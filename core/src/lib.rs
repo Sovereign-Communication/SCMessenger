@@ -8,10 +8,12 @@ pub mod abuse;
 pub mod crypto;
 pub mod drift;
 pub mod dspy;
+pub mod error;
 pub mod identity;
 pub mod iron_core;
 pub mod message;
 pub mod mobile_bridge;
+pub mod notification;
 pub mod observability;
 pub mod privacy;
 pub mod relay;
@@ -22,9 +24,7 @@ pub mod transport;
 pub mod wasm_support;
 
 // Re-export critical types from core modules
-pub use iron_core::{IronCore, IronCoreError};
-pub use message::types::{Receipt, encode_receipt, decode_receipt};
-pub use message::MessageType;
+pub use message::types::{Receipt, MessageType};
 pub use message::codec::decode_envelope;
 pub use store::outbox::RetryPolicy;
 
