@@ -83,10 +83,10 @@ GitHub Actions automatically:
 
 **Includes:**
 - PerPeerBackoffState: tracks attempt count, last attempt time, backoff duration per peer
-- Exponential backoff ladder: 1s → 2s → 4s → 8s → 16s → 30s (capped)
+- Exponential backoff ladder: 1s→30s (capped)
 - Max 3 concurrent dials enforcer (orchestrator checks before dialing)
-- CircuitRelayLadder: after first peer connects, add relay to dial candidates (after direct, before fallback)
-- 23 tests: 7 unit (backoff logic, reset on success, limit enforcement) + 16 integration (concurrent dials, relay ladder, peer-connect detection)
+- CircuitRelayLadder: after first peer connects, add circuit-relay to dial candidates (after direct, before fallback)
+- 23 tests: 7 unit (backoff logic, reset on success, limit enforcement) + 16 integration (concurrent dials, circuit-relay ladder, peer-connect detection)
 - Thread-safe with Arc<RwLock>
 - Verbose DEBUG logging at every step
 

@@ -71,7 +71,7 @@ Key outcomes:
 - **Environment hardened**: ANDROID_HOME and PATH permanently set (setx) for cargo-ndk, gradle, adb, emulator, sdkmanager, avdmanager.
 - **HANDOFF queue cleaned**: 59 `[VALIDATED]_*` items batch-moved from `HANDOFF/todo/` to `HANDOFF/done/[VALIDATED]/`. Active todo: 25 files.
 - **Build gates verified**: `cargo check --workspace` PASS, `cargo test --workspace --no-run` PASS.
-- **Phase 1 audit complete**: P1-17 WiFi Direct WAIVED (emulator HW restriction — Android<->Android cell is [BLOCKED-HW]; Android<->Windows equivalent covered by mDNS/LAN+TCP). Remaining: NEXT_ITER_04 (emulator retest), P1-14 (hostile-network), P1-18 (relay), P1-19 (exit review).
+- **Phase 1 audit complete**: P1-17 WiFi Direct WAIVED (emulator HW restriction — Android<->Android cell is [BLOCKED-HW]; Android<->Windows equivalent covered by mDNS/LAN+TCP). Remaining: NEXT_ITER_04 (emulator retest), P1-14 (hostile-network), P1-18 (mesh node), P1-19 (exit review).
 - **Iteration plan**: `HANDOFF/plans/QWEN_ITERATION_PLAN_2026-07-08.md` defines 2 iterations: (1) Emulator + baseline validation, (2) Phase 1 completion + exit review.
 
 ---

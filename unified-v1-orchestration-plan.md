@@ -19,10 +19,10 @@ and Gemini all have working keys. Every task below is delegated — zero native
 Claude implementation.
 
 **Key findings from Hermes farm-sim (7-node Docker topology):**
-- Network plumbing PASS: 7 containers, 3 isolated networks, relay custody working
+- Network plumbing PASS: 7 containers, 3 isolated networks, custody working
 - Application delivery FAIL: 191 envelope decode errors — root cause traced to
   custody dispatch missing `wrap_in_drift_frame()` call
-- Hermes also identified relay message ordering bug (DriftFrame unwrap must
+- Hermes also identified mesh message ordering bug (DriftFrame unwrap must
   precede RelayMessage parse) — already correct in THIS repo (line 2701 is after
   line 2651, which is the correct order). No action needed for that fix.
 - Hermes reverted its own size-limit attempt (libp2p 0.56 does not expose
@@ -554,7 +554,7 @@ Workers implement code only; the orchestrator runs all gates.
 | C-03 | Advertise/dial adaptive ports | Qwen CODER |
 | C-04 | Hardcoded-port sweep | Qwen FLASH |
 | C-05 | Hostile-network test | Qwen CODER |
-| C-06 | Relay task P1-18 | Qwen CODER |
+| C-06 | Node task P1-18 | Qwen CODER |
 | C-07 | Parity exit review | HUMAN + Qwen THINK |
 
 ### Wave B — PQC depth (FROZEN until E-01c)
@@ -578,7 +578,7 @@ B-02 double-frozen (also AD-8 onion seam freeze).
 | H-01 | GitHub Actions billing/org fix | D-07, D-03 run, iOS lane |
 | H-02 | Physical two-device WiFi Aware/BLE field trials | T-02 final |
 | H-03 | Three P1-10 sign-offs (peer_exchange, GroupInfo.port, transport_memory) | C-02..C-04 |
-| H-04 | AWS relay resume decision | B4 infra (committed, paused) |
+| H-04 | AWS cloud node resume decision | B4 infra (committed, paused) |
 | H-05 | Final release sign-off | All waves complete |
 
 ---

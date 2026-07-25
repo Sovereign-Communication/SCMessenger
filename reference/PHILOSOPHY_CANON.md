@@ -1,7 +1,7 @@
 # SCMessenger Philosophy Canon
 
-Status: Draft from repository context, pending owner confirmation.
-Last updated: 2026-02-24
+Status: Active -- owner-confirmed.
+Last updated: 2026-07-24
 
 ## Mission and product intent
 - Build a sovereign, end-to-end encrypted messenger where users own identity and communication without centralized account dependency.
@@ -18,9 +18,10 @@ Last updated: 2026-02-24
 - Preserve identity canonicalization around `public_key_hex`; treat `identity_id` and `libp2p_peer_id` as derived metadata.
 - Enforce deterministic, testable behavior across Android, iOS, and Web for critical controls.
 - Prioritize parity and correctness over platform-specific divergence.
+- **All nodes are peers that relay for each other.** There is no separate "relay" role or dedicated relay infrastructure. Every SCMessenger node participates in mesh routing and store-and-forward for the network. The term "node" is canonical; "relay" refers only to the act of relaying or to the libp2p circuit-relay protocol.
 
 ## UX and interaction principles
-- Keep relay semantics user-understandable and consistent: relay ON enables messaging; relay OFF blocks inbound/outbound relay messaging while local history remains readable offline.
+- Keep mesh routing semantics user-understandable and consistent: mesh ON enables messaging through the network; mesh OFF blocks inbound/outbound routed messaging while local history remains readable offline.
 - Keep mental model and critical controls aligned across Android, iOS, and Web.
 - Use English-only for alpha while preserving an i18n path for post-alpha expansion.
 
@@ -55,12 +56,12 @@ Last updated: 2026-02-24
 ## Decision examples
 ### Accepted examples
 - Choosing `public_key_hex` as canonical cross-platform identity.
-- Requiring relay ON/OFF semantics to be identical across clients.
+- Requiring mesh routing ON/OFF semantics to be identical across clients.
 - Requiring consent gate and bounded retention for alpha.
 
 ### Rejected examples
 - Allowing Web parity to remain optional before GA.
-- Allowing platform-specific behavior for core privacy/relay semantics.
+- Allowing platform-specific behavior for core privacy/mesh routing semantics.
 - Using static-only bootstrap configuration without dynamic resolution strategy.
 
 ## Enforceable rules
@@ -68,7 +69,7 @@ Last updated: 2026-02-24
 | Rule ID | Rule text | Scope | Criticality | Verification | Exception path |
 |---|---|---|---|---|---|
 | PHIL-001 | Use `public_key_hex` as canonical persisted/exchange identity across Android, iOS, and Web. | code, docs, UX | non-negotiable | API/schema checks, cross-platform interop tests, doc review | owner-approved exception with migration plan and rollback |
-| PHIL-002 | Keep relay semantics identical across clients: ON enables relay messaging; OFF blocks inbound and outbound relay messaging while local history remains readable offline. | code, UX, tests | non-negotiable | parity tests and UX flow validation | owner-approved temporary exception with explicit risk window |
+| PHIL-002 | Keep mesh routing semantics identical across clients: ON enables routed messaging through the network; OFF blocks inbound and outbound routed messaging while local history remains readable offline. All nodes are peers that relay for each other; there is no dedicated "relay" role. | code, UX, tests | non-negotiable | parity tests and UX flow validation | owner-approved temporary exception with explicit risk window |
 | PHIL-003 | Keep protocol and cryptographic authority in Rust core; platform adapters do not redefine cryptographic behavior. | architecture, code | non-negotiable | architecture/code review | owner-approved exception with security review |
 | PHIL-004 | Enforce first-run consent gate that communicates security/privacy boundaries before first use. | UX, code | non-negotiable | UI flow tests and release checklist | owner-approved exception not permitted for GA |
 | PHIL-005 | Maintain bounded retention policy to prevent unbounded local growth. | code, settings, ops | non-negotiable | storage policy tests and config inspection | owner-approved temporary exception with cleanup deadline |
@@ -79,4 +80,4 @@ Last updated: 2026-02-24
 | PHIL-010 | Keep critical UX controls and semantics in parity across Android, iOS, and Web; do not allow a temporary lead platform for critical UX behavior. | UX, roadmap, release | non-negotiable | tri-platform UX parity checklist and release sign-off | no waiver; UX parity is required |
 
 ## Open items requiring owner confirmation
-- None.
+- None. (Node/relay terminology alignment confirmed 2026-07-24.)

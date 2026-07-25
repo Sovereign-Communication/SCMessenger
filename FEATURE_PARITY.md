@@ -155,7 +155,7 @@ Legend: [OK] = Wired & callable | [WARNING] = Partially wired | [FAIL] = Not wir
   - `local_transport_fallback_tests.swift`: Repaired stale type name (`LocalTransportFallbackResult`).
 - **Intentional Multipeer vs WiFi Direct Equivalence**: Multipeer Connectivity (iOS) and WiFi Direct / WiFi Aware (Android) serve as intentional platform-equivalent local peer-to-peer transport layers. `LocalTransportFallback` provides deterministic local fallback (Multipeer -> BLE) on iOS matching Android's local transport fallback architecture.
 - **Verification**: The standalone local-transport and role-mode checks pass; generated Swift bindings pass the drift check; the Rust ledger-convergence integration target compiles; and the full `SCMessenger` simulator build and XCTest run passes on iPhone 17 Pro. The project now has an executable `SCMessengerTests` target containing the three outbox retry-policy parity tests.
-- **Device-only boundary**: Bidirectional relay delivery and real receipt round-trips still require two physical peers. This is a hardware verification boundary, not a known scoped implementation gap.
+- **Device-only boundary**: Bidirectional mesh delivery and real receipt round-trips still require two physical peers. This is a hardware verification boundary, not a known scoped implementation gap.
 
 ---
 
@@ -166,7 +166,7 @@ Legend: [OK] = Wired & callable | [WARNING] = Partially wired | [FAIL] = Not wir
 All core API functions are now wired across all applicable platforms. TCP/mDNS transport
 parity was achieved on 2026-04-09: SmartTransportRouter on Android and iOS now includes
 a `TCP_MDNS` transport type that scores and routes LAN-discovered peers via libp2p TCP
-through SwarmBridge, separate from internet relay. The remaining
+through SwarmBridge, separate from internet-routed mesh delivery. The remaining
 items marked N/A are intentional design choices:
 
 - **`setDelegate` on WASM**: Browser uses polling via `drainReceivedMessages` instead

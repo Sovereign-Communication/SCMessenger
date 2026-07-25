@@ -1,12 +1,12 @@
-# AWS free-tier IAM setup for the SCMessenger cloud relay/farm-sim rig
+# AWS free-tier IAM setup for the SCMessenger cloud node/farm-sim rig
 
-Status: Active. Supports FARM_FINAL_PLAN.md WS-FARM-B (B4: cloud relays,
+Status: Active. Supports FARM_FINAL_PLAN.md WS-FARM-B (B4: cloud nodes,
 B5/B6: rig-based farm-topology simulation). Free tier only, $0 budget target.
 
 ## Why this file exists
 
 `iam-policy-scmessenger-relay.json` is a scoped IAM policy so the orchestrator
-(or a delegated agent) can provision/manage the relay EC2 instance(s) without
+(or a delegated agent) can provision/manage the node EC2 instance(s) without
 ever holding root credentials or broad account access. It is deliberately
 restrictive:
 
@@ -93,7 +93,7 @@ free-tier hour/storage exhaustion if you leave instances running past the
 
 Step 4's $1 budget only emails you - it does not stop anything by itself. AWS
 Budgets can also take an automatic ACTION when a threshold is crossed:
-attaching a hard-deny IAM policy to the relay user, and/or stopping the relay
+attaching a hard-deny IAM policy to the node user, and/or stopping the node
 EC2 instance. This closes the gap between "you get an email" and "spend
 actually stops."
 
@@ -109,12 +109,12 @@ the three files below - not something to hand to the orchestrator.
    kill-switch fires): IAM console -> Policies -> Create policy -> JSON ->
    paste `quarantine-policy.json` -> name it `SCMessengerBudgetQuarantine` ->
    Create. It's a single explicit `Deny: * on *` - explicit Deny always wins
-   over any Allow in IAM evaluation, so attaching this to the relay user
-   neutralizes it regardless of what `SCMessengerRelayFreeTierOnly` still
+   over any Allow in IAM evaluation, so attaching this to the node user
+   neutralizes it regardless of what `SCMessengerNodeFreeTierOnly` still
    allows.
 
 2. **Create the Budget Actions execution role** (the identity AWS Budgets
-   itself assumes to perform the action - separate from your relay user):
+   itself assumes to perform the action - separate from your node user):
    IAM console -> Roles -> Create role -> Custom trust policy -> paste
    `budget-action-trust-policy.json` -> name it
    `SCMessengerBudgetActionExecutionRole` -> attach a new policy pasted from

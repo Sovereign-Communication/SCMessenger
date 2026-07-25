@@ -91,11 +91,21 @@ if [ -n "$XCODE_DEVICE_UDID" ]; then
   ' "$XCDEVICE_JSON" | head -n 1)"
 fi
 
+# Prefer tunnel-connected devices, fall back to any available device.
+# WiFi-paired devices report tunnelState=disconnected but devicectl
+# establishes the tunnel on-demand during install/launch.
 DEVICECTL_IDENTIFIER="$(jq -r --arg id "$DEVICE_UDID" '
   .result.devices[]
   | select((.connectionProperties.tunnelState // "") == "connected" and .identifier == $id)
   | .identifier
 ' "$DEVICECTL_JSON" | head -n 1)"
+if [ -z "$DEVICECTL_IDENTIFIER" ]; then
+  DEVICECTL_IDENTIFIER="$(jq -r --arg id "$DEVICE_UDID" '
+    .result.devices[]
+    | select(.identifier == $id)
+    | .identifier
+  ' "$DEVICECTL_JSON" | head -n 1)"
+fi
 
 if [ -n "$DEVICECTL_IDENTIFIER" ] && [ -z "$DEVICE_NAME" ]; then
   DEVICE_NAME="$(jq -r --arg id "$DEVICECTL_IDENTIFIER" '
@@ -114,11 +124,19 @@ if [ -n "$DEVICE_NAME" ] && [ -z "$XCODE_DEVICE_UDID" ]; then
 fi
 
 if [ -n "$DEVICE_NAME" ] && [ -z "$DEVICECTL_IDENTIFIER" ]; then
+  # Prefer tunnel-connected, fall back to any available device by name.
   DEVICECTL_IDENTIFIER="$(jq -r --arg name "$DEVICE_NAME" '
     .result.devices[]
     | select((.connectionProperties.tunnelState // "") == "connected" and (.deviceProperties.name // .name // "") == $name)
     | .identifier
   ' "$DEVICECTL_JSON" | head -n 1)"
+  if [ -z "$DEVICECTL_IDENTIFIER" ]; then
+    DEVICECTL_IDENTIFIER="$(jq -r --arg name "$DEVICE_NAME" '
+      .result.devices[]
+      | select((.deviceProperties.name // .name // "") == $name)
+      | .identifier
+    ' "$DEVICECTL_JSON" | head -n 1)"
+  fi
 fi
 
 if [ -z "$XCODE_DEVICE_UDID" ] || [ -z "$DEVICECTL_IDENTIFIER" ]; then
@@ -132,8 +150,7 @@ if [ -z "$XCODE_DEVICE_UDID" ] || [ -z "$DEVICECTL_IDENTIFIER" ]; then
   echo "Connected iOS devices (CoreDevice IDs):" >&2
   jq -r '
     .result.devices[]
-    | select((.connectionProperties.tunnelState // "") == "connected")
-    | "  - \((.deviceProperties.name // .name // "Unknown")): \(.identifier)"
+    | "  - \((.deviceProperties.name // .name // "Unknown")): \(.identifier) (tunnel: \(.connectionProperties.tunnelState // "unknown"))"
   ' "$DEVICECTL_JSON" >&2
   exit 1
 fi

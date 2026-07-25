@@ -23,8 +23,8 @@ TRANSPORT LAYER
 - [x] BLE Android<->Windows data path with MAC-rotation identity keying (P1-16, adversarial-audited)
 - [x] WiFi Aware Android transport (11+ passing tests, uses loopback TCP proxy — NOT orphaned)
 - [x] WiFi Direct Android transport (7+ passing tests — waived to v1.1 for Android<->Android)
-- [x] Relay: 3-node LAN custody chain architecture, DriftFrame gossip, IBLT sync live in swarm
-- [x] libp2p 0.56 single workspace pin, AutoNAT + DCUtR + relay-client in behaviour stack
+- [x] Mesh: 3-node LAN custody chain architecture, DriftFrame gossip, IBLT sync live in swarm
+- [x] libp2p 0.56 single workspace pin, AutoNAT + DCUtR + circuit-relay-client in behaviour stack
 - [x] DNS fallback for Android (Google Public DNS, ESC_ANDROID_DNS_RESOLVER_FIX 2026-07-10)
 - [x] Build provenance stamps (git hash/ts/libp2p version in CLI + Android logcat, P1-05)
 - [x] ANR fix: BatteryReceiver FFI moved off main thread (P1-08)
@@ -47,12 +47,12 @@ CRYPTOGRAPHY (PQC waves 0-2 complete, waves 3-5 frozen)
 - [x] backup.rs: Argon2id (user exports), Blake3 derive_key (auto-backups), PBKDF2 (legacy read)
 - [x] Skipped-key persistence for ratchet restart (E3, done 2026-07-13)
 
-RELAY + DTN
+MESH ROUTING + DTN
 - [x] DriftFrame gossip protocol live in swarm path
 - [x] IBLT (MinHash) sync for custody
-- [x] RelayCustodyStore (sled-backed)
+- [x] CustodyStore (sled-backed)
 - [x] Outbox Site-2/Site-3 flush: FIXED and live-verified (5-11 ms deliveries, 2026-07-17)
-- [x] Relay discovery/dial amplification ticket filed (A-09)
+- [x] Node discovery/dial amplification ticket filed (A-09)
 
 ANDROID APP
 - [x] UniFFI async FFI bridge (Rust -> Kotlin suspend functions)
@@ -75,8 +75,12 @@ INFRASTRUCTURE
 
 ## v0.4.0: Josh Test Release (Hawaii -> Pennsylvania over AWS)
 
-GOAL: Two-person end-to-end messaging over the internet with an AWS relay node
+GOAL: Two-person end-to-end messaging over the internet with an AWS node
 ensuring mesh stays up. Real delivery. Real receipts. No hand-holding.
+
+NOTE: All nodes are peers that relay for each other. There is no separate
+"relay" role -- every node is a relay. The AWS instance runs a regular
+SCMessenger node.
 
 ### What needs to land for v0.4.0:
 
@@ -108,9 +112,9 @@ ensuring mesh stays up. Real delivery. Real receipts. No hand-holding.
    Estimated LoC: ~80-120 (Kotlin side only)
    Blocks: Android not lying to the user
 
-4. **AWS relay live proof** [HUMAN: activate infra + SONNET: rig wiring]
+4. **AWS node live proof** [HUMAN: activate infra + SONNET: rig wiring]
    Tickets: C-05_P1_14, C-06_P1_18 (P1-14/P1-18 post-exit verification debt)
-   Gap: infra/aws/ is committed but not live; WAN relay has never been proven
+   Gap: infra/aws/ is committed but not live; WAN node has never been proven
    end-to-end; hostile-network (netem/firewall profiles) not yet run
    Estimated LoC: ~200-300 (compose + rig scripts + health endpoint)
    Blocks: the entire Josh-test scenario
@@ -146,7 +150,7 @@ ensuring mesh stays up. Real delivery. Real receipts. No hand-holding.
 #### OPERATOR ACTIONS (human gates, zero LoC)
 
 - H-01: GitHub billing fix (unblocks iOS lane -- NOT required for Josh test)
-- H-04: AWS relay activate (required for Josh test)
+- H-04: AWS node activate (required for Josh test)
 - Lucas configures port forwards (tcp/443, tcp/80, udp/443) + DDNS record
 
 #### INSTALL ARTIFACT
@@ -158,7 +162,7 @@ ensuring mesh stays up. Real delivery. Real receipts. No hand-holding.
 ### v0.4.0 total remaining effort estimate:
 - Rust/Kotlin code: ~900-1,250 LoC net logic (not counting tests)
 - Infrastructure: ~200-300 LoC (compose/scripts)
-- Human gates: 2 (billing optional, AWS relay required)
+- Human gates: 2 (billing optional, AWS node required)
 
 ### v0.4.0 does NOT include:
 - iOS (H-01 billing unlock + GitHub Actions fix still pending)
@@ -182,7 +186,7 @@ Builds directly on v0.4.0. Every item here assumes v0.4.0 is solid.
 
 #### FARM SIM INFRASTRUCTURE (~300-400 LoC)
 - 3-group docker compose topology (Group A farmhouse/mDNS, Group B
-  far-field/internet-relay, Group C dead-zone/BLE-offline) per FARM_FINAL_PLAN.md
+  far-field/internet-routed, Group C dead-zone/BLE-offline) per FARM_FINAL_PLAN.md
   Tickets: FARM_SIM_PHASE_2_3_FINDINGS.md, CONTACT_PROVISIONING_FIX.md,
   EXECUTE_PHASE_2_3_ON_INSTANCE.md, ORCHESTRATE_FARM_SIM_FIX_AND_RETEST.md
   Gap: zero contacts provisioned at startup -> /api/send returns 404 "Contact not found"
@@ -199,15 +203,15 @@ Builds directly on v0.4.0. Every item here assumes v0.4.0 is solid.
   Estimated LoC: ~100-200 (verify-first, fix if in-memory construction confirmed)
 
 #### REACH / ANCHOR (~300-400 LoC)
-- B3: Farm anchor deployment (--http-bind flag + /health route, CLI relay runbook)
+- B3: Farm anchor deployment (--http-bind flag + /health route, CLI node runbook)
   Ticket: FARM_FINAL_PLAN.md WS-FARM-B3
   Estimated LoC: ~150-200
 
-- B4: Cloud relays live (AWS + Alibaba) as secondary bootstrap
+- B4: Cloud nodes live (AWS + Alibaba) as secondary bootstrap
   Ticket: FARM_FINAL_PLAN.md WS-FARM-B4
   Estimated LoC: ~100-150 (config + compose + monitoring)
 
-- B5: P1-14 hostile-network + P1-18 WAN relay proofs on the rig
+- B5: P1-14 hostile-network + P1-18 WAN node proofs on the rig
   Tickets: C-05_P1_14_hostile_network_test_lo.md, C-06_P1_18_relay_task_3_node_custo.md
   Estimated LoC: ~150-200 (rig scripts, netem profiles, test playbooks)
 
@@ -426,7 +430,7 @@ FD-10: Delivery-truth audit across FD-1..4 -- GATE
   Remaining to fully complete: ~200-300 LoC (Android<->Android two-device validation + GO negotiation edge cases)
   [BLOCKED-HW: needs 2nd Android device]
 
-- Anonymous/headless relay node (INVESTIGATE_IDENTITY_OPTIONAL_RELAY_MODE: investigated,
+- Anonymous/headless node (INVESTIGATE_IDENTITY_OPTIONAL_NODE_MODE: investigated,
   found architectural work required to separate packet forwarding from identity-dependent
   message handling)
   Remaining to fully complete: ~600-900 LoC (architectural separation of packet-forward
@@ -464,7 +468,7 @@ FD-10: Delivery-truth audit across FD-1..4 -- GATE
 | H-01 | GitHub Actions billing fix or repo transfer to org | iOS CI lane | v1.0.0 (iOS) |
 | H-02 | Acquire 2nd Android device OR record waiver | WiFi Aware + BLE Android<->Android | v1.0.0 farm drills |
 | H-03 | Port strategy sign-offs x3 (GroupInfo sharing, GroupInfo.port FFI, transport-memory fingerprint) | C-02/C-03/C-04 | v1.0.0 |
-| H-04 | Activate AWS relay (infra committed, not live) | Josh test WAN proof | v0.4.0 |
+| H-04 | Activate AWS node (infra committed, not live) | Josh test WAN proof | v0.4.0 |
 | H-05 | Apple Developer account USD 99/yr + TestFlight | iOS distribution to farm-mates | v1.0.0 farm rollout |
 | H-06 | KMP D2 stack: JVM/Compose Desktop vs native (Compose Desktop is JVM-only) | KMP architecture | v1.0.0 |
 | H-07 | WSL2 for KMP Linux validation accepted (BlueZ caveat) or name real Linux hardware | KMP QA | v1.0.0 |
@@ -502,7 +506,7 @@ FD-10: Delivery-truth audit across FD-1..4 -- GATE
 | Release | Purpose | Estimated Remaining LoC (net logic) | Human Gates |
 |---------|---------|--------------------------------------|-------------|
 | v0.3.5 | Current: Android<->Windows transport parity | -- DONE -- | -- |
-| v0.4.0 | Josh internet test (Hawaii->PA via AWS) | ~1,100-1,550 | H-04 (AWS activate) |
+| v0.4.0 | Josh internet test (Hawaii->PA via AWS node) | ~1,100-1,550 | H-04 (AWS node activate) |
 | v0.5.0 | Farm simulation (12-node Docker, all 6 scenarios) | ~1,700-2,350 | H-05 decision |
 | v1.0.0 | Fully featured: iOS, PQC complete, Meeting Mode, KMP desktop, farm drills | ~5,100-7,800 | H-01,02,03,05,06,07 |
 | TOTAL | v0.4.0 through v1.0.0 | ~7,900-11,700 LoC | 7 human decisions |

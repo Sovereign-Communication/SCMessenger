@@ -14,29 +14,29 @@ Repo check performed just now: `git log` head is `2bbea431`, and local `main` ma
 
 ## Part 1: Lucas/Josh Alpha Test
 
-Goal: Lucas (fiber) and Josh (cellular/WiFi, his phone) message each other reliably across the real internet through the AWS relay (`100.56.248.69:9001`).
+Goal: Lucas (fiber) and Josh (cellular/WiFi, his phone) message each other reliably across the real internet through the AWS node (`100.56.248.69:9001`).
 
 ### Verified working now
 
-- Alpha relay live and healthy, running the dial-fix image, restart policy set.
-- **Core dial bug fixed** (commit `f2831458`): `SwarmCommand::Dial` now waits for a real `ConnectionEstablished` event before reporting success. Previously it reported "connected" as soon as libp2p merely *queued* the dial — which is why prior sessions saw "Bootstrap connected" in the logs while the relay showed zero real TCP connections.
-- Lucas's Windows CLI → relay: real connection, confirmed via `ss -tn state established` on the relay itself. Ledger exchange completed (48 entries).
+- Alpha node live and healthy, running the dial-fix image, restart policy set.
+- **Core dial bug fixed** (commit `f2831458`): `SwarmCommand::Dial` now waits for a real `ConnectionEstablished` event before reporting success. Previously it reported "connected" as soon as libp2p merely *queued* the dial — which is why prior sessions saw "Bootstrap connected" in the logs while the node showed zero real TCP connections.
+- Lucas's Windows CLI → node: real connection, confirmed via `ss -tn state established` on the node itself. Ledger exchange completed (48 entries).
 - Lucas's local Android emulator → relay: confirmed via app logs (`Connected(peerId=..., transport=INTERNET)`).
-- Graceful-AF dial policy (self-dial prevention + RFC1918 private-range awareness) implemented in `cli/src/ledger.rs`, adversarial-reviewed (caught and fixed a real bug in the relay-circuit exemption before merge), committed.
+- Graceful-AF dial policy (self-dial prevention + RFC1918 private-range awareness) implemented in `cli/src/ledger.rs`, adversarial-reviewed (caught and fixed a real bug in the circuit-relay exemption before merge), committed.
 - E-00 (ratchet/PQ subsystem wiring) — **done 2026-07-17**, separately from this session: real messages now get actual forward secrecy + PQ protection. Before this fix, every message sent by the app had zero forward secrecy regardless of how correct the underlying crypto code was. Kill switch: env `SCM_RATCHET_DISABLE`.
 - All of the above is committed and pushed to `origin/main` (commits `f2831458`, `1950c374`, `2eaad174`, `efd164de`, `2bbea431`).
 
 ### Still open — what's actually blocking the Josh test
 
 1. **Josh's device has never connected.** The AWS-emulator stand-in for Josh hit two separate, unfixed Android system-image crash loops (missing `libstatspull.so`, then missing `libnetd_updatable.so` — looks like a corrupted/incomplete system image, not a config problem). Abandoned 2026-07-20; the operator accepted Lucas's own solo verified connection as sufficient proof the *dial fix* works, but that is not the same as proving Josh's real phone can connect.
-2. Confirm both Lucas and a second real endpoint appear **simultaneously** in the relay's connection list.
+2. Confirm both Lucas and a second real endpoint appear **simultaneously** in the node's connection list.
 3. Provision Lucas and Josh as contacts (public-key exchange via the `scmessenger://?public_key=...` deep link or in-app Add Contact) — not yet done with any real second party.
 4. Send an actual message Lucas → Josh (or back) and confirm delivery + receipt. Never done, for anyone.
-5. Filed but not fixed: after connecting, the CLI still promiscuously dials every address it learns from the ledger (own LAN IP, emulator-internal junk) with only partial filtering. Per-peer backoff/concurrent-dial cap and "prefer relay-circuit routing over direct dial" are designed but not implemented (`HANDOFF/todo/GRACEFUL_AF_DIAL_POLICY.md`, items 3–4).
+5. Filed but not fixed: after connecting, the CLI still promiscuously dials every address it learns from the ledger (own LAN IP, emulator-internal junk) with only partial filtering. Per-peer backoff/concurrent-dial cap and "prefer circuit-relay routing over direct dial" are designed but not implemented (`HANDOFF/todo/GRACEFUL_AF_DIAL_POLICY.md`, items 3–4).
 6. Small fix not yet filed as a ticket: the swarm's adaptive port listener should exclude the control-API port (9876) from its own port range so the earlier port-collision class of bug can't recur.
-7. Design question, not yet resolved: operator directive says "bootstrap deprecated in favor of relays," but the code still reads `config.json bootstrap_nodes` as the seed. Needs a decision on whether/how to reframe this and whether the app should proactively probe for relays.
+7. Design question, not yet resolved: operator directive says "bootstrap deprecated in favor of nodes," but the code still reads `config.json bootstrap_nodes` as the seed. Needs a decision on whether/how to reframe this and whether the app should proactively probe for nodes.
 8. A-04 (Android receipt-encoding unification) — dispatched today, the dispatch produced no output (empty log), ticket still open in `HANDOFF/IN_PROGRESS/`.
-9. Practical note: the relay address is currently hardcoded in `MeshRepository.kt` — fine for this specific test, but there's no general "add any relay" flow yet if you want Josh to use a build that isn't pinned to your test relay.
+9. Practical note: the node address is currently hardcoded in `MeshRepository.kt` — fine for this specific test, but there's no general "add any node" flow yet if you want Josh to use a build that isn't pinned to your test node.
 10. What you'd actually send Josh: a debug APK exists locally (`android/app/build/outputs/apk/debug/app-debug.apk`, built with the dial fix) or he builds from source per `HANDOFF/ALPHA_TEST_LUCAS_JOSH_SETUP.md`. There is no signed/distributable release build yet — this is a debug artifact, not a shareable download link in the normal sense.
 
 ---
@@ -71,7 +71,7 @@ These need you specifically, not an agent, and are documented in `HANDOFF/todo/W
 
 - **H-01** GitHub Actions billing — blocks CI + the whole iOS lane.
 - **H-02** Physical two-device field trials (WiFi Aware, BLE) — needs real hardware in hand.
-- **H-04** AWS relay resume decision — this is about the separate Farm-Sim cloud-relay infra (`infra/aws/`), not the alpha-relay you're already using with Josh.
+- **H-04** AWS node resume decision — this is about the separate Farm-Sim cloud-mesh infra (`infra/aws/`), not the alpha-node you're already using with Josh.
 - **H-05** Final v1.0.0 sign-off — the actual release-tag gate: needs all of the above closed, farm drills logged, PQC audits on file, and an Apple Developer account decision ($99/yr, needed before iOS TestFlight).
 
 ---

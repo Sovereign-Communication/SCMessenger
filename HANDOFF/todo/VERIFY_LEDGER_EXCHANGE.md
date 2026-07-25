@@ -86,13 +86,13 @@ After all nodes start:
 
 **Diagnosis:**
 1. Check if ledger_exchange protocol is enabled in core
-2. Check if nodes are actually connecting to bootstrap relays
+2. Check if nodes are actually connecting to bootstrap nodes
 3. Check if ledger.to_shared_entries() is being called on connection
 4. Check if merge_shared_entries() is updating the ledger
 
 ## Success Criteria
 
-[OK] All nodes bootstrap to their configured relay nodes
+[OK] All nodes bootstrap to their configured bootstrap nodes
 [OK] Ledger entries grow from 0 → 6+ entries per node
 [OK] Ledger exchange logs show peer merging
 [OK] Nodes have consistent peer knowledge (±1 entry)

@@ -116,7 +116,7 @@ E1 is **not small-model work as a whole** — it's the hardest item (2–4 faile
 | C-03 | P1-12 advertise/dial/remember adaptive ports + sled `transport_memory` schema | CODER | ~350 |
 | C-04 | P1-13 hardcoded-port sweep (retire 9001/9002/9010) | FLASH | ~100 |
 | C-05 | P1-14 hostile-network test (lossy/NAT-ed LAN scenario in farm harness) | CODER | (+200 T) |
-| C-06 | P1-18 relay task (content destroyed — re-derive from `docs/` relay specs at dispatch) | CODER | ~250 |
+| C-06 | P1-18 node task (content destroyed — re-derive from `docs/` node specs at dispatch) | CODER | ~250 |
 | C-07 | P1-19 parity exit review: Windows CLI daemon ↔ Android emulator LAN pairing as final acceptance | HUMAN+THINK | 0 |
 
 **Wave C subtotal: ~950–1,250 LoC (+200 T)**
@@ -128,8 +128,8 @@ E1 is **not small-model work as a whole** — it's the hardest item (2–4 faile
 | B-01 | PQC-04 suite negotiation (verify current state first — was next-in-line 07-10, not in open queue) | CODER | ~300 (+200 T) |
 | B-02 | PQC-09 hybrid onion + `ONION_COMPILE_FIX` + `SECURITY_REVIEW_FIXES` (3 tickets) | THINK→CODER | ~600 |
 | B-03 | PQC-10 ML-DSA identity signatures + `MLDSA_MODULE_MISSING` (`crypto/pq/mldsa.rs` exists — verify depth, wire into identity ops) | CODER | ~650 |
-| B-04 | PQC-11 relay/invite hybrid dual-sig auth | CODER | ~400 |
-| B-05 | PQC-12 TLS PQ groups for relay transport | CODER | ~300 |
+| B-04 | PQC-11 node/invite hybrid dual-sig auth | CODER | ~400 |
+| B-05 | PQC-12 TLS PQ groups for node transport | CODER | ~300 |
 | B-06 | PQC-13 verification suite: kani proofs, proptest cross-version matrix | THINK | (+600 T) |
 | B-07 | PQC-14 docs + risk-register closure | FLASH | 0 (docs) |
 
@@ -152,11 +152,11 @@ Standing PQC rules (from surviving `REMAINING_WORK_TRACKING.md`): hybrid never p
 
 ### Wave H — Human-only gates (no LoC)
 
-H-01 GitHub Actions billing (D-07 unblock) · H-02 physical two-device WiFi Aware/BLE/DTN-mule procedures (T1.3, field trials) · H-03 three P1-10 operator sign-offs (peer_exchange semantics, `GroupInfo.port` FFI field, `transport_memory` privacy fingerprint) · H-04 B4 AWS cloud relay resume decision (infra written, PAUSED — credentials never run) · H-05 final release sign-off.
+H-01 GitHub Actions billing (D-07 unblock) · H-02 physical two-device WiFi Aware/BLE/DTN-mule procedures (T1.3, field trials) · H-03 three P1-10 operator sign-offs (peer_exchange semantics, `GroupInfo.port` FFI field, `transport_memory` privacy fingerprint) · H-04 B4 AWS cloud node resume decision (infra written, PAUSED — credentials never run) · H-05 final release sign-off.
 
 ### Explicitly excluded from v1.0.0 farm build
 
-TASK_KMP_* (4 tickets, post-v1 architecture) · B4 AWS relay (paused) · Windows WiFi Direct (waived) · remaining ~1,380 unwrap() sites beyond D-05 scope · full iOS↔Android BLE parity beyond receipts.
+TASK_KMP_* (4 tickets, post-v1 architecture) · B4 AWS cloud node (paused) · Windows WiFi Direct (waived) · remaining ~1,380 unwrap() sites beyond D-05 scope · full iOS↔Android BLE parity beyond receipts.
 
 ---
 
