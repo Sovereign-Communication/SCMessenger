@@ -55,7 +55,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -98,7 +98,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -131,7 +131,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -176,7 +176,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
