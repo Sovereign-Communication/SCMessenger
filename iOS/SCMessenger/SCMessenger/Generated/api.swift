@@ -3753,14 +3753,135 @@ public protocol LedgerManagerProtocol: AnyObject, Sendable {
     
     func allKnownTopics()  -> [String]
     
+    /**
+     * Attach the identity learned from Identify to a ledger entry.
+     *
+     * SIBLING OF [`Self::record_connection`] (re-review round 4). This is the
+     * OTHER function that can create a `LedgerEntry` from an address, and it is
+     * the wire-driven one (`mobile_bridge.rs` calls it with raw
+     * `/sc/ledger-exchange/1.0.0` data). Gating `record_connection` and leaving
+     * this open would be exactly the partial application the choke-point
+     * refactor exists to stop, so it runs the same ingestion predicate.
+     *
+     * Entries created here keep `success_count = 0`, so they remain in the
+     * unproven seed tier and are never disclosed by
+     * [`Self::exchange_response_entries`]; the ingestion gate is defence in
+     * depth on top of that, not a replacement for it.
+     */
     func annotateIdentity(multiaddr: String, peerId: String, publicKey: String?, nickname: String?) 
     
     func dialableAddresses()  -> [LedgerEntry]
     
+    /**
+     * Export our best-known peers as routing-only seed entries for an invite.
+     *
+     * Ordered by [`Self::get_preferred_relays`] ranking (proven peers, most
+     * recently seen first). The caller is responsible for prepending its own
+     * dialable address -- see `crate::relay::invite::build_seed_ledger`.
+     *
+     * Everything except the multiaddr is dropped here, including the peer id:
+     * see the type-level note on [`SeedLedgerEntry`]. This is the only export
+     * path for invites, so it is also the choke point that keeps third-party
+     * identity out of them.
+     *
+     * ADDRESS FILTERING (re-review NEW-7). This had no address filter at all,
+     * so a node that had dialed loopback or its own LAN baked those addresses
+     * into an invite QR -- a durable, forwardable artefact, which is strictly
+     * worse than the wire disclosure NEW-2 covers. It now runs the SAME
+     * predicate as the ledger-exchange reply
+     * ([`crate::transport::addr_filter::is_disclosable_multiaddr`]), so an
+     * invite can only ever carry globally routable, non-DNS addresses.
+     *
+     * CONSEQUENCE, called out because it is a real functional limit and not an
+     * oversight: an invite can no longer carry an RFC1918 address, so the
+     * "invite the person next to me onto my LAN mesh" cold start is not served
+     * by this function. Wiring that case up needs a caller that knows the
+     * invite is being handed over in person; [`Self::export_seed_entries_for`]
+     * exists for it and is deliberately not the default. Today nothing accepts
+     * an invite at all (review F2), so this closes a latent leak rather than
+     * removing a working feature.
+     */
+    func exportSeedEntries(limit: UInt32)  -> [SeedLedgerEntry]
+
     func getPreferredRelays(limit: UInt32)  -> [LedgerEntry]
     
+    /**
+     * Merge seed entries learned out-of-band (invite / QR) into the ledger.
+     * Returns the number of entries that were newly added.
+     *
+     * MERGE POLICY (deliberate -- seed data is attacker-suppliable):
+     * - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
+     * ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
+     * - A seed carries no identity and no counters, so there is nothing to
+     * merge into an existing entry: a known address is left completely
+     * untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
+     * `public_key` and `nickname` all keep their current values. An invite
+     * is not evidence that a peer was reachable at any particular time, and
+     * it is certainly not evidence about who is listening there.
+     * - New entries are added with `success_count = 0` and no identity fields.
+     * That means they are deliberately NOT returned by
+     * [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
+     * by [`Self::get_preferred_relays`]: an unproven address handed to us by
+     * whoever held the invite must not masquerade as an address we have
+     * actually reached. They surface through [`Self::seed_addresses`]
+     * instead -- see the reasoning on that method. The first successful
+     * connection promotes the entry via [`Self::record_connection`], and
+     * [`Self::annotate_identity`] attaches the identity learned from
+     * Identify at that point.
+     * - Entries whose multiaddr does not parse, is empty, carries no transport
+     * component, or is not routable
+     * ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
+     * dropped, and the whole batch is capped at
+     * [`MAX_SEED_LEDGER_ENTRIES`].
+     *
+     * Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
+     * invite is the LAN/mesh cold-start path and a node has no reliable way to
+     * know its own network context from inside the store layer. Callers that
+     * do know (a cellular-only node) should use
+     * [`Self::import_seed_entries_with_mode`].
+     */
+    func importSeedEntries(entries: [SeedLedgerEntry])  -> UInt32
+
     func load() throws 
     
+    /**
+     * Record that we reached `peer_id` at `multiaddr`.
+     *
+     * INGESTION CHOKE POINT (re-review round 4, F3/NEW-1). The address gate
+     * used to live in the CALLERS, which is how `cli/src/main.rs` ended up with
+     * the DNS gate in `cmd_relay`'s `PeerIdentified` handler and not in
+     * `cmd_start`'s byte-identical one. The gate now lives here, so no caller
+     * can record an unvalidated address at all.
+     *
+     * TWO RULES, both unconditional, with NO parameter a call site can turn the
+     * wrong way -- deliberately stronger than "make the policy a required
+     * argument", because a required argument is still something a future call
+     * site can get wrong:
+     *
+     * 1. **No DNS forms.** A `/dns4/...` entry resolves to whatever its zone
+     * owner says at dial time and is re-pointable between probes, so a
+     * stored name is an SSRF primitive with an indefinite lifetime. Every
+     * caller of this method is recording an address that came off a live
+     * socket (`swarm.rs` passes the resolved `remote_addr` of an established
+     * OUTBOUND connection; the UniFFI surface is called from a platform
+     * client after its own connection succeeded), and a connected socket's
+     * address is an IP literal by construction. There is therefore no
+     * legitimate DNS provenance for this entry point and no reason to offer
+     * one. Operator-configured names reach the swarm through
+     * `bootstrap_addrs`, not through the ledger.
+     * 2. **A transport component is required.** `"".parse::<Multiaddr>()`
+     * returns `Ok(<empty>)` (review F9), so "it parsed" proves nothing; an
+     * empty or peer-id-only record would be stored and later gossiped.
+     *
+     * NOT REJECTED HERE, deliberately: loopback and RFC1918. This method's
+     * meaning is "we actually reached this address", and an address we just
+     * used demonstrably works for us. The routability filter belongs at the
+     * RE-DIAL and DISCLOSURE boundaries -- `build_seed_dial_candidates`,
+     * [`Self::exchange_response_entries`] and [`Self::export_seed_entries`] --
+     * which is where a LAN neighbour stops being useful and starts being
+     * reconnaissance. Rejecting them here would also make
+     * `lan_only_node_discloses_nothing_to_a_stranger` vacuous.
+     */
     func recordConnection(multiaddr: String, peerId: String) 
     
     func recordFailure(multiaddr: String) 
@@ -3769,6 +3890,29 @@ public protocol LedgerManagerProtocol: AnyObject, Sendable {
     
     func saveWithEntries(entries: [LedgerEntry]) throws 
     
+    /**
+     * Addresses known only from an invite/QR seed: recorded, syntactically
+     * valid, but never yet successfully dialed by us.
+     *
+     * WHY A SEPARATE ACCESSOR rather than relaxing
+     * [`Self::dialable_addresses`]: that filter (`success_count > 0 &&
+     * failure_count < 5`) means "addresses we have actually reached", and the
+     * CLI depends on exactly that meaning -- its startup `DialScheduler` sweep,
+     * its relay ranking and its ledger display all read it. Folding unproven,
+     * attacker-suppliable seed addresses into it would silently change what
+     * every existing caller believes it is getting. Seeds are a strictly
+     * lower-confidence tier, so they get their own accessor and callers opt in
+     * by name: sweep the proven set first, then this one. A first successful
+     * connection promotes a seed into the proven set via
+     * [`Self::record_connection`] with no special casing.
+     *
+     * `limit` bounds the returned Vec (review F4). The seed tier is the
+     * attacker-suppliable tier and this used to clone the ENTIRE unproven set
+     * on every `ConnectToSeedPeers`, synchronously on the swarm event-loop
+     * thread. `0` means "no entries", not "unlimited".
+     */
+    func seedAddresses(limit: UInt32)  -> [LedgerEntry]
+
     func summary()  -> String
     
 }
@@ -3841,6 +3985,21 @@ open func allKnownTopics() -> [String]  {
 })
 }
     
+    /**
+     * Attach the identity learned from Identify to a ledger entry.
+     *
+     * SIBLING OF [`Self::record_connection`] (re-review round 4). This is the
+     * OTHER function that can create a `LedgerEntry` from an address, and it is
+     * the wire-driven one (`mobile_bridge.rs` calls it with raw
+     * `/sc/ledger-exchange/1.0.0` data). Gating `record_connection` and leaving
+     * this open would be exactly the partial application the choke-point
+     * refactor exists to stop, so it runs the same ingestion predicate.
+     *
+     * Entries created here keep `success_count = 0`, so they remain in the
+     * unproven seed tier and are never disclosed by
+     * [`Self::exchange_response_entries`]; the ingestion gate is defence in
+     * depth on top of that, not a replacement for it.
+     */
 open func annotateIdentity(multiaddr: String, peerId: String, publicKey: String?, nickname: String?)  {try! rustCall() {
     uniffi_scmessenger_core_fn_method_ledgermanager_annotate_identity(
             self.uniffiCloneHandle(),
@@ -3860,6 +4019,44 @@ open func dialableAddresses() -> [LedgerEntry]  {
 })
 }
     
+    /**
+     * Export our best-known peers as routing-only seed entries for an invite.
+     *
+     * Ordered by [`Self::get_preferred_relays`] ranking (proven peers, most
+     * recently seen first). The caller is responsible for prepending its own
+     * dialable address -- see `crate::relay::invite::build_seed_ledger`.
+     *
+     * Everything except the multiaddr is dropped here, including the peer id:
+     * see the type-level note on [`SeedLedgerEntry`]. This is the only export
+     * path for invites, so it is also the choke point that keeps third-party
+     * identity out of them.
+     *
+     * ADDRESS FILTERING (re-review NEW-7). This had no address filter at all,
+     * so a node that had dialed loopback or its own LAN baked those addresses
+     * into an invite QR -- a durable, forwardable artefact, which is strictly
+     * worse than the wire disclosure NEW-2 covers. It now runs the SAME
+     * predicate as the ledger-exchange reply
+     * ([`crate::transport::addr_filter::is_disclosable_multiaddr`]), so an
+     * invite can only ever carry globally routable, non-DNS addresses.
+     *
+     * CONSEQUENCE, called out because it is a real functional limit and not an
+     * oversight: an invite can no longer carry an RFC1918 address, so the
+     * "invite the person next to me onto my LAN mesh" cold start is not served
+     * by this function. Wiring that case up needs a caller that knows the
+     * invite is being handed over in person; [`Self::export_seed_entries_for`]
+     * exists for it and is deliberately not the default. Today nothing accepts
+     * an invite at all (review F2), so this closes a latent leak rather than
+     * removing a working feature.
+     */
+open func exportSeedEntries(limit: UInt32) -> [SeedLedgerEntry]  {
+    return try!  FfiConverterSequenceTypeSeedLedgerEntry.lift(try! rustCall() {
+    uniffi_scmessenger_core_fn_method_ledgermanager_export_seed_entries(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+
 open func getPreferredRelays(limit: UInt32) -> [LedgerEntry]  {
     return try!  FfiConverterSequenceTypeLedgerEntry.lift(try! rustCall() {
     uniffi_scmessenger_core_fn_method_ledgermanager_get_preferred_relays(
@@ -3869,6 +4066,50 @@ open func getPreferredRelays(limit: UInt32) -> [LedgerEntry]  {
 })
 }
     
+    /**
+     * Merge seed entries learned out-of-band (invite / QR) into the ledger.
+     * Returns the number of entries that were newly added.
+     *
+     * MERGE POLICY (deliberate -- seed data is attacker-suppliable):
+     * - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
+     * ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
+     * - A seed carries no identity and no counters, so there is nothing to
+     * merge into an existing entry: a known address is left completely
+     * untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
+     * `public_key` and `nickname` all keep their current values. An invite
+     * is not evidence that a peer was reachable at any particular time, and
+     * it is certainly not evidence about who is listening there.
+     * - New entries are added with `success_count = 0` and no identity fields.
+     * That means they are deliberately NOT returned by
+     * [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
+     * by [`Self::get_preferred_relays`]: an unproven address handed to us by
+     * whoever held the invite must not masquerade as an address we have
+     * actually reached. They surface through [`Self::seed_addresses`]
+     * instead -- see the reasoning on that method. The first successful
+     * connection promotes the entry via [`Self::record_connection`], and
+     * [`Self::annotate_identity`] attaches the identity learned from
+     * Identify at that point.
+     * - Entries whose multiaddr does not parse, is empty, carries no transport
+     * component, or is not routable
+     * ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
+     * dropped, and the whole batch is capped at
+     * [`MAX_SEED_LEDGER_ENTRIES`].
+     *
+     * Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
+     * invite is the LAN/mesh cold-start path and a node has no reliable way to
+     * know its own network context from inside the store layer. Callers that
+     * do know (a cellular-only node) should use
+     * [`Self::import_seed_entries_with_mode`].
+     */
+open func importSeedEntries(entries: [SeedLedgerEntry]) -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_scmessenger_core_fn_method_ledgermanager_import_seed_entries(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceTypeSeedLedgerEntry.lower(entries),$0
+    )
+})
+}
+
 open func load()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
     uniffi_scmessenger_core_fn_method_ledgermanager_load(
             self.uniffiCloneHandle(),$0
@@ -3876,6 +4117,44 @@ open func load()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_li
 }
 }
     
+    /**
+     * Record that we reached `peer_id` at `multiaddr`.
+     *
+     * INGESTION CHOKE POINT (re-review round 4, F3/NEW-1). The address gate
+     * used to live in the CALLERS, which is how `cli/src/main.rs` ended up with
+     * the DNS gate in `cmd_relay`'s `PeerIdentified` handler and not in
+     * `cmd_start`'s byte-identical one. The gate now lives here, so no caller
+     * can record an unvalidated address at all.
+     *
+     * TWO RULES, both unconditional, with NO parameter a call site can turn the
+     * wrong way -- deliberately stronger than "make the policy a required
+     * argument", because a required argument is still something a future call
+     * site can get wrong:
+     *
+     * 1. **No DNS forms.** A `/dns4/...` entry resolves to whatever its zone
+     * owner says at dial time and is re-pointable between probes, so a
+     * stored name is an SSRF primitive with an indefinite lifetime. Every
+     * caller of this method is recording an address that came off a live
+     * socket (`swarm.rs` passes the resolved `remote_addr` of an established
+     * OUTBOUND connection; the UniFFI surface is called from a platform
+     * client after its own connection succeeded), and a connected socket's
+     * address is an IP literal by construction. There is therefore no
+     * legitimate DNS provenance for this entry point and no reason to offer
+     * one. Operator-configured names reach the swarm through
+     * `bootstrap_addrs`, not through the ledger.
+     * 2. **A transport component is required.** `"".parse::<Multiaddr>()`
+     * returns `Ok(<empty>)` (review F9), so "it parsed" proves nothing; an
+     * empty or peer-id-only record would be stored and later gossiped.
+     *
+     * NOT REJECTED HERE, deliberately: loopback and RFC1918. This method's
+     * meaning is "we actually reached this address", and an address we just
+     * used demonstrably works for us. The routability filter belongs at the
+     * RE-DIAL and DISCLOSURE boundaries -- `build_seed_dial_candidates`,
+     * [`Self::exchange_response_entries`] and [`Self::export_seed_entries`] --
+     * which is where a LAN neighbour stops being useful and starts being
+     * reconnaissance. Rejecting them here would also make
+     * `lan_only_node_discloses_nothing_to_a_stranger` vacuous.
+     */
 open func recordConnection(multiaddr: String, peerId: String)  {try! rustCall() {
     uniffi_scmessenger_core_fn_method_ledgermanager_record_connection(
             self.uniffiCloneHandle(),
@@ -3908,6 +4187,36 @@ open func saveWithEntries(entries: [LedgerEntry])throws   {try rustCallWithError
 }
 }
     
+    /**
+     * Addresses known only from an invite/QR seed: recorded, syntactically
+     * valid, but never yet successfully dialed by us.
+     *
+     * WHY A SEPARATE ACCESSOR rather than relaxing
+     * [`Self::dialable_addresses`]: that filter (`success_count > 0 &&
+     * failure_count < 5`) means "addresses we have actually reached", and the
+     * CLI depends on exactly that meaning -- its startup `DialScheduler` sweep,
+     * its relay ranking and its ledger display all read it. Folding unproven,
+     * attacker-suppliable seed addresses into it would silently change what
+     * every existing caller believes it is getting. Seeds are a strictly
+     * lower-confidence tier, so they get their own accessor and callers opt in
+     * by name: sweep the proven set first, then this one. A first successful
+     * connection promotes a seed into the proven set via
+     * [`Self::record_connection`] with no special casing.
+     *
+     * `limit` bounds the returned Vec (review F4). The seed tier is the
+     * attacker-suppliable tier and this used to clone the ENTIRE unproven set
+     * on every `ConnectToSeedPeers`, synchronously on the swarm event-loop
+     * thread. `0` means "no entries", not "unlimited".
+     */
+open func seedAddresses(limit: UInt32) -> [LedgerEntry]  {
+    return try!  FfiConverterSequenceTypeLedgerEntry.lift(try! rustCall() {
+    uniffi_scmessenger_core_fn_method_ledgermanager_seed_addresses(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+
 open func summary() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_scmessenger_core_fn_method_ledgermanager_summary(
@@ -7183,6 +7492,84 @@ public func FfiConverterTypeRelayAdjustment_lower(_ value: RelayAdjustment) -> R
 }
 
 
+/**
+ * A routing-only peer record carried inside an invite (item 1 of the v0.4.0
+ * ledger seeding work).
+ *
+ * ROUTING ONLY -- NO IDENTITY (operator directive 2026-07-25). This type has
+ * exactly one field and must keep exactly one field. `peer_id`, `public_key`,
+ * `nickname`, `topics`, `success_count`, `failure_count` and `last_seen` are
+ * all deliberately absent: every one of them is identity or behavioural
+ * metadata about a third party who never consented to being listed in someone
+ * else's invite. An invite says *where to knock*, not *who lives there*.
+ *
+ * The invitee dials the bare address, completes the Noise handshake and learns
+ * the peer identity from Identify at connect time, then attaches it locally via
+ * [`LedgerManager::annotate_identity`]. Dropping `peer_id` forgoes dial-time
+ * identity pinning, which is an availability property; message confidentiality
+ * is per-contact X25519 / XChaCha20-Poly1305 established out of band and is
+ * unaffected by which node answers at a given address.
+ *
+ * `relay/invite.rs` has a leak-regression test that asserts no peer id, public
+ * key or nickname appears in the serialised invite bytes. If you add a field
+ * here, that test is what will stop you.
+ */
+public struct SeedLedgerEntry: Equatable, Hashable {
+    /**
+     * Peer-id-stripped dialable multiaddr, e.g. `/ip4/A.B.C.D/tcp/9001`.
+     */
+    public var multiaddr: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Peer-id-stripped dialable multiaddr, e.g. `/ip4/A.B.C.D/tcp/9001`.
+         */multiaddr: String) {
+        self.multiaddr = multiaddr
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SeedLedgerEntry: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSeedLedgerEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SeedLedgerEntry {
+        return
+            try SeedLedgerEntry(
+                multiaddr: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SeedLedgerEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.multiaddr, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSeedLedgerEntry_lift(_ buf: RustBuffer) throws -> SeedLedgerEntry {
+    return try FfiConverterTypeSeedLedgerEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSeedLedgerEntry_lower(_ value: SeedLedgerEntry) -> RustBuffer {
+    return FfiConverterTypeSeedLedgerEntry.lower(value)
+}
+
+
 public struct ServiceStats: Equatable, Hashable {
     public var peersDiscovered: UInt32
     public var messagesRelayed: UInt32
@@ -10096,6 +10483,31 @@ fileprivate struct FfiConverterSequenceTypeReceivedMessage: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSeedLedgerEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [SeedLedgerEntry]
+
+    public static func write(_ value: [SeedLedgerEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSeedLedgerEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SeedLedgerEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SeedLedgerEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSeedLedgerEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProximityTransport: FfiConverterRustBuffer {
     typealias SwiftType = [ProximityTransport]
 
@@ -11049,19 +11461,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_all_known_topics() != 57331) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_scmessenger_core_checksum_method_ledgermanager_annotate_identity() != 57777) {
+    if (uniffi_scmessenger_core_checksum_method_ledgermanager_annotate_identity() != 38634) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_dialable_addresses() != 62093) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_scmessenger_core_checksum_method_ledgermanager_export_seed_entries() != 20628) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_get_preferred_relays() != 25619) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_scmessenger_core_checksum_method_ledgermanager_import_seed_entries() != 25477) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_load() != 33824) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_scmessenger_core_checksum_method_ledgermanager_record_connection() != 24304) {
+    if (uniffi_scmessenger_core_checksum_method_ledgermanager_record_connection() != 175) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_record_failure() != 43159) {
@@ -11071,6 +11489,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_save_with_entries() != 8183) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_scmessenger_core_checksum_method_ledgermanager_seed_addresses() != 5514) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ledgermanager_summary() != 6900) {

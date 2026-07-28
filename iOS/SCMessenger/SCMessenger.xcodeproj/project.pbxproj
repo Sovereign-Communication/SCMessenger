@@ -45,6 +45,12 @@
 		DDEB56052F3FE0BD00387CC8 /* BackupPassphraseValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56042F3FE0BD00387CC8 /* BackupPassphraseValidator.swift */; };
 		DDEB56072F3FE0BD00387CC8 /* IdentityBackupSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56062F3FE0BD00387CC8 /* IdentityBackupSheets.swift */; };
 		DDEB57012F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */; };
+		CDA100012F80000100387CC8 /* BackupPassphraseValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100112F80000100387CC8 /* BackupPassphraseValidatorTests.swift */; };
+		CDA100022F80000100387CC8 /* MeshBackgroundServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */; };
+		CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */; };
+		CDA100042F80000100387CC8 /* ReceiptUnificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */; };
+		CDA200012F80000200387CC8 /* NotificationLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200112F80000200387CC8 /* NotificationLogger.swift */; };
+		CDA200022F80000200387CC8 /* NotificationBackgroundProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200122F80000200387CC8 /* NotificationBackgroundProcessor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +107,12 @@
 		DDEB56062F3FE0BD00387CC8 /* IdentityBackupSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityBackupSheets.swift; sourceTree = "<group>"; };
 		DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxRetryPolicyTests.swift; sourceTree = "<group>"; };
 		DDEB57032F3FE0BD00387CC8 /* SCMessengerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SCMessengerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDA100112F80000100387CC8 /* BackupPassphraseValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupPassphraseValidatorTests.swift; sourceTree = "<group>"; };
+		CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshBackgroundServiceTests.swift; sourceTree = "<group>"; };
+		CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationVerificationTests.swift; sourceTree = "<group>"; };
+		CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptUnificationTests.swift; sourceTree = "<group>"; };
+		CDA200112F80000200387CC8 /* NotificationLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationLogger.swift; sourceTree = "<group>"; };
+		CDA200122F80000200387CC8 /* NotificationBackgroundProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationBackgroundProcessor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -202,6 +214,7 @@
 				DDEB56AA2F3FE0BD00387CC8 /* Theme.swift */,
 				DDEB56002F3FE0BD00387CC8 /* QRCodeGenerator.swift */,
 				DDEB56042F3FE0BD00387CC8 /* BackupPassphraseValidator.swift */,
+				CDA200112F80000200387CC8 /* NotificationLogger.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -281,9 +294,18 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		CDA200322F80000200387CC8 /* Background */ = {
+			isa = PBXGroup;
+			children = (
+				CDA200122F80000200387CC8 /* NotificationBackgroundProcessor.swift */,
+			);
+			path = Background;
+			sourceTree = "<group>";
+		};
 		DDEB56C32F3FE0BD00387CC8 /* SCMessenger */ = {
 			isa = PBXGroup;
 			children = (
+				CDA200322F80000200387CC8 /* Background */,
 				DDEB56972F3FE0BD00387CC8 /* Data */,
 				DDEB569B2F3FE0BD00387CC8 /* Generated */,
 				DDEB569D2F3FE0BD00387CC8 /* Models */,
@@ -311,7 +333,11 @@
 		DDEB57082F3FE0BD00387CC8 /* SCMessengerTests */ = {
 			isa = PBXGroup;
 			children = (
+				CDA100112F80000100387CC8 /* BackupPassphraseValidatorTests.swift */,
+				CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */,
+				CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */,
 				DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */,
+				CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */,
 			);
 			name = SCMessengerTests;
 			path = ../SCMessengerTests;
@@ -472,6 +498,8 @@
 				DDEB56032F3FE0BD00387CC8 /* VerifySafetyNumberSheet.swift in Sources */,
 				DDEB56052F3FE0BD00387CC8 /* BackupPassphraseValidator.swift in Sources */,
 				DDEB56072F3FE0BD00387CC8 /* IdentityBackupSheets.swift in Sources */,
+				CDA200012F80000200387CC8 /* NotificationLogger.swift in Sources */,
+				CDA200022F80000200387CC8 /* NotificationBackgroundProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -479,7 +507,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CDA100012F80000100387CC8 /* BackupPassphraseValidatorTests.swift in Sources */,
+				CDA100022F80000100387CC8 /* MeshBackgroundServiceTests.swift in Sources */,
+				CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */,
 				DDEB57012F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift in Sources */,
+				CDA100042F80000100387CC8 /* ReceiptUnificationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -116,36 +116,12 @@ final class MeshRepository {
 
     // MARK: - Bootstrap Nodes for NAT Traversal
 
-    /// Static fallback bootstrap node multiaddrs for NAT traversal and internet roaming.
-    /// These are used only if env override and remote fetch both fail/are absent.
-    /// Priority order: GCP relay (cloud) → OSX relay (home/local backup).
-    private static let staticBootstrapNodes: [String] = []
-
-    /// NAT hole-punch Priority 1 (iOS parity with core connect_to_bootstrap_relay /
-    /// Android ensureBootstrapRelayConnected): proactive outbound dial target used to
-    /// establish a NAT mapping before any inbound circuit-relay traffic is expected.
-    /// Hardcoded for now per HANDOFF NAT hole-punch task; should move to
-    /// bootstrap.rs-sourced config once that's exposed over the UniFFI boundary.
-    private static let defaultBootstrapRelay = "/ip4/100.56.248.69/tcp/9001"
-
-    /// Resolved bootstrap nodes using the core BootstrapResolver.
-    /// Priority: SC_BOOTSTRAP_NODES env var → remote URL → static fallback.
-    /// ANR FIX: Return static fallback immediately, no network I/O at class load time.
-    static var defaultBootstrapNodes: [String] {
-        // Return static fallback immediately, no network I/O
-        staticBootstrapNodes
-    }
-
     private static func isEnabledFlag(_ raw: String?) -> Bool {
         guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
             return false
         }
         return value == "1" || value == "true" || value == "yes" || value == "on"
     }
-
-    private static let bootstrapRelayPeerIds: Set<String> = Set(
-        defaultBootstrapNodes.compactMap { parseBootstrapRelay(from: $0)?.relayPeerId }
-    )
 
     // MARK: - UniFFI Components (lazy initialization)
 
@@ -826,14 +802,10 @@ final class MeshRepository {
             let defaultSettings = settingsManager?.defaultSettings()
             var swarmTransportStarted = defaultSettings?.internetEnabled != true
             if defaultSettings?.internetEnabled == true {
-                // Configure bootstrap nodes for NAT traversal.
-                // Priority: Ledger (cached) → Remote → Static.
-                var bootstrapAddrs = Self.defaultBootstrapNodes
-                if let ledgerNodes = ledgerManager?.getPreferredRelays(limit: 10) {
-                    for entry in ledgerNodes where !bootstrapAddrs.contains(entry.multiaddr) {
-                        bootstrapAddrs.append(entry.multiaddr)
-                    }
-                }
+                // Configure bootstrap nodes from the connection ledger. A fresh
+                // install legitimately has no candidates until invite/QR or LAN
+                // discovery seeds the ledger.
+                let bootstrapAddrs = ledgerBootstrapAddresses()
 
                 // P0_TRANSPORT_001: Use static port 9001 for LAN connectivity with CLI daemon.
                 // This ensures both sides can dial each other using predictable addresses.
@@ -845,7 +817,11 @@ final class MeshRepository {
                     guard let service = meshService else {
                         throw MeshError.notInitialized("MeshService was released before Swarm startup")
                     }
-                    try service.startSwarm(listenAddr: "/ip4/0.0.0.0/tcp/9001", bootstrapAddrs: [])
+                    appendDiagnostic("swarm_start bootstrap_count=\(bootstrapAddrs.count)")
+                    try service.startSwarm(
+                        listenAddr: "/ip4/0.0.0.0/tcp/9001",
+                        bootstrapAddrs: bootstrapAddrs
+                    )
                     swarmTransportStarted = true
                     broadcastIdentityBeacon()
                     logger.info("Internet transport (Swarm) initiated with \(bootstrapAddrs.count) bootstrap nodes")
@@ -960,18 +936,22 @@ final class MeshRepository {
         }
     }
 
-    /// NAT hole-punch Priority 1 (iOS): proactively dial the bootstrap relay right
-    /// after mesh startup, so an outbound NAT mapping exists before any inbound
-    /// circuit-relay traffic is expected. Non-fatal on failure -- mesh startup
-    /// must not be blocked by an unreachable relay.
+    /// Proactively dial the best ledger-sourced relay after mesh startup so an
+    /// outbound NAT mapping exists before inbound circuit-relay traffic is expected.
+    /// A fresh install has no candidate until invite/QR or LAN discovery seeds
+    /// the ledger. Failure is non-fatal.
     private func ensureBootstrapRelayConnected() async {
         guard let swarmBridge else {
             logger.warning("Skipping bootstrap relay connect: SwarmBridge not wired yet")
             return
         }
+        guard let bootstrapRelay = ledgerBootstrapAddresses(maxCount: 1).first else {
+            logger.info("No known relay in ledger; skipping proactive bootstrap dial")
+            return
+        }
         do {
-            try await swarmBridge.dial(multiaddr: Self.defaultBootstrapRelay)
-            logger.info("Connected to bootstrap relay")
+            try await swarmBridge.dial(multiaddr: bootstrapRelay)
+            logger.info("Connected to ledger bootstrap relay")
         } catch {
             logger.warning("Bootstrap relay unavailable at startup (non-fatal): \(error.localizedDescription)")
         }
@@ -1059,12 +1039,17 @@ final class MeshRepository {
         let settings = try? settingsManager?.load()
         if settings?.internetEnabled == true {
             do {
-                // Configure bootstrap nodes for NAT traversal
+                // Configure bootstrap nodes from the connection ledger.
                 // P0_TRANSPORT_001: Use static port 9001 for LAN connectivity with CLI daemon.
                 guard let service = meshService else {
                     throw MeshError.notInitialized("MeshService is unavailable for Swarm startup")
                 }
-                try service.startSwarm(listenAddr: "/ip4/0.0.0.0/tcp/9001", bootstrapAddrs: [])
+                let bootstrapAddrs = ledgerBootstrapAddresses()
+                appendDiagnostic("swarm_start_manual bootstrap_count=\(bootstrapAddrs.count)")
+                try service.startSwarm(
+                    listenAddr: "/ip4/0.0.0.0/tcp/9001",
+                    bootstrapAddrs: bootstrapAddrs
+                )
                 // startSwarm only returns once Rust has installed its handle.
                 // Retain the matching bridge before any outbound work can route.
                 swarmBridge = service.getSwarmBridge()
@@ -3164,6 +3149,30 @@ final class MeshRepository {
             throw MeshError.notInitialized("LedgerManager not initialized")
         }
         return ledgerManager.dialableAddresses()
+    }
+
+    /// Returns bounded, deduplicated bootstrap candidates from the ledger.
+    /// Preferred relays lead the list, followed by any other proven dialable
+    /// addresses. No platform-owned fallback address is injected.
+    private func ledgerBootstrapEntries(maxCount: UInt32 = 10) -> [LedgerEntry] {
+        guard let ledgerManager else { return [] }
+
+        let preferred = ledgerManager.getPreferredRelays(limit: maxCount)
+        let dialable = ledgerManager.dialableAddresses()
+        var seen = Set<String>()
+        var result: [LedgerEntry] = []
+
+        for entry in preferred + dialable {
+            let address = entry.multiaddr.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !address.isEmpty, seen.insert(address).inserted else { continue }
+            result.append(entry)
+            if result.count >= Int(maxCount) { break }
+        }
+        return result
+    }
+
+    private func ledgerBootstrapAddresses(maxCount: UInt32 = 10) -> [String] {
+        ledgerBootstrapEntries(maxCount: maxCount).map(\.multiaddr)
     }
 
     func getAllKnownTopics() throws -> [String] {
@@ -5744,7 +5753,7 @@ final class MeshRepository {
     }
 
     func isBootstrapRelayPeer(_ peerId: String) -> Bool {
-        return Self.bootstrapRelayPeerIds.contains(peerId)
+        return ledgerBootstrapEntries().contains { $0.peerId == peerId }
     }
 
     /// Check if a peer is a known relay (either bootstrap or dynamically discovered headless)
@@ -5881,8 +5890,8 @@ final class MeshRepository {
     private func relayCircuitAddresses(for targetPeerId: String) -> [String] {
         guard isLibp2pPeerId(targetPeerId) else { return [] }
 
-        // 1. System default bootstrap nodes
-        var relays: [String] = Self.defaultBootstrapNodes.compactMap { bootstrap in
+        // 1. Ledger-sourced bootstrap nodes
+        var relays: [String] = ledgerBootstrapAddresses().compactMap { bootstrap in
             guard let relay = Self.parseBootstrapRelay(from: bootstrap) else { return nil }
             return "\(relay.transportAddr)/p2p/\(relay.relayPeerId)/p2p-circuit/p2p/\(targetPeerId)"
         }
@@ -5987,7 +5996,7 @@ final class MeshRepository {
         defer { relayBootstrapDialInProgress = false }
         lastRelayBootstrapDialAt = now
 
-        for addr in Self.defaultBootstrapNodes {
+        for addr in ledgerBootstrapAddresses() {
             let relayPeerId = Self.parseBootstrapRelay(from: addr)?.relayPeerId
             do {
                 if let relayPeerId,

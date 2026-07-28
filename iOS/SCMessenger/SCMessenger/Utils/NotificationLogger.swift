@@ -24,7 +24,7 @@ final class NotificationLogger {
 
         do {
             try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true, attributes: nil)
-            logFileURL = logsDirectory.appendingPathComponent("notification_verification_\(Date().ISO8601DateFormatter.string(from: Date())).log")
+            logFileURL = logsDirectory.appendingPathComponent("notification_verification_\(Date().iso8601StringFormatter.string(from: Date())).log")
         } catch {
             // Fallback to console-only logging
             logFileURL = documentsPath.appendingPathComponent("notification_verification.log")
@@ -34,7 +34,7 @@ final class NotificationLogger {
 
     /// Log a verification event with timestamp
     func log(_ message: String) {
-        let timestamp = Date().ISO8601DateFormatter.string(from: Date())
+        let timestamp = Date().iso8601StringFormatter.string(from: Date())
         let entry: String = "[\(timestamp)] \(message)\n"
 
         // Log to OSLog
@@ -124,7 +124,7 @@ final class NotificationLogger {
     // MARK: - Private Helpers
 
     private func appendToFile(_ content: String) {
-        guard FileManager.default.fileExists(atPath: logFileURL.path) else {
+        if !FileManager.default.fileExists(atPath: logFileURL.path) {
             // Create file if it doesn't exist
             FileManager.default.createFile(atPath: logFileURL.path, contents: nil, attributes: nil)
         }
@@ -146,13 +146,13 @@ final class NotificationLogger {
 // MARK: - ISO8601 Date Formatter
 
 extension Date {
-    private static let iso8601Formatter: ISO8601DateFormatter = {
-        let formatter: ISO8601DateFormatter = ISO8601DateFormatter()
+    private static let sharedISO8601Formatter: ISO8601DateFormatter = {
+        let formatter = Foundation.ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    var ISO8601DateFormatter: ISO8601DateFormatter {
-        Self.iso8601Formatter
+    var iso8601StringFormatter: ISO8601DateFormatter {
+        Self.sharedISO8601Formatter
     }
 }

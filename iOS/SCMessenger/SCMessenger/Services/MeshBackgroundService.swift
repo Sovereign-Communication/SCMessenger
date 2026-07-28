@@ -11,8 +11,12 @@ import os
 @Observable
 @MainActor
 final class MeshBackgroundService {
+    typealias BackgroundWork = @MainActor () async throws -> Void
+
     private let logger: Logger = Logger(subsystem: "com.scmessenger", category: "Background")
     private let meshRepository: MeshRepository
+    private let refreshWork: BackgroundWork
+    private let processingWork: BackgroundWork
 
     // BGTask identifiers - must match Info.plist BGTaskSchedulerPermittedIdentifiers
     static let refreshTaskId: String = "com.scmessenger.mesh.refresh"
@@ -22,8 +26,25 @@ final class MeshBackgroundService {
     private var refreshTaskScheduled: Bool = false
     private var processingTaskScheduled: Bool = false
 
-    init(meshRepository: MeshRepository) {
+    init(
+        meshRepository: MeshRepository,
+        refreshWork: BackgroundWork? = nil,
+        processingWork: BackgroundWork? = nil
+    ) {
         self.meshRepository = meshRepository
+        self.refreshWork = refreshWork ?? {
+            try await meshRepository.syncPendingMessages()
+            meshRepository.updateStats()
+            try await meshRepository.quickPeerDiscovery()
+        }
+        self.processingWork = processingWork ?? {
+            try await meshRepository.performBulkSync()
+            try await meshRepository.cleanupOldMessages()
+            try await meshRepository.updatePeerLedger()
+            let report: String = meshRepository.ironCore?.runMaintenanceCycle(budgetMs: 25000) ?? "no core"
+            Logger(subsystem: "com.scmessenger", category: "Background")
+                .info("Maintenance cycle: \(report)")
+        }
     }
 
     // MARK: - Public API
@@ -141,14 +162,7 @@ final class MeshBackgroundService {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
-                // Sync pending messages
-                try await self.meshRepository.syncPendingMessages()
-
-                // Update stats
-                self.meshRepository.updateStats()
-
-                // Discover nearby peers (quick scan)
-                try await self.meshRepository.quickPeerDiscovery()
+                try await self.refreshWork()
 
                 task.setTaskCompleted(success: true)
                 self.logger.info("Background refresh completed successfully")
@@ -179,18 +193,7 @@ final class MeshBackgroundService {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
-                // Full sync with all known peers
-                try await self.meshRepository.performBulkSync()
-
-                // Cleanup old messages
-                try await self.meshRepository.cleanupOldMessages()
-
-                // Update peer connection ledger
-                try await self.meshRepository.updatePeerLedger()
-
-                // Run Rust core maintenance cycle (25s budget)
-                let report: String = self.meshRepository.ironCore?.runMaintenanceCycle(budgetMs: 25000) ?? "no core"
-                self.logger.info("Maintenance cycle: \(report)")
+                try await self.processingWork()
 
                 task.setTaskCompleted(success: true)
                 self.logger.info("Background processing completed successfully")
@@ -210,9 +213,7 @@ extension MeshBackgroundService {
         logger.debug("[INFO] Simulating background refresh")
         return Task {
             do {
-                try await meshRepository.syncPendingMessages()
-                meshRepository.updateStats()
-                try await meshRepository.quickPeerDiscovery()
+                try await refreshWork()
                 logger.debug("[OK] Simulated background refresh completed")
             } catch {
                 logger.error("[ERROR] Simulated background refresh failed: \(error.localizedDescription)")
@@ -225,11 +226,7 @@ extension MeshBackgroundService {
         logger.debug("[INFO] Simulating background processing")
         return Task {
             do {
-                try await meshRepository.performBulkSync()
-                try await meshRepository.cleanupOldMessages()
-                try await meshRepository.updatePeerLedger()
-                // Note: runMaintenanceCycle(budgetMs:) intentionally excluded from simulation
-                // to avoid side effects and timing behavior unsuitable for a fast test loop.
+                try await processingWork()
                 logger.debug("[OK] Simulated background processing completed")
             } catch {
                 logger.error("[ERROR] Simulated background processing failed: \(error.localizedDescription)")

@@ -64,29 +64,20 @@ final class NotificationBackgroundProcessor {
 
         logger.info("Testing silent notifications")
 
-        do {
-            let startTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+        let startTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
 
-            // Verify silent notification setup
-            let settings: UNNotificationSettings = await center.notificationSettings()
-            results.silentNotification = settings.badge != nil
+        // Verify notification settings using the public UNNotificationSettings
+        // properties available on iOS.
+        let settings: UNNotificationSettings = await center.notificationSettings()
+        results.silentNotification = settings.badgeSetting != .notSupported
+        results.constraintHandling = settings.soundSetting != .enabled
+        results.processingTime = CFAbsoluteTimeGetCurrent() - startTime
 
-            let elapsed: CFAbsoluteTime = CFAbsoluteTimeGetCurrent() - startTime
-            results.processingTime = elapsed
-
-            if settings.sounds.isEmpty {
-                results.constraintHandling = true
-            }
-
-            notificationLogger.logTestResult(
-                "Silent Notification",
-                passed: results.silentNotification,
-                details: "Configure sounds: \(settings.sounds.count)"
-            )
-        } catch {
-            results.errors.append("Silent notification test failed: \(error.localizedDescription)")
-            notificationLogger.logTestResult("Silent Notification", passed: false)
-        }
+        notificationLogger.logTestResult(
+            "Silent Notification",
+            passed: results.silentNotification,
+            details: "Sound setting: \(settings.soundSetting.rawValue)"
+        )
 
         return results
     }
