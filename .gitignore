@@ -91,6 +91,7 @@ node_modules/
 # Temporary files - use /tmp/ at repo root for session work
 /tmp/
 tmp/
+.tools/
 
 # Log extraction archives (auto-managed by rotation)
 ios_logs_archive/
