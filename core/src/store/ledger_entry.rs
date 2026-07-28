@@ -254,8 +254,17 @@ impl LedgerManager {
         if ledger_file.exists() {
             let data = std::fs::read_to_string(&ledger_file)
                 .map_err(|_| crate::IronCoreError::StorageError)?;
-            let entries: Vec<LedgerEntry> =
+            let mut entries: Vec<LedgerEntry> =
                 serde_json::from_str(&data).map_err(|_| crate::IronCoreError::Internal)?;
+            if entries.len() > MAX_LEDGER_ENTRIES {
+                entries.sort_by(|a, b| {
+                    (b.success_count > 0)
+                        .cmp(&(a.success_count > 0))
+                        .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
+                        .then_with(|| a.multiaddr.cmp(&b.multiaddr))
+                });
+                entries.truncate(MAX_LEDGER_ENTRIES);
+            }
             *self.entries.lock() = entries;
         }
         Ok(())
@@ -845,6 +854,26 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    #[test]
+    fn ledger_load_caps_oversized_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mk = |addr: String, success, last_seen| LedgerEntry { multiaddr: addr, peer_id: None, public_key: None, nickname: None, success_count: success, failure_count: 0, last_seen: Some(last_seen), topics: Vec::new() };
+        let proven = "/ip4/203.0.113.100/tcp/9001".to_string();
+        let oldest_zero = "/ip4/10.0.0.0/tcp/9001".to_string();
+        let mut entries: Vec<LedgerEntry> = (0..19).map(|i| mk(format!("/ip4/203.0.113.{}/tcp/9001", i + 1), 1, 4000 + i as u64)).collect();
+        entries.push(mk(proven.clone(), 3, 5000));
+        entries.push(mk(oldest_zero.clone(), 0, 1));
+        let extra = MAX_LEDGER_ENTRIES + 100 - entries.len();
+        entries.extend((0..extra).map(|i| mk(format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1), 0, 100 + i as u64)));
+        std::fs::write(dir.path().join("ledger.json"), serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
+        mgr.load().expect("load");
+        let loaded = mgr.entries.lock();
+        assert_eq!(loaded.len(), MAX_LEDGER_ENTRIES);
+        assert!(loaded.iter().any(|e| e.multiaddr == proven && e.success_count > 0));
+        assert!(!loaded.iter().any(|e| e.multiaddr == oldest_zero));
     }
 
     #[test]
