@@ -3,23 +3,23 @@
 Status: READY (execute after final S1 tree)
 Authority: PR #115 (GPT plan) gate 040-S4; vehicle HANDOFF/todo/D-04.
 Scope honesty: the local lab proves fresh CLI<->emulator delivery at
-current HEAD with both endpoints on the alpha relay (mandate 0A.8). The
+current HEAD with both endpoints on the cloud node (AWS) (mandate 0A.8). The
 cross-internet Hawaii<->PA custody cell is 040-S5 (operator + Josh/Lucas,
 infra-gated) and stays separate.
 
-Relay facts: /ip4/100.56.248.69/tcp/9001; health http://100.56.248.69:9876/health
+Cloud node facts: /ip4/100.56.248.69/tcp/9001; health http://100.56.248.69:9876/health
 (port 9876, NOT 8080); image testbotz/scmessenger (container scm-alpha-relay).
 Peer id per newer alpha doc: 12D3KooWGhDbFE4YrSHEphHtrpZ79WdBV7VX1ZUqGnBsKhYHsGXB
 (2026-07-20 proof recorded 12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg;
-dialing is promiscuous -- record both, trust the live relay's identify).
+dialing is promiscuous -- record both, trust the live cloud node's identify).
 
 Code-verified corrections at HEAD (override older docs):
 - CLI binary is scmessenger-cli (cli/Cargo.toml), not scm.
 - --http-bind is a GLOBAL flag (cli/src/main.rs:154-158).
-- CLI relay seeding is config/env (bootstrap_nodes in config.json or
+- CLI initial-node seeding is config/env (bootstrap_nodes in config.json or
   SC_BOOTSTRAP_NODES env; cli/src/bootstrap.rs:36-46), NOT the ledger.
 - Android ledger = Rust LedgerManager; fresh install EMPTY; no hardcoded
-  relay remains (comment-only MeshRepository.kt:78).
+  cloud-node address remains (comment-only MeshRepository.kt:78).
 - No REST route returns per-message delivery status. Sender-observed
   DELIVERED = CLI stdout "Delivered: <8-char-id>" (cli/src/main.rs:2081)
   and/or Android logcat "[RECEIPT-RX] Received from core: ... status=delivered"
@@ -43,11 +43,11 @@ compile is COLD -> -j2 first, -j6 warm. Never `cargo clean --target X`
 (it wipes all of target/).
 0.3 Provenance baseline: `git rev-parse HEAD` = <HEAD_SHA>; every endpoint
 must later show it in its "Core Provenance:" startup line.
-0.4 Relay health (operator egress):
+0.4 Cloud node health (operator egress):
   curl -fsS http://100.56.248.69:9876/health  -> {"status":"healthy"}
   powershell -NoProfile -Command "Test-NetConnection 100.56.248.69 -Port 9001 -InformationLevel Quiet"  -> True
 If down: retry x2 @60s; then LAN-DIRECT fallback (Appendix A) or ABORT to
-operator (infra, not code). Never fake relay evidence.
+operator (infra, not code). Never fake cloud-node evidence.
 0.5 Emulator (agy executes; orchestrator gates):
   emulator -avd scm_pixel_34 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
   adb -s emulator-5554 wait-for-device
@@ -75,15 +75,15 @@ Expect one match. Absent -> ABI misconfig; fix before continuing.
 ## 2. Ledger seeding on the fresh emulator (the crux)
 
 Mechanism inventory at HEAD (use only the live one):
-- Settings relay entry -- DEAD write path (toggle+budget only; relay list
+- Settings cloud-node entry -- DEAD write path (toggle+budget only; cloud-node list
   read-only/ledger-sourced, MeshRepository.kt:5495-5501).
-- Deep link scmessenger://add|invite -- LIVE but cannot carry a relay
+- Deep link scmessenger://add|invite -- LIVE but cannot carry a cloud-node
   multiaddr (prefills a contact only; MainViewModel.kt:285-299).
 - LAN/mDNS discovery of CLI -- LIVE but unreliable through emulator NAT;
   FALLBACK only.
 - Signed invite import -- DEAD on Android (zero kt references; confirms
   the F2 review finding).
-- Relay-discovery HTTP endpoint -- ABSENT (only HttpURLConnection is a
+- Cloud-node-discovery HTTP endpoint -- ABSENT (only HttpURLConnection is a
   google.com connectivity probe, NetworkDiagnostics.kt:62-63).
 
 PRIMARY SEED = unsigned contact-JSON import with a `listeners` array: the
@@ -101,33 +101,33 @@ exactly 64 hex chars or import is rejected (ContactsViewModel.kt:495-504).
 Then:
   curl -s http://127.0.0.1:9876/api/identity -o tmp\work_files\2026-07-28_wave2\cli_identity.json
 Record <CLI_PK_HEX> (public_key_hex) and <CLI_PEER_ID> (libp2p_peer_id).
-2.2 Assert CLI on relay (first ConnectionEstablished, CLI side):
+2.2 Assert CLI on the cloud node (first ConnectionEstablished, CLI side):
   findstr /C:"Connected to" /C:"Core Provenance" tmp\work_files\2026-07-28_wave2\cli.log
 Expect: "Core Provenance: 0.x.y (<HEAD_SHA>)" (hash must equal <HEAD_SHA>)
 and "Connected to 12D3Koo... via /ip4/100.56.248.69/tcp/9001 (promiscuous
 mode — any PeerID accepted)".
 2.3 agy installs + launches + seeds (orchestrator supplies exact JSON):
-Seed payload (double duty: registers cli-node contact AND seeds+dials relay):
+Seed payload (double duty: registers cli-node contact AND seeds+dials the cloud node):
   {"public_key":"<CLI_PK_HEX>","peer_id":"<CLI_PEER_ID>","nickname":"cli-node","listeners":["/ip4/100.56.248.69/tcp/9001"]}
 agy invocation (model name suffix IS the effort -- never add --effort):
   agy.exe -p --model "gemini-3.6-flash-high" --add-dir C:/Users/SCM/Documents/GitHub/SCMessenger --dangerously-skip-permissions --print-timeout 1800s "<scoped task: install -r -d the APK; pm grant POST_NOTIFICATIONS; launch via monkey; import the JSON exactly via Add Contact/Import; confirm cli-node appears; capture adb logcat -d to tmp/work_files/2026-07-28_wave2/android_logcat_seed.txt; report lines matching: Dialed seed relay from ledger / Connected to / Dial timed out / No known relay in ledger; read the app identity screen and report this device's 64-hex public key and 12D3Koo peer id verbatim; do not build or edit>"
 agy reports <ANDROID_PK_HEX> and <ANDROID_PEER_ID>.
-2.4 Verify seed took (relay ConnectionEstablished, Android side):
+2.4 Verify seed took (cloud node ConnectionEstablished, Android side):
 Expect "Dialed seed relay from ledger: /ip4/100.56.248.69/tcp/9001" (now
 means CONNECTED, not queued) + core "Connected to ... via /ip4/100.56.248.69/tcp/9001".
 "Dial timed out after 10s" or "No known relay in ledger yet" -> triage 6A.
 
-## 3. Connection phase -- both sides on relay + mutual discovery
+## 3. Connection phase -- both sides on the cloud node + mutual discovery
 
 3.1 Signatures: CLI second "Connected to <ANDROID_PEER_ID> via ..." once
-discovered through the relay; Android "Connected to <CLI_PEER_ID> via ...";
+discovered through the cloud node; Android "Connected to <CLI_PEER_ID> via ...";
 CLI outbox flush "Flushing N queued message(s) to peer <ANDROID_PEER_ID>"
 (cli/src/main.rs:2475-2479).
 3.2 Socket evidence (host):
   powershell -NoProfile -Command "Get-NetTCPConnection -RemoteAddress 100.56.248.69 -RemotePort 9001 -State Established | Format-Table -AutoSize" > tmp\work_files\2026-07-28_wave2\netstat.txt
 Expect >=1 Established row. Emulator leg is NATed through host, so host
 established socket + Android logcat Connected line together evidence both.
-Relay-side ss -tn (both endpoints) is OPERATOR-ASSISTED corroboration
+Cloud-node-side ss -tn (both endpoints) is OPERATOR-ASSISTED corroboration
 (SSH to 100.56.248.69); request it, never block on it, never fabricate.
 3.3 Mutual peer knowledge:
   curl -s http://127.0.0.1:9876/api/peers -o tmp\work_files\2026-07-28_wave2\peers_cli.json
@@ -170,7 +170,7 @@ artifacts against pass criteria.
    /ip4/100.56.248.69/tcp/9001 (promiscuous mode ...)" in cli.log AND
    android_logcat_seed.txt (stronger: second Connected to the counterparty
    peer on each side).
-3. Relay socket: Established TCP row to 100.56.248.69:9001 in netstat.txt.
+3. Cloud-node socket: Established TCP row to 100.56.248.69:9001 in netstat.txt.
 4. CLI->Android: "Message from ..." in Android logcat AND "Delivered: <id>"
    in cli.log for the same send.
 5. Android->CLI: direction":"received" marker entry in history_cli.json AND
@@ -182,20 +182,20 @@ success:true alone, any dial-queue log. success:true with no receipt = FAIL.
 
 ## 6. Failure triage (ordered)
 
-A (no connection): A1 relay health+9001 (down -> infra, retry x2, fallback
-or ABORT). A2 CLI not on relay: grep "Outgoing connection error" (needs
+A (no connection): A1 cloud node health+9001 (down -> infra, retry x2, fallback
+or ABORT). A2 CLI not on the cloud node: grep "Outgoing connection error" (needs
 RUST_LOG debug), confirm SC_BOOTSTRAP_NODES in process env, check firewall
 outbound 9001. A3 Android ledger empty: "No known relay in ledger yet" ->
 re-run seed, confirm 64-hex public_key (else silently rejected at
 ContactsViewModel.kt:495-504), confirm "Dialed seed relay from ledger"
 after re-import. A4 dialed but no Connected: "Dial timed out after 10s"
 (sweep, swarm.rs:2836-2851); confirm emulator egress (ping 8.8.8.8).
-B (relay-connected, no mutual delivery): B1 outbox grep "Flushing" /
+B (cloud-node-connected, no mutual delivery): B1 outbox grep "Flushing" /
 "deferring outbox flush" (main.rs:1878-1884 = peer not transport-reachable
 yet). B2 peers_cli.json must contain <ANDROID_PEER_ID>; contacts_cli.json
 must hold the Android contact; read /api/send error field. B3 agy confirms
-cli-node contact + relay visible in getBootstrapNodesForSettings (proves
-seed promoted to success_count>0). B4 relay ss corroboration. B5 transport
+cli-node contact + cloud node visible in getBootstrapNodesForSettings (proves
+seed promoted to success_count>0). B4 cloud-node ss corroboration. B5 transport
 selection: SmartTransportRouter must choose INTERNET/swarm, not BLE.
 C (message arrives, no sender DELIVERED): C1 did Android send the ACK
 (encodeReceipt MeshRepository.kt:2448-2460)? CLI inline decode debug
@@ -226,7 +226,7 @@ triage buffer ~30-45m. Per phase max 2 retries with triage between; 3rd
 failure escalates (no loops). Receipt failure at correct provenance:
 freeze logs, ticket, report FAIL -- never retry into a pass.
 
-## Appendix A -- LAN-DIRECT fallback (relay down; labelled LAN evidence)
+## Appendix A -- LAN-DIRECT fallback (cloud node down; labelled LAN evidence)
 
 CLI without SC_BOOTSTRAP_NODES; Android seed listeners = CLI's
 host-reachable address from the emulator (host = 10.0.2.2; CLI binds P2P
@@ -243,4 +243,4 @@ row to the CLI LAN address; relay evidence recorded N/A-with-reason.
 3. Whether CLI ledger gossips its relay entry via /sc/ledger-exchange/1.0.0
    (protocol exists addr_filter.rs:363; propagation unproven) -- relevant
    only if relying on auto-discovery instead of explicit import.
-4. Relay-side ss output is operator-assisted corroboration, never a gate.
+4. Cloud-node-side ss output is operator-assisted corroboration, never a gate.
