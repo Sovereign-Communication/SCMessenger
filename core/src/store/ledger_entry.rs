@@ -38,6 +38,10 @@ pub struct LedgerEntry {
 /// `seed_ledger_full_invite_fits_qr_budget` test in `relay/invite.rs`.
 pub const MAX_SEED_LEDGER_ENTRIES: usize = 16;
 
+/// Maximum number of [`LedgerEntry`] records retained in the in-memory ledger.
+/// New-insert paths evict the least-useful entry before exceeding this cap.
+const MAX_LEDGER_ENTRIES: usize = 1024;
+
 /// A routing-only peer record carried inside an invite (item 1 of the v0.4.0
 /// ledger seeding work).
 ///
@@ -99,6 +103,33 @@ fn get_multiaddr_port(addr_str: &str) -> Option<u16> {
         }
     }
     None
+}
+
+fn evict_one_locked(entries: &mut Vec<LedgerEntry>) {
+    if entries.len() < MAX_LEDGER_ENTRIES {
+        return;
+    }
+
+    let victim = if let Some((idx, _)) = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.success_count == 0)
+        .min_by_key(|(_, entry)| (entry.last_seen.is_some(), entry.last_seen.unwrap_or(0)))
+    {
+        idx
+    } else if let Some((idx, _)) = entries
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, entry)| (entry.last_seen.is_some(), entry.last_seen.unwrap_or(0)))
+    {
+        idx
+    } else {
+        0
+    };
+
+    if victim < entries.len() {
+        entries.remove(victim);
+    }
 }
 
 /// Who an invite's `seed_ledger` is going to.
@@ -241,6 +272,9 @@ impl LedgerManager {
             entry.peer_id = Some(peer_id);
             entry.last_seen = Some(current_timestamp());
         } else {
+            while entries.len() >= MAX_LEDGER_ENTRIES {
+                evict_one_locked(&mut entries);
+            }
             entries.push(LedgerEntry {
                 multiaddr,
                 peer_id: Some(peer_id),
@@ -341,6 +375,9 @@ impl LedgerManager {
             entry.last_seen = Some(current_timestamp());
             false
         } else {
+            while entries.len() >= MAX_LEDGER_ENTRIES {
+                evict_one_locked(&mut entries);
+            }
             entries.push(LedgerEntry {
                 multiaddr,
                 peer_id: Some(peer_id),
@@ -387,12 +424,21 @@ impl LedgerManager {
     /// thread. `0` means "no entries", not "unlimited".
     pub fn seed_addresses(&self, limit: u32) -> Vec<LedgerEntry> {
         let entries = self.entries.lock();
-        entries
+        let mut candidates: Vec<LedgerEntry> = entries
             .iter()
             .filter(|e| e.success_count == 0 && e.failure_count < 5)
-            .take(limit as usize)
             .cloned()
-            .collect()
+            .collect();
+        candidates.sort_by(|a, b| {
+            match (a.last_seen, b.last_seen) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a_last_seen), Some(b_last_seen)) => b_last_seen.cmp(&a_last_seen),
+            }
+            .then_with(|| b.success_count.cmp(&a.success_count))
+        });
+        candidates.into_iter().take(limit as usize).collect()
     }
 
     /// Export our best-known peers as routing-only seed entries for an invite.
@@ -579,6 +625,9 @@ impl LedgerManager {
             // A known address is left exactly as it is. A seed has no field
             // that could improve it, and none that we would trust if it did.
             if !already_known {
+                while ledger.len() >= MAX_LEDGER_ENTRIES {
+                    evict_one_locked(&mut ledger);
+                }
                 ledger.push(LedgerEntry {
                     multiaddr: stripped,
                     peer_id: None,
@@ -1355,6 +1404,39 @@ mod tests {
         assert!(
             !after.iter().any(|n| n == "ledger.json") || before.iter().any(|n| n == "ledger.json"),
             "ephemeral ledger wrote ledger.json into the shared temp directory"
+        );
+    }
+
+    #[test]
+    fn ledger_caps_at_max_entries() {
+        let (_dir, mut mgr) = manager();
+        mgr.storage_path = None;
+
+        let addr = |i: usize| {
+            format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1)
+        };
+        let oldest_zero_addr = addr(0);
+        let proven_addr = addr(10);
+
+        let total = MAX_LEDGER_ENTRIES + 5;
+        for i in 0..total {
+            let multiaddr = addr(i);
+            if i < 10 {
+                mgr.annotate_identity(multiaddr, peer(), None, None);
+            } else {
+                mgr.record_connection(multiaddr, peer());
+            }
+        }
+
+        let entries = mgr.entries.lock();
+        assert_eq!(entries.len(), MAX_LEDGER_ENTRIES);
+        assert!(
+            !entries.iter().any(|e| e.multiaddr == oldest_zero_addr),
+            "oldest zero-success entry should have been evicted"
+        );
+        assert!(
+            entries.iter().any(|e| e.multiaddr == proven_addr && e.success_count > 0),
+            "proven entry should survive"
         );
     }
 }
