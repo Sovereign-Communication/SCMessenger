@@ -1,0 +1,23 @@
+[
+  {
+    "available": true,
+    "identifier": "XCODE-WIFI-1",
+    "name": "Shared iPhone Name",
+    "platform": "com.apple.platform.iphoneos",
+    "simulator": false
+  },
+  {
+    "available": true,
+    "identifier": "XCODE-WIFI-2",
+    "name": "Shared iPhone Name",
+    "platform": "com.apple.platform.iphoneos",
+    "simulator": false
+  },
+  {
+    "available": true,
+    "identifier": "XCODE-SIMULATOR",
+    "name": "Simulator",
+    "platform": "com.apple.platform.iphonesimulator",
+    "simulator": true
+  }
+]

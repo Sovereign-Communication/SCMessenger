@@ -13,6 +13,7 @@ APP_PATH="$DERIVED_DATA_PATH/Build/Products/${CONFIGURATION}-iphoneos/SCMessenge
 CLEAN_BUILD="${CLEAN_BUILD:-1}"
 UNINSTALL_FIRST="${UNINSTALL_FIRST:-0}"
 ALLOW_DATA_ERASING_UNINSTALL="${ALLOW_DATA_ERASING_UNINSTALL:-0}"
+DEVICE_RESOLUTION_ONLY="${DEVICE_RESOLUTION_ONLY:-0}"
 
 # A normal `devicectl install app` is an in-place update for the same bundle
 # identifier and preserves the app container. Uninstalling first destroys that
@@ -26,7 +27,7 @@ fi
 
 # ── Auto-detect APPLE_TEAM_ID from .xcodeproj if not provided ──────────────
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
-if [ -z "$APPLE_TEAM_ID" ]; then
+if [ -z "$APPLE_TEAM_ID" ] && [ "$DEVICE_RESOLUTION_ONLY" != "1" ]; then
   APPLE_TEAM_ID=$(grep -m1 'DEVELOPMENT_TEAM' "$PROJECT_PATH/project.pbxproj" 2>/dev/null \
     | sed -E 's/.*= *([A-Z0-9]+).*/\1/' || true)
   if [ -n "$APPLE_TEAM_ID" ]; then
@@ -59,8 +60,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-XCDEVICE_JSON="$(mktemp)"
-DEVICECTL_JSON="$(mktemp)"
+DEVICE_RESOLVER="$ROOT_DIR/iOS/resolve-coredevice.jq"
+if [ ! -f "$DEVICE_RESOLVER" ]; then
+  echo "error: CoreDevice resolver is missing at '$DEVICE_RESOLVER'." >&2
+  exit 1
+fi
+
+mkdir -p "$ROOT_DIR/tmp"
+XCDEVICE_JSON="$(mktemp "$ROOT_DIR/tmp/install-device-xcdevice.XXXXXX")"
+DEVICECTL_JSON="$(mktemp "$ROOT_DIR/tmp/install-device-devicectl.XXXXXX")"
 cleanup_temp_files() {
   rm -f "$XCDEVICE_JSON" "$DEVICECTL_JSON"
 }
@@ -80,49 +88,7 @@ XCODE_DEVICE_UDID=""
 DEVICECTL_IDENTIFIER=""
 DEVICE_NAME=""
 
-# Accept either Xcode destination UDID or CoreDevice identifier as DEVICE_UDID.
-XCODE_DEVICE_UDID="$(jq -r --arg id "$DEVICE_UDID" '
-  .[] | select(.simulator == false and (.platform | contains("iphoneos")) and .available == true and .identifier == $id) | .identifier
-' "$XCDEVICE_JSON" | head -n 1)"
-
-if [ -n "$XCODE_DEVICE_UDID" ]; then
-  DEVICE_NAME="$(jq -r --arg id "$XCODE_DEVICE_UDID" '
-    .[] | select(.identifier == $id) | .name
-  ' "$XCDEVICE_JSON" | head -n 1)"
-fi
-
-DEVICECTL_IDENTIFIER="$(jq -r --arg id "$DEVICE_UDID" '
-  .result.devices[]
-  | select((.connectionProperties.tunnelState // "") == "connected" and .identifier == $id)
-  | .identifier
-' "$DEVICECTL_JSON" | head -n 1)"
-
-if [ -n "$DEVICECTL_IDENTIFIER" ] && [ -z "$DEVICE_NAME" ]; then
-  DEVICE_NAME="$(jq -r --arg id "$DEVICECTL_IDENTIFIER" '
-    .result.devices[]
-    | select(.identifier == $id)
-    | (.deviceProperties.name // .name // "")
-  ' "$DEVICECTL_JSON" | head -n 1)"
-fi
-
-if [ -n "$DEVICE_NAME" ] && [ -z "$XCODE_DEVICE_UDID" ]; then
-  XCODE_DEVICE_UDID="$(jq -r --arg name "$DEVICE_NAME" '
-    .[]
-    | select(.simulator == false and (.platform | contains("iphoneos")) and .available == true and .name == $name)
-    | .identifier
-  ' "$XCDEVICE_JSON" | head -n 1)"
-fi
-
-if [ -n "$DEVICE_NAME" ] && [ -z "$DEVICECTL_IDENTIFIER" ]; then
-  DEVICECTL_IDENTIFIER="$(jq -r --arg name "$DEVICE_NAME" '
-    .result.devices[]
-    | select((.connectionProperties.tunnelState // "") == "connected" and (.deviceProperties.name // .name // "") == $name)
-    | .identifier
-  ' "$DEVICECTL_JSON" | head -n 1)"
-fi
-
-if [ -z "$XCODE_DEVICE_UDID" ] || [ -z "$DEVICECTL_IDENTIFIER" ]; then
-  echo "error: failed to resolve both device IDs for '$DEVICE_UDID'." >&2
+print_device_inventory() {
   echo "Connected iOS devices (Xcode IDs):" >&2
   jq -r '
     .[]
@@ -132,16 +98,66 @@ if [ -z "$XCODE_DEVICE_UDID" ] || [ -z "$DEVICECTL_IDENTIFIER" ]; then
   echo "Connected iOS devices (CoreDevice IDs):" >&2
   jq -r '
     .result.devices[]
-    | select((.connectionProperties.tunnelState // "") == "connected")
-    | "  - \((.deviceProperties.name // .name // "Unknown")): \(.identifier)"
+    | select(
+        (.hardwareProperties.platform // "") == "iOS"
+        and (.hardwareProperties.reality // "") == "physical"
+      )
+    | "  - \((.deviceProperties.name // .name // "Unknown")): "
+      + "\(.identifier) (Xcode: \(.hardwareProperties.udid // "unknown"), "
+      + "pairing: \(.connectionProperties.pairingState // "unknown"), "
+      + "tunnel: \(.connectionProperties.tunnelState // "unknown"))"
   ' "$DEVICECTL_JSON" >&2
+}
+
+# Match only stable IDs. Display-name fallback can select the wrong phone when
+# two paired devices share a name, which is unacceptable before an optional
+# destructive uninstall. A paired Wi-Fi device remains eligible while its
+# tunnel is disconnected; devicectl establishes that tunnel on demand.
+DEVICE_MATCHES="$(jq --arg id "$DEVICE_UDID" -f "$DEVICE_RESOLVER" "$DEVICECTL_JSON")"
+DEVICE_MATCH_COUNT="$(jq -r 'length' <<<"$DEVICE_MATCHES")"
+
+if [ "$DEVICE_MATCH_COUNT" -ne 1 ]; then
+  echo "error: expected one paired physical iOS device for '$DEVICE_UDID', found $DEVICE_MATCH_COUNT." >&2
+  print_device_inventory
   exit 1
+fi
+
+DEVICECTL_IDENTIFIER="$(jq -r '.[0].coreDeviceIdentifier' <<<"$DEVICE_MATCHES")"
+XCODE_DEVICE_UDID="$(jq -r '.[0].xcodeIdentifier' <<<"$DEVICE_MATCHES")"
+DEVICE_NAME="$(jq -r '.[0].name' <<<"$DEVICE_MATCHES")"
+
+XCODE_DEVICE_MATCH_COUNT="$(jq -r --arg id "$XCODE_DEVICE_UDID" '
+  [
+    .[]
+    | select(
+        .simulator == false
+        and (.platform | contains("iphoneos"))
+        and .available == true
+        and .identifier == $id
+      )
+  ]
+  | length
+' "$XCDEVICE_JSON")"
+
+if [ "$XCODE_DEVICE_MATCH_COUNT" -ne 1 ]; then
+  echo "error: CoreDevice mapped '$DEVICE_UDID' to unavailable or ambiguous Xcode destination '$XCODE_DEVICE_UDID'." >&2
+  print_device_inventory
+  exit 1
+fi
+
+XCODE_DEVICE_NAME="$(jq -r --arg id "$XCODE_DEVICE_UDID" '
+  .[]
+  | select(.identifier == $id)
+  | .name
+' "$XCDEVICE_JSON" | head -n 1)"
+if [ -n "$XCODE_DEVICE_NAME" ]; then
+  DEVICE_NAME="$XCODE_DEVICE_NAME"
 fi
 
 DEVICE_UDID="$XCODE_DEVICE_UDID"
 
 echo "== SCMessenger iOS install =="
-echo "Team ID:             $APPLE_TEAM_ID"
+echo "Team ID:             ${APPLE_TEAM_ID:-not required for resolution-only mode}"
 echo "Device Name:         ${DEVICE_NAME:-Unknown}"
 echo "Xcode Device UDID:   $DEVICE_UDID"
 echo "CoreDevice ID:       $DEVICECTL_IDENTIFIER"
@@ -151,12 +167,18 @@ echo "DerivedData:         $DERIVED_DATA_PATH"
 echo "Clean build:         $CLEAN_BUILD"
 echo "Uninstall first:     $UNINSTALL_FIRST"
 echo "Launch after install $LAUNCH_AFTER_INSTALL"
+echo "Resolution only:     $DEVICE_RESOLUTION_ONLY"
 if [ "$UNINSTALL_FIRST" = "0" ]; then
   echo "Data preservation:   in-place update (existing app data retained)"
 else
   echo "Data preservation:   destructive clean install explicitly confirmed"
 fi
 echo
+
+if [ "$DEVICE_RESOLUTION_ONLY" = "1" ]; then
+  echo "[OK] Device resolution complete; build and install skipped."
+  exit 0
+fi
 
 echo "1) Generating/copying UniFFI bindings..."
 "$ROOT_DIR/iOS/copy-bindings.sh"
