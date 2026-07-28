@@ -132,6 +132,80 @@ fn evict_one_locked(entries: &mut Vec<LedgerEntry>) {
     }
 }
 
+fn annotate_identity_locked(
+    entries: &mut Vec<LedgerEntry>,
+    multiaddr: String,
+    peer_id: String,
+    public_key: Option<String>,
+    nickname: Option<String>,
+) -> bool {
+    let normalized_public_key = public_key.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    let normalized_nickname = nickname.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    let target_port = get_multiaddr_port(&multiaddr);
+    let mut found_dns_idx = None;
+    for (idx, entry) in entries.iter().enumerate() {
+        if entry.peer_id.as_deref() == Some(&peer_id)
+            && is_dns_multiaddr(&entry.multiaddr)
+            && (target_port.is_none() || get_multiaddr_port(&entry.multiaddr) == target_port)
+        {
+            found_dns_idx = Some(idx);
+            break;
+        }
+    }
+
+    if let Some(idx) = found_dns_idx {
+        let entry = &mut entries[idx];
+        if normalized_public_key.is_some() {
+            entry.public_key = normalized_public_key;
+        }
+        if normalized_nickname.is_some() {
+            entry.nickname = normalized_nickname;
+        }
+        entry.last_seen = Some(current_timestamp());
+        false
+    } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
+        entry.peer_id = Some(peer_id);
+        if normalized_public_key.is_some() {
+            entry.public_key = normalized_public_key;
+        }
+        if normalized_nickname.is_some() {
+            entry.nickname = normalized_nickname;
+        }
+        entry.last_seen = Some(current_timestamp());
+        false
+    } else {
+        while entries.len() >= MAX_LEDGER_ENTRIES {
+            evict_one_locked(entries);
+        }
+        entries.push(LedgerEntry {
+            multiaddr,
+            peer_id: Some(peer_id),
+            public_key: normalized_public_key,
+            nickname: normalized_nickname,
+            success_count: 0,
+            failure_count: 0,
+            last_seen: Some(current_timestamp()),
+            topics: Vec::new(),
+        });
+        true
+    }
+}
+
 /// Who an invite's `seed_ledger` is going to.
 ///
 /// Re-review NEW-7: an invite QR is a durable, forwardable artefact, so its
@@ -202,7 +276,10 @@ impl LedgerManager {
     }
 
     pub fn save(&self) -> Result<(), crate::IronCoreError> {
-        let entries = self.entries.lock();
+        let entries = {
+            let guard = self.entries.lock();
+            (*guard).clone()
+        };
         self.save_with_entries(&entries)
     }
 
@@ -250,6 +327,7 @@ impl LedgerManager {
             );
             return;
         }
+        let snapshot = {
         let mut entries = self.entries.lock();
         let target_port = get_multiaddr_port(&multiaddr);
         let mut found_dns_idx = None;
@@ -286,15 +364,20 @@ impl LedgerManager {
                 topics: Vec::new(),
             });
         }
-        let _ = self.save_with_entries(&entries);
+        (*entries).clone()
+        };
+        let _ = self.save_with_entries(&snapshot);
     }
 
     pub fn record_failure(&self, multiaddr: String) {
+        let snapshot = {
         let mut entries = self.entries.lock();
         if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
             entry.failure_count += 1;
         }
-        let _ = self.save_with_entries(&entries);
+        (*entries).clone()
+        };
+        let _ = self.save_with_entries(&snapshot);
     }
 
     /// Attach the identity learned from Identify to a ledger entry.
@@ -324,74 +407,18 @@ impl LedgerManager {
             );
             return;
         }
-        let normalized_public_key = public_key.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-        let normalized_nickname = nickname.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-
-        let mut entries = self.entries.lock();
-        let target_port = get_multiaddr_port(&multiaddr);
-        let mut found_dns_idx = None;
-        for (idx, entry) in entries.iter().enumerate() {
-            if entry.peer_id.as_deref() == Some(&peer_id)
-                && is_dns_multiaddr(&entry.multiaddr)
-                && (target_port.is_none() || get_multiaddr_port(&entry.multiaddr) == target_port)
-            {
-                found_dns_idx = Some(idx);
-                break;
-            }
-        }
-
-        let is_new = if let Some(idx) = found_dns_idx {
-            let entry = &mut entries[idx];
-            if normalized_public_key.is_some() {
-                entry.public_key = normalized_public_key;
-            }
-            if normalized_nickname.is_some() {
-                entry.nickname = normalized_nickname;
-            }
-            entry.last_seen = Some(current_timestamp());
-            false
-        } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-            entry.peer_id = Some(peer_id);
-            if normalized_public_key.is_some() {
-                entry.public_key = normalized_public_key;
-            }
-            if normalized_nickname.is_some() {
-                entry.nickname = normalized_nickname;
-            }
-            entry.last_seen = Some(current_timestamp());
-            false
-        } else {
-            while entries.len() >= MAX_LEDGER_ENTRIES {
-                evict_one_locked(&mut entries);
-            }
-            entries.push(LedgerEntry {
+        let snapshot = {
+            let mut entries = self.entries.lock();
+            let _ = annotate_identity_locked(
+                &mut entries,
                 multiaddr,
-                peer_id: Some(peer_id),
-                public_key: normalized_public_key,
-                nickname: normalized_nickname,
-                success_count: 0,
-                failure_count: 0,
-                last_seen: Some(current_timestamp()),
-                topics: Vec::new(),
-            });
-            true
+                peer_id,
+                public_key,
+                nickname,
+            );
+            (*entries).clone()
         };
-        let _ = self.save_with_entries(&entries);
-        let _ = is_new;
+        let _ = self.save_with_entries(&snapshot);
     }
 
     pub fn dialable_addresses(&self) -> Vec<LedgerEntry> {
@@ -593,6 +620,7 @@ impl LedgerManager {
         entries: Vec<SeedLedgerEntry>,
         mode: NetworkMode,
     ) -> u32 {
+        let (snapshot, added) = {
         let mut ledger = self.entries.lock();
         let mut added = 0u32;
 
@@ -642,8 +670,28 @@ impl LedgerManager {
             }
         }
 
-        let _ = self.save_with_entries(&ledger);
+        ((*ledger).clone(), added)
+        };
+        let _ = self.save_with_entries(&snapshot);
         added
+    }
+
+    pub fn annotate_identities_batch(&self, items: Vec<(String, String, Option<String>, Option<String>)>) {
+        let snapshot = {
+            let mut entries = self.entries.lock();
+            for (multiaddr, peer_id, public_key, nickname) in items {
+                if !is_recordable_multiaddr(&multiaddr) {
+                    tracing::debug!(
+                        "Refusing to annotate a DNS-form or transport-less multiaddr: {}",
+                        multiaddr
+                    );
+                    continue;
+                }
+                let _ = annotate_identity_locked(&mut entries, multiaddr, peer_id, public_key, nickname);
+            }
+            (*entries).clone()
+        };
+        let _ = self.save_with_entries(&snapshot);
     }
 
     /// Build the peer list for a `/sc/ledger-exchange/1.0.0` RESPONSE.
