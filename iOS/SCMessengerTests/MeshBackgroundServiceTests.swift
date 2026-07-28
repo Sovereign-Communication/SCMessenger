@@ -19,7 +19,11 @@ final class MeshBackgroundServiceTests: XCTestCase {
     override func setUp() {
         super.setUp()
         meshRepository = MeshRepository()
-        backgroundService = MeshBackgroundService(meshRepository: meshRepository)
+        backgroundService = MeshBackgroundService(
+            meshRepository: meshRepository,
+            refreshWork: {},
+            processingWork: {}
+        )
     }
 
     override func tearDown() {
@@ -50,19 +54,17 @@ final class MeshBackgroundServiceTests: XCTestCase {
         )
     }
 
-    /// Exercises the same work the real BGAppRefreshTask handler performs
-    /// (sync pending messages + refresh stats) via the debug-only simulation
-    /// hook, since the real BGTaskScheduler launch path can't be driven
-    /// directly from a unit test.
+    /// Verifies that the debug-only simulation awaits the injected refresh
+    /// operation without starting real radios or network transports.
     func testSimulatedBackgroundRefreshCompletesWithoutThrowing() async {
-        let task: Task<Void, Error> = backgroundService.simulateBackgroundRefresh()
+        let task: Task<Void, Never> = backgroundService.simulateBackgroundRefresh()
         await task.value
     }
 
-    /// Exercises the same work the real BGProcessingTask handler performs
-    /// (bulk sync + peer ledger update) via the debug-only simulation hook.
+    /// Verifies that the debug-only simulation awaits the injected processing
+    /// operation without starting real radios or network transports.
     func testSimulatedBackgroundProcessingCompletesWithoutThrowing() async {
-        let task: Task<Void, Error> = backgroundService.simulateBackgroundProcessing()
+        let task: Task<Void, Never> = backgroundService.simulateBackgroundProcessing()
         await task.value
     }
 }
