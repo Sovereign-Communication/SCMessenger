@@ -8,12 +8,14 @@ on:
 
 permissions:
   contents: read
-  issues: write  # Required for creating GitHub issues
 
 jobs:
   audit:
     name: Dependency Security Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
