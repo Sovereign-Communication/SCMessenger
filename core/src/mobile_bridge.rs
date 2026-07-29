@@ -970,6 +970,7 @@ impl MeshService {
                                                         // picks the resolved IP at dial time and
                                                         // can re-point it between probes -- the
                                                         // IP rules above never run on a name.
+                                                        let mut accepted = Vec::new();
                                                         for addr in &listen_addrs {
                                                             let addr_str = addr.to_string();
                                                             if !crate::transport::addr_filter::is_dialable_multiaddr(
@@ -984,12 +985,15 @@ impl MeshService {
                                                                 );
                                                                 continue;
                                                             }
-                                                            core_ref.ledger_manager.annotate_identity(
+                                                            accepted.push((
                                                                 addr_str,
                                                                 peer_id.to_string(),
                                                                 public_key.clone(),
                                                                 None, // Nickname not available in Identify
-                                                            );
+                                                            ));
+                                                        }
+                                                        if !accepted.is_empty() {
+                                                            let _ = core_ref.ledger_manager.annotate_identities_batch(accepted);
                                                         }
                                                     }
 
@@ -1048,6 +1052,8 @@ impl MeshService {
                                                     // re-gossiped, so it is filtered before it is
                                                     // stored, not after.
                                                     #[cfg(not(target_arch = "wasm32"))]
+                                                    {
+                                                        let mut accepted = Vec::new();
                                                     for entry in entries {
                                                         let stripped =
                                                             crate::transport::addr_filter::strip_peer_id(
@@ -1072,13 +1078,17 @@ impl MeshService {
                                                             continue;
                                                         }
                                                         if let Some(peer_id) = entry.last_peer_id {
-                                                            core_ref.ledger_manager.annotate_identity(
+                                                            accepted.push((
                                                                 stripped,
                                                                 peer_id,
                                                                 None,
                                                                 None,
-                                                            );
+                                                            ));
                                                         }
+                                                    }
+                                                    if !accepted.is_empty() {
+                                                        let _ = core_ref.ledger_manager.annotate_identities_batch(accepted);
+                                                    }
                                                     }
                                                 }
                                             }
