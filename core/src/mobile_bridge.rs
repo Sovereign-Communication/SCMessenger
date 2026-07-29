@@ -3432,6 +3432,94 @@ pub fn safety_number(our_pubkey_hex: String, their_pubkey_hex: String) -> String
     crate::identity::keys::safety_number(&our_pubkey_hex, &their_pubkey_hex).unwrap_or_default()
 }
 
+// ============================================================================
+// UNIFFI EXPORTS: ABUSE ENGINE & DEVICE PROTECTION
+// ============================================================================
+
+/// Check if a peer is exempt from auto-blocking.
+#[uniffi::export]
+pub fn auto_block_is_exempt(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.auto_block_is_exempt(&peer_id)
+}
+
+/// Exclude a peer from automatic blocking rules.
+#[uniffi::export]
+pub fn auto_block_exempt_peer(peer_id: String) {
+    let core = crate::IronCore::new();
+    core.auto_block_exempt_peer(peer_id);
+}
+
+/// Remove a peer from the auto-block exemption list.
+#[uniffi::export]
+pub fn auto_block_unexempt_peer(peer_id: String) {
+    let core = crate::IronCore::new();
+    core.auto_block_unexempt_peer(&peer_id);
+}
+
+/// Get the current reputation score for a peer (0.0 to 100.0).
+#[uniffi::export]
+pub fn get_reputation_score(peer_id: String) -> f64 {
+    let core = crate::IronCore::new();
+    core.get_reputation_score(&peer_id)
+}
+
+/// Check if a peer's reputation score is within suspicious bounds.
+#[uniffi::export]
+pub fn is_peer_suspicious(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_peer_suspicious(&peer_id)
+}
+
+/// Check if a peer's reputation score is abusive.
+#[uniffi::export]
+pub fn is_peer_abusive(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_peer_abusive(&peer_id)
+}
+
+/// Get spam confidence score for a peer (0.0 to 1.0).
+#[uniffi::export]
+pub fn detect_spam_confidence(peer_id: String) -> f64 {
+    let core = crate::IronCore::new();
+    core.detect_spam_confidence(&peer_id)
+}
+
+/// Inspect binary envelope data to determine if content violates spam heuristics.
+#[uniffi::export]
+pub fn is_content_suspicious(envelope_data: Vec<u8>) -> bool {
+    let core = crate::IronCore::new();
+    core.is_content_suspicious(&envelope_data)
+}
+
+/// Prune stale peer records from the spam detection engine.
+#[uniffi::export]
+pub fn prune_stale_spam_peers(max_entries: u32) -> u32 {
+    let core = crate::IronCore::new();
+    core.prune_stale_spam_peers(max_entries as usize) as u32
+}
+
+/// Associate a device ID with a peer ID in the blocked manager.
+#[uniffi::export]
+pub fn register_device_id(peer_id: String, device_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.register_device_id(&peer_id, &device_id).is_ok()
+}
+
+/// Retrieve all known device IDs associated with a peer ID.
+#[uniffi::export]
+pub fn get_known_devices(peer_id: String) -> Vec<String> {
+    let core = crate::IronCore::new();
+    core.get_known_devices(&peer_id)
+}
+
+/// Check if a specific device ID has been blocked.
+#[uniffi::export]
+pub fn is_device_blocked(device_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_device_blocked(&device_id)
+}
+
 fn current_timestamp() -> u64 {
     web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
