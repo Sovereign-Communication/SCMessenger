@@ -56,6 +56,7 @@ Purpose: classify documentation by lifecycle state so execution decisions use au
 | `docs/PLATFORM_SUPPORT_MATRIX.md`                     | Active | Platform support baseline                                      |
 | `docs/INTEROP_MATRIX_V0.2.0_ALPHA.md`                 | Active | Cross-platform function completeness + interoperability matrix |
 | `docs/PROTOCOL.md`                                    | Active | Protocol identifiers and wire contract                         |
+| `docs/NATURE_INSPIRED_MESH_PHILOSOPHY.md`             | Active | Biological scaling & nature-inspired mesh architecture (WBE 3/4 scaling) |
 | `docs/PQC_HYBRID_PROTOCOL.md`                         | Active | Post-quantum hybrid cryptographic protocol spec (ML-KEM-768, ML-DSA-65, ratchet, envelope v2) |
 | `docs/QUANTUM_READINESS_AUDIT.md`                     | Active | Post-quantum threat assessment and remediation status          |
 | `docs/TESTING_GUIDE.md`                               | Active | Validation commands and expected outcomes                      |

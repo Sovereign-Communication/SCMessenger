@@ -38,6 +38,8 @@ see the [Document Status Index](docs/DOCUMENT_STATUS_INDEX.md).
 ## Protocol and internals
 
 - [Protocol Specification](docs/PROTOCOL.md) -- the wire contract
+- [Nature-Inspired Mesh Philosophy](docs/NATURE_INSPIRED_MESH_PHILOSOPHY.md) -- WBE 3/4 biological scaling laws & metabolic mesh architecture
+- [Post-Quantum Protocol Specification](docs/PQC_HYBRID_PROTOCOL.md) -- ML-KEM-768 & ML-DSA-65 hybrid cryptographic suite
 - [Transport Architecture](docs/TRANSPORT_ARCHITECTURE.md)
 - [NAT Traversal Guide](docs/NAT_TRAVERSAL_GUIDE.md)
 - [Ephemeral Messaging](docs/ephemeral_messaging.md)
