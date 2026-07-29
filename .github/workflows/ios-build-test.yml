@@ -7,7 +7,7 @@
 # via callback URL when one is configured.
 #
 # Triggers: Manual dispatch with sprint_id and git_branch inputs
-#           Plus push and pull_request on iOS/**, core/src/api.udl, and mobile/**
+#           Plus main pushes and pull requests that touch the iOS/FFI surface
 #
 # Jobs:
 #   build-ios:         Cross-compile Rust -> iOS, build XCFramework, run XCTest
@@ -57,18 +57,34 @@ on:
     paths:
       - 'iOS/**'
       - 'core/src/api.udl'
+      - 'core/src/bin/gen_swift.rs'
+      - 'core/src/contacts_bridge.rs'
+      - 'core/src/iron_core.rs'
+      - 'core/src/mobile_bridge.rs'
+      - 'core/src/store/inbox.rs'
+      - 'core/src/store/ledger_entry.rs'
+      - 'core/src/store/storage.rs'
       - 'mobile/**'
   push:
+    branches:
+      - main
     paths:
       - 'iOS/**'
       - 'core/src/api.udl'
+      - 'core/src/bin/gen_swift.rs'
+      - 'core/src/contacts_bridge.rs'
+      - 'core/src/iron_core.rs'
+      - 'core/src/mobile_bridge.rs'
+      - 'core/src/store/inbox.rs'
+      - 'core/src/store/ledger_entry.rs'
+      - 'core/src/store/storage.rs'
       - 'mobile/**'
 
 permissions:
   contents: read
 
-# push and pull_request both fire for branch pushes that touch iOS/**; without
-# this, superseded macOS runs keep burning the full timeout in parallel.
+# Keep one active run per branch or pull request. Restricting push runs to main
+# avoids duplicating every pull-request run with a second branch-push run.
 concurrency:
   group: ios-build-test-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -152,19 +168,13 @@ jobs:
       # Runs after the XCFramework build so gen_swift is already warm at the
       # gen-bindings feature set instead of triggering another rebuild.
       - name: Verify Swift bindings are up to date
-        # Known bindings drift until PQC-10 regen; non-blocking until then (see TASK_CI_IOS_MACOS_RUNNER_FIX.md)
-        continue-on-error: true
         run: |
           ./scripts/verify_ios_bindings.sh
 
       # --- Xcode project sanity check ---
-      # There is no shared scheme committed under
-      # iOS/SCMessenger/SCMessenger.xcodeproj/xcshareddata/xcschemes/, so
-      # `-scheme SCMessenger` relies on xcodebuild's implicit scheme generation.
-      # That does work for `build` (mobile.yml is green using exactly that), but
-      # printing the resolved schemes/targets here turns any future scheme
-      # resolution problem into an immediate, obvious error instead of a
-      # 30-minute mystery inside a build step.
+      # Shared application and test schemes are committed. Printing the
+      # resolved schemes/targets turns any future registration regression into
+      # an immediate error instead of a late failure inside the build step.
       - name: List Xcode schemes and targets
         working-directory: iOS
         run: |

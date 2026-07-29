@@ -1,5 +1,5 @@
 module scmessenger_core {
-    header "scmessenger_core.h"
+    header "apiFFI.h"
     export *
     use "Darwin"
     use "_Builtin_stdbool"
