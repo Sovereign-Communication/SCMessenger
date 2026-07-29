@@ -13,7 +13,7 @@ Nature solves the challenge of distributing nutrients across organisms ranging f
 
 \[B \propto M^{3/4}\]
 
-Similarly, urban infrastructure scales sublinearly (\(M^{0.85}\)) while urban innovation outputs scale superlinearly (\(M^{1.15}\)). 
+Similarly, urban infrastructure scales sublinearly (\(M^{0.85}\)) while urban innovation outputs scale superlinearly (\(M^{1.15}\)).
 
 SCMessenger applies these exact scaling invariants to its Rust core (`core/src/transport/` and `core/src/routing/`) to guarantee battery efficiency and zero UI freeze on mobile edge devices regardless of whether the mesh contains 10 nodes or 10,000,000 nodes.
 

@@ -428,7 +428,7 @@ Completed comprehensive audit and cleanup of Android privacy settings to ensure 
 
 **Files Modified:**
 - `MeshSettingsScreen.kt`: Removed Privacy Settings section (-11 LOC)
-- `SettingsScreen.kt`: Removed PrivacySettingsSection composable (-60 LOC)  
+- `SettingsScreen.kt`: Removed PrivacySettingsSection composable (-60 LOC)
 - `SettingsViewModel.kt`: Removed update methods for unimplemented features (-22 LOC)
 - `IMPLEMENTATION_STATUS.md`: Added documentation about removal
 - `REMAINING_WORK_TRACKING.md`: Added resolution entry
@@ -633,8 +633,8 @@ Fixed critical iOS instant crash issue caused by version mismatch between Swift 
 - Timestamp mismatch: `api.swift` (1774009040) vs `xcframework` (1773996654)
 
 **Resolution Steps:**
-1. **Rebuilt iOS Libraries**: 
-   - `cargo build --target aarch64-apple-ios-sim --release` 
+1. **Rebuilt iOS Libraries**:
+   - `cargo build --target aarch64-apple-ios-sim --release`
    - `cargo build --target aarch64-apple-ios --release`
 2. **Recreated XCFramework**: Combined both iOS device + simulator libraries with current headers
 3. **Updated Project**: Copied fresh xcframework to iOS project location
@@ -681,19 +681,19 @@ Implemented automatic peer forwarding functionality to address the issue where n
 
 ### Technical Implementation
 
-- **Native platforms**: Share connected peers + DHT entries via ledger exchange on `ConnectionEstablished` 
+- **Native platforms**: Share connected peers + DHT entries via ledger exchange on `ConnectionEstablished`
 - **WASM platforms**: Initiate ledger exchange handshake to trigger peer information sharing
 - **Maintained compatibility**: All existing peer broadcast mechanisms still work
 - **No breaking changes**: Existing applications benefit automatically
 
 ### What Works (Verified)
-- Core messaging functionality 
+- Core messaging functionality
 - Cross-platform builds (iOS, Android, WASM)
 - Basic transport layer with automatic peer forwarding
 - All automated tests passing (520+)
 - **NEW**: Automatic peer discovery propagation through relay nodes
 
-### What Needs Verification  
+### What Needs Verification
 - Real-world testing of Android + iOS discovering each other via GCP relay
 - Performance impact of automatic ledger exchange
 - Cross-platform notification behavior consistency
@@ -717,12 +717,12 @@ Re-enabled v0.2.1 notification functionality that was previously rolled back to 
 - **Focus**: Comprehensive testing and real-world verification
 
 ### What Works (Verified)
-- Core messaging functionality 
+- Core messaging functionality
 - Cross-platform builds (iOS, Android, WASM)
 - Basic transport layer
 - All automated tests passing (520+)
 
-### What Needs Verification  
+### What Needs Verification
 - Complete notification flow testing (iOS, Android, WASM)
 - Real-world message delivery with notifications
 - Cross-platform notification behavior consistency
@@ -2378,7 +2378,7 @@ ssh relay-server "journalctl -u scm-relay --since '5 minutes ago'"
   - Historical open-checkbox sources were triaged with explicit status tags in `docs/historical/*` and are no longer active checklist noise.
   - `docs/ALPHA_RELEASE_AUDIT_V0.1.2.md` version-bump/redeploy steps were explicitly marked as historical closeout and superseded by v0.2.0 release-sync docs.
   - Final checklist inventory after wave-3 triage: 10 open checklist items repo-wide, all in `REMAINING_WORK_TRACKING.md`. See `DOCUMENTATION_UPDATE_TEMPLATE.md` in contact audit directory for canonical doc updates.
- 
+
 ## v0.2.0 Critical Bug Fixes (2026-03-09)
 
 - `cargo test --workspace --no-run` — **pass**

@@ -149,4 +149,3 @@ Escalation note (per CLAUDE.md): this plan changes identity format, wire format,
 Residual Exposures:
 1. **Relay Transit Signatures**: Envelope transit hop signatures use Ed25519 (64B) to preserve low overhead across mesh relay hops; payload authenticity and confidentiality are protected by E2E dual signatures (Ed25519 + ML-DSA-65) and hybrid ratchet encryption.
 2. **libp2p Noise Transport**: Peer connection establishment uses classical Noise XX (X25519+ChaCha20Poly1305) until upstream libp2p releases standard post-quantum Noise extensions.
-
