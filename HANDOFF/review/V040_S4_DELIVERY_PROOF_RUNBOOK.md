@@ -43,7 +43,7 @@ compile is COLD -> -j2 first, -j6 warm. Never `cargo clean --target X`
 (it wipes all of target/).
 0.3 Provenance baseline: `git rev-parse HEAD` = <HEAD_SHA>; every endpoint
 must later show it in its "Core Provenance:" startup line.
-0.4 Cloud node reachability (operator egress): PRECONDITION -- 100.56.248.69 is a Tailscale CGNAT address; the Windows host MUST have Tailscale up (service was absent at 2026-07-28 probe -- both 9876 and 9001 unreachable without it). Verify: tailscale status shows the node, then:
+0.4 Cloud node reachability (operator egress): PRECONDITION -- the cloud node must be reachable by PUBLIC route (public IP or DDNS + port forwards per H-04). 100.56.248.69 is a CGNAT-range tailnet address (ops-side convenience, NOT a product path -- repo philosophy: no third-party network dependencies); the 2026-07-28 probe found it unreachable from the Windows host. Operator to supply the public endpoint before this step. Verify:
   curl -fsS http://100.56.248.69:9876/health  -> {"status":"healthy"}
   powershell -NoProfile -Command "Test-NetConnection 100.56.248.69 -Port 9001 -InformationLevel Quiet"  -> True
 If down: retry x2 @60s; then LAN-DIRECT fallback (Appendix A) or ABORT to
