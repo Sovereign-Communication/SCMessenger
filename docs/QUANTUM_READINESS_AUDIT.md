@@ -132,3 +132,21 @@ Escalation note (per CLAUDE.md): this plan changes identity format, wire format,
 - libcrux-ml-kem: https://crates.io/crates/libcrux-ml-kem
 - RustCrypto ml-kem: https://crates.io/crates/ml-kem
 - rust-libp2p Noise (X25519-only as of audit date): https://docs.rs/libp2p/latest/libp2p/noise/index.html
+
+---
+
+## Remediation Status (2026-07-29 Snapshot)
+
+| Finding | Severity | Landed Remediation Tasks | Status |
+|---|---|---|---|
+| F1 Legacy envelope path HNDL | CRITICAL | `PQC_08_LEGACY_PATH_RETIREMENT.md` (gated legacy sends, require_pq enforcement) | **CLOSED** |
+| F2 Ratcheted path HNDL | CRITICAL | `PQC_05_HYBRID_KEM_MODULE.md`, `PQC_06_HYBRID_SESSION_INIT.md`, `PQC_07_PQ_RATCHET.md` (root key mixing with ML-KEM-768 shared secret) | **CLOSED** |
+| F3 Single keypair / no agility | HIGH | `PQC_02_ENVELOPE_V2.md`, `PQC_03_IDENTITY_V2_KEYBUNDLE.md`, `PQC_04_SUITE_NEGOTIATION.md` | **CLOSED** |
+| F4 Onion routing retro-privacy | HIGH | `PQC_09_HYBRID_ONION.md` (spec and modules landed; parked until onion layer activation) | **PARKED** |
+| F5 Ed25519 signatures forgeable | MEDIUM | `PQC_10_MLDSA_IDENTITY_SIGNATURES.md`, `PQC_11_RELAY_INVITE_HYBRID_AUTH.md` | **CLOSED** |
+| F6 Transport hop encryption classical | MEDIUM | `PQC_12_TRANSPORT_TLS_PQ.md` (rustls PQ enabled; libp2p Noise remains classical) | **ACCEPTED** |
+
+Residual Exposures:
+1. **Relay Transit Signatures**: Envelope transit hop signatures use Ed25519 (64B) to preserve low overhead across mesh relay hops; payload authenticity and confidentiality are protected by E2E dual signatures (Ed25519 + ML-DSA-65) and hybrid ratchet encryption.
+2. **libp2p Noise Transport**: Peer connection establishment uses classical Noise XX (X25519+ChaCha20Poly1305) until upstream libp2p releases standard post-quantum Noise extensions.
+

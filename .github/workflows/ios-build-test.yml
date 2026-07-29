@@ -261,8 +261,7 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            | (xcpretty 2>/dev/null || cat)
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Run iOS tests
         working-directory: iOS
@@ -276,8 +275,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath ../test-results/ios-test-results.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
-            | (xcpretty 2>/dev/null || cat)
+            CODE_SIGNING_ALLOWED=NO
 
       # --- Artifacts ---
       - name: Upload test results

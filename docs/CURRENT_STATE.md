@@ -37,7 +37,7 @@ in-flight milestone. Long-horizon sequencing remains the two-phase DAG in
 | :--- | :--- | :--- | :--- |
 | **Rust Core (`core/`)** | **v0.3.5 Verified** | `IronCore` (`core/src/iron_core.rs`) | Cargo workspace compiles cleanly (`cargo check --workspace`). 1100+ lib unit tests pass. |
 | **Transport Layer** | **v0.3.5 / v0.4.0 Prep** | `SwarmBridge` (`core/src/transport/swarm.rs`) | Phase 1 parity signed off; mDNS/TCP/QUIC/WS/BLE paths landed. Re-verify bootstrap relay dial semantics (2026-07-25 handoff). |
-| **PQC & Ratchet** | **v0.4.0+ / v1.0.0 track** | `DoubleRatchet` & `IdentityKeys` | E-00 wiring **done** (2026-07-17). PQC-02..13 in done/; **PQC-14** open. PQ root-key mixing in `ratchet.rs` (suite 0x02). |
+| **PQC & Ratchet** | **v0.5.0 / Verified** | `DoubleRatchet` & `IdentityKeys` | PQC-01..14 **COMPLETE** (2026-07-29). Hybrid suite `0x02` (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65) active. Protocol spec published (`docs/PQC_HYBRID_PROTOCOL.md`). Note: Envelope relay transit signatures (Ed25519) and Noise transport layer remain classical for network efficiency and standard libp2p compatibility. |
 | **Android Client** | **v0.3.5 Active** | `MeshRepository.kt` (`android/app/...`) | Kotlin UniFFI async bindings active. Pre-built APK installer ([install-apk.bat](../android/install-apk.bat)) verified. |
 | **iOS Client** | **v0.3.5 Active** | `MeshRepository.swift` (`iOS/SCMessenger/...`) | Swift UniFFI bindings active with WS12.22+ crash fixes. Cable installer ([install-device.sh](../iOS/install-device.sh)) verified. |
 | **WASM / Web** | **v0.3.5 Active** | `scmessenger-wasm` (`wasm/`) | Binds loopback WebSocket RPC on port 9002. Web asset server integrated in CLI daemon. |

@@ -2,9 +2,15 @@ name: Mobile
 
 on:
   push:
-    branches: [main]
+    paths:
+      - 'iOS/**'
+      - 'core/src/api.udl'
+      - 'mobile/**'
   pull_request:
-    branches: [main]
+    paths:
+      - 'iOS/**'
+      - 'core/src/api.udl'
+      - 'mobile/**'
 
 env:
   CARGO_TERM_COLOR: always
