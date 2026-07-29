@@ -312,8 +312,26 @@ impl LedgerManager {
             }
             let data = std::fs::read_to_string(&ledger_file)
                 .map_err(|_| crate::IronCoreError::StorageError)?;
-            let mut entries: Vec<LedgerEntry> =
-                serde_json::from_str(&data).map_err(|_| crate::IronCoreError::Internal)?;
+            let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    tracing::warn!("ledger file corrupted; recovering with empty ledger: {}", err);
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let corrupt_name = format!(
+                        "{}.corrupt-{}",
+                        ledger_file
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("ledger.json"),
+                        timestamp
+                    );
+                    let _ = std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name));
+                    Vec::new()
+                }
+            };
             let parsed_len = entries.len();
             entries.retain(|entry| {
                 let public_key_ok = entry
@@ -324,11 +342,14 @@ impl LedgerManager {
                     .nickname
                     .as_ref()
                     .map_or(true, |value| value.trim().len() <= MAX_LEN_NICKNAME);
-                let peer_id_ok = entry.peer_id.as_ref().map_or(true, |peer_id| {
-                    peer_id.is_empty()
-                        || (peer_id.len() <= MAX_LEN_PEER_ID
-                            && peer_id.parse::<libp2p::PeerId>().is_ok())
-                });
+                // Ingest parity: ingest accepts an empty peer_id string, so load admits None or Some("") and rejects only non-empty invalid peer ids.
+                let peer_id_ok = match entry.peer_id.as_deref() {
+                    None | Some("") => true,
+                    Some(peer_id) => {
+                        peer_id.len() <= MAX_LEN_PEER_ID
+                            && peer_id.parse::<libp2p::PeerId>().is_ok()
+                    }
+                };
                 entry.multiaddr.len() <= MAX_LEN_MULTIADDR && peer_id_ok && public_key_ok && nickname_ok
             });
             let mut changed = entries.len() != parsed_len;
@@ -1937,5 +1958,63 @@ mod tests {
         let reloaded = LedgerManager::new(path);
         reloaded.load().expect("second load");
         assert_eq!(reloaded.entries.lock().len(), MAX_LEDGER_ENTRIES);
+    }
+
+    #[test]
+    fn load_admits_empty_peer_id_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger_file = dir.path().join("ledger.json");
+        let entries = vec![
+            LedgerEntry {
+                multiaddr: "/ip4/198.51.100.30/tcp/9001".to_string(),
+                peer_id: Some(String::new()),
+                public_key: None,
+                nickname: None,
+                success_count: 1,
+                failure_count: 0,
+                last_seen: Some(1),
+                topics: Vec::new(),
+            },
+            LedgerEntry {
+                multiaddr: "/ip4/198.51.100.31/tcp/9001".to_string(),
+                peer_id: None,
+                public_key: None,
+                nickname: None,
+                success_count: 1,
+                failure_count: 0,
+                last_seen: Some(2),
+                topics: Vec::new(),
+            },
+        ];
+        std::fs::write(&ledger_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+
+        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
+        mgr.load().expect("load");
+        let loaded = mgr.entries.lock();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.iter().any(|e| e.multiaddr == "/ip4/198.51.100.30/tcp/9001" && e.peer_id.as_deref() == Some("")));
+        assert!(loaded.iter().any(|e| e.multiaddr == "/ip4/198.51.100.31/tcp/9001" && e.peer_id.is_none()));
+    }
+
+    #[test]
+    fn load_recovers_from_corrupt_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger_file = dir.path().join("ledger.json");
+        std::fs::write(&ledger_file, "{ not json").unwrap();
+
+        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
+        mgr.load().expect("load recovers from corrupt json");
+
+        assert!(mgr.entries.lock().is_empty());
+        let corrupt_present = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .flatten()
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map_or(false, |name| name.starts_with("ledger.json.corrupt-"))
+            });
+        assert!(corrupt_present, "corrupt sibling was not created");
     }
 }
