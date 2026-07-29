@@ -9,6 +9,7 @@ import SwiftUI
 import VisionKit
 import Vision
 
+@MainActor
 struct ContactsListView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var viewModel: ContactsViewModel?
@@ -359,6 +360,7 @@ struct ContactRow: View {
     }
 }
 
+@MainActor
 struct AddContactView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MeshRepository.self) private var repository
