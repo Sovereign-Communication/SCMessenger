@@ -4123,10 +4123,7 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Evaluate a peer against auto-block criteria without taking action.
-    pub fn auto_block_evaluate(
-        &self,
-        peer_id: &str,
-    ) -> crate::abuse::auto_block::AutoBlockResult {
+    pub fn auto_block_evaluate(&self, peer_id: &str) -> crate::abuse::auto_block::AutoBlockResult {
         self.auto_block_engine.read().evaluate(peer_id)
     }
 
@@ -4231,19 +4228,26 @@ impl IronCore {
         peer_id: &str,
         device_id: &str,
     ) -> Result<(), crate::IronCoreError> {
-        self.blocked_manager()
+        self.blocked_manager
             .read()
             .register_device_id(peer_id, device_id)
+            .map(|_| ())
     }
 
     /// Retrieve all known device IDs for a peer ID.
     pub fn get_known_devices(&self, peer_id: &str) -> Vec<String> {
-        self.blocked_manager().read().get_known_devices(peer_id)
+        self.blocked_manager
+            .read()
+            .get_known_devices(peer_id)
+            .unwrap_or_default()
     }
 
     /// Check if a specific device ID is blocked.
     pub fn is_device_blocked(&self, device_id: &str) -> bool {
-        self.blocked_manager().read().is_device_blocked(device_id)
+        self.blocked_manager
+            .read()
+            .is_device_blocked(device_id)
+            .unwrap_or(false)
     }
 
     /// Update keepalive interval for a peer connection.
