@@ -4,16 +4,27 @@ on:
   push:
     tags:
       - v*
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  verify-release-version:
+    name: Verify release version metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify platform version and build-number agreement
+        run: bash scripts/verify_versions.sh --require-tag
+
   # CLI Builds (Linux, macOS, Windows)
   build-cli:
     name: Build CLI - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: verify-release-version
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +95,7 @@ jobs:
   build-android:
     name: Build Android Release
     runs-on: ubuntu-latest
+    needs: verify-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -96,40 +108,26 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: Build Debug APK (for CI verification)
+      - name: Require Android release signing secrets
         env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          KEYSTORE_BASE64: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SCMESSENGER_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SCMESSENGER_KEY_PASSWORD }}
         run: |
-          cd android
-          ./gradlew assembleDebug
+          for required in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!required}" ]; then
+              echo "::error::Android release signing secret ${required} is not configured"
+              exit 1
+            fi
+          done
 
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
-
-      # Signed release build: only runs once SCMESSENGER_KEYSTORE_BASE64 is
-      # set as a repo secret (see docs/ANDROID_RELEASE_SIGNING.md for how to
-      # generate the keystore and configure the four required secrets).
-      # Uses the env-driven signing path in android/app/build.gradle
-      # (SCMESSENGER_KEYSTORE_PATH/_PASSWORD/_ALIAS/_PASSWORD -- first
-      # priority in its signingConfigs.release block), so nothing in the
-      # gradle config itself needs to change. Produces both a .aab (for
-      # Play Store upload) and a signed .apk (for direct/sideload
-      # distribution, e.g. handing a build straight to an alpha tester
-      # without waiting on a Play Store review).
       - name: Decode release keystore
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
-        env:
-          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
         run: |
-          echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
+          echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
 
       - name: Build signed release AAB + APK
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:
-          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           SCMESSENGER_KEYSTORE_PATH: release.keystore
           SCMESSENGER_KEYSTORE_PASSWORD: ${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}
@@ -141,12 +139,14 @@ jobs:
 
       - name: Remove decoded keystore
         if: always()
-        run: rm -f android/release.keystore
+        run: rm -f android/app/release.keystore
+
+      - name: Require non-empty signed release artifacts
+        run: |
+          test -n "$(find android/app/build/outputs/bundle/release -type f -name '*.aab' -size +0c -print -quit)"
+          test -n "$(find android/app/build/outputs/apk/release -type f -name '*.apk' -size +0c -print -quit)"
 
       - name: Upload signed release artifacts
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
-        env:
-          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: android-release-signed
@@ -154,76 +154,11 @@ jobs:
             android/app/build/outputs/bundle/release/*.aab
             android/app/build/outputs/apk/release/*.apk
 
-  # iOS Release Build
-  build-ios:
-    name: Build iOS Release
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.0.app
-
-      - name: Install CocoaPods
-        run: gem install cocoapods
-
-      - name: Install Pods
-        run: |
-          cd iOS
-          pod install
-
-      - name: Build Workspace
-        run: |
-          cd iOS
-          xcodebuild -workspace SCMessenger.xcworkspace \
-            -scheme SCMessenger \
-            -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 15' \
-            build
-
-      - name: Run Tests
-        run: |
-          cd iOS
-          xcodebuild test \
-            -workspace SCMessenger.xcworkspace \
-            -scheme SCMessenger \
-            -destination 'platform=iOS Simulator,name=iPhone 15'
-
-      # Note: Release signing requires GitHub Secrets
-      # Uncomment and configure secrets for production releases
-      # - name: Import Certificates
-      #   env:
-      #     CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
-      #     CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-      #     PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-      #   run: |
-      #     # Import certificate to keychain
-      #     echo "$CERTIFICATE_BASE64" | base64 -d > certificate.p12
-      #     security create-keychain -p "" build.keychain
-      #     security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-      #     security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-      #     # Install provisioning profile
-      #     echo "$PROVISIONING_PROFILE_BASE64" | base64 -d > profile.mobileprovision
-      #     mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-      #     cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-      # 
-      # - name: Build IPA
-      #   run: |
-      #     cd iOS
-      #     xcodebuild -workspace SCMessenger.xcworkspace \
-      #       -scheme SCMessenger \
-      #       -configuration Release \
-      #       -archivePath build/SCMessenger.xcarchive \
-      #       archive
-      #     xcodebuild -exportArchive \
-      #       -archivePath build/SCMessenger.xcarchive \
-      #       -exportPath build \
-      #       -exportOptionsPlist ExportOptions.plist
-
   # WASM Release Build
   build-wasm:
     name: Build WASM Release
     runs-on: ubuntu-latest
+    needs: verify-release-version
     steps:
       - uses: actions/checkout@v4
 
@@ -286,10 +221,9 @@ jobs:
           path: wasm/pkg/*
 
   # Create GitHub Release
-  # Note: build-ios is intentionally excluded -- iOS distribution requires an
-  # Apple Developer account ($99/yr) which is a pending human decision. The
-  # iOS build job still runs independently so failures surface in CI, but the
-  # release is not blocked on it.
+  # iOS distribution is intentionally absent: an IPA would require an archive,
+  # export options, and distribution signing gates that this workflow does not
+  # configure. iOS CI owns simulator verification separately.
   create-release:
     name: Create GitHub Release
     needs: [build-cli, build-android, build-wasm]
@@ -312,7 +246,7 @@ jobs:
       - name: Generate Combined Checksums
         run: |
           # Find all binary files (excluding checksums)
-          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.ipa" -o -name "*.wasm" \) ! -name "*.sha256" | while read file; do
+          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.wasm" \) ! -name "*.sha256" | while read file; do
             if [ -f "$file" ]; then
               sha256sum "$file" >> SHA256SUMS.txt
             fi
@@ -327,7 +261,6 @@ jobs:
             **/scm-*
             **/*.apk
             **/*.aab
-            **/*.ipa
             **/*.wasm
             **/*.js
             **/*.ts

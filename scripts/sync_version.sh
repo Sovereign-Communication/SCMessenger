@@ -1,203 +1,68 @@
 #!/usr/bin/env bash
-# Version synchronization script
-# Reads version from Cargo.toml and updates all platform manifests
-# Validates: Requirements 8.1, 8.2, 8.3, 8.4
-
+# Synchronize Cargo's release version to the real platform manifests.
 set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+fail() { echo "[ERROR] $*" >&2; exit 1; }
+usage() {
+    cat <<'EOF'
+Usage: scripts/sync_version.sh (--build-number N | --android-build-number N --ios-build-number N)
 
-# Get the repository root
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+Cargo.toml is the source version. Android and desktop retain its complete
+SemVer value; iOS CFBundleShortVersionString receives only X.Y.Z because Apple
+marketing versions cannot carry prerelease metadata. Build numbers are supplied
+by the release operator and must each exceed their current platform value.
+EOF
+}
+plist_value() { awk -v key="$1" '$0 ~ "<key>" key "</key>" { getline; if (match($0, /<string>[^<]+<\/string>/)) { v=substr($0,RSTART,RLENGTH); sub(/^<string>/,"",v); sub(/<\/string>$/,"",v); print v; exit } }' "$2"; }
+workspace_version() { awk '/^\[workspace\.package\]$/ { p=1; next } /^\[/ { p=0 } p && /^version = "[^"]+"$/ { v=$0; sub(/^version = "/,"",v); sub(/"$/,"",v); print v; exit }' Cargo.toml; }
 
-echo " Synchronizing version across all platforms..."
-
-# Extract version from workspace Cargo.toml
-VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-
-if [ -z "$VERSION" ]; then
-    echo -e "${RED} Failed to extract version from Cargo.toml${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN} Version: $VERSION${NC}"
-
-# Parse semantic version components
-IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-
-# Calculate Android versionCode (MAJOR * 10000 + MINOR * 100 + PATCH)
-VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
-
-echo "  - Major: $MAJOR"
-echo "  - Minor: $MINOR"
-echo "  - Patch: $PATCH"
-echo "  - Android versionCode: $VERSION_CODE"
-
-# Update Android build.gradle
-if [ -f "android/app/build.gradle" ]; then
-    echo " Updating Android version..."
-    
-    # Update versionName
-    if grep -q 'versionName' android/app/build.gradle; then
-        sed -i.bak "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
-        echo -e "${GREEN}   Updated versionName to $VERSION${NC}"
-    else
-        echo -e "${YELLOW}   versionName not found in build.gradle${NC}"
-    fi
-    
-    # Update versionCode
-    if grep -q 'versionCode' android/app/build.gradle; then
-        sed -i.bak "s/versionCode [0-9]*/versionCode $VERSION_CODE/" android/app/build.gradle
-        echo -e "${GREEN}   Updated versionCode to $VERSION_CODE${NC}"
-    else
-        echo -e "${YELLOW}   versionCode not found in build.gradle${NC}"
-    fi
-    
-    # Remove backup file
-    rm -f android/app/build.gradle.bak
-else
-    echo -e "${YELLOW}   android/app/build.gradle not found${NC}"
-fi
-
-# Update iOS Info.plist
-if [ -f "iOS/SCMessenger/Info.plist" ]; then
-    echo " Updating iOS version..."
-    
-    # Update CFBundleShortVersionString (user-visible version)
-    if /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" iOS/SCMessenger/Info.plist &>/dev/null; then
-        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" iOS/SCMessenger/Info.plist
-        echo -e "${GREEN}   Updated CFBundleShortVersionString to $VERSION${NC}"
-    else
-        echo -e "${YELLOW}   CFBundleShortVersionString not found in Info.plist${NC}"
-    fi
-    
-    # Update CFBundleVersion (build number - use versionCode for consistency)
-    if /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" iOS/SCMessenger/Info.plist &>/dev/null; then
-        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION_CODE" iOS/SCMessenger/Info.plist
-        echo -e "${GREEN}   Updated CFBundleVersion to $VERSION_CODE${NC}"
-    else
-        echo -e "${YELLOW}   CFBundleVersion not found in Info.plist${NC}"
-    fi
-else
-    echo -e "${YELLOW}   iOS/SCMessenger/Info.plist not found (macOS required for PlistBuddy)${NC}"
-fi
-
-# Update WASM package.json
-if [ -f "wasm/package.json" ]; then
-    echo " Updating WASM version..."
-    
-    if grep -q '"version"' wasm/package.json; then
-        sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" wasm/package.json
-        echo -e "${GREEN}   Updated package.json version to $VERSION${NC}"
-        rm -f wasm/package.json.bak
-    else
-        echo -e "${YELLOW}   version field not found in package.json${NC}"
-    fi
-else
-    echo -e "${YELLOW}   wasm/package.json not found${NC}"
-fi
-
-# =============================================================================
-# NEW: Update KMP Desktop package metadata
-# =============================================================================
-
-# Update shared/build.gradle.kts version
-if [ -f "shared/build.gradle.kts" ]; then
-    echo "️  Updating KMP Desktop version..."
-    
-    # Update the version property in build.gradle.kts
-    if grep -q '^version = ' shared/build.gradle.kts; then
-        sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" shared/build.gradle.kts
-        echo -e "${GREEN}   Updated shared/build.gradle.kts version to $VERSION${NC}"
-    else
-        echo -e "${YELLOW}   version property not found in shared/build.gradle.kts${NC}"
-    fi
-    
-    # Update packageVersion in nativeDistribution block
-    if grep -q 'packageVersion = ' shared/build.gradle.kts; then
-        sed -i.bak "s/packageVersion = \".*\"/packageVersion = \"$VERSION\"/" shared/build.gradle.kts
-        echo -e "${GREEN}   Updated nativeDistribution.packageVersion to $VERSION${NC}"
-    fi
-    
-    # Update description/version references in compose.desktop block
-    if grep -q 'appRelease = ' shared/build.gradle.kts; then
-        sed -i.bak "s/appRelease = \".*\"/appRelease = \"$VERSION\"/" shared/build.gradle.kts
-        echo -e "${GREEN}   Updated nativeDistribution.appRelease to $VERSION${NC}"
-    fi
-    
-    rm -f shared/build.gradle.kts.bak
-else
-    echo -e "${YELLOW}   shared/build.gradle.kts not found — skipping KMP desktop version sync${NC}"
-fi
-
-# Update desktop workflow version reference (docs/workflows/desktop.yml)
-if [ -f "docs/workflows/desktop.yml" ]; then
-    echo " Updating desktop workflow version comments..."
-    # Workflow doesn't embed version directly (reads from Cargo.toml at runtime)
-    # but we update any hardcoded comments if present
-    sed -i.bak "s/# Version: .*/# Version: $VERSION/" docs/workflows/desktop.yml 2>/dev/null || true
-    rm -f docs/workflows/desktop.yml.bak
-    echo -e "${GREEN}   Desktop workflow checked${NC}"
-fi
-
-# Update release workflow template version references
-for workflow in docs/workflows/release.yml docs/workflows/release-desktop.yml; do
-    if [ -f "$workflow" ]; then
-        echo "️  Updating release workflow: $workflow"
-        sed -i.bak "s/app_deb_name: .*/app_deb_name: scmessenger-desktop_${VERSION}_amd64.deb/" "$workflow" 2>/dev/null || true
-        sed -i.bak "s/appimage_name: .*/appimage_name: SCMessenger-Desktop-${VERSION}-x86_64.AppImage/" "$workflow" 2>/dev/null || true
-        rm -f "$workflow.bak"
-        echo -e "${GREEN}   Release workflow updated${NC}"
-    fi
+ANDROID_BUILD=""
+IOS_BUILD=""
+SHARED_BUILD=""
+while (($#)); do
+    case "$1" in
+        --build-number) (($# >= 2)) || fail "--build-number requires a value"; SHARED_BUILD="$2"; shift 2 ;;
+        --android-build-number) (($# >= 2)) || fail "--android-build-number requires a value"; ANDROID_BUILD="$2"; shift 2 ;;
+        --ios-build-number) (($# >= 2)) || fail "--ios-build-number requires a value"; IOS_BUILD="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; fail "Unknown argument: $1" ;;
+    esac
 done
+if [[ -n "$SHARED_BUILD" ]]; then
+    [[ -z "$ANDROID_BUILD" && -z "$IOS_BUILD" ]] || fail "--build-number cannot be combined with platform-specific build numbers"
+    ANDROID_BUILD="$SHARED_BUILD"
+    IOS_BUILD="$SHARED_BUILD"
+fi
+[[ "$ANDROID_BUILD" =~ ^[1-9][0-9]*$ ]] || fail "Android build number must be a positive integer"
+[[ "$IOS_BUILD" =~ ^[1-9][0-9]*$ ]] || fail "iOS build number must be a positive integer"
 
-echo ""
-echo -e "${GREEN} Version synchronization complete!${NC}"
-echo ""
-echo "Updated manifests:"
-echo "  - Android (android/app/build.gradle)"
-echo "  - iOS (iOS/SCMessenger/Info.plist)"
-echo "  - WASM (wasm/package.json)"
-echo "  - KMP Desktop (shared/build.gradle.kts)"
-echo ""
-echo "Next steps:"
-echo "  1. Review changes: git diff"
-echo "  2. Commit: git add -A && git commit -m \"chore: bump version to $VERSION\""
-echo "  3. Tag: git tag v$VERSION"
-echo "  4. Push: git push origin main --tags"
-echo ""
+# Preflight every target before changing any file. WASM inherits Cargo's
+# workspace version, so it is verified rather than independently rewritten.
+for f in Cargo.toml android/build.gradle iOS/SCMessenger/SCMessenger/Info.plist wasm/Cargo.toml shared/build.gradle.kts; do
+    [[ -f "$f" ]] || fail "Required release manifest is missing: $f"
+done
+VERSION="$(workspace_version)"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || fail "Cargo workspace version is invalid: $VERSION"
+IOS_MARKETING_VERSION="${VERSION%%[-+]*}"
+grep -qE "^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*[0-9]+" android/build.gradle || fail "Android versionCode is missing"
+grep -qE "^[[:space:]]*versionName[[:space:]]*=[[:space:]]*'[^']+'" android/build.gradle || fail "Android versionName is missing"
+grep -q '<key>CFBundleShortVersionString</key>' iOS/SCMessenger/SCMessenger/Info.plist || fail "iOS marketing version is missing"
+grep -q '<key>CFBundleVersion</key>' iOS/SCMessenger/SCMessenger/Info.plist || fail "iOS build number is missing"
+grep -qE '^version\.workspace = true$' wasm/Cargo.toml || fail "WASM must inherit the workspace version"
+grep -qE '^version = "[^"]+"$' shared/build.gradle.kts || fail "Desktop version is missing"
+CURRENT_ANDROID="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' android/build.gradle | head -n 1)"
+CURRENT_IOS="$(plist_value CFBundleVersion iOS/SCMessenger/SCMessenger/Info.plist)"
+[[ "$CURRENT_ANDROID" =~ ^[0-9]+$ ]] || fail "Could not read Android versionCode"
+[[ "$CURRENT_IOS" =~ ^[0-9]+$ ]] || fail "Could not read iOS CFBundleVersion"
+(( ANDROID_BUILD > CURRENT_ANDROID )) || fail "Android build number $ANDROID_BUILD must exceed $CURRENT_ANDROID"
+(( IOS_BUILD > CURRENT_IOS )) || fail "iOS build number $IOS_BUILD must exceed $CURRENT_IOS"
 
-# =============================================================================
-# DESKTOP PACKAGE METADATA SYNC (stub)
-# -----------------------------------------------------------------------------
-# The following locations would be updated with the synchronized version for
-# desktop releases. These are NOT actively modified by this script yet — they
-# are listed here as placeholders so that a future contributor can wire them
-# into the main sync loop above without needing to reverse-engineer the
-# project layout.
-#
-#   1. shared/src/desktopMain/resources/metainf/make-app.desktop
-#      — Update X-AppImage-Version= or Version= field
-#
-#   2. shared/build.gradle.kts (nativeDistribution block)
-#      — packageVersion = "$VERSION"
-#
-#   3. AppImage — build_appimage.sh environment
-#      — Pass APP_VERSION env var to appimagetool
-#
-#   4. Cargo.toml workspace.version
-#      — Already the source of truth; no additional update needed
-#
-#   5. docs/workflows/release-desktop.yml
-#      — Update default artifact name patterns:
-#        app_deb_name: scmessenger-desktop_${VERSION}_amd64.deb
-#        appimage_name: SCMessenger-Desktop-${VERSION}-x86_64.AppImage
-#
-# To enable: uncomment the sed/update commands below and reference $VERSION
-# extracted from Cargo.toml at the top of this script.
-# =============================================================================
+# Only declared release fields are changed; lockfiles and generated files are untouched.
+VERSION="$VERSION" ANDROID_BUILD="$ANDROID_BUILD" perl -0pi -e 's/(^[\t ]*versionCode[\t ]*=[\t ]*)[0-9]+/${1}$ENV{ANDROID_BUILD}/m; s/(^[\t ]*versionName[\t ]*=[\t ]*'"'"')[^'"'"']+'"'"'/${1}$ENV{VERSION}'"'"'/m' android/build.gradle
+IOS_MARKETING_VERSION="$IOS_MARKETING_VERSION" IOS_BUILD="$IOS_BUILD" perl -0pi -e 's#(<key>CFBundleShortVersionString</key>\s*<string>)[^<]+(</string>)#${1}$ENV{IOS_MARKETING_VERSION}${2}#s; s#(<key>CFBundleVersion</key>\s*<string>)[^<]+(</string>)#${1}$ENV{IOS_BUILD}${2}#s' iOS/SCMessenger/SCMessenger/Info.plist
+VERSION="$VERSION" perl -0pi -e 's/^version = "[^"]+"$/version = "$ENV{VERSION}"/m' shared/build.gradle.kts
+
+bash scripts/verify_versions.sh
+echo "[OK] Synchronized $VERSION (iOS marketing version $IOS_MARKETING_VERSION)"
