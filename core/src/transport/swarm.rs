@@ -634,9 +634,8 @@ impl RelayAbuseGuardrails {
         if elapsed_ms > 0 {
             let refill =
                 (elapsed_ms as f64 / 1000.0) * LEDGER_EXCHANGE_GLOBAL_BUCKET_REFILL_PER_SEC;
-            self.global_exchange_bucket.tokens =
-                (self.global_exchange_bucket.tokens + refill)
-                    .min(LEDGER_EXCHANGE_GLOBAL_BUCKET_BURST_CAPACITY);
+            self.global_exchange_bucket.tokens = (self.global_exchange_bucket.tokens + refill)
+                .min(LEDGER_EXCHANGE_GLOBAL_BUCKET_BURST_CAPACITY);
             self.global_exchange_bucket.last_refill_ms = now_ms;
         }
         if self.global_exchange_bucket.tokens < 1.0 {
