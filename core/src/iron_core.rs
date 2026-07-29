@@ -4152,8 +4152,7 @@ impl IronCore {
 
     /// Evaluate all tracked peers for auto-blocking across the engine.
     pub fn auto_block_evaluate_all_tracked(&self) -> usize {
-        let (blocked_count, _) = self.auto_block_engine.read().evaluate_all_tracked();
-        blocked_count
+        self.auto_block_engine.read().evaluate_all_tracked().unwrap_or(0)
     }
 
     /// Record a spam signal for abuse tracking.
