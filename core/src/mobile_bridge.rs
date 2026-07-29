@@ -993,7 +993,7 @@ impl MeshService {
                                                             ));
                                                         }
                                                         if !accepted.is_empty() {
-                                                            let _ = core_ref.ledger_manager.annotate_identities_batch(accepted);
+                                                            core_ref.ledger_manager.annotate_identities_batch(accepted);
                                                         }
                                                     }
 
@@ -1087,7 +1087,7 @@ impl MeshService {
                                                         }
                                                     }
                                                     if !accepted.is_empty() {
-                                                        let _ = core_ref.ledger_manager.annotate_identities_batch(accepted);
+                                                        core_ref.ledger_manager.annotate_identities_batch(accepted);
                                                     }
                                                     }
                                                 }
@@ -3953,25 +3953,30 @@ mod tests {
         let path = dir.path().to_str().unwrap().to_string();
         let ledger = LedgerManager::new(path);
 
+        // Valid libp2p peer ids -- record_connection rejects unparseable
+        // peer ids (v2a-2 wire-validation), so fixtures use real PeerIds.
+        let peer1 = libp2p::PeerId::random().to_string();
+        let peer2 = libp2p::PeerId::random().to_string();
+
         // Add some entries
-        ledger.record_connection("/ip4/1.2.3.4/tcp/1000".to_string(), "peer1".to_string());
-        ledger.record_connection("/ip4/1.2.3.4/tcp/1000".to_string(), "peer1".to_string()); // Make it successful
+        ledger.record_connection("/ip4/1.2.3.4/tcp/1000".to_string(), peer1.clone());
+        ledger.record_connection("/ip4/1.2.3.4/tcp/1000".to_string(), peer1.clone()); // Make it successful
 
         // Simulate time passing and another peer
         std::thread::sleep(web_time::Duration::from_millis(10));
-        ledger.record_connection("/ip4/5.6.7.8/tcp/2000".to_string(), "peer2".to_string());
-        ledger.record_connection("/ip4/5.6.7.8/tcp/2000".to_string(), "peer2".to_string());
+        ledger.record_connection("/ip4/5.6.7.8/tcp/2000".to_string(), peer2.clone());
+        ledger.record_connection("/ip4/5.6.7.8/tcp/2000".to_string(), peer2.clone());
 
         let preferred = ledger.get_preferred_relays(10);
         assert_eq!(preferred.len(), 2);
 
         // Peer 2 should be first because it was seen last
-        assert_eq!(preferred[0].peer_id, Some("peer2".to_string()));
-        assert_eq!(preferred[1].peer_id, Some("peer1".to_string()));
+        assert_eq!(preferred[0].peer_id, Some(peer2.clone()));
+        assert_eq!(preferred[1].peer_id, Some(peer1.clone()));
 
         let limited = ledger.get_preferred_relays(1);
         assert_eq!(limited.len(), 1);
-        assert_eq!(limited[0].peer_id, Some("peer2".to_string()));
+        assert_eq!(limited[0].peer_id, Some(peer2));
     }
 
     #[test]
