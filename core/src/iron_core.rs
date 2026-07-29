@@ -4154,12 +4154,23 @@ impl IronCore {
     }
 
     /// Record a spam signal for abuse tracking.
-    pub fn record_spam_signal(&self, peer_id: &str, signal: crate::abuse::spam_detection::SpamSignal) {
-        self.spam_detection_engine.read().record_spam_signal(peer_id, signal);
+    pub fn record_spam_signal(
+        &self,
+        peer_id: &str,
+        signal: crate::abuse::spam_detection::SpamSignal,
+    ) {
+        self.spam_detection_engine
+            .read()
+            .record_spam_signal(peer_id, signal);
     }
 
     /// Record an outbound message to update peer reputation.
-    pub fn record_outbound_message(&self, peer_id: &str, envelope_data: &[u8], is_to_contact: bool) {
+    pub fn record_outbound_message(
+        &self,
+        peer_id: &str,
+        envelope_data: &[u8],
+        is_to_contact: bool,
+    ) {
         self.abuse_manager
             .read()
             .record_outbound_message(peer_id, envelope_data, is_to_contact);
@@ -4167,17 +4178,26 @@ impl IronCore {
 
     /// Get reputation score for a peer (0.0 to 100.0).
     pub fn get_reputation_score(&self, peer_id: &str) -> f64 {
-        self.abuse_manager.read().get_enhanced_score(peer_id).overall_score()
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .overall_score()
     }
 
     /// Check if peer reputation is suspicious.
     pub fn is_peer_suspicious(&self, peer_id: &str) -> bool {
-        self.abuse_manager.read().get_enhanced_score(peer_id).is_suspicious()
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .is_suspicious()
     }
 
     /// Check if peer reputation is abusive.
     pub fn is_peer_abusive(&self, peer_id: &str) -> bool {
-        self.abuse_manager.read().get_enhanced_score(peer_id).is_abusive()
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .is_abusive()
     }
 
     /// Detect spam confidence for a peer (0.0 to 1.0).
@@ -4187,16 +4207,24 @@ impl IronCore {
 
     /// Check if payload content is suspicious.
     pub fn is_content_suspicious(&self, envelope_data: &[u8]) -> bool {
-        self.spam_detection_engine.read().is_content_suspicious(envelope_data)
+        self.spam_detection_engine
+            .read()
+            .is_content_suspicious(envelope_data)
     }
 
     /// Prune stale peer entries from spam detection store.
     pub fn prune_stale_spam_peers(&self, max_entries: usize) -> usize {
-        self.spam_detection_engine.read().prune_stale_peers(max_entries)
+        self.spam_detection_engine
+            .read()
+            .prune_stale_peers(max_entries)
     }
 
     /// Associate a device ID with a peer ID in the blocked manager.
-    pub fn register_device_id(&self, peer_id: &str, device_id: &str) -> Result<(), crate::IronCoreError> {
+    pub fn register_device_id(
+        &self,
+        peer_id: &str,
+        device_id: &str,
+    ) -> Result<(), crate::IronCoreError> {
         self.blocked_manager()
             .read()
             .register_device_id(peer_id, device_id)
