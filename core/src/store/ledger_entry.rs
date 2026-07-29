@@ -42,6 +42,14 @@ pub const MAX_SEED_LEDGER_ENTRIES: usize = 16;
 /// New-insert paths evict the least-useful entry before exceeding this cap.
 const MAX_LEDGER_ENTRIES: usize = 1024;
 
+const MAX_LEN_MULTIADDR: usize = 512;
+const MAX_LEN_PEER_ID: usize = 128;
+const MAX_LEN_PUBLIC_KEY: usize = 512;
+const MAX_LEN_NICKNAME: usize = 128;
+
+/// Failure threshold aligned with `core/src/transport/dial_policy.rs` dead-mark.
+const LEDGER_DEAD_FAILURE_THRESHOLD: u32 = 3;
+
 /// A routing-only peer record carried inside an invite (item 1 of the v0.4.0
 /// ledger seeding work).
 ///
@@ -155,6 +163,20 @@ fn annotate_identity_locked(
             Some(trimmed)
         }
     });
+
+    if multiaddr.len() > MAX_LEN_MULTIADDR
+        || (!peer_id.is_empty()
+            && (peer_id.len() > MAX_LEN_PEER_ID
+                || peer_id.parse::<libp2p::PeerId>().is_err()))
+        || normalized_public_key
+            .as_ref()
+            .map_or(false, |value| value.len() > MAX_LEN_PUBLIC_KEY)
+        || normalized_nickname
+            .as_ref()
+            .map_or(false, |value| value.len() > MAX_LEN_NICKNAME)
+    {
+        return false;
+    }
 
     let target_port = get_multiaddr_port(&multiaddr);
     let mut found_dns_idx = None;
@@ -336,6 +358,14 @@ impl LedgerManager {
             );
             return;
         }
+        if multiaddr.len() > MAX_LEN_MULTIADDR
+            || (!peer_id.is_empty()
+                && (peer_id.len() > MAX_LEN_PEER_ID
+                    || peer_id.parse::<libp2p::PeerId>().is_err()))
+        {
+            return;
+        }
+
         let snapshot = {
         let mut entries = self.entries.lock();
         let target_port = get_multiaddr_port(&multiaddr);
@@ -462,7 +492,7 @@ impl LedgerManager {
         let entries = self.entries.lock();
         let mut candidates: Vec<LedgerEntry> = entries
             .iter()
-            .filter(|e| e.success_count == 0 && e.failure_count < 5)
+            .filter(|e| e.success_count == 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
             .cloned()
             .collect();
         candidates.sort_by(|a, b| {
@@ -549,7 +579,7 @@ impl LedgerManager {
         let entries = self.entries.lock();
         let mut preferred: Vec<LedgerEntry> = entries
             .iter()
-            .filter(|e| e.success_count > 0)
+            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
             .cloned() // Clone now so we can sort
             .collect();
         // Sort by last_seen descending
@@ -662,6 +692,12 @@ impl LedgerManager {
             // A known address is left exactly as it is. A seed has no field
             // that could improve it, and none that we would trust if it did.
             if !already_known {
+                if seed.multiaddr.len() > MAX_LEN_MULTIADDR
+                    || stripped.len() > MAX_LEN_MULTIADDR
+                {
+                    tracing::debug!("Dropping over-length seed multiaddr");
+                    continue;
+                }
                 while ledger.len() >= MAX_LEDGER_ENTRIES {
                     evict_one_locked(&mut ledger);
                 }
@@ -857,6 +893,68 @@ mod tests {
     }
 
     #[test]
+    fn seed_threshold_boundary() {
+        let (_dir, mgr) = manager();
+        assert_eq!(
+            mgr.import_seed_entries(vec![
+                seed("/ip4/10.0.0.2/tcp/9001"),
+                seed("/ip4/10.0.0.3/tcp/9001"),
+                seed("/ip4/10.0.0.4/tcp/9001"),
+                seed("/ip4/10.0.0.5/tcp/9001"),
+            ]),
+            4
+        );
+        for _ in 0..2 {
+            mgr.record_failure("/ip4/10.0.0.2/tcp/9001".to_string());
+            mgr.record_failure("/ip4/10.0.0.4/tcp/9001".to_string());
+        }
+        for _ in 0..3 {
+            mgr.record_failure("/ip4/10.0.0.3/tcp/9001".to_string());
+            mgr.record_failure("/ip4/10.0.0.5/tcp/9001".to_string());
+        }
+
+        let seeds = mgr.seed_addresses(64);
+        assert!(seeds.iter().any(|e| e.multiaddr == "/ip4/10.0.0.2/tcp/9001"));
+        assert!(!seeds.iter().any(|e| e.multiaddr == "/ip4/10.0.0.3/tcp/9001"));
+
+        mgr.record_connection("/ip4/10.0.0.4/tcp/9001".to_string(), peer());
+        mgr.record_connection("/ip4/10.0.0.5/tcp/9001".to_string(), peer());
+        let relays = mgr.get_preferred_relays(64);
+        assert!(relays.iter().any(|e| e.multiaddr == "/ip4/10.0.0.4/tcp/9001"));
+        assert!(!relays.iter().any(|e| e.multiaddr == "/ip4/10.0.0.5/tcp/9001"));
+    }
+
+    #[test]
+    fn oversize_and_bad_peerid_rejected() {
+        let (_dir, mgr) = manager();
+        let long_multiaddr = format!(
+            "/ip4/198.51.100.9/tcp/9001{}",
+            (0..12).map(|_| format!("/p2p/{}", peer())).collect::<String>()
+        );
+        assert!(long_multiaddr.len() > MAX_LEN_MULTIADDR);
+        mgr.annotate_identity(long_multiaddr, peer(), None, None);
+
+        let long_peer = "P".repeat(MAX_LEN_PEER_ID + 1);
+        assert!(long_peer.len() > MAX_LEN_PEER_ID);
+        mgr.annotate_identity(
+            "/ip4/198.51.100.10/tcp/9001".to_string(),
+            long_peer,
+            None,
+            None,
+        );
+
+        mgr.annotate_identity(
+            "/ip4/198.51.100.11/tcp/9001".to_string(),
+            "not-a-peer-id".to_string(),
+            None,
+            None,
+        );
+
+        assert!(mgr.seed_addresses(64).is_empty());
+        assert!(mgr.dialable_addresses().is_empty());
+    }
+
+    #[test]
     fn ledger_load_caps_oversized_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mk = |addr: String, success, last_seen| LedgerEntry { multiaddr: addr, peer_id: None, public_key: None, nickname: None, success_count: success, failure_count: 0, last_seen: Some(last_seen), topics: Vec::new() };
@@ -998,8 +1096,9 @@ mod tests {
     #[test]
     fn import_seed_entries_never_clobbers_proven_entry() {
         let (_dir, mgr) = manager();
-        mgr.record_connection("/ip4/10.0.0.1/tcp/9001".to_string(), "realpeer".to_string());
-        mgr.record_connection("/ip4/10.0.0.1/tcp/9001".to_string(), "realpeer".to_string());
+        let proven_peer = peer();
+        mgr.record_connection("/ip4/10.0.0.1/tcp/9001".to_string(), proven_peer.clone());
+        mgr.record_connection("/ip4/10.0.0.1/tcp/9001".to_string(), proven_peer.clone());
         mgr.record_failure("/ip4/10.0.0.1/tcp/9001".to_string());
         let before = mgr.dialable_addresses();
         assert_eq!(before.len(), 1);
@@ -1020,7 +1119,7 @@ mod tests {
         assert_eq!(after[0].last_seen, last_seen, "last_seen was clobbered");
         assert_eq!(
             after[0].peer_id.as_deref(),
-            Some("realpeer"),
+            Some(proven_peer.as_str()),
             "known peer_id was disturbed by seed data"
         );
     }
