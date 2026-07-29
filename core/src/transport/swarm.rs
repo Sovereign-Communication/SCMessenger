@@ -517,6 +517,11 @@ const LEDGER_EXCHANGE_MAX_REQUEST_PEERS: usize = 64;
 #[cfg(not(target_arch = "wasm32"))]
 const LEDGER_EXCHANGE_BUCKET_MULTIPLIER: f64 = 0.1;
 
+/// Global burst/refill limits for inbound ledger-exchange requests (NEW-6).
+/// sized for small alpha topologies (2-12 nodes); revisit for farm scale.
+const LEDGER_EXCHANGE_GLOBAL_BUCKET_BURST_CAPACITY: f64 = 10.0;
+const LEDGER_EXCHANGE_GLOBAL_BUCKET_REFILL_PER_SEC: f64 = 2.0;
+
 /// How many ledger-derived addresses `ConnectToSeedPeers` considers before
 /// falling back to the addresses the swarm was started with.
 ///
@@ -563,6 +568,7 @@ struct PendingDialEntry {
 struct RelayAbuseGuardrails {
     per_peer_buckets: HashMap<String, TokenBucketState>,
     recent_duplicates: HashMap<String, u64>,
+    global_exchange_bucket: TokenBucketState,
 }
 
 impl RelayAbuseGuardrails {
@@ -570,6 +576,10 @@ impl RelayAbuseGuardrails {
         Self {
             per_peer_buckets: HashMap::new(),
             recent_duplicates: HashMap::new(),
+            global_exchange_bucket: TokenBucketState {
+                tokens: LEDGER_EXCHANGE_GLOBAL_BUCKET_BURST_CAPACITY,
+                last_refill_ms: 0,
+            },
         }
     }
 
@@ -615,6 +625,24 @@ impl RelayAbuseGuardrails {
             return false;
         }
         bucket.tokens -= 1.0;
+        true
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn consume_global_token(&mut self, now_ms: u64) -> bool {
+        let elapsed_ms = now_ms.saturating_sub(self.global_exchange_bucket.last_refill_ms);
+        if elapsed_ms > 0 {
+            let refill =
+                (elapsed_ms as f64 / 1000.0) * LEDGER_EXCHANGE_GLOBAL_BUCKET_REFILL_PER_SEC;
+            self.global_exchange_bucket.tokens =
+                (self.global_exchange_bucket.tokens + refill)
+                    .min(LEDGER_EXCHANGE_GLOBAL_BUCKET_BURST_CAPACITY);
+            self.global_exchange_bucket.last_refill_ms = now_ms;
+        }
+        if self.global_exchange_bucket.tokens < 1.0 {
+            return false;
+        }
+        self.global_exchange_bucket.tokens -= 1.0;
         true
     }
 
@@ -2845,6 +2873,9 @@ pub async fn start_swarm_with_config(
                                 let key_str = key.to_string();
                                 dial_policy_manager.complete_dial_attempt(&key_str);
                                 dial_policy_manager.record_dial_failure(&key_str, None);
+                                if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                                    let _ = core.ledger_manager.record_failure(key_str.clone());
+                                }
 
                                 tracing::debug!("Pending dial to {} timed out after {}s with no connection signal", key, PENDING_DIAL_TIMEOUT_SECS);
                                 let _ = entry.reply.send(Err(format!("Dial timed out after {}s with no connection signal", PENDING_DIAL_TIMEOUT_SECS))).await;
@@ -3778,7 +3809,9 @@ pub async fn start_swarm_with_config(
                                                 &requester,
                                                 exchange_now_ms,
                                                 LEDGER_EXCHANGE_BUCKET_MULTIPLIER,
-                                            );
+                                            )
+                                            && ledger_exchange_guardrails
+                                                .consume_global_token(exchange_now_ms);
 
                                         let offered = request.peers.len();
                                         tracing::info!(
@@ -4547,16 +4580,18 @@ pub async fn start_swarm_with_config(
                                 // peer_id, so an unrelated concurrent dial or background
                                 // reconnect to the SAME peer_id via a DIFFERENT address can't
                                 // falsely resolve this entry.
-                                let mut resolved_pending_key = None;
-                                for (key, entry) in pending_dials.iter() {
-                                    if entry.candidate_addrs.iter().any(|a| a == &remote_addr || a == &stripped_remote) {
-                                        resolved_pending_key = Some(key.clone());
-                                        break;
+                                if endpoint.is_dialer() {
+                                    let mut resolved_pending_key = None;
+                                    for (key, entry) in pending_dials.iter() {
+                                        if entry.candidate_addrs.iter().any(|a| a == &remote_addr || a == &stripped_remote) {
+                                            resolved_pending_key = Some(key.clone());
+                                            break;
+                                        }
                                     }
-                                }
-                                if let Some(key) = resolved_pending_key {
-                                    if let Some(entry) = pending_dials.remove(&key) {
-                                        let _ = entry.reply.send(Ok(())).await;
+                                    if let Some(key) = resolved_pending_key {
+                                        if let Some(entry) = pending_dials.remove(&key) {
+                                            let _ = entry.reply.send(Ok(())).await;
+                                        }
                                     }
                                 }
 
@@ -4840,6 +4875,9 @@ pub async fn start_swarm_with_config(
                                         let addr_key = multiaddr_to_key(&stripped_failed);
                                         dial_policy_manager.record_dial_failure(&addr_key, peer_id);
                                         dial_policy_manager.complete_dial_attempt(&addr_key);
+                                        if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                                            let _ = core.ledger_manager.record_failure(stripped_failed.to_string());
+                                        }
 
                                         for (key, entry) in pending_dials.iter() {
                                             if entry.candidate_addrs.iter().any(|a| a == failed_addr || a == &stripped_failed)
@@ -5580,6 +5618,15 @@ pub async fn start_swarm_with_config(
                                 let mut queued: Option<Multiaddr> = None;
                                 let mut last_error = String::new();
                                 for candidate in &candidates {
+                                    let candidate_key = multiaddr_to_key(candidate);
+                                    if !dial_policy_manager.register_dial_attempt(&candidate_key, None) {
+                                        tracing::debug!(
+                                            "[DIAL-REJECTED] seed candidate {}: dial policy gate",
+                                            candidate
+                                        );
+                                        last_error = format!("{}: dial policy gate rejected", candidate);
+                                        continue;
+                                    }
                                     match swarm.dial(candidate.clone()) {
                                         Ok(_) => {
                                             tracing::info!(
@@ -5590,6 +5637,7 @@ pub async fn start_swarm_with_config(
                                             break;
                                         }
                                         Err(e) => {
+                                            dial_policy_manager.complete_dial_attempt(&candidate_key);
                                             tracing::warn!("Seed peer dial failed: {}: {}", candidate, e);
                                             last_error = format!("{}: {}", candidate, e);
                                         }
