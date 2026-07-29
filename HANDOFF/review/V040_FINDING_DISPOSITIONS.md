@@ -14,7 +14,7 @@ Verdict source of record: HANDOFF/review/LEDGER_SEEDING_ADVERSARIAL_REVIEW_2026-
 | F4 unbounded candidate build | CLOSED | FIXED -- prior | caps + HashSet dedupe + bounded seed_addresses |
 | F5 startup deadlock | CLOSED | FIXED -- prior | seed dial via tokio::spawn |
 | F6 topology disclosure | CLOSED (filter rebuilt; NEW-2 addressed at addr_filter.rs:365) | FIXED -- verify bucket-ordering residual (NEW-5) in terminal verdict | exchange_response_entries proven-tier-only + lazy take(limit) |
-| F7 dial-policy bypass / no record_failure | PARTIAL | FIX IN PROGRESS | threshold (3) + proven-tier filter LANDED (v2a-2); (a) register gate + (b) record_failure wiring LANDED (packet 2, 5b66f896); GPT V2A_PRECHECK: dialable_addresses + exchange_response_entries threshold fix pending v2b |
+| F7 dial-policy bypass / no record_failure | CLOSED pending terminal verdict | FIXED | threshold (3) + proven-tier filter (v2a-2); register gate + record_failure wiring (packet 2, 5b66f896); dialable_addresses + exchange_response_entries threshold completion (v2b) -- all four paths aligned |
 | F8 circuit collapse | CLOSED | FIXED -- prior | protocol-iterating strip |
 | F9 empty multiaddr parse | CLOSED | FIXED -- prior | empty + no-transport rejected |
 | F10 unbounded ledger growth / disk DoS | CLOSED pending terminal verdict | FIXED | load cap (v2a-1); byte bounds at ingest AND load (v2a-2 + v2c-2); save serialization + atomic durable writes (v2c-1); batch caller (1c); durable shrink-persist at load (v2c-2); corrupt-file recovery (v2c-3). RESIDUAL (post-alpha, bounded): streaming parse of multi-MB legacy files -- growth path closed by write-side caps, 16MB warn guard in place |
