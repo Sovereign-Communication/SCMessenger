@@ -15,6 +15,23 @@ Mechanical rules below are ENFORCED by a versioned git pre-commit hook
 no matter which tool makes them. Never bypass with `--no-verify`; only the
 human operator may do that.
 
+## Architecture doctrine: nodes, not relays
+
+There are NO standalone relays in SCMessenger. Only NODES exist, and EVERY
+node relays -- store-and-forward custody is a behavior all nodes perform,
+not a role. The AWS instance at 100.56.248.69 is a CLOUD NODE: a full node
+that also relays, exactly as every other node does. Discovery is LEDGER
+SHARING between nodes (invite/QR-seeded, gossip-propagated); bootstrap
+address lists are a deprecated transitional mechanism being replaced by
+ledger-sharing-first discovery (contract: V050-B1/B2). In docs, plans,
+tickets, and agent output: say "cloud node" / "node" -- use "relay" only
+as the VERB for the custody behavior all nodes perform, or inside code
+identifiers (RelayCustodyStore, cmd_relay, relay_custody_msg_ prefixes --
+technical names, not roles). No anonymous packet forwarder exists or may
+be introduced: cmd_relay requires identity (cli/src/main.rs:2529). Full
+parity: CLI, Android, iOS, and cloud deployments run the same node with
+the same relay behavior.
+
 ## Hard rules (every agent, every capability class)
 
 1. NO EMOJI anywhere — code, docs, comments, logs, commit messages. Use
