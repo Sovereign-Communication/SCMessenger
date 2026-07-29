@@ -135,22 +135,17 @@ fn evict_one_locked(entries: &mut Vec<LedgerEntry>) {
                 (Some(a_last_seen), Some(b_last_seen)) => a_last_seen.cmp(&b_last_seen),
             }
             .then_with(|| a.1.multiaddr.cmp(&b.1.multiaddr))
-        })
-    {
+        }) {
         idx
-    } else if let Some((idx, _)) = entries
-        .iter()
-        .enumerate()
-        .min_by(|a, b| {
-            match (a.1.last_seen, b.1.last_seen) {
-                (None, None) => std::cmp::Ordering::Equal,
-                (None, Some(_)) => std::cmp::Ordering::Less,
-                (Some(_), None) => std::cmp::Ordering::Greater,
-                (Some(a_last_seen), Some(b_last_seen)) => a_last_seen.cmp(&b_last_seen),
-            }
-            .then_with(|| a.1.multiaddr.cmp(&b.1.multiaddr))
-        })
-    {
+    } else if let Some((idx, _)) = entries.iter().enumerate().min_by(|a, b| {
+        match (a.1.last_seen, b.1.last_seen) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(a_last_seen), Some(b_last_seen)) => a_last_seen.cmp(&b_last_seen),
+        }
+        .then_with(|| a.1.multiaddr.cmp(&b.1.multiaddr))
+    }) {
         idx
     } else {
         0
@@ -187,8 +182,7 @@ fn annotate_identity_locked(
 
     if multiaddr.len() > MAX_LEN_MULTIADDR
         || (!peer_id.is_empty()
-            && (peer_id.len() > MAX_LEN_PEER_ID
-                || peer_id.parse::<libp2p::PeerId>().is_err()))
+            && (peer_id.len() > MAX_LEN_PEER_ID || peer_id.parse::<libp2p::PeerId>().is_err()))
         || normalized_public_key
             .as_ref()
             .map_or(false, |value| value.len() > MAX_LEN_PUBLIC_KEY)
@@ -311,7 +305,10 @@ impl LedgerManager {
             );
             for dir_entry in dir_entries.flatten() {
                 let file_name = dir_entry.file_name();
-                if file_name.to_str().map_or(false, |name| name.starts_with(&tmp_prefix)) {
+                if file_name
+                    .to_str()
+                    .map_or(false, |name| name.starts_with(&tmp_prefix))
+                {
                     let _ = std::fs::remove_file(dir_entry.path());
                 }
             }
@@ -331,7 +328,10 @@ impl LedgerManager {
             let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
                 Ok(entries) => entries,
                 Err(err) => {
-                    tracing::warn!("ledger file corrupted; recovering with empty ledger: {}", err);
+                    tracing::warn!(
+                        "ledger file corrupted; recovering with empty ledger: {}",
+                        err
+                    );
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -368,7 +368,10 @@ impl LedgerManager {
                             && peer_id.parse::<libp2p::PeerId>().is_ok()
                     }
                 };
-                entry.multiaddr.len() <= MAX_LEN_MULTIADDR && peer_id_ok && public_key_ok && nickname_ok
+                entry.multiaddr.len() <= MAX_LEN_MULTIADDR
+                    && peer_id_ok
+                    && public_key_ok
+                    && nickname_ok
             });
             let mut changed = entries.len() != parsed_len;
             if entries.len() > MAX_LEDGER_ENTRIES {
@@ -499,50 +502,50 @@ impl LedgerManager {
         }
         if multiaddr.len() > MAX_LEN_MULTIADDR
             || (!peer_id.is_empty()
-                && (peer_id.len() > MAX_LEN_PEER_ID
-                    || peer_id.parse::<libp2p::PeerId>().is_err()))
+                && (peer_id.len() > MAX_LEN_PEER_ID || peer_id.parse::<libp2p::PeerId>().is_err()))
         {
             return;
         }
 
         let snapshot = {
-        let mut entries = self.entries.lock();
-        let target_port = get_multiaddr_port(&multiaddr);
-        let mut found_dns_idx = None;
-        for (idx, entry) in entries.iter().enumerate() {
-            if entry.peer_id.as_deref() == Some(&peer_id)
-                && is_dns_multiaddr(&entry.multiaddr)
-                && (target_port.is_none() || get_multiaddr_port(&entry.multiaddr) == target_port)
-            {
-                found_dns_idx = Some(idx);
-                break;
+            let mut entries = self.entries.lock();
+            let target_port = get_multiaddr_port(&multiaddr);
+            let mut found_dns_idx = None;
+            for (idx, entry) in entries.iter().enumerate() {
+                if entry.peer_id.as_deref() == Some(&peer_id)
+                    && is_dns_multiaddr(&entry.multiaddr)
+                    && (target_port.is_none()
+                        || get_multiaddr_port(&entry.multiaddr) == target_port)
+                {
+                    found_dns_idx = Some(idx);
+                    break;
+                }
             }
-        }
 
-        if let Some(idx) = found_dns_idx {
-            let entry = &mut entries[idx];
-            entry.success_count += 1;
-            entry.last_seen = Some(current_timestamp());
-        } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-            entry.success_count += 1;
-            entry.peer_id = Some(peer_id);
-            entry.last_seen = Some(current_timestamp());
-        } else {
-            while entries.len() >= MAX_LEDGER_ENTRIES {
-                evict_one_locked(&mut entries);
+            if let Some(idx) = found_dns_idx {
+                let entry = &mut entries[idx];
+                entry.success_count += 1;
+                entry.last_seen = Some(current_timestamp());
+            } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
+                entry.success_count += 1;
+                entry.peer_id = Some(peer_id);
+                entry.last_seen = Some(current_timestamp());
+            } else {
+                while entries.len() >= MAX_LEDGER_ENTRIES {
+                    evict_one_locked(&mut entries);
+                }
+                entries.push(LedgerEntry {
+                    multiaddr,
+                    peer_id: Some(peer_id),
+                    public_key: None,
+                    nickname: None,
+                    success_count: 1,
+                    failure_count: 0,
+                    last_seen: Some(current_timestamp()),
+                    topics: Vec::new(),
+                });
             }
-            entries.push(LedgerEntry {
-                multiaddr,
-                peer_id: Some(peer_id),
-                public_key: None,
-                nickname: None,
-                success_count: 1,
-                failure_count: 0,
-                last_seen: Some(current_timestamp()),
-                topics: Vec::new(),
-            });
-        }
-        (*entries).clone()
+            (*entries).clone()
         };
         let _ = self.save_with_entries(&snapshot);
     }
@@ -550,11 +553,11 @@ impl LedgerManager {
     pub fn record_failure(&self, multiaddr: String) {
         let _save_guard = self.save_lock.lock();
         let snapshot = {
-        let mut entries = self.entries.lock();
-        if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-            entry.failure_count += 1;
-        }
-        (*entries).clone()
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
+                entry.failure_count += 1;
+            }
+            (*entries).clone()
         };
         let _ = self.save_with_entries(&snapshot);
     }
@@ -589,13 +592,8 @@ impl LedgerManager {
         }
         let snapshot = {
             let mut entries = self.entries.lock();
-            let _ = annotate_identity_locked(
-                &mut entries,
-                multiaddr,
-                peer_id,
-                public_key,
-                nickname,
-            );
+            let _ =
+                annotate_identity_locked(&mut entries, multiaddr, peer_id, public_key, nickname);
             (*entries).clone()
         };
         let _ = self.save_with_entries(&snapshot);
@@ -807,74 +805,73 @@ impl LedgerManager {
         self.import_seed_entries_locked(entries, mode)
     }
 
-    fn import_seed_entries_locked(
-        &self,
-        entries: Vec<SeedLedgerEntry>,
-        mode: NetworkMode,
-    ) -> u32 {
+    fn import_seed_entries_locked(&self, entries: Vec<SeedLedgerEntry>, mode: NetworkMode) -> u32 {
         let (snapshot, added) = {
-        let mut ledger = self.entries.lock();
-        let mut added = 0u32;
+            let mut ledger = self.entries.lock();
+            let mut added = 0u32;
 
-        if entries.len() > MAX_SEED_LEDGER_ENTRIES {
-            tracing::warn!(
-                "Seed import capped: {} entries offered, {} accepted",
-                entries.len(),
-                MAX_SEED_LEDGER_ENTRIES
-            );
-        }
-
-        for seed in entries.into_iter().take(MAX_SEED_LEDGER_ENTRIES) {
-            let stripped = strip_peer_id_component(&seed.multiaddr);
-            if stripped.is_empty() {
-                tracing::debug!("Dropping seed multiaddr with no transport component");
-                continue;
-            }
-            // `DnsPolicy::Reject`: an invite's `seed_ledger` is supplied by
-            // whoever produced the invite, so a `/dns4/...` entry would let them
-            // re-point our dial target after the fact (re-review NEW-1).
-            if !is_dialable_multiaddr(&stripped, mode, DnsPolicy::Reject) {
-                tracing::debug!("Dropping non-routable seed multiaddr: {}", stripped);
-                continue;
+            if entries.len() > MAX_SEED_LEDGER_ENTRIES {
+                tracing::warn!(
+                    "Seed import capped: {} entries offered, {} accepted",
+                    entries.len(),
+                    MAX_SEED_LEDGER_ENTRIES
+                );
             }
 
-            let already_known = ledger
-                .iter()
-                .any(|e| strip_peer_id_component(&e.multiaddr) == stripped);
-
-            // A known address is left exactly as it is. A seed has no field
-            // that could improve it, and none that we would trust if it did.
-            if !already_known {
-                if seed.multiaddr.len() > MAX_LEN_MULTIADDR
-                    || stripped.len() > MAX_LEN_MULTIADDR
-                {
-                    tracing::debug!("Dropping over-length seed multiaddr");
+            for seed in entries.into_iter().take(MAX_SEED_LEDGER_ENTRIES) {
+                let stripped = strip_peer_id_component(&seed.multiaddr);
+                if stripped.is_empty() {
+                    tracing::debug!("Dropping seed multiaddr with no transport component");
                     continue;
                 }
-                while ledger.len() >= MAX_LEDGER_ENTRIES {
-                    evict_one_locked(&mut ledger);
+                // `DnsPolicy::Reject`: an invite's `seed_ledger` is supplied by
+                // whoever produced the invite, so a `/dns4/...` entry would let them
+                // re-point our dial target after the fact (re-review NEW-1).
+                if !is_dialable_multiaddr(&stripped, mode, DnsPolicy::Reject) {
+                    tracing::debug!("Dropping non-routable seed multiaddr: {}", stripped);
+                    continue;
                 }
-                ledger.push(LedgerEntry {
-                    multiaddr: stripped,
-                    peer_id: None,
-                    public_key: None,
-                    nickname: None,
-                    success_count: 0,
-                    failure_count: 0,
-                    last_seen: Some(current_timestamp()),
-                    topics: Vec::new(),
-                });
-                added += 1;
-            }
-        }
 
-        ((*ledger).clone(), added)
+                let already_known = ledger
+                    .iter()
+                    .any(|e| strip_peer_id_component(&e.multiaddr) == stripped);
+
+                // A known address is left exactly as it is. A seed has no field
+                // that could improve it, and none that we would trust if it did.
+                if !already_known {
+                    if seed.multiaddr.len() > MAX_LEN_MULTIADDR
+                        || stripped.len() > MAX_LEN_MULTIADDR
+                    {
+                        tracing::debug!("Dropping over-length seed multiaddr");
+                        continue;
+                    }
+                    while ledger.len() >= MAX_LEDGER_ENTRIES {
+                        evict_one_locked(&mut ledger);
+                    }
+                    ledger.push(LedgerEntry {
+                        multiaddr: stripped,
+                        peer_id: None,
+                        public_key: None,
+                        nickname: None,
+                        success_count: 0,
+                        failure_count: 0,
+                        last_seen: Some(current_timestamp()),
+                        topics: Vec::new(),
+                    });
+                    added += 1;
+                }
+            }
+
+            ((*ledger).clone(), added)
         };
         let _ = self.save_with_entries(&snapshot);
         added
     }
 
-    pub fn annotate_identities_batch(&self, items: Vec<(String, String, Option<String>, Option<String>)>) {
+    pub fn annotate_identities_batch(
+        &self,
+        items: Vec<(String, String, Option<String>, Option<String>)>,
+    ) {
         let _save_guard = self.save_lock.lock();
         let snapshot = {
             let mut entries = self.entries.lock();
@@ -886,7 +883,13 @@ impl LedgerManager {
                     );
                     continue;
                 }
-                let _ = annotate_identity_locked(&mut entries, multiaddr, peer_id, public_key, nickname);
+                let _ = annotate_identity_locked(
+                    &mut entries,
+                    multiaddr,
+                    peer_id,
+                    public_key,
+                    nickname,
+                );
             }
             (*entries).clone()
         };
@@ -1068,14 +1071,22 @@ mod tests {
         }
 
         let seeds = mgr.seed_addresses(64);
-        assert!(seeds.iter().any(|e| e.multiaddr == "/ip4/10.0.0.2/tcp/9001"));
-        assert!(!seeds.iter().any(|e| e.multiaddr == "/ip4/10.0.0.3/tcp/9001"));
+        assert!(seeds
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/10.0.0.2/tcp/9001"));
+        assert!(!seeds
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/10.0.0.3/tcp/9001"));
 
         mgr.record_connection("/ip4/10.0.0.4/tcp/9001".to_string(), peer());
         mgr.record_connection("/ip4/10.0.0.5/tcp/9001".to_string(), peer());
         let relays = mgr.get_preferred_relays(64);
-        assert!(relays.iter().any(|e| e.multiaddr == "/ip4/10.0.0.4/tcp/9001"));
-        assert!(!relays.iter().any(|e| e.multiaddr == "/ip4/10.0.0.5/tcp/9001"));
+        assert!(relays
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/10.0.0.4/tcp/9001"));
+        assert!(!relays
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/10.0.0.5/tcp/9001"));
     }
 
     #[test]
@@ -1083,7 +1094,9 @@ mod tests {
         let (_dir, mgr) = manager();
         let long_multiaddr = format!(
             "/ip4/198.51.100.9/tcp/9001{}",
-            (0..12).map(|_| format!("/p2p/{}", peer())).collect::<String>()
+            (0..12)
+                .map(|_| format!("/p2p/{}", peer()))
+                .collect::<String>()
         );
         assert!(long_multiaddr.len() > MAX_LEN_MULTIADDR);
         mgr.annotate_identity(long_multiaddr, peer(), None, None);
@@ -1127,20 +1140,49 @@ mod tests {
     #[test]
     fn ledger_load_caps_oversized_file() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mk = |addr: String, success, last_seen| LedgerEntry { multiaddr: addr, peer_id: None, public_key: None, nickname: None, success_count: success, failure_count: 0, last_seen: Some(last_seen), topics: Vec::new() };
+        let mk = |addr: String, success, last_seen| LedgerEntry {
+            multiaddr: addr,
+            peer_id: None,
+            public_key: None,
+            nickname: None,
+            success_count: success,
+            failure_count: 0,
+            last_seen: Some(last_seen),
+            topics: Vec::new(),
+        };
         let proven = "/ip4/203.0.113.100/tcp/9001".to_string();
         let oldest_zero = "/ip4/10.0.0.0/tcp/9001".to_string();
-        let mut entries: Vec<LedgerEntry> = (0..19).map(|i| mk(format!("/ip4/203.0.113.{}/tcp/9001", i + 1), 1, 4000 + i as u64)).collect();
+        let mut entries: Vec<LedgerEntry> = (0..19)
+            .map(|i| {
+                mk(
+                    format!("/ip4/203.0.113.{}/tcp/9001", i + 1),
+                    1,
+                    4000 + i as u64,
+                )
+            })
+            .collect();
         entries.push(mk(proven.clone(), 3, 5000));
         entries.push(mk(oldest_zero.clone(), 0, 1));
         let extra = MAX_LEDGER_ENTRIES + 100 - entries.len();
-        entries.extend((0..extra).map(|i| mk(format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1), 0, 100 + i as u64)));
-        std::fs::write(dir.path().join("ledger.json"), serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        entries.extend((0..extra).map(|i| {
+            mk(
+                format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1),
+                0,
+                100 + i as u64,
+            )
+        }));
+        std::fs::write(
+            dir.path().join("ledger.json"),
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
         let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
         mgr.load().expect("load");
         let loaded = mgr.entries.lock();
         assert_eq!(loaded.len(), MAX_LEDGER_ENTRIES);
-        assert!(loaded.iter().any(|e| e.multiaddr == proven && e.success_count > 0));
+        assert!(loaded
+            .iter()
+            .any(|e| e.multiaddr == proven && e.success_count > 0));
         assert!(!loaded.iter().any(|e| e.multiaddr == oldest_zero));
     }
 
@@ -1758,9 +1800,7 @@ mod tests {
         let (_dir, mut mgr) = manager();
         mgr.storage_path = None;
 
-        let addr = |i: usize| {
-            format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1)
-        };
+        let addr = |i: usize| format!("/ip4/10.0.{}.{}/tcp/9001", i / 250, (i % 250) + 1);
         let oldest_zero_addr = addr(0);
         let proven_addr = addr(10);
 
@@ -1781,7 +1821,9 @@ mod tests {
             "oldest zero-success entry should have been evicted"
         );
         assert!(
-            entries.iter().any(|e| e.multiaddr == proven_addr && e.success_count > 0),
+            entries
+                .iter()
+                .any(|e| e.multiaddr == proven_addr && e.success_count > 0),
             "proven entry should survive"
         );
     }
@@ -1859,7 +1901,11 @@ mod tests {
             let stale: Vec<_> = std::fs::read_dir(dir.path())
                 .expect("read dir")
                 .flatten()
-                .filter(|e| e.file_name().to_str().map_or(false, |n| n.starts_with(&tmp_prefix)))
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map_or(false, |n| n.starts_with(&tmp_prefix))
+                })
                 .collect();
             assert!(stale.is_empty(), "tmp siblings remain: {:?}", stale);
         }
@@ -1879,7 +1925,11 @@ mod tests {
             last_seen: Some(42),
             topics: Vec::new(),
         }];
-        std::fs::write(&ledger_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        std::fs::write(
+            &ledger_file,
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
         let stale = dir.path().join("ledger.json.tmp.123.0");
         std::fs::write(&stale, "stale").unwrap();
 
@@ -1898,7 +1948,10 @@ mod tests {
         let valid_two = "/ip4/198.51.100.21/tcp/9001".to_string();
         let entries = vec![
             LedgerEntry {
-                multiaddr: format!("/ip4/198.51.100.22/tcp/9001{}", "x".repeat(MAX_LEN_MULTIADDR)),
+                multiaddr: format!(
+                    "/ip4/198.51.100.22/tcp/9001{}",
+                    "x".repeat(MAX_LEN_MULTIADDR)
+                ),
                 peer_id: None,
                 public_key: None,
                 nickname: None,
@@ -1938,7 +1991,11 @@ mod tests {
                 topics: Vec::new(),
             },
         ];
-        std::fs::write(&ledger_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        std::fs::write(
+            &ledger_file,
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
 
         let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
         mgr.load().expect("load");
@@ -1963,7 +2020,11 @@ mod tests {
             topics: Vec::new(),
         };
         let entries: Vec<LedgerEntry> = (0..MAX_LEDGER_ENTRIES + 50).map(mk).collect();
-        std::fs::write(&ledger_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        std::fs::write(
+            &ledger_file,
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
 
         let path = dir.path().to_string_lossy().to_string();
         let mgr = LedgerManager::new(path.clone());
@@ -2005,14 +2066,23 @@ mod tests {
                 topics: Vec::new(),
             },
         ];
-        std::fs::write(&ledger_file, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        std::fs::write(
+            &ledger_file,
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
 
         let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
         mgr.load().expect("load");
         let loaded = mgr.entries.lock();
         assert_eq!(loaded.len(), 2);
-        assert!(loaded.iter().any(|e| e.multiaddr == "/ip4/198.51.100.30/tcp/9001" && e.peer_id.as_deref() == Some("")));
-        assert!(loaded.iter().any(|e| e.multiaddr == "/ip4/198.51.100.31/tcp/9001" && e.peer_id.is_none()));
+        assert!(loaded
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/198.51.100.30/tcp/9001"
+                && e.peer_id.as_deref() == Some("")));
+        assert!(loaded
+            .iter()
+            .any(|e| e.multiaddr == "/ip4/198.51.100.31/tcp/9001" && e.peer_id.is_none()));
     }
 
     #[test]
@@ -2031,7 +2101,10 @@ mod tests {
             .flatten()
             .find_map(|entry| {
                 let name = entry.file_name();
-                if name.to_str().map_or(false, |name| name.starts_with("ledger.json.corrupt-")) {
+                if name
+                    .to_str()
+                    .map_or(false, |name| name.starts_with("ledger.json.corrupt-"))
+                {
                     Some(entry.path())
                 } else {
                     None
@@ -2056,7 +2129,10 @@ mod tests {
                 .iter()
                 .find(|e| e.multiaddr == addr)
                 .unwrap_or_else(|| panic!("missing {addr}"));
-            assert!(entry.last_seen.is_some(), "imported anchor must be stamped fresh");
+            assert!(
+                entry.last_seen.is_some(),
+                "imported anchor must be stamped fresh"
+            );
             assert_eq!(entry.success_count, 0, "imported seed stays unproven");
         }
     }
@@ -2090,11 +2166,17 @@ mod tests {
         let entries = mgr.entries.lock();
         assert_eq!(entries.len(), MAX_LEDGER_ENTRIES);
         for addr in &seed_addrs {
-            assert!(entries.iter().any(|e| e.multiaddr == *addr), "missing seed anchor {addr}");
+            assert!(
+                entries.iter().any(|e| e.multiaddr == *addr),
+                "missing seed anchor {addr}"
+            );
         }
         for i in 0..16 {
             let evicted = format!("/ip4/10.9.0.{}/tcp/9001", i + 1);
-            assert!(!entries.iter().any(|e| e.multiaddr == evicted), "oldest entry not displaced: {evicted}");
+            assert!(
+                !entries.iter().any(|e| e.multiaddr == evicted),
+                "oldest entry not displaced: {evicted}"
+            );
         }
     }
 
@@ -2129,7 +2211,10 @@ mod tests {
         let a_addrs: Vec<&str> = seeds_a.iter().map(|e| e.multiaddr.as_str()).collect();
         let b_addrs: Vec<&str> = seeds_b.iter().map(|e| e.multiaddr.as_str()).collect();
         assert_eq!(a_addrs, b_addrs);
-        assert!(a_addrs.windows(2).all(|w| w[0] <= w[1]), "ties must sort multiaddr ascending: {a_addrs:?}");
+        assert!(
+            a_addrs.windows(2).all(|w| w[0] <= w[1]),
+            "ties must sort multiaddr ascending: {a_addrs:?}"
+        );
     }
 
     #[test]
