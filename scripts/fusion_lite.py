@@ -60,7 +60,7 @@ OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 BYOK_DENYLIST_PREFIXES = ("mistralai/",)
 # Operator-set 2026-07-19: 2c default per call.
 DEFAULT_MAX_COST = 0.02
-HARD_MAX_COST = 0.05  # --max-cost can never be raised past this, no exceptions
+HARD_MAX_COST = 0.10  # raised 0.05 -> 0.10 with explicit operator approval 2026-07-29 (Tier-B premium panels)
 DEFAULT_MAX_TOKENS = 300
 
 
