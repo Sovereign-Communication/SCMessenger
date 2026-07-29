@@ -4152,7 +4152,10 @@ impl IronCore {
 
     /// Evaluate all tracked peers for auto-blocking across the engine.
     pub fn auto_block_evaluate_all_tracked(&self) -> usize {
-        self.auto_block_engine.read().evaluate_all_tracked().unwrap_or(0)
+        self.auto_block_engine
+            .read()
+            .evaluate_all_tracked()
+            .unwrap_or(0)
     }
 
     /// Record a spam signal for abuse tracking.
@@ -4204,7 +4207,10 @@ impl IronCore {
 
     /// Detect spam confidence for a peer (0.0 to 1.0).
     pub fn detect_spam_confidence(&self, peer_id: &str) -> f64 {
-        self.abuse_manager.read().spam_detector().spam_score(peer_id)
+        self.abuse_manager
+            .read()
+            .spam_detector()
+            .spam_score(peer_id)
     }
 
     /// Check if payload content is suspicious.
