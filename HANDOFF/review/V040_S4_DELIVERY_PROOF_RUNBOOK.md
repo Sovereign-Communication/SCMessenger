@@ -43,13 +43,13 @@ compile is COLD -> -j2 first, -j6 warm. Never `cargo clean --target X`
 (it wipes all of target/).
 0.3 Provenance baseline: `git rev-parse HEAD` = <HEAD_SHA>; every endpoint
 must later show it in its "Core Provenance:" startup line.
-0.4 Cloud node health (operator egress):
+0.4 Cloud node reachability (operator egress): PRECONDITION -- 100.56.248.69 is a Tailscale CGNAT address; the Windows host MUST have Tailscale up (service was absent at 2026-07-28 probe -- both 9876 and 9001 unreachable without it). Verify: tailscale status shows the node, then:
   curl -fsS http://100.56.248.69:9876/health  -> {"status":"healthy"}
   powershell -NoProfile -Command "Test-NetConnection 100.56.248.69 -Port 9001 -InformationLevel Quiet"  -> True
 If down: retry x2 @60s; then LAN-DIRECT fallback (Appendix A) or ABORT to
 operator (infra, not code). Never fake cloud-node evidence.
 0.5 Emulator (agy executes; orchestrator gates):
-  emulator -avd scm_pixel_34 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+  emulator -avd scm_pixel_35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
   adb -s emulator-5554 wait-for-device
   adb -s emulator-5554 shell getprop sys.boot_completed  -> 1
 If no boot in ~10 min: one cold retry (-no-snapshot-load), then escalate.
