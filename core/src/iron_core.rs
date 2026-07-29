@@ -4123,12 +4123,18 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Evaluate a peer against auto-block criteria without taking action.
-    pub fn auto_block_evaluate(&self, peer_id: &str) -> crate::abuse::auto_block::AutoBlockResult {
+    pub fn auto_block_evaluate(
+        &self,
+        peer_id: &str,
+    ) -> crate::abuse::auto_block::AutoBlockResult {
         self.auto_block_engine.read().evaluate(peer_id)
     }
 
     /// Evaluate a peer against auto-block criteria and apply block if triggered.
-    pub fn auto_block_evaluate_and_block(&self, peer_id: &str) -> Result<bool, crate::IronCoreError> {
+    pub fn auto_block_evaluate_and_block(
+        &self,
+        peer_id: &str,
+    ) -> Result<bool, crate::IronCoreError> {
         self.auto_block_engine.read().evaluate_and_block(peer_id)
     }
 
