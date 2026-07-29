@@ -70,6 +70,8 @@ pub enum IronCoreError {
     IoError,
     #[error("Onion routing disabled")]
     OnionRoutingDisabled,
+}
+
 pub use crypto::{decrypt_message, encrypt_message};
 pub use error::{
     MeshResult, SerializationError, SerializationResult, TransportError, TransportResult,
