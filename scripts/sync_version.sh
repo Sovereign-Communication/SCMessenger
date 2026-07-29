@@ -40,7 +40,7 @@ fi
 
 # Preflight every target before changing any file. WASM inherits Cargo's
 # workspace version, so it is verified rather than independently rewritten.
-for f in Cargo.toml android/build.gradle iOS/SCMessenger/SCMessenger/Info.plist wasm/Cargo.toml shared/build.gradle.kts; do
+for f in Cargo.toml android/build.gradle iOS/SCMessenger/SCMessenger/Info.plist iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj wasm/Cargo.toml shared/build.gradle.kts; do
     [[ -f "$f" ]] || fail "Required release manifest is missing: $f"
 done
 VERSION="$(workspace_version)"
@@ -50,6 +50,8 @@ grep -qE "^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*[0-9]+" android/build
 grep -qE "^[[:space:]]*versionName[[:space:]]*=[[:space:]]*'[^']+'" android/build.gradle || fail "Android versionName is missing"
 grep -q '<key>CFBundleShortVersionString</key>' iOS/SCMessenger/SCMessenger/Info.plist || fail "iOS marketing version is missing"
 grep -q '<key>CFBundleVersion</key>' iOS/SCMessenger/SCMessenger/Info.plist || fail "iOS build number is missing"
+grep -q 'MARKETING_VERSION = ' iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj || fail "iOS project marketing version is missing"
+grep -q 'CURRENT_PROJECT_VERSION = ' iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj || fail "iOS project build number is missing"
 grep -qE '^version\.workspace = true$' wasm/Cargo.toml || fail "WASM must inherit the workspace version"
 grep -qE '^version = "[^"]+"$' shared/build.gradle.kts || fail "Desktop version is missing"
 CURRENT_ANDROID="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' android/build.gradle | head -n 1)"
@@ -62,6 +64,7 @@ CURRENT_IOS="$(plist_value CFBundleVersion iOS/SCMessenger/SCMessenger/Info.plis
 # Only declared release fields are changed; lockfiles and generated files are untouched.
 VERSION="$VERSION" ANDROID_BUILD="$ANDROID_BUILD" perl -0pi -e 's/(^[\t ]*versionCode[\t ]*=[\t ]*)[0-9]+/${1}$ENV{ANDROID_BUILD}/m; s/(^[\t ]*versionName[\t ]*=[\t ]*'"'"')[^'"'"']+'"'"'/${1}$ENV{VERSION}'"'"'/m' android/build.gradle
 IOS_MARKETING_VERSION="$IOS_MARKETING_VERSION" IOS_BUILD="$IOS_BUILD" perl -0pi -e 's#(<key>CFBundleShortVersionString</key>\s*<string>)[^<]+(</string>)#${1}$ENV{IOS_MARKETING_VERSION}${2}#s; s#(<key>CFBundleVersion</key>\s*<string>)[^<]+(</string>)#${1}$ENV{IOS_BUILD}${2}#s' iOS/SCMessenger/SCMessenger/Info.plist
+IOS_MARKETING_VERSION="$IOS_MARKETING_VERSION" IOS_BUILD="$IOS_BUILD" perl -0pi -e 's/(MARKETING_VERSION = )[^;]+;/${1}$ENV{IOS_MARKETING_VERSION};/g; s/(CURRENT_PROJECT_VERSION = )[^;]+;/${1}$ENV{IOS_BUILD};/g' iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj
 VERSION="$VERSION" perl -0pi -e 's/^version = "[^"]+"$/version = "$ENV{VERSION}"/m' shared/build.gradle.kts
 
 bash scripts/verify_versions.sh

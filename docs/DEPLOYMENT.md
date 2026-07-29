@@ -82,11 +82,11 @@ vim Cargo.toml  # Change version = "0.2.1" to "0.2.2"
   --ios-build-number 8
 ```
 
-This updates Android metadata in `android/build.gradle`, iOS metadata in
-`iOS/SCMessenger/SCMessenger/Info.plist`, and desktop metadata in
-`shared/build.gradle.kts`. WASM inherits the Cargo workspace version. The
-script requires explicit build numbers greater than each platform's current
-value and then runs the read-only cross-platform verifier.
+This updates Android metadata in `android/build.gradle`, iOS metadata in both
+`iOS/SCMessenger/SCMessenger/Info.plist` and the Xcode project, and desktop
+metadata in `shared/build.gradle.kts`. WASM inherits the Cargo workspace
+version. The script requires explicit build numbers greater than each
+platform's current value and then runs the read-only cross-platform verifier.
 
 ### Version Validation
 

@@ -13,7 +13,7 @@ desktop_version() { sed -nE 's/^version = "([^"]+)"$/\1/p' "$1" | head -n 1; }
 REQUIRE_TAG=false
 if [[ "${1:-}" == "--require-tag" ]]; then REQUIRE_TAG=true; shift; fi
 (($# == 0)) || fail "Usage: scripts/verify_versions.sh [--require-tag]"
-for f in Cargo.toml android/build.gradle iOS/SCMessenger/SCMessenger/Info.plist wasm/Cargo.toml shared/build.gradle.kts; do
+for f in Cargo.toml android/build.gradle iOS/SCMessenger/SCMessenger/Info.plist iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj wasm/Cargo.toml shared/build.gradle.kts; do
     [[ -f "$f" ]] || fail "Required release manifest is missing: $f"
 done
 CARGO_VERSION="$(workspace_version Cargo.toml)"
@@ -21,6 +21,8 @@ ANDROID_VERSION="$(android_value android/build.gradle versionName)"
 ANDROID_BUILD="$(android_value android/build.gradle versionCode)"
 IOS_VERSION="$(plist_value iOS/SCMessenger/SCMessenger/Info.plist CFBundleShortVersionString)"
 IOS_BUILD="$(plist_value iOS/SCMessenger/SCMessenger/Info.plist CFBundleVersion)"
+IOS_PROJECT_VERSION="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj | sort -u)"
+IOS_PROJECT_BUILD="$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION = ([^;]+);/\1/p' iOS/SCMessenger/SCMessenger.xcodeproj/project.pbxproj | sort -u)"
 DESKTOP_VERSION="$(desktop_version shared/build.gradle.kts)"
 [[ "$CARGO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || fail "Cargo version is not SemVer: $CARGO_VERSION"
 IOS_CORE="${CARGO_VERSION%%[-+]*}"
@@ -29,6 +31,8 @@ IOS_CORE="${CARGO_VERSION%%[-+]*}"
 [[ "$ANDROID_VERSION" == "$CARGO_VERSION" ]] || fail "Android versionName ($ANDROID_VERSION) differs from Cargo ($CARGO_VERSION)"
 [[ "$DESKTOP_VERSION" == "$CARGO_VERSION" ]] || fail "Desktop version ($DESKTOP_VERSION) differs from Cargo ($CARGO_VERSION)"
 [[ "$IOS_VERSION" == "$IOS_CORE" ]] || fail "iOS marketing version ($IOS_VERSION) must be Cargo numeric core ($IOS_CORE)"
+[[ "$IOS_PROJECT_VERSION" == "$IOS_VERSION" ]] || fail "iOS project marketing versions ($IOS_PROJECT_VERSION) differ from Info.plist ($IOS_VERSION)"
+[[ "$IOS_PROJECT_BUILD" == "$IOS_BUILD" ]] || fail "iOS project build numbers ($IOS_PROJECT_BUILD) differ from Info.plist ($IOS_BUILD)"
 grep -qE '^version\.workspace = true$' wasm/Cargo.toml || fail "WASM does not inherit Cargo's workspace version"
 
 HEAD_COMMIT="$(git rev-parse HEAD)"
