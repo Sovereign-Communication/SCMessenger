@@ -42,7 +42,12 @@ def getGitHash = { ->
 }
 
 gradle.taskGraph.whenReady { graph ->
-    def releaseRequested = graph.allTasks.any { it.name.toLowerCase().contains('release') }
+    // Source-set lint and test tasks also contain "Release" in their names.
+    // Gate only tasks that can actually assemble, package, publish, or install
+    // a release artifact.
+    def releaseRequested = graph.allTasks.any {
+        it.name ==~ /(?i)(assemble|bundle|package|publish|install).*release.*/
+    }
     if (releaseRequested && !releaseSigningReady) {
         throw new GradleException("Release signing is required. Configure a real release keystore; debug signing is never valid for release artifacts.")
     }
