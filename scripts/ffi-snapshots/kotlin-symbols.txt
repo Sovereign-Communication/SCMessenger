@@ -431,3 +431,15 @@ suspend fun `shutdown`()
 suspend fun `subscribeTopic`(`topic`: kotlin.String)
 suspend fun `unsubscribeTopic`(`topic`: kotlin.String)
 suspend fun `updateKeepalive`(`peerId`: kotlin.String, `intervalSecs`: kotlin.ULong)
+fun `autoBlockExemptPeer`(`peerId`: kotlin.String)
+fun `autoBlockIsExempt`(`peerId`: kotlin.String): kotlin.Boolean {
+fun `autoBlockUnexemptPeer`(`peerId`: kotlin.String)
+fun `detectSpamConfidence`(`peerId`: kotlin.String): kotlin.Double {
+fun `getKnownDevices`(`peerId`: kotlin.String): List<kotlin.String> {
+fun `getReputationScore`(`peerId`: kotlin.String): kotlin.Double {
+fun `isContentSuspicious`(`envelopeData`: kotlin.ByteArray): kotlin.Boolean {
+fun `isDeviceBlocked`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {
+fun `isPeerAbusive`(`peerId`: kotlin.String): kotlin.Boolean {
+fun `isPeerSuspicious`(`peerId`: kotlin.String): kotlin.Boolean {
+fun `pruneStaleSpamPeers`(`maxEntries`: kotlin.UInt): kotlin.UInt {
+fun `registerDeviceId`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {

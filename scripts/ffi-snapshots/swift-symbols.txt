@@ -481,3 +481,15 @@ public struct SeedLedgerEntry: Equatable, Hashable {
 public struct ServiceStats: Equatable, Hashable {
 public struct SignatureResult: Equatable, Hashable {
 public struct TtlConfig: Equatable, Hashable {
+public func autoBlockExemptPeer(peerId: String)  {try! rustCall() {
+public func autoBlockIsExempt(peerId: String) -> Bool  {
+public func autoBlockUnexemptPeer(peerId: String)  {try! rustCall() {
+public func detectSpamConfidence(peerId: String) -> Double  {
+public func getKnownDevices(peerId: String) -> [String]  {
+public func getReputationScore(peerId: String) -> Double  {
+public func isContentSuspicious(envelopeData: Data) -> Bool  {
+public func isDeviceBlocked(peerId: String, deviceId: String) -> Bool  {
+public func isPeerAbusive(peerId: String) -> Bool  {
+public func isPeerSuspicious(peerId: String) -> Bool  {
+public func pruneStaleSpamPeers(maxEntries: UInt32) -> UInt32  {
+public func registerDeviceId(peerId: String, deviceId: String) -> Bool  {
