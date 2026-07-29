@@ -5,6 +5,8 @@ use crate::transport::addr_filter::{
 use libp2p::Multiaddr;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::io::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 fn current_timestamp() -> u64 {
@@ -49,6 +51,9 @@ const MAX_LEN_NICKNAME: usize = 128;
 
 /// Failure threshold aligned with `core/src/transport/dial_policy.rs` dead-mark.
 const LEDGER_DEAD_FAILURE_THRESHOLD: u32 = 3;
+
+/// Monotonic nonce for unique temporary ledger files in `save_with_entries`.
+static SAVE_TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 /// A routing-only peer record carried inside an invite (item 1 of the v0.4.0
 /// ledger seeding work).
@@ -256,6 +261,9 @@ pub struct LedgerManager {
     /// An in-memory core must have an in-memory ledger.
     storage_path: Option<std::path::PathBuf>,
     entries: Arc<Mutex<Vec<LedgerEntry>>>,
+    /// Serializes durable snapshots so concurrent mutators cannot write out of
+    /// snapshot order. Held from before the entries mutation until after rename.
+    save_lock: Mutex<()>,
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
@@ -265,6 +273,7 @@ impl LedgerManager {
         Self {
             storage_path: Some(std::path::PathBuf::from(storage_path)),
             entries: Arc::new(Mutex::new(Vec::new())),
+            save_lock: Mutex::new(()),
         }
     }
 
@@ -301,12 +310,49 @@ impl LedgerManager {
         let ledger_file = storage_path.join("ledger.json");
         let data =
             serde_json::to_string_pretty(entries).map_err(|_| crate::IronCoreError::Internal)?;
-        std::fs::write(&ledger_file, data).map_err(|_| crate::IronCoreError::StorageError)?;
+
+        let tmp_file = ledger_file.with_file_name(format!(
+            "ledger.json.tmp.{}.{}",
+            std::process::id(),
+            SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed)
+        ));
+
+        let tmp_result = (|| {
+            let mut file = std::fs::File::create(&tmp_file)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()
+        })();
+        if let Err(err) = tmp_result {
+            let _ = std::fs::remove_file(&tmp_file);
+            tracing::warn!("ledger tmp write failed: {}", err);
+            return Err(crate::IronCoreError::StorageError);
+        }
+
+        if let Err(err) = std::fs::rename(&tmp_file, &ledger_file) {
+            let _ = std::fs::remove_file(&tmp_file);
+            tracing::warn!("ledger rename failed: {}", err);
+            return Err(crate::IronCoreError::StorageError);
+        }
+
+        #[cfg(unix)]
+        {
+            // Best-effort directory fsync so the rename itself is durable.
+            if let Ok(dir) = std::fs::File::open(storage_path) {
+                let _ = dir.sync_all();
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Same-directory std::fs::rename maps to MoveFileExW with replace
+            // semantics; Windows gives atomic replacement without a separate
+            // directory fsync surface here.
+        }
 
         Ok(())
     }
 
     pub fn save(&self) -> Result<(), crate::IronCoreError> {
+        let _save_guard = self.save_lock.lock();
         let entries = {
             let guard = self.entries.lock();
             (*guard).clone()
@@ -351,6 +397,7 @@ impl LedgerManager {
     /// reconnaissance. Rejecting them here would also make
     /// `lan_only_node_discloses_nothing_to_a_stranger` vacuous.
     pub fn record_connection(&self, multiaddr: String, peer_id: String) {
+        let _save_guard = self.save_lock.lock();
         if !is_recordable_multiaddr(&multiaddr) {
             tracing::debug!(
                 "Refusing to record a connection against a DNS-form or transport-less                  multiaddr: {}",
@@ -409,6 +456,7 @@ impl LedgerManager {
     }
 
     pub fn record_failure(&self, multiaddr: String) {
+        let _save_guard = self.save_lock.lock();
         let snapshot = {
         let mut entries = self.entries.lock();
         if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
@@ -439,6 +487,7 @@ impl LedgerManager {
         public_key: Option<String>,
         nickname: Option<String>,
     ) {
+        let _save_guard = self.save_lock.lock();
         if !is_recordable_multiaddr(&multiaddr) {
             tracing::debug!(
                 "Refusing to annotate a DNS-form or transport-less multiaddr: {}",
@@ -572,7 +621,8 @@ impl LedgerManager {
     /// do know (a cellular-only node) should use
     /// [`Self::import_seed_entries_with_mode`].
     pub fn import_seed_entries(&self, entries: Vec<SeedLedgerEntry>) -> u32 {
-        self.import_seed_entries_with_mode(entries, NetworkMode::Local)
+        let _save_guard = self.save_lock.lock();
+        self.import_seed_entries_locked(entries, NetworkMode::Local)
     }
 
     pub fn get_preferred_relays(&self, limit: u32) -> Vec<LedgerEntry> {
@@ -617,6 +667,7 @@ impl LedgerManager {
         Self {
             storage_path: None,
             entries: Arc::new(Mutex::new(Vec::new())),
+            save_lock: Mutex::new(()),
         }
     }
 
@@ -655,6 +706,15 @@ impl LedgerManager {
     ///   Without this an invite holder could load a victim's dial set with
     ///   internal host:port pairs and read open/closed off the dial timing.
     pub fn import_seed_entries_with_mode(
+        &self,
+        entries: Vec<SeedLedgerEntry>,
+        mode: NetworkMode,
+    ) -> u32 {
+        let _save_guard = self.save_lock.lock();
+        self.import_seed_entries_locked(entries, mode)
+    }
+
+    fn import_seed_entries_locked(
         &self,
         entries: Vec<SeedLedgerEntry>,
         mode: NetworkMode,
@@ -722,6 +782,7 @@ impl LedgerManager {
     }
 
     pub fn annotate_identities_batch(&self, items: Vec<(String, String, Option<String>, Option<String>)>) {
+        let _save_guard = self.save_lock.lock();
         let snapshot = {
             let mut entries = self.entries.lock();
             for (multiaddr, peer_id, public_key, nickname) in items {
