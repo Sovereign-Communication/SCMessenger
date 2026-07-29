@@ -25,6 +25,20 @@ Working agy form:
 
 Use separate worktrees or strictly sequential packets when files overlap.
 
+## Required Windows branch map
+
+- Continue `wip/v040-seeding-fixes` only for W1 and the existing PR #116
+  remediation. Do not mix security, release, or unrelated unification work
+  into that review range.
+- Create `wip/v040-release-readiness` from
+  `origin/main@7d396f4df0460686d4ebc2e850b5ee3a7b964cc0` for W2, W5, W6, and the
+  tracked Windows response file.
+- Create `wip/v040-core-unification` from that same `origin/main` commit for
+  W3 and W4.
+- Agy edits packet-specific worktrees branching from the applicable Windows
+  integration branch. Agy does not commit or push; Qwen reviews and integrates.
+- Do not work in or rebase `gpt/v050-ios-readiness`; that is the Mac/iOS lane.
+
 ## Exact observed state
 
 - `origin/main`: `7d396f4df0460686d4ebc2e850b5ee3a7b964cc0`
