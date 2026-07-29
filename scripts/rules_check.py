@@ -23,9 +23,6 @@ import re
 import subprocess
 import sys
 
-EMOJI = re.compile(
-    "[\U0001F300-\U0001FAFF\U0001F1E6-\U0001F1FF\U00002600-\U000027BF]"
-)
 PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 ARTIFACT_SUFFIXES = (".log", ".pid", ".logcat")
 BINARY_SUFFIXES = (
@@ -34,6 +31,15 @@ BINARY_SUFFIXES = (
     ".xcframework", ".ttf", ".otf", ".woff", ".woff2", ".bin", ".exe",
 )
 EXEMPT_PREFIXES = ("docs/historical/", "tmp/")
+
+
+def is_blocked_emoji_codepoint(codepoint: int) -> bool:
+    """Return whether a code point is within the repository's blocked ranges."""
+    return (
+        0x1F300 <= codepoint <= 0x1FAFF
+        or 0x1F1E6 <= codepoint <= 0x1F1FF
+        or 0x2600 <= codepoint <= 0x27BF
+    )
 
 
 def staged_files():
@@ -67,7 +73,7 @@ def check(path: str) -> list:
     except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError, PermissionError):
         return fails
 
-    hits = EMOJI.findall(text)
+    hits = [char for char in text if is_blocked_emoji_codepoint(ord(char))]
     if hits:
         cps = ", ".join(f"U+{ord(c):04X}" for c in hits[:8])
         fails.append(

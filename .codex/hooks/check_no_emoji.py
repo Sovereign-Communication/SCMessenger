@@ -6,17 +6,16 @@ actual, positively-identified emoji match.
 """
 import json
 import os
-import re
 import sys
 
-EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001F300-\U0001FAFF"  # misc symbols/pictographs through extended-A
-    "\U0001F1E6-\U0001F1FF"  # regional indicator (flag) letters
-    "\U00002600-\U000027BF"  # misc symbols + dingbats (covers checkmarks, X, sparkles)
-    "]",
-    flags=re.UNICODE,
-)
+
+def is_blocked_emoji_codepoint(codepoint: int) -> bool:
+    """Return whether a code point is within the repository's blocked ranges."""
+    return (
+        0x1F300 <= codepoint <= 0x1FAFF
+        or 0x1F1E6 <= codepoint <= 0x1F1FF
+        or 0x2600 <= codepoint <= 0x27BF
+    )
 
 SKIP_SUBSTRINGS = ("/target/", "\\target\\", "/node_modules/", "\\node_modules\\",
                     "/.git/", "\\.git\\", "/build/", "\\build\\", "/.gradle/", "\\.gradle\\")
@@ -36,7 +35,7 @@ def main() -> int:
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         text = f.read()
 
-    matches = EMOJI_PATTERN.findall(text)
+    matches = [char for char in text if is_blocked_emoji_codepoint(ord(char))]
     if not matches:
         return 0
 
