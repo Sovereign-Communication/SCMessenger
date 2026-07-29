@@ -70,20 +70,6 @@ pub enum IronCoreError {
     IoError,
     #[error("Onion routing disabled")]
     OnionRoutingDisabled,
-}
-
-// -----------------------------------------------------------------------
-// Canonical GossipSub Topic Constants (Single Source of Truth)
-// -----------------------------------------------------------------------
-/// Universal discovery lobby topic subscribed by all active nodes on startup.
-pub const TOPIC_LOBBY: &str = "sc-lobby";
-
-/// Primary mesh topic for encrypted message and outbox routing.
-pub const TOPIC_MESH: &str = "sc-mesh";
-
-/// Receipt convergence topic for delivery proof & status synchronization.
-pub const TOPIC_RECEIPT_CONVERGENCE: &str = "sc-receipt-convergence";
-
 pub use crypto::{decrypt_message, encrypt_message};
 pub use error::{
     MeshResult, SerializationError, SerializationResult, TransportError, TransportResult,
@@ -273,6 +259,7 @@ pub use uniffi::deps::anyhow;
 /// migration, mismatched values silently partition the mesh.
 pub const TOPIC_LOBBY: &str = "sc-lobby";
 pub const TOPIC_MESH: &str = "sc-mesh";
+pub const TOPIC_RECEIPT_CONVERGENCE: &str = "sc-receipt-convergence";
 
 // Include UniFFI scaffolding
 #[cfg(not(target_arch = "wasm32"))]
