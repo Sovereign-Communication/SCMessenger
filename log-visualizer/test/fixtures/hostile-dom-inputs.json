@@ -1,0 +1,8 @@
+[
+  "<node>",
+  "quote: \\\" and apostrophe: '",
+  "bread & butter",
+  "<img src=x onerror=alert(1)>",
+  "</script><script>alert('closed')</script>",
+  "12D3KooW<script>alert('peer')</script>"
+]

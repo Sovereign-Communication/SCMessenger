@@ -358,16 +358,27 @@
         function showNodeTooltip(event, d) {
             const tooltip = d3.select("#tooltip");
             const peerId = platformToPeer.get(d.id) || "Not yet identified";
+            const content = document.createDocumentFragment();
+            const name = document.createElement("div");
+            name.style.fontWeight = "900";
+            name.style.color = "var(--accent)";
+            name.textContent = d.name;
+            const description = document.createElement("div");
+            description.style.fontSize = "10px";
+            description.style.marginBottom = "8px";
+            description.textContent = d.description;
+            const peer = document.createElement("div");
+            peer.style.fontFamily = "monospace";
+            peer.style.fontSize = "9px";
+            peer.style.background = "rgba(0,0,0,0.3)";
+            peer.style.padding = "4px";
+            peer.style.borderRadius = "4px";
+            peer.textContent = peerId;
+            content.append(name, description, peer);
             tooltip.style("opacity", 1)
-                .html(`
-                    <div style="font-weight:900; color:var(--accent);">${d.name}</div>
-                    <div style="font-size:10px; margin-bottom:8px;">${d.description}</div>
-                    <div style="font-family:monospace; font-size:9px; background:rgba(0,0,0,0.3); padding:4px; border-radius:4px;">
-                        ${peerId}
-                    </div>
-                `)
                 .style("left", (event.pageX + 10) + "px")
                 .style("top", (event.pageY - 10) + "px");
+            tooltip.node().replaceChildren(content);
         }
 
         function hideTooltip() {
@@ -451,13 +462,19 @@
 
         function showLinkTooltip(event, src, tgt, transport) {
             const tooltip = d3.select("#tooltip");
+            const content = document.createDocumentFragment();
+            const title = document.createElement("div");
+            title.style.fontWeight = "900";
+            title.style.color = TRANSPORTS[transport].color;
+            title.textContent = `${TRANSPORTS[transport].label} Link`;
+            const endpoints = document.createElement("div");
+            endpoints.style.fontSize = "10px";
+            endpoints.textContent = `${src} ↔ ${tgt}`;
+            content.append(title, endpoints);
             tooltip.style("opacity", 1)
-                .html(`
-                    <div style="font-weight:900; color:${TRANSPORTS[transport].color};">${TRANSPORTS[transport].label} Link</div>
-                    <div style="font-size:10px;">${src} ↔ ${tgt}</div>
-                `)
                 .style("left", (event.pageX + 10) + "px")
                 .style("top", (event.pageY - 10) + "px");
+            tooltip.node().replaceChildren(content);
         }
 
         // Logic to extract peer IDs and active connections from logs
@@ -532,7 +549,7 @@
             
             // Highlight the node name to show it's identified
             node.select(".node-label")
-                .text(d => `${d.id} ✓`)
+                .text(d => `${d.id} [OK]`)
                 .style("fill", "#10b981");
 
             node.select(".node-id")

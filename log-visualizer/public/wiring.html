@@ -733,7 +733,11 @@
       const file = node.data("file") || "";
       const crate = node.data("crate") || "";
       const line = node.data("line") || "";
-      $tooltip.innerHTML = `${name}<br><span style="opacity:0.7;font-size:0.6rem">${file}:${line}  [${crate}]</span>`;
+      const details = document.createElement("span");
+      details.style.opacity = "0.7";
+      details.style.fontSize = "0.6rem";
+      details.textContent = `${file}:${line}  [${crate}]`;
+      $tooltip.replaceChildren(document.createTextNode(name), document.createElement("br"), details);
       $tooltip.style.left = (evt.originalEvent.clientX + 14) + "px";
       $tooltip.style.top = (evt.originalEvent.clientY - 40) + "px";
     }
@@ -754,41 +758,94 @@
         cy.nodes().removeClass("selected highlighted dimmed");
         cy.edges().removeClass("highlighted dimmed");
       }
-      $detail.innerHTML = '<span style="color:var(--text-dim); font-size:0.7rem">Click a node to inspect</span>';
+      showEmptyDetail();
+    }
+
+    function showEmptyDetail() {
+      const message = document.createElement("span");
+      message.style.color = "var(--text-dim)";
+      message.style.fontSize = "0.7rem";
+      message.textContent = "Click a node to inspect";
+      $detail.replaceChildren(message);
     }
 
     // ── Sidebar ──
     function updateSidebar(node) {
       const d = node.data();
-      const stub = d.is_stub ? " <span style='color:#fbbf24'>[STUB]</span>" : "";
-      const unwired = d.is_unwired ? " <span style='color:#ef4444'>[UNWIRED]</span>" : "";
       const callsOut = d.calls_out_to || [];
       const calledBy = d.called_by || [];
-
-      let html = `
-        <div class="field"><div class="label">Name</div><div class="value" style="color:var(--primary);font-weight:700">${esc(d.name || d.label)}${stub}${unwired}</div></div>
-        <div class="field"><div class="label">File</div><div class="value">${esc(d.file || "-")} : ${d.line || "-"}</div></div>
-        <div class="field"><div class="label">Crate</div><div class="value">${esc(d.crate || "-")}</div></div>
-        <div class="field"><div class="label">In-degree</div><div class="value">${d.in_degree}</div></div>
-        <div class="field"><div class="label">Out-degree</div><div class="value">${d.out_degree}</div></div>
-        <div class="field"><div class="label">Calls (${callsOut.length})</div>
-          <div class="call-list">${callsOut.map(c => `<div>${esc(c)}</div>`).join("") || "<div style='color:var(--text-dim)'>none</div>"}</div>
-        </div>
-        <div class="field"><div class="label">Called By (${calledBy.length})</div>
-          <div class="call-list">${calledBy.slice(0,30).map(c => {
-            const cn = fullData.nodes.find(n => n.id === c);
-            const label = cn ? cn.name : c.split("::").pop();
-            return `<div><a onclick="jumpToNode('${escAttr(c)}')">${esc(label)}</a></div>`;
-          }).join("") || "<div style='color:var(--text-dim)'>none</div>"}
-          ${calledBy.length > 30 ? `<div style="color:var(--text-dim)">... and ${calledBy.length - 30} more</div>` : ""}
-          </div>
-        </div>
-      `;
-      $detail.innerHTML = html;
+      const field = (label, value, className = "value") => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "field";
+        const heading = document.createElement("div");
+        heading.className = "label";
+        heading.textContent = label;
+        const body = document.createElement("div");
+        body.className = className;
+        if (value instanceof Node) body.append(value); else body.textContent = value;
+        wrapper.append(heading, body);
+        return wrapper;
+      };
+      const name = document.createElement("span");
+      name.style.color = "var(--primary)";
+      name.style.fontWeight = "700";
+      name.textContent = d.name || d.label || "";
+      if (d.is_stub) {
+        const stub = document.createElement("span");
+        stub.style.color = "#fbbf24";
+        stub.textContent = " [STUB]";
+        name.append(stub);
+      }
+      if (d.is_unwired) {
+        const unwired = document.createElement("span");
+        unwired.style.color = "#ef4444";
+        unwired.textContent = " [UNWIRED]";
+        name.append(unwired);
+      }
+      const callList = (items, linked) => {
+        const list = document.createElement("div");
+        list.className = "call-list";
+        if (items.length === 0) {
+          const none = document.createElement("div");
+          none.style.color = "var(--text-dim)";
+          none.textContent = "none";
+          list.append(none);
+          return list;
+        }
+        items.forEach((item) => {
+          const row = document.createElement("div");
+          if (linked) {
+            const target = fullData.nodes.find(n => n.id === item);
+            const link = document.createElement("a");
+            link.href = "#";
+            link.textContent = target ? target.name : item.split("::").pop();
+            link.addEventListener("click", (event) => {
+              event.preventDefault();
+              window.jumpToNode(item);
+            });
+            row.append(link);
+          } else row.textContent = item;
+          list.append(row);
+        });
+        return list;
+      };
+      const calledByList = callList(calledBy.slice(0, 30), true);
+      if (calledBy.length > 30) {
+        const more = document.createElement("div");
+        more.style.color = "var(--text-dim)";
+        more.textContent = `... and ${calledBy.length - 30} more`;
+        calledByList.append(more);
+      }
+      $detail.replaceChildren(
+        field("Name", name),
+        field("File", `${d.file || "-"} : ${d.line || "-"}`),
+        field("Crate", d.crate || "-"),
+        field("In-degree", d.in_degree),
+        field("Out-degree", d.out_degree),
+        field(`Calls (${callsOut.length})`, callList(callsOut, false)),
+        field(`Called By (${calledBy.length})`, calledByList),
+      );
     }
-
-    function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-    function escAttr(s) { return String(s).replace(/'/g,"\\'").replace(/"/g,"&quot;"); }
 
     // ── Global helpers exposed for sidebar links ──
     window.jumpToNode = function(nodeId) {
@@ -874,7 +931,7 @@
       $depthVal.textContent = "1";
       $search.value = "";
       refreshGraph();
-      $detail.innerHTML = '<span style="color:var(--text-dim); font-size:0.7rem">Click a node to inspect</span>';
+      showEmptyDetail();
     });
 
     // ── Refresh ──
