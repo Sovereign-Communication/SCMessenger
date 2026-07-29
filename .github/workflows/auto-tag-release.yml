@@ -1,19 +1,26 @@
 name: Auto Tag Release
 
-# Closes the gap where Cargo.toml's version gets bumped as part of normal
-# feature work but nobody remembers to separately cut a release -- v0.2.1
-# (2026-03-18) sat as the latest tag through four subsequent version bumps
-# (0.3.0, 0.3.4 x2, 0.3.5) with zero corresponding releases. Tagging is now
-# automatic: any push to main that changes Cargo.toml's
-# [workspace.package] version creates and pushes the matching v* tag,
-# which in turn triggers release.yml (already tag-triggered) with no
-# manual step required.
+# MANUAL-ONLY since the v0.4.0 terminal release (operator directive
+# 2026-07-28, per PR #115 section 1.5). The previous automatic trigger
+# (push to main touching Cargo.toml) armed a trap: merging the
+# 0.3.5 -> 0.4.0 bump would have pushed a STABLE v0.4.0 tag, and
+# release.yml (tags: v*) would have cut a NON-prerelease GitHub Release
+# at the bump commit -- not the reviewed candidate the operator tags as
+# v0.4.0-alpha.1. Tags are now cut deliberately: run this workflow
+# manually (Actions -> Auto Tag Release -> Run workflow) AFTER the
+# terminal release PR lands. It tags whatever [workspace.package]
+# version currently says; the exists-check guard below is unchanged.
+# The old automatic trigger is retained commented-out for reversibility.
+#
+# Historical context (why auto-tagging existed): v0.2.1 (2026-03-18) sat
+# as the latest tag through four version bumps with zero releases.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'Cargo.toml'
 
 permissions:
   contents: write
