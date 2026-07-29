@@ -3515,9 +3515,9 @@ pub fn get_known_devices(peer_id: String) -> Vec<String> {
 
 /// Check if a specific device ID has been blocked.
 #[uniffi::export]
-pub fn is_device_blocked(device_id: String) -> bool {
+pub fn is_device_blocked(peer_id: String, device_id: String) -> bool {
     let core = crate::IronCore::new();
-    core.is_device_blocked(&device_id)
+    core.is_device_blocked(&peer_id, &device_id)
 }
 
 fn current_timestamp() -> u64 {

@@ -4162,7 +4162,7 @@ impl IronCore {
         peer_id: &str,
         signal: crate::abuse::spam_detection::SpamSignal,
     ) {
-        self.spam_detection_engine
+        self.abuse_manager
             .read()
             .record_spam_signal(peer_id, signal);
     }
@@ -4205,20 +4205,22 @@ impl IronCore {
 
     /// Detect spam confidence for a peer (0.0 to 1.0).
     pub fn detect_spam_confidence(&self, peer_id: &str) -> f64 {
-        self.spam_detection_engine.read().spam_score(peer_id)
+        self.abuse_manager.read().spam_detector().spam_score(peer_id)
     }
 
     /// Check if payload content is suspicious.
     pub fn is_content_suspicious(&self, envelope_data: &[u8]) -> bool {
-        self.spam_detection_engine
+        self.abuse_manager
             .read()
+            .spam_detector()
             .is_content_suspicious(envelope_data)
     }
 
     /// Prune stale peer entries from spam detection store.
     pub fn prune_stale_spam_peers(&self, max_entries: usize) -> usize {
-        self.spam_detection_engine
+        self.abuse_manager
             .read()
+            .spam_detector()
             .prune_stale_peers(max_entries)
     }
 
@@ -4243,10 +4245,10 @@ impl IronCore {
     }
 
     /// Check if a specific device ID is blocked.
-    pub fn is_device_blocked(&self, device_id: &str) -> bool {
+    pub fn is_device_blocked(&self, peer_id: &str, device_id: &str) -> bool {
         self.blocked_manager
             .read()
-            .is_device_blocked(device_id)
+            .is_device_blocked(peer_id, device_id)
             .unwrap_or(false)
     }
 
