@@ -8,6 +8,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct SCMessengerApp: App {
     private let installChoiceKey: String = "hasCompletedInstallModeChoice"
 
