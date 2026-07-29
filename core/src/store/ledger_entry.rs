@@ -185,10 +185,10 @@ fn annotate_identity_locked(
             && (peer_id.len() > MAX_LEN_PEER_ID || peer_id.parse::<libp2p::PeerId>().is_err()))
         || normalized_public_key
             .as_ref()
-            .map_or(false, |value| value.len() > MAX_LEN_PUBLIC_KEY)
+            .is_some_and(|value| value.len() > MAX_LEN_PUBLIC_KEY)
         || normalized_nickname
             .as_ref()
-            .map_or(false, |value| value.len() > MAX_LEN_NICKNAME)
+            .is_some_and(|value| value.len() > MAX_LEN_NICKNAME)
     {
         return false;
     }
@@ -307,7 +307,7 @@ impl LedgerManager {
                 let file_name = dir_entry.file_name();
                 if file_name
                     .to_str()
-                    .map_or(false, |name| name.starts_with(&tmp_prefix))
+                    .is_some_and(|name| name.starts_with(&tmp_prefix))
                 {
                     let _ = std::fs::remove_file(dir_entry.path());
                 }
@@ -355,11 +355,11 @@ impl LedgerManager {
                 let public_key_ok = entry
                     .public_key
                     .as_ref()
-                    .map_or(true, |value| value.trim().len() <= MAX_LEN_PUBLIC_KEY);
+                    .is_none_or(|value| value.trim().len() <= MAX_LEN_PUBLIC_KEY);
                 let nickname_ok = entry
                     .nickname
                     .as_ref()
-                    .map_or(true, |value| value.trim().len() <= MAX_LEN_NICKNAME);
+                    .is_none_or(|value| value.trim().len() <= MAX_LEN_NICKNAME);
                 // Ingest parity: ingest accepts an empty peer_id string, so load admits None or Some("") and rejects only non-empty invalid peer ids.
                 let peer_id_ok = match entry.peer_id.as_deref() {
                     None | Some("") => true,
@@ -1904,7 +1904,7 @@ mod tests {
                 .filter(|e| {
                     e.file_name()
                         .to_str()
-                        .map_or(false, |n| n.starts_with(&tmp_prefix))
+                        .is_some_and(|n| n.starts_with(&tmp_prefix))
                 })
                 .collect();
             assert!(stale.is_empty(), "tmp siblings remain: {:?}", stale);
@@ -2103,7 +2103,7 @@ mod tests {
                 let name = entry.file_name();
                 if name
                     .to_str()
-                    .map_or(false, |name| name.starts_with("ledger.json.corrupt-"))
+                    .is_some_and(|name| name.starts_with("ledger.json.corrupt-"))
                 {
                     Some(entry.path())
                 } else {

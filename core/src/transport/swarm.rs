@@ -2873,7 +2873,7 @@ pub async fn start_swarm_with_config(
                                 dial_policy_manager.complete_dial_attempt(&key_str);
                                 dial_policy_manager.record_dial_failure(&key_str, None);
                                 if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
-                                    let _ = core.ledger_manager.record_failure(key_str.clone());
+                                    core.ledger_manager.record_failure(key_str.clone());
                                 }
 
                                 tracing::debug!("Pending dial to {} timed out after {}s with no connection signal", key, PENDING_DIAL_TIMEOUT_SECS);
@@ -4875,7 +4875,7 @@ pub async fn start_swarm_with_config(
                                         dial_policy_manager.record_dial_failure(&addr_key, peer_id);
                                         dial_policy_manager.complete_dial_attempt(&addr_key);
                                         if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
-                                            let _ = core.ledger_manager.record_failure(stripped_failed.to_string());
+                                            core.ledger_manager.record_failure(stripped_failed.to_string());
                                         }
 
                                         for (key, entry) in pending_dials.iter() {
