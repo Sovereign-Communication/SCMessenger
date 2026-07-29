@@ -30,6 +30,7 @@ final class mDNSServiceDiscovery: NSObject {
     // Service advertisement
     private var localService: NetService?
     private var isAdvertising: Bool = false
+    private var advertisingGeneration: UInt64 = 0
 
     // Service type (must match Android's WifiDirectTransport.SERVICE_TYPE)
     private let serviceType: String = "_scmessenger._tcp"
@@ -69,49 +70,53 @@ final class mDNSServiceDiscovery: NSObject {
     }
 
     func startAdvertising(port: Int32) {
-        guard !isAdvertising else {
+        guard localService == nil else {
             logger.debug("Already advertising mDNS service")
             return
         }
 
+        advertisingGeneration &+= 1
+        let generation = advertisingGeneration
         logger.info("Starting mDNS advertising for \(self.serviceName) on port \(port)")
-        localService = NetService(
+        let service = NetService(
             domain: "local.",
             type: serviceType,
             name: serviceName,
             port: port
         )
-        localService?.delegate = self
+        service.delegate = self
+        localService = service
+        isAdvertising = true
 
         // Set TXT records for cross-platform compatibility (match Android format)
         Task { @MainActor [weak self] in
-            guard let self = self,
-                  let identity = self.meshRepository?.getFullIdentityInfo(),
-                  let peerId = identity.libp2pPeerId,
-                  let publicKey = identity.publicKeyHex else {
-                self?.localService?.publish()
-                self?.isAdvertising = true
-                return
+            guard let self,
+                  self.advertisingGeneration == generation,
+                  self.localService === service else { return }
+
+            if let identity = self.meshRepository?.getFullIdentityInfo(),
+               let peerId = identity.libp2pPeerId,
+               let publicKey = identity.publicKeyHex {
+                let txtRecord: [String: Data] = [
+                    "peer_id": Data(peerId.utf8),
+                    "pubkey": Data((String(publicKey.prefix(16)) + "...").utf8),
+                    "device_id": Data((identity.deviceId ?? "").utf8),
+                    "version": Data("1.0".utf8),
+                    "transport": Data("tcp".utf8)
+                ]
+                service.setTXTRecord(NetService.data(fromTXTRecord: txtRecord))
+                self.logger.debug("mDNS TXT record set: \(txtRecord.keys.sorted())")
             }
-            let txtRecord: [String: Data] = [
-                "peer_id": Data(peerId.utf8),
-                "pubkey": Data((String(publicKey.prefix(16)) + "...").utf8),
-                "device_id": Data((identity.deviceId ?? "").utf8),
-                "version": Data("1.0".utf8),
-                "transport": Data("tcp".utf8)
-            ]
-            let txtData: Data = NetService.data(fromTXTRecord: txtRecord)
-            self.localService?.setTXTRecord(txtData)
-            self.localService?.publish()
-            self.isAdvertising = true
-            self.logger.debug("mDNS TXT record set: \(txtRecord.keys.sorted())")
+            service.publish()
         }
     }
 
     func stopAdvertising() {
-        guard isAdvertising else { return }
+        advertisingGeneration &+= 1
+        guard localService != nil || isAdvertising else { return }
         logger.info("Stopping mDNS advertising")
         localService?.stop()
+        localService?.delegate = nil
         localService = nil
         isAdvertising = false
     }
