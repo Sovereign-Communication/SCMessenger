@@ -18,9 +18,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.0</string>
+	<string>0.5.0</string>
 	<key>CFBundleVersion</key>
-	<string>7</string>
+	<string>8</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>17.0</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
@@ -31,11 +31,12 @@
 	<array>
 		<string>_scmesh._tcp</string>
 		<string>_scmesh._udp</string>
+		<string>_scmessenger._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>SCMessenger uses the camera to scan QR codes for quickly adding contacts and joining mesh networks.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>SCMessenger uses the local network to find nearby mesh nodes via WiFi Direct and establish peer-to-peer connections.</string>
+	<string>SCMessenger uses the local network to discover nearby mesh nodes and establish peer-to-peer connections.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>SCMessenger uses motion activity to adapt mesh power behavior and reduce battery drain while preserving connectivity.</string>
 	<key>NSUserNotificationsUsageDescription</key>

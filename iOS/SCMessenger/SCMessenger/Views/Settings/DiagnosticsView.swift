@@ -145,15 +145,17 @@ struct DiagnosticsView: View {
     private func prepareExport() {
         let jsonMetrics = repository.exportDiagnostics()
         let recentLogs = repository.diagnosticsSnapshot(limit: 5000)
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
         let missingPermissions = [
             "Bluetooth (peer discovery and nearby transport)",
             "Local Network (peer connectivity in local mesh)",
             "Notifications (optional delivery alerts)"
         ]
         let bundleText: String = """
-        === SCMessenger Diagnostics Bundle (v0.4.0) ===
+        === SCMessenger Diagnostics Bundle (v\(appVersion)) ===
         Generated: \(Date())
-        Version: 0.4.0
+        Version: \(appVersion) (\(buildVersion))
 
         --- Runtime Summary ---
         connection_path_state: \(repository.getConnectionPathState())
