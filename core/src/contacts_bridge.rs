@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 // Contact management bridge for mobile platforms
 //
 // Wraps CLI contact storage logic (sled-based) for UniFFI exposure to Android/iOS.

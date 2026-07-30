@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
