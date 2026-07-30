@@ -291,6 +291,7 @@ impl MeshService {
         );
 
         // Initialize IronCore
+        #[cfg(not(target_arch = "wasm32"))]
         let core = if let Some(ref log_dir) = self.log_directory {
             if let Some(ref path) = self.storage_path {
                 tracing::info!("MeshService::start: Creating IronCore::with_storage_and_logs");
@@ -313,6 +314,9 @@ impl MeshService {
             tracing::info!("MeshService::start: Creating IronCore::new (no storage)");
             crate::IronCore::new()
         };
+
+        #[cfg(target_arch = "wasm32")]
+        let core = crate::IronCore::new();
 
         // Start the core
         core.start()?;
