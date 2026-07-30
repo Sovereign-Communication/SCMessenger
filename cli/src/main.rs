@@ -51,7 +51,10 @@ async fn run_share_apk(
     let bound_port = listener.local_addr()?.port();
     let local_ip = get_local_ipv4().unwrap_or_else(|| Ipv4Addr::new(127, 0, 0, 1));
     let aws_relay = "/ip4/100.56.248.69/tcp/9001";
-    let download_url = format!("http://{}:{}/scmessenger.apk?bootstrap={}", local_ip, bound_port, aws_relay);
+    let download_url = format!(
+        "http://{}:{}/scmessenger.apk?bootstrap={}",
+        local_ip, bound_port, aws_relay
+    );
 
     println!("============================================================");
     println!(" [OK] SCMessenger Node Ephemeral APK Host Active");
