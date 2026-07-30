@@ -253,6 +253,18 @@ pub enum Commands {
         #[command(subcommand)]
         action: DiscoveryAction,
     },
+    /// Host APK for remote QR code scan-to-install on local network
+    ShareApk {
+        /// Optional path to APK file (default: searches local build outputs)
+        #[arg(short, long)]
+        apk_path: Option<String>,
+        /// Duration in minutes to host server (default: 15)
+        #[arg(short, long, default_value = "15")]
+        duration_mins: u64,
+        /// HTTP port to listen on (default: 8080)
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand)]
