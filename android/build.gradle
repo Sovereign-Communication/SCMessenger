@@ -1,0 +1,44 @@
+// Top-level build file for SCMessenger Android
+// Build reproducibility: All versions pinned for consistent builds across environments
+buildscript {
+    ext {
+        // Pinned Kotlin and Compose versions (Requirement 7.3)
+        kotlin_version = '1.9.20'
+        compose_compiler_version = '1.5.4'
+        compose_version = '1.5.4'
+
+        // Pinned dependency versions (Requirement 7.3)
+        hilt_version = '2.50'
+        coroutines_version = '1.7.3'
+
+        // Pinned SDK versions (Requirement 7.3)
+        compileSdk = 35
+        minSdk = 26  // Required for WiFi Aware
+        targetSdk = 35
+
+        // Pinned Gradle plugin versions (Requirement 7.3)
+        gradle_plugin_version = '8.13.2'
+        ksp_version = '1.9.20-1.0.14'
+
+        // Application versioning (synced from Cargo.toml via scripts/sync_version.sh)
+        versionCode = 14
+        versionName = '0.4.0'
+    }
+
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://repo1.maven.org/maven2/" }
+    }
+
+    dependencies {
+        classpath "com.android.tools.build:gradle:$gradle_plugin_version"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "com.google.dagger:hilt-android-gradle-plugin:$hilt_version"
+        classpath "com.google.devtools.ksp:symbol-processing-gradle-plugin:$ksp_version"
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
