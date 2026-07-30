@@ -350,7 +350,6 @@ impl LedgerManager {
                     *self.entries.lock() = Vec::new();
                     let _ = self.save_with_entries(&[]);
                     return Ok(());
->>>>>>> main
                 }
             }
             let data = std::fs::read_to_string(&ledger_file)
@@ -2190,7 +2189,6 @@ mod tests {
     }
 
     #[test]
->>>>>>> main
     fn invite_import_stamps_last_seen() {
         let (_dir, mgr) = manager();
         let imported = vec![
