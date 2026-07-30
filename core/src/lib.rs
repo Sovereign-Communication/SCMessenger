@@ -28,6 +28,7 @@ pub use iron_core::{CoreDelegate, IronCore};
 // because the UDL-based scaffolding requires interface types to have
 // matching Rust implementations (which are wired in Phase 1B).
 #[derive(Debug, thiserror::Error, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(uniffi::Error))]
 pub enum IronCoreError {
     #[error("Identity not initialized")]
     NotInitialized,
