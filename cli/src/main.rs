@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
