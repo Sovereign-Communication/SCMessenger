@@ -979,9 +979,18 @@ impl MeshService {
                                                         let mut accepted = Vec::new();
                                                         for addr in &listen_addrs {
                                                             let addr_str = addr.to_string();
+                                                            let mode = if let Some(engine) = &core_ref.escalation_engine {
+                                                                if engine.current_transport() == crate::mobile_bridge::TransportType::Cellular {
+                                                                    crate::transport::addr_filter::NetworkMode::Public
+                                                                } else {
+                                                                    crate::transport::addr_filter::NetworkMode::Local
+                                                                }
+                                                            } else {
+                                                                crate::transport::addr_filter::NetworkMode::Local
+                                                            };
                                                             if !crate::transport::addr_filter::is_dialable_multiaddr(
                                                                 &addr_str,
-                                                                crate::transport::addr_filter::NetworkMode::Local,
+                                                                mode,
                                                                 crate::transport::addr_filter::DnsPolicy::Reject,
                                                             ) {
                                                                 tracing::debug!(
@@ -1072,9 +1081,18 @@ impl MeshService {
                                                         // stored here, became a seed-dial
                                                         // candidate, and the desktop swarm wires
                                                         // a real resolver.
+                                                        let mode = if let Some(engine) = &core_ref.escalation_engine {
+                                                            if engine.current_transport() == crate::mobile_bridge::TransportType::Cellular {
+                                                                crate::transport::addr_filter::NetworkMode::Public
+                                                            } else {
+                                                                crate::transport::addr_filter::NetworkMode::Local
+                                                            }
+                                                        } else {
+                                                            crate::transport::addr_filter::NetworkMode::Local
+                                                        };
                                                         if !crate::transport::addr_filter::is_dialable_multiaddr(
                                                             &stripped,
-                                                            crate::transport::addr_filter::NetworkMode::Local,
+                                                            mode,
                                                             crate::transport::addr_filter::DnsPolicy::Reject,
                                                         ) {
                                                             tracing::debug!(

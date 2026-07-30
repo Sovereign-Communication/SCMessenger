@@ -473,16 +473,23 @@ impl MultiPathDelivery {
         recipient_peer: PeerId,
         seen_at: u64,
     ) {
-        let ceiling = unix_now_secs().saturating_add(RECENCY_MAX_CLOCK_SKEW_SECS);
+        let now = unix_now_secs();
+        if seen_at == 0 || seen_at.saturating_add(RECENCY_MAX_AGE_SECS) < now {
+            return;
+        }
+        let ceiling = now.saturating_add(RECENCY_MAX_CLOCK_SKEW_SECS);
         let clamped = seen_at.min(ceiling);
         let key = (relay_peer, recipient_peer);
 
         // Updating a route we already track changes no structure: no new key,
-        // no quota consumption, no prune. This is also what keeps a peer from
-        // moving its own entries to the back of the eviction queue by
-        // re-asserting them (see `recency_routes_by_relay`).
+        // no quota consumption, no prune. If the existing timestamp is in the future
+        // (due to past clock skew or injection), reset it to the clamped value.
         if let Some(existing) = self.recipient_recency_by_route.get_mut(&key) {
-            *existing = (*existing).max(clamped);
+            if *existing > now {
+                *existing = clamped;
+            } else {
+                *existing = (*existing).max(clamped);
+            }
             return;
         }
 
