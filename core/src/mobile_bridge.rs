@@ -3386,14 +3386,11 @@ pub fn recommended_transport(peer_id: String) -> ProximityTransport {
             if let Some(t) = engine.current_transport(arr) {
                 return match t {
                     crate::transport::abstraction::TransportType::BLE => ProximityTransport::Ble,
-                    crate::transport::abstraction::TransportType::WifiAware => {
+                    crate::transport::abstraction::TransportType::WiFiAware => {
                         ProximityTransport::WifiAware
                     }
-                    crate::transport::abstraction::TransportType::WifiDirect => {
+                    crate::transport::abstraction::TransportType::WiFiDirect => {
                         ProximityTransport::WifiDirect
-                    }
-                    crate::transport::abstraction::TransportType::Multipeer => {
-                        ProximityTransport::Multipeer
                     }
                     _ => ProximityTransport::Ble,
                 };
