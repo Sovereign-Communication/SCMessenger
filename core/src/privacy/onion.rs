@@ -833,13 +833,9 @@ mod tests {
         assert_eq!(peeled2.1, payload);
     }
 
-    #[test]
-    fn test_proptest_arbitrary_bytes_no_panic() {
-        use proptest::prelude::*;
-
-        proptest! {
+        proptest::proptest! {
             #[test]
-            fn arbitrary_bytes_dont_panic(data in any::<Vec<u8>>()) {
+            fn arbitrary_bytes_dont_panic(data in proptest::prelude::any::<Vec<u8>>()) {
                 let envelope = OnionEnvelope {
                     version: data.first().cloned().unwrap_or(0x01),
                     layer_data: data.clone(),
@@ -851,7 +847,6 @@ mod tests {
                 // Should not panic regardless of input
             }
         }
-    }
 
     #[test]
     fn test_onion_error_display() {

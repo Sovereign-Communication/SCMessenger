@@ -355,7 +355,6 @@ impl Default for CircuitRelayLadder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
     fn test_backoff_state_creation() {

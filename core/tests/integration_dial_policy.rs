@@ -1,7 +1,6 @@
 // Integration tests for P1 Graceful Dial Policy (Items 3+4)
 // Tests per-peer backoff state machine and circuit-relay ladder preference.
 
-use std::thread;
 use std::time::Duration;
 
 #[test]
@@ -367,7 +366,7 @@ fn test_circuit_relay_invalid_addresses_skipped() {
 
     // May be empty or contain the addr depending on implementation
     // The important thing is it doesn't crash
-    assert!(relay_addresses.len() >= 0);
+    let _ = relay_addresses.len();
 }
 
 #[test]
