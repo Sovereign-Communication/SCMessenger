@@ -49,6 +49,12 @@ const MAX_LEN_PEER_ID: usize = 128;
 const MAX_LEN_PUBLIC_KEY: usize = 512;
 const MAX_LEN_NICKNAME: usize = 128;
 
+/// Hard ceiling on ledger file size (bytes). Files exceeding this are
+/// quarantined on load and recovery starts with an empty ledger.
+/// 1024 entries x ~500 bytes/entry < 1 MB in practice; 16 MB gives 16x
+/// headroom before rejecting as potential DoS artifact.
+const MAX_LEDGER_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Failure threshold aligned with `core/src/transport/dial_policy.rs` dead-mark.
 const LEDGER_DEAD_FAILURE_THRESHOLD: u32 = 3;
 
@@ -316,11 +322,35 @@ impl LedgerManager {
 
         if ledger_file.exists() {
             if let Ok(metadata) = std::fs::metadata(&ledger_file) {
-                if metadata.len() > 16 * 1024 * 1024 {
+                if metadata.len() > MAX_LEDGER_FILE_BYTES {
                     tracing::warn!(
-                        "ledger file is {} bytes; parsing may exceed bounded-memory targets",
-                        metadata.len()
+                        "ledger file is {} bytes (limit {}); quarantining and recovering with empty ledger",
+                        metadata.len(),
+                        MAX_LEDGER_FILE_BYTES,
                     );
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+                    let oversized_name = format!(
+                        "{}.oversized-{}.{}",
+                        ledger_file
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("ledger.json"),
+                        timestamp,
+                        nonce,
+                    );
+                    let _ =
+                        std::fs::rename(&ledger_file, ledger_file.with_file_name(oversized_name));
+                    // Start fresh -- save an empty ledger so subsequent
+                    // writes do not resurrect the oversized file.
+                    let _save_guard = self.save_lock.lock();
+                    *self.entries.lock() = Vec::new();
+                    let _ = self.save_with_entries(&[]);
+                    return Ok(());
+>>>>>>> main
                 }
             }
             let data = std::fs::read_to_string(&ledger_file)
@@ -384,9 +414,12 @@ impl LedgerManager {
                 entries.truncate(MAX_LEDGER_ENTRIES);
                 changed = true;
             }
+            // Acquire save_lock BEFORE replacing entries so a concurrent
+            // save cannot snapshot the old contents between our swap and
+            // our persist (W1: stale-load-overwrites-newer-save fix).
+            let _save_guard = self.save_lock.lock();
             *self.entries.lock() = entries;
             if changed {
-                let _save_guard = self.save_lock.lock();
                 let snapshot = { self.entries.lock().clone() };
                 if let Err(err) = self.save_with_entries(&snapshot) {
                     tracing::warn!("ledger shrink persist failed: {}", err);
@@ -2115,6 +2148,49 @@ mod tests {
     }
 
     #[test]
+    fn load_quarantines_oversized_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger_file = dir.path().join("ledger.json");
+
+        // Write a file exceeding MAX_LEDGER_FILE_BYTES (16 MB).
+        // We only need to exceed the size check; content is irrelevant
+        // since the guard fires before parse.
+        let oversized = vec![b'x'; (MAX_LEDGER_FILE_BYTES as usize) + 1];
+        std::fs::write(&ledger_file, &oversized).unwrap();
+        assert!(ledger_file.exists());
+
+        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
+        mgr.load().expect("load quarantines oversized file");
+
+        // Entries must be empty (fresh start).
+        assert!(mgr.entries.lock().is_empty());
+
+        // Quarantined file must exist with original oversized content.
+        let quarantined = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("ledger.json.oversized-"))
+            })
+            .expect("quarantined file must exist");
+        assert_eq!(
+            std::fs::metadata(quarantined.path()).unwrap().len(),
+            (MAX_LEDGER_FILE_BYTES as u64) + 1
+        );
+
+        // A fresh empty ledger.json must have been written at ledger_file location.
+        assert!(ledger_file.exists());
+        let fresh_data: Vec<LedgerEntry> =
+            serde_json::from_str(&std::fs::read_to_string(&ledger_file).unwrap())
+                .expect("fresh ledger must be valid JSON");
+        assert!(fresh_data.is_empty());
+    }
+
+    #[test]
+>>>>>>> main
     fn invite_import_stamps_last_seen() {
         let (_dir, mgr) = manager();
         let imported = vec![

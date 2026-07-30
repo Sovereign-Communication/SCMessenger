@@ -4118,6 +4118,145 @@ impl IronCore {
             .touch_endpoint(endpoint_id)
     }
 
+    // -----------------------------------------------------------------------
+    // FFI Parity: AutoBlockEngine & Abuse Reputation Convenience Methods
+    // -----------------------------------------------------------------------
+
+    /// Evaluate a peer against auto-block criteria without taking action.
+    pub fn auto_block_evaluate(&self, peer_id: &str) -> crate::abuse::auto_block::AutoBlockResult {
+        self.auto_block_engine.read().evaluate(peer_id)
+    }
+
+    /// Evaluate a peer against auto-block criteria and apply block if triggered.
+    pub fn auto_block_evaluate_and_block(
+        &self,
+        peer_id: &str,
+    ) -> Result<bool, crate::IronCoreError> {
+        self.auto_block_engine.read().evaluate_and_block(peer_id)
+    }
+
+    /// Add a peer to the auto-block exemption whitelist.
+    pub fn auto_block_exempt_peer(&self, peer_id: String) {
+        self.auto_block_engine.write().exempt_peer(peer_id);
+    }
+
+    /// Remove a peer from the auto-block exemption whitelist.
+    pub fn auto_block_unexempt_peer(&self, peer_id: &str) {
+        self.auto_block_engine.write().unexempt_peer(peer_id);
+    }
+
+    /// Check if a peer is exempt from auto-blocking.
+    pub fn auto_block_is_exempt(&self, peer_id: &str) -> bool {
+        self.auto_block_engine.read().is_exempt(peer_id)
+    }
+
+    /// Evaluate all tracked peers for auto-blocking across the engine.
+    pub fn auto_block_evaluate_all_tracked(&self) -> usize {
+        self.auto_block_engine
+            .read()
+            .evaluate_all_tracked()
+            .unwrap_or(0)
+    }
+
+    /// Record a spam signal for abuse tracking.
+    pub fn record_spam_signal(
+        &self,
+        peer_id: &str,
+        signal: crate::abuse::spam_detection::SpamSignal,
+    ) {
+        self.abuse_manager
+            .read()
+            .record_spam_signal(peer_id, signal);
+    }
+
+    /// Record an outbound message to update peer reputation.
+    pub fn record_outbound_message(
+        &self,
+        peer_id: &str,
+        envelope_data: &[u8],
+        is_to_contact: bool,
+    ) {
+        self.abuse_manager
+            .read()
+            .record_outbound_message(peer_id, envelope_data, is_to_contact);
+    }
+
+    /// Get reputation score for a peer (0.0 to 100.0).
+    pub fn get_reputation_score(&self, peer_id: &str) -> f64 {
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .overall_score()
+    }
+
+    /// Check if peer reputation is suspicious.
+    pub fn is_peer_suspicious(&self, peer_id: &str) -> bool {
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .is_suspicious()
+    }
+
+    /// Check if peer reputation is abusive.
+    pub fn is_peer_abusive(&self, peer_id: &str) -> bool {
+        self.abuse_manager
+            .read()
+            .get_enhanced_score(peer_id)
+            .is_abusive()
+    }
+
+    /// Detect spam confidence for a peer (0.0 to 1.0).
+    pub fn detect_spam_confidence(&self, peer_id: &str) -> f64 {
+        self.abuse_manager
+            .read()
+            .spam_detector()
+            .spam_score(peer_id)
+    }
+
+    /// Check if payload content is suspicious.
+    pub fn is_content_suspicious(&self, envelope_data: &[u8]) -> bool {
+        self.abuse_manager
+            .read()
+            .spam_detector()
+            .is_content_suspicious(envelope_data)
+    }
+
+    /// Prune stale peer entries from spam detection store.
+    pub fn prune_stale_spam_peers(&self, max_entries: usize) -> usize {
+        self.abuse_manager
+            .read()
+            .spam_detector()
+            .prune_stale_peers(max_entries)
+    }
+
+    /// Associate a device ID with a peer ID in the blocked manager.
+    pub fn register_device_id(
+        &self,
+        peer_id: &str,
+        device_id: &str,
+    ) -> Result<(), crate::IronCoreError> {
+        self.blocked_manager
+            .read()
+            .register_device_id(peer_id, device_id)
+            .map(|_| ())
+    }
+
+    /// Retrieve all known device IDs for a peer ID.
+    pub fn get_known_devices(&self, peer_id: &str) -> Vec<String> {
+        self.blocked_manager
+            .read()
+            .get_known_devices(peer_id)
+            .unwrap_or_default()
+    }
+
+    /// Check if a specific device ID is blocked.
+    pub fn is_device_blocked(&self, peer_id: &str, device_id: &str) -> bool {
+        self.blocked_manager
+            .read()
+            .is_device_blocked(peer_id, device_id)
+            .unwrap_or(false)
+    }
+
     /// Update keepalive interval for a peer connection.
     /// Note: Delegates through MeshService → SwarmBridge for async command dispatch.
     #[cfg(not(target_arch = "wasm32"))]

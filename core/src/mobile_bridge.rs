@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
@@ -291,6 +293,7 @@ impl MeshService {
         );
 
         // Initialize IronCore
+        #[cfg(not(target_arch = "wasm32"))]
         let core = if let Some(ref log_dir) = self.log_directory {
             if let Some(ref path) = self.storage_path {
                 tracing::info!("MeshService::start: Creating IronCore::with_storage_and_logs");
@@ -313,6 +316,9 @@ impl MeshService {
             tracing::info!("MeshService::start: Creating IronCore::new (no storage)");
             crate::IronCore::new()
         };
+
+        #[cfg(target_arch = "wasm32")]
+        let core = crate::IronCore::new();
 
         // Start the core
         core.start()?;
@@ -3383,8 +3389,17 @@ pub fn recommended_transport(peer_id: String) -> ProximityTransport {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
             let engine = get_escalation_engine();
-            if let Some(transport) = engine.recommended_transport(&arr) {
-                return transport;
+            if let Some(t) = engine.current_transport(arr) {
+                return match t {
+                    crate::transport::abstraction::TransportType::BLE => ProximityTransport::Ble,
+                    crate::transport::abstraction::TransportType::WiFiAware => {
+                        ProximityTransport::WifiAware
+                    }
+                    crate::transport::abstraction::TransportType::WiFiDirect => {
+                        ProximityTransport::WifiDirect
+                    }
+                    _ => ProximityTransport::Ble,
+                };
             }
         }
     }
@@ -3430,6 +3445,94 @@ pub fn update_peer_transports(peer_id: String, transports: Vec<ProximityTranspor
 #[uniffi::export]
 pub fn safety_number(our_pubkey_hex: String, their_pubkey_hex: String) -> String {
     crate::identity::keys::safety_number(&our_pubkey_hex, &their_pubkey_hex).unwrap_or_default()
+}
+
+// ============================================================================
+// UNIFFI EXPORTS: ABUSE ENGINE & DEVICE PROTECTION
+// ============================================================================
+
+/// Check if a peer is exempt from auto-blocking.
+#[uniffi::export]
+pub fn auto_block_is_exempt(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.auto_block_is_exempt(&peer_id)
+}
+
+/// Exclude a peer from automatic blocking rules.
+#[uniffi::export]
+pub fn auto_block_exempt_peer(peer_id: String) {
+    let core = crate::IronCore::new();
+    core.auto_block_exempt_peer(peer_id);
+}
+
+/// Remove a peer from the auto-block exemption list.
+#[uniffi::export]
+pub fn auto_block_unexempt_peer(peer_id: String) {
+    let core = crate::IronCore::new();
+    core.auto_block_unexempt_peer(&peer_id);
+}
+
+/// Get the current reputation score for a peer (0.0 to 100.0).
+#[uniffi::export]
+pub fn get_reputation_score(peer_id: String) -> f64 {
+    let core = crate::IronCore::new();
+    core.get_reputation_score(&peer_id)
+}
+
+/// Check if a peer's reputation score is within suspicious bounds.
+#[uniffi::export]
+pub fn is_peer_suspicious(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_peer_suspicious(&peer_id)
+}
+
+/// Check if a peer's reputation score is abusive.
+#[uniffi::export]
+pub fn is_peer_abusive(peer_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_peer_abusive(&peer_id)
+}
+
+/// Get spam confidence score for a peer (0.0 to 1.0).
+#[uniffi::export]
+pub fn detect_spam_confidence(peer_id: String) -> f64 {
+    let core = crate::IronCore::new();
+    core.detect_spam_confidence(&peer_id)
+}
+
+/// Inspect binary envelope data to determine if content violates spam heuristics.
+#[uniffi::export]
+pub fn is_content_suspicious(envelope_data: Vec<u8>) -> bool {
+    let core = crate::IronCore::new();
+    core.is_content_suspicious(&envelope_data)
+}
+
+/// Prune stale peer records from the spam detection engine.
+#[uniffi::export]
+pub fn prune_stale_spam_peers(max_entries: u32) -> u32 {
+    let core = crate::IronCore::new();
+    core.prune_stale_spam_peers(max_entries as usize) as u32
+}
+
+/// Associate a device ID with a peer ID in the blocked manager.
+#[uniffi::export]
+pub fn register_device_id(peer_id: String, device_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.register_device_id(&peer_id, &device_id).is_ok()
+}
+
+/// Retrieve all known device IDs associated with a peer ID.
+#[uniffi::export]
+pub fn get_known_devices(peer_id: String) -> Vec<String> {
+    let core = crate::IronCore::new();
+    core.get_known_devices(&peer_id)
+}
+
+/// Check if a specific device ID has been blocked.
+#[uniffi::export]
+pub fn is_device_blocked(peer_id: String, device_id: String) -> bool {
+    let core = crate::IronCore::new();
+    core.is_device_blocked(&peer_id, &device_id)
 }
 
 fn current_timestamp() -> u64 {

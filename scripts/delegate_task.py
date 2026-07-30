@@ -601,7 +601,7 @@ Return your changes as unified diffs, one fenced ```diff block per file, using s
                         prompt += f"\n--- {filepath} ---\n```rust\n{f.read()}\n```\n"
                 except Exception as e:
                     print(f"Warning: Could not read {filepath}: {e}")
-        
+
         chunk_content, response_file = send_request(args, prompt, resolved_model, display_model)
         retry_count = 0
         while chunk_content is None and retry_count < 10 and args.provider in ("qwen", "qwenpaid"):

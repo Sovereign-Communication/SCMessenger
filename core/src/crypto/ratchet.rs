@@ -1331,7 +1331,7 @@ mod tests {
         };
         let transcript_hash = [0u8; 32];
 
-        let mut alice_session =
+        let alice_session =
             RatchetSession::init_as_sender_hybrid(&alice_key, &bob_bundle, transcript_hash)
                 .unwrap();
 

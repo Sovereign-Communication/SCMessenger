@@ -296,7 +296,7 @@
           <span id="depthVal">3.2</span>
         </div>
         <div class="search-box">
-          <span class="search-icon">🔍</span>
+          <span class="search-icon">Find</span>
           <input type="text" id="searchInput" placeholder="Search logs..." />
         </div>
         <button id="pauseBtn" class="secondary-btn">Pause</button>
@@ -501,7 +501,7 @@
         nodeEnter
           .on("mouseover", (e, d) => {
             tooltip.style.opacity = 1;
-            tooltip.innerHTML = d.name;
+            tooltip.textContent = d.name;
             tooltip.style.left = e.clientX + 10 + "px";
             tooltip.style.top = e.clientY - 30 + "px";
           })
@@ -554,7 +554,7 @@
           .includes(focus.name.toLowerCase());
       }
       function updateFeedUI() {
-        logFeed.innerHTML = "";
+        logFeed.replaceChildren();
         logsBuffer
           .slice(-50)
           .filter((l) => matchesFocus(l, currentFocus))
@@ -563,7 +563,11 @@
       function addLogToSidebar(log) {
         const div = document.createElement("div");
         div.className = "log-item";
-        div.innerHTML = `<span style="color:var(--primary); font-weight:950;">${log.levelTag || "L"}</span>: ${log.msg || "..."}`;
+        const level = document.createElement("span");
+        level.style.color = "var(--primary)";
+        level.style.fontWeight = "950";
+        level.textContent = log.levelTag || "L";
+        div.append(level, document.createTextNode(`: ${log.msg || "..."}`));
         logFeed.prepend(div);
         if (logFeed.childNodes.length > 50) logFeed.lastChild.remove();
       }
@@ -581,7 +585,7 @@
       };
 
       document.getElementById("clearBtn").onclick = () => {
-        logFeed.innerHTML = "";
+        logFeed.replaceChildren();
         logsBuffer = [];
       };
 

@@ -1,7 +1,7 @@
 # ACTIVE_LEDGER
 
 ## Repo State
-As of 2026-07-17
+As of 2026-07-29
 
 ## Remaining LoC Estimate
 0 LoC (doc only)
@@ -29,7 +29,7 @@ As of 2026-07-17
 | D    | D-01   | OPEN      | FLASH  | 0   |       |
 | D    | D-02   | OPEN      | FLASH  | 0   |       |
 | D    | D-03   | OPEN      | FLASH  | 0   |       |
-| D    | D-05   | OPEN      | FLASH  | 0   |       |
+| D    | D-05   | DONE      | FLASH  | 0   | Unwrap panic hardening |
 | D    | D-06   | OPEN      | FLASH  | 0   |       |
 | E    | E-01a  | DONE      | FLASH  | 0   | Constraints analysis |
 | E    | E-01b  | BLOCKED   | FLASH  | 0   | Operator review needed |
@@ -50,8 +50,8 @@ As of 2026-07-17
 | W    | W-03   | BLOCKED   | FLASH  | 0   | Frozen on E-01c |
 | W    | W-04   | BLOCKED   | FLASH  | 0   | Frozen on E-01c |
 | W    | W-05   | BLOCKED   | FLASH  | 0   | Frozen on E-01c |
-| Z    | Z-02   | OPEN      | FLASH  | 0   |       |
-| Z    | Z-03   | IN_PROGRESS | FLASH | 0   | Active ledger creation |
+| Z    | Z-02   | DONE      | FLASH  | 0   | Backlog tickets regenerated |
+| Z    | Z-03   | DONE      | FLASH  | 0   | Active ledger updated |
 
 ## Rules
 

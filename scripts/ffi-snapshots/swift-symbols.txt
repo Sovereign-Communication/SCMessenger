@@ -366,14 +366,26 @@ public func FfiConverterTypeSwarmBridge_lift(_ handle: UInt64) throws -> SwarmBr
 public func FfiConverterTypeSwarmBridge_lower(_ value: SwarmBridge) -> UInt64 {
 public func FfiConverterTypeTtlConfig_lift(_ buf: RustBuffer) throws -> TtlConfig {
 public func FfiConverterTypeTtlConfig_lower(_ value: TtlConfig) -> RustBuffer {
+public func autoBlockExemptPeer(peerId: String)  {try! rustCall() {
+public func autoBlockIsExempt(peerId: String) -> Bool  {
+public func autoBlockUnexemptPeer(peerId: String)  {try! rustCall() {
 public func blockedIdentityNew(peerId: String) -> BlockedIdentity  {
 public func blockedIdentityWithDeviceId(blocked: BlockedIdentity, deviceId: String) -> BlockedIdentity  {
 public func blockedIdentityWithNotes(blocked: BlockedIdentity, notes: String) -> BlockedIdentity  {
 public func blockedIdentityWithReason(blocked: BlockedIdentity, reason: String) -> BlockedIdentity  {
 public func decodeReceipt(data: Data)throws  -> Receipt  {
+public func detectSpamConfidence(peerId: String) -> Double  {
 public func encodeReceipt(receipt: Receipt)throws  -> Data  {
 public func getBuildProvenance() -> String  {
+public func getKnownDevices(peerId: String) -> [String]  {
+public func getReputationScore(peerId: String) -> Double  {
+public func isContentSuspicious(envelopeData: Data) -> Bool  {
+public func isDeviceBlocked(peerId: String, deviceId: String) -> Bool  {
+public func isPeerAbusive(peerId: String) -> Bool  {
+public func isPeerSuspicious(peerId: String) -> Bool  {
+public func pruneStaleSpamPeers(maxEntries: UInt32) -> UInt32  {
 public func recommendedTransport(peerId: String) -> ProximityTransport  {
+public func registerDeviceId(peerId: String, deviceId: String) -> Bool  {
 public func safetyNumber(ourPubkeyHex: String, theirPubkeyHex: String) -> String  {
 public func uniffiCloneHandle() -> UInt64 {
 public func uniffiCloneHandle() -> UInt64 {

@@ -80,6 +80,9 @@ fun `add`(`contact`: Contact)
 fun `add`(`record`: MessageRecord)
 fun `allKnownTopics`(): List<kotlin.String>
 fun `annotateIdentity`(`multiaddr`: kotlin.String, `peerId`: kotlin.String, `publicKey`: kotlin.String?, `nickname`: kotlin.String?)
+fun `autoBlockExemptPeer`(`peerId`: kotlin.String)
+fun `autoBlockIsExempt`(`peerId`: kotlin.String): kotlin.Boolean {
+fun `autoBlockUnexemptPeer`(`peerId`: kotlin.String)
 fun `blockAndDeletePeer`(`peerId`: kotlin.String, `deviceId`: kotlin.String?, `reason`: kotlin.String?)
 fun `blockPeer`(`peerId`: kotlin.String, `deviceId`: kotlin.String?, `reason`: kotlin.String?)
 fun `blockedCount`(): kotlin.UInt
@@ -111,6 +114,7 @@ fun `custodyRegistrationTransitions`(`identityId`: kotlin.String): kotlin.String
 fun `defaultSettings`(): MeshSettings
 fun `delete`(`id`: kotlin.String)
 fun `deriveWifiAwarePmk`(`remotePubkeyBytes`: kotlin.ByteArray): kotlin.ByteArray
+fun `detectSpamConfidence`(`peerId`: kotlin.String): kotlin.Double {
 fun `deviceId`(): kotlin.String?
 fun `dialableAddresses`(): List<LedgerEntry>
 fun `dispatchBlePacket`(`peerId`: kotlin.String, `data`: kotlin.ByteArray)
@@ -153,12 +157,14 @@ fun `getDeviceId`(): kotlin.String?
 fun `getDeviceState`(): DeviceState?
 fun `getDiskStats`(): DiskStats
 fun `getIdentityInfo`(): IdentityInfo
+fun `getKnownDevices`(`peerId`: kotlin.String): List<kotlin.String> {
 fun `getLibp2pPeerId`(): kotlin.String?
 fun `getNatStatus`(): kotlin.String
 fun `getPeerReputation`(`peerId`: kotlin.String): kotlin.Double
 fun `getPreferredRelays`(`limit`: kotlin.UInt): List<LedgerEntry>
 fun `getPrivacyConfig`(): kotlin.String
 fun `getRegistrationState`(`identityId`: kotlin.String): RegistrationStateInfo
+fun `getReputationScore`(`peerId`: kotlin.String): kotlin.Double {
 fun `getSeniorityTimestamp`(): kotlin.ULong?
 fun `getState`(): ServiceState
 fun `getStats`(): ServiceStats
@@ -177,7 +183,11 @@ fun `inboxCount`(): kotlin.UInt
 fun `initializeIdentity`()
 fun `inviteGetSignableData`(`tokenBytes`: kotlin.ByteArray): kotlin.ByteArray
 fun `isConsentGranted`(): kotlin.Boolean
+fun `isContentSuspicious`(`envelopeData`: kotlin.ByteArray): kotlin.Boolean {
+fun `isDeviceBlocked`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {
+fun `isPeerAbusive`(`peerId`: kotlin.String): kotlin.Boolean {
 fun `isPeerBlocked`(`peerId`: kotlin.String, `deviceId`: kotlin.String?): kotlin.Boolean
+fun `isPeerSuspicious`(`peerId`: kotlin.String): kotlin.Boolean {
 fun `isRunning`(): kotlin.Boolean
 fun `isRunning`(): kotlin.Boolean
 fun `listBlockedPeersBridge`(): List<BlockedIdentity>
@@ -240,6 +250,7 @@ fun `prepareOnionMessage`(`envelopeData`: kotlin.ByteArray, `relayPublicKeysJson
 fun `prepareOnionMessage`(`envelopeData`: kotlin.ByteArray, `relayPublicKeysJson`: kotlin.String): kotlin.ByteArray
 fun `prepareReceipt`(`recipientPublicKeyHex`: kotlin.String, `messageId`: kotlin.String): kotlin.ByteArray
 fun `pruneBefore`(`beforeTimestamp`: kotlin.ULong): kotlin.UInt
+fun `pruneStaleSpamPeers`(`maxEntries`: kotlin.UInt): kotlin.UInt {
 fun `publicKeyHex`(): kotlin.String?
 fun `randomPort`(): kotlin.UShort
 fun `randomPort`(): kotlin.UShort
@@ -260,6 +271,7 @@ fun `recordConnection`(`multiaddr`: kotlin.String, `peerId`: kotlin.String)
 fun `recordFailure`(`multiaddr`: kotlin.String)
 fun `recordLog`(`line`: kotlin.String)
 fun `registerBlockedDevice`(`peerId`: kotlin.String, `deviceId`: kotlin.String)
+fun `registerDeviceId`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {
 fun `relayJitterDelay`(`severity`: kotlin.String): kotlin.ULong
 fun `removeConversation`(`peerId`: kotlin.String)
 fun `remove`(`peerId`: kotlin.String)

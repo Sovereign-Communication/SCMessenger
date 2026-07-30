@@ -96,6 +96,14 @@ jobs:
         with:
           ndk-version: r26b
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
       - name: Build Debug APK (for CI verification)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -162,7 +170,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.0.app
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | tail -n 1)
+          if [ -n "$XCODE_PATH" ]; then
+            sudo xcode-select -s "$XCODE_PATH"
+          fi
+          xcode-select -p
 
       - name: Install CocoaPods
         run: gem install cocoapods

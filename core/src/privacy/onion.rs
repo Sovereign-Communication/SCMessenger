@@ -833,23 +833,18 @@ mod tests {
         assert_eq!(peeled2.1, payload);
     }
 
-    #[test]
-    fn test_proptest_arbitrary_bytes_no_panic() {
-        use proptest::prelude::*;
+    proptest::proptest! {
+        #[test]
+        fn arbitrary_bytes_dont_panic(data in proptest::prelude::any::<Vec<u8>>()) {
+            let envelope = OnionEnvelope {
+                version: data.first().cloned().unwrap_or(0x01),
+                layer_data: data.clone(),
+                remaining_layers: vec![],
+            };
 
-        proptest! {
-            #[test]
-            fn arbitrary_bytes_dont_panic(data in any::<Vec<u8>>()) {
-                let envelope = OnionEnvelope {
-                    version: data.first().cloned().unwrap_or(0x01),
-                    layer_data: data.clone(),
-                    remaining_layers: vec![],
-                };
-
-                let secret = [0u8; 32];
-                let _ = peel_layer(&envelope, &secret, None);
-                // Should not panic regardless of input
-            }
+            let secret = [0u8; 32];
+            let _ = peel_layer(&envelope, &secret, None);
+            // Should not panic regardless of input
         }
     }
 

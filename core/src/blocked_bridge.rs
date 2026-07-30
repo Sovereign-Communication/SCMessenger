@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 // Blocked identities bridge for mobile platforms (Android/iOS)
 //
 // Exposes BlockedManager through UniFFI for cross-platform blocking functionality.

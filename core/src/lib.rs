@@ -1,13 +1,5 @@
-//! SCMessenger Core Library
-//!
-//! This crate provides the core functionality for the SCMessenger P2P messaging system.
-//! It includes identity management, encryption, transport layer, message handling,
-//! and persistent storage capabilities.
-
 pub mod abuse;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod blocked_bridge;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod contacts_bridge;
 pub mod crypto;
 pub mod drift;
@@ -16,7 +8,6 @@ pub mod error;
 pub mod identity;
 pub mod iron_core;
 pub mod message;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod mobile_bridge;
 pub mod notification;
 pub mod notification_defaults;
@@ -261,6 +252,7 @@ pub use uniffi::deps::anyhow;
 /// migration, mismatched values silently partition the mesh.
 pub const TOPIC_LOBBY: &str = "sc-lobby";
 pub const TOPIC_MESH: &str = "sc-mesh";
+pub const TOPIC_RECEIPT_CONVERGENCE: &str = "sc-receipt-convergence";
 
 // Include UniFFI scaffolding
 #[cfg(not(target_arch = "wasm32"))]

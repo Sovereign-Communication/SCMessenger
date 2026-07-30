@@ -1044,10 +1044,10 @@ mod tests {
         );
     }
 
-    /// Property: no mutation of the seed ledger survives verification, for any
-    /// ledger shape and any single-entry edit. The hand-written cases above
-    /// cover the four shapes we expect; this covers the ones we did not think
-    /// of.
+    // Property: no mutation of the seed ledger survives verification, for any
+    // ledger shape and any single-entry edit. The hand-written cases above
+    // cover the four shapes we expect; this covers the ones we did not think
+    // of.
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
 

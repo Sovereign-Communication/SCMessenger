@@ -19,9 +19,7 @@ Session reference: `HANDOFF/SESSION_HANDOFF_2026-07-25.md`. Full pass:
   **done** (commits in `_QUEUE.md`). P1-14/P1-18 = post-exit verification debt.
 - **Outbox delivery CRITICAL (2026-07-12):** Closed 2026-07-17 — see
   `HANDOFF/done/CRITICAL_OUTBOX_NEVER_FLUSHES_DESPITE_ACTIVE_CONNECTION.md`.
-- **PQC:** PQC-02..PQC-13 in done/ per queue; **PQC-14** open (`HANDOFF/todo/`).
-  Stale `PQC_10_MLDSA_MODULE_MISSING.md` vs landed `core/src/crypto/pq/mldsa.rs` — ignore
-  until HANDOFF hygiene moves it.
+- **PQC:** PQC-01..PQC-14 **COMPLETE** (2026-07-29). Protocol spec published (`docs/PQC_HYBRID_PROTOCOL.md`), CURRENT_STATE.md and QUANTUM_READINESS_AUDIT.md updated, residual risk register updated.
 - **v0.4.0 alpha:** Tag **`v0.4.0-alpha.1`**; `V040_ORCHESTRATION_PLAN.md` superseded.
 - **CI (H1):** Resolved per queue 2026-07-23 (Enterprise trial); still run local gates
   on Windows as authoritative.
