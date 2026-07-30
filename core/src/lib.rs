@@ -14,7 +14,6 @@ pub mod notification_defaults;
 pub mod observability;
 pub mod privacy;
 pub mod relay;
-pub mod retry;
 pub mod routing;
 pub mod settings;
 pub mod store;
