@@ -3386,9 +3386,15 @@ pub fn recommended_transport(peer_id: String) -> ProximityTransport {
             if let Some(t) = engine.current_transport(arr) {
                 return match t {
                     crate::transport::abstraction::TransportType::BLE => ProximityTransport::Ble,
-                    crate::transport::abstraction::TransportType::WifiAware => ProximityTransport::WifiAware,
-                    crate::transport::abstraction::TransportType::WifiDirect => ProximityTransport::WifiDirect,
-                    crate::transport::abstraction::TransportType::Multipeer => ProximityTransport::Multipeer,
+                    crate::transport::abstraction::TransportType::WifiAware => {
+                        ProximityTransport::WifiAware
+                    }
+                    crate::transport::abstraction::TransportType::WifiDirect => {
+                        ProximityTransport::WifiDirect
+                    }
+                    crate::transport::abstraction::TransportType::Multipeer => {
+                        ProximityTransport::Multipeer
+                    }
                     _ => ProximityTransport::Ble,
                 };
             }
