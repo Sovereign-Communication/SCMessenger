@@ -1,6 +1,9 @@
+pub mod abuse;
 pub mod blocked_bridge;
 pub mod contacts_bridge;
 pub mod crypto;
+pub mod drift;
+pub mod dspy;
 pub mod error;
 pub mod identity;
 pub mod iron_core;
@@ -11,6 +14,7 @@ pub mod notification_defaults;
 pub mod observability;
 pub mod privacy;
 pub mod relay;
+pub mod retry;
 pub mod routing;
 pub mod settings;
 pub mod store;
