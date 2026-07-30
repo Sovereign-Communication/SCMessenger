@@ -1,0 +1,1 @@
+{"file": "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt", "function": "createIdentity", "line": 93, "severity": "info", "category": "error", "title": "Ollama timeout", "description": "Request timed out after 120s", "code_snippet": "", "suggestion": "", "timestamp": "2026-07-30T11:20:02.335881"}

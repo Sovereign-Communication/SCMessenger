@@ -1,0 +1,29 @@
+{
+  "completed_functions": [
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::determineInitialState",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::isBackupAvailable",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::createIdentity",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::clearError",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::setError",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\IdentityCreationCoordinator.kt::generateSecureRandomSalt",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isMeshParticipationEnabled",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::mapToSmartTransportType",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::mapFromSmartTransportType",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::checkMeshParticipationEnabled",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isEnabledFlag",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::getAvailableStorageMB",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::checkAndRecordMessage",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::enhanceNetworkErrorLogging",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::trackNetworkFailure",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::triggerFallbackProtocol",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::publishIdentityInfo",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isCorrupted"
+  ],
+  "current_file": "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt",
+  "current_function": "isCorrupted",
+  "total_functions": 5391,
+  "total_issues": 1,
+  "start_time": "2026-07-30T11:16:45.409131",
+  "last_update": "2026-07-30T11:57:01.547895",
+  "errors": []
+}
