@@ -465,10 +465,9 @@ def save_state(state: AuditState):
 
 
 def append_result(issue: AuditIssue):
-    RESULTS_FILE.write_text(
-        RESULTS_FILE.read_text() + json.dumps(asdict(issue)) + '\n' if RESULTS_FILE.exists() 
-        else json.dumps(asdict(issue)) + '\n'
-    )
+    # Use append mode to avoid race conditions
+    with RESULTS_FILE.open('a', encoding='utf-8') as f:
+        f.write(json.dumps(asdict(issue)) + '\n')
 
 
 # ============ MAIN AUDIT LOOP ============
