@@ -1,0 +1,20 @@
+{
+  "completed_functions": [
+    "core\\src\\blocked_bridge.rs::from",
+    "core\\src\\blocked_bridge.rs::from",
+    "core\\src\\blocked_bridge.rs::default",
+    "core\\src\\blocked_bridge.rs::new",
+    "core\\src\\blocked_bridge.rs::block",
+    "core\\src\\blocked_bridge.rs::unblock",
+    "core\\src\\blocked_bridge.rs::list",
+    "core\\src\\blocked_bridge.rs::count",
+    "core\\src\\blocked_bridge.rs::get_known_devices"
+  ],
+  "current_file": "core\\src\\blocked_bridge.rs",
+  "current_function": "get_known_devices",
+  "total_functions": 5391,
+  "total_issues": 16,
+  "start_time": "2026-07-30T13:59:50.520760",
+  "last_update": "2026-07-30T14:08:26.243494",
+  "errors": []
+}

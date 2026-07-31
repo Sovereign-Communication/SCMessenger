@@ -17,13 +17,20 @@
     "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::trackNetworkFailure",
     "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::triggerFallbackProtocol",
     "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::publishIdentityInfo",
-    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isCorrupted"
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isCorrupted",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::markCorrupted",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::recordSuccess",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::recordFailure",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::forMessage",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::recoverFromCorruption",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::isTerminalIdentityFailure",
+    "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt::terminalIdentityFailureMessage"
   ],
   "current_file": "android\\app\\src\\main\\java\\com\\scmessenger\\android\\data\\MeshRepository.kt",
-  "current_function": "isCorrupted",
+  "current_function": "terminalIdentityFailureMessage",
   "total_functions": 5391,
   "total_issues": 1,
   "start_time": "2026-07-30T11:16:45.409131",
-  "last_update": "2026-07-30T11:57:01.547895",
+  "last_update": "2026-07-30T13:13:20.752214",
   "errors": []
 }

@@ -158,7 +158,18 @@
     "core\\src\\iron_core.rs::routing_engine_handle",
     "core\\src\\iron_core.rs::set_cover_traffic_generator",
     "core\\src\\iron_core.rs::set_timing_jitter",
-    "core\\src\\iron_core.rs::list_notification_endpoints"
+    "core\\src\\iron_core.rs::list_notification_endpoints",
+    "core\\src\\iron_core.rs::clear_all_request_notifications",
+    "core\\src\\iron_core.rs::clear_message_notifications",
+    "core\\src\\iron_core.rs::close_all_notifications",
+    "core\\src\\iron_core.rs::transport_manager_handle",
+    "core\\src\\iron_core.rs::get_healthy_connections",
+    "core\\src\\iron_core.rs::expire_address_observations",
+    "core\\src\\iron_core.rs::bootstrap_manager_handle",
+    "core\\src\\iron_core.rs::peer_exchange_manager_handle",
+    "core\\src\\iron_core.rs::get_unhealthy_connections",
+    "core\\src\\iron_core.rs::cleanup_stale_connections",
+    "core\\src\\iron_core.rs::current_discovery_phase"
   ],
   "all_functions": [
     {
@@ -54073,9 +54084,9 @@
     }
   ],
   "total_functions": 5391,
-  "total_issues": 162,
-  "current_index": 161,
+  "total_issues": 173,
+  "current_index": 172,
   "start_time": "2026-07-30T11:34:16.669790",
-  "last_update": "2026-07-30T13:03:28.793818",
+  "last_update": "2026-07-30T13:13:48.172409",
   "errors": []
 }
