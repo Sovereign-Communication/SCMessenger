@@ -357,3 +357,4 @@ docker/test-results/
 .claude/alibaba_cloud_config.env
 IDEA.md
 test_ollama_prompt.rs
+HANDOFF/freenet-blog-post.md
