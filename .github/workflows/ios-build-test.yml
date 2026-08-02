@@ -93,7 +93,7 @@ jobs:
     steps:
       # --- Checkout ---
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.git_branch || github.ref }}
 
@@ -337,7 +337,7 @@ jobs:
     steps:
       # --- Checkout ---
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.git_branch || github.ref }}
 
