@@ -36,8 +36,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Convert a Path to a string, returning an error if the path contains invalid UTF-8.
@@ -745,10 +745,7 @@ async fn cmd_share_apk(
         .context("Failed to bind TCP listener for APK server")?;
     let bound_port = listener.local_addr()?.port();
     let local_ip = get_local_ipv4().unwrap_or(Ipv4Addr::LOCALHOST);
-    let download_url = format!(
-        "http://{}:{}/scmessenger.apk",
-        local_ip, bound_port
-    );
+    let download_url = format!("http://{}:{}/scmessenger.apk", local_ip, bound_port);
 
     println!("============================================================");
     println!(" [OK] SCMessenger Node Ephemeral APK Host Active");
