@@ -271,16 +271,18 @@ jobs:
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
       # --- iOS Simulator Test ---
-      # Split build from run: build once against the generic simulator SDK (the
-      # destination mobile.yml proves resolves on a clean CI clone), then run the
-      # produced test bundle on the concrete booted device by UDID.
+      # Split build from run: build the application and XCTest bundle once
+      # against the generic simulator SDK, then run the produced test bundle
+      # on the concrete booted device by UDID. The test target is registered in
+      # the SCMessengerTests scheme; the app-only SCMessenger scheme cannot
+      # execute XCTest tests with test-without-building.
       - name: Build for testing (iOS Simulator)
         working-directory: iOS
         run: |
           set -o pipefail
           xcodebuild build-for-testing \
             -project SCMessenger/SCMessenger.xcodeproj \
-            -scheme SCMessenger \
+            -scheme SCMessengerTests \
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
@@ -293,7 +295,7 @@ jobs:
           set -o pipefail
           xcodebuild test-without-building \
             -project SCMessenger/SCMessenger.xcodeproj \
-            -scheme SCMessenger \
+            -scheme SCMessengerTests \
             -destination "id=${{ steps.sim.outputs.udid }}" \
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
