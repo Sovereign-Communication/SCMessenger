@@ -297,7 +297,6 @@ fun `routingUpdateReliability`(`peerIdHex`: kotlin.String, `success`: kotlin.Boo
 fun `runMaintenanceCycle`(`budgetMs`: kotlin.UInt): kotlin.String
 fun `runMaintenanceCycle`(`budgetMs`: kotlin.UInt): kotlin.String
 fun `safetyNumber`(`ourPubkeyHex`: kotlin.String, `theirPubkeyHex`: kotlin.String): kotlin.String {
-fun `saveWithEntries`(`entries`: List<LedgerEntry>)
 fun `save`()
 fun `save`(`settings`: MeshSettings)
 fun `search`(`query`: kotlin.String): List<Contact>

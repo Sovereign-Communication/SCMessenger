@@ -205,7 +205,6 @@ open func runMaintenanceCycle(budgetMs: UInt32) -> String  {
 open func runMaintenanceCycle(budgetMs: UInt32) -> String  {
 open func save()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func save(settings: MeshSettings)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
-open func saveWithEntries(entries: [LedgerEntry])throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func search(query: String)throws  -> [Contact]  {
 open func search(query: String, limit: UInt32)throws  -> [MessageRecord]  {
 open func seedAddresses(limit: UInt32) -> [LedgerEntry]  {
