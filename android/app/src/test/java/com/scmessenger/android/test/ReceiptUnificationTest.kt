@@ -142,6 +142,37 @@ class ReceiptUnificationTest {
         getField<CoroutineScope>(repo, "repoScope")?.cancel()
     }
 
+    @Test
+    fun `inbound gate waits for dedup result and reports duplicates`() = runTest {
+        val filesDir = freshFilesDir()
+        val repo = MeshRepository(fakeContext(filesDir))
+
+        val router = mockk<SmartTransportRouter>()
+        coEvery {
+            router.checkAndRecordMessage(
+                "msg-dup-1",
+                SmartTransportRouter.TransportType.INTERNET
+            )
+        } returns Triple(true, 42L, SmartTransportRouter.TransportType.CORE)
+
+        setField(repo, "smartTransportRouter", router)
+
+        val result = repo.gateInboundMessage("msg-dup-1")
+
+        assertTrue(result.first)
+        assertEquals(42L, result.second)
+        assertEquals(MeshRepository.TransportType.CORE, result.third)
+
+        coVerify(exactly = 1) {
+            router.checkAndRecordMessage(
+                "msg-dup-1",
+                SmartTransportRouter.TransportType.INTERNET
+            )
+        }
+
+        cancelRepoScope(repo)
+    }
+
     @After
     fun cleanup() {
         testRoot.listFiles()?.forEach { it.deleteRecursively() }

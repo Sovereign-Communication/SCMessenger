@@ -212,6 +212,10 @@ open class MeshRepository(
         } ?: Triple(false, null, null)
     }
 
+    internal suspend fun gateInboundMessage(messageId: String): Triple<Boolean, Long?, TransportType?> {
+        return checkAndRecordMessage(messageId, TransportType.INTERNET)
+    }
+
     private suspend fun enhanceNetworkErrorLogging(exception: Exception, node: String) {
         val errorDetails = classifyBootstrapError(exception, node)
         Timber.w("Bootstrap failed for $node - $errorDetails")
@@ -1747,23 +1751,22 @@ open class MeshRepository(
                 ) {
                     Timber.i("Message from $senderId: $messageId")
                     repoScope.launch {
-                        // Check for duplicate messages across transports
-                        val (isDuplicate, timeVarianceMs, firstTransport) = checkAndRecordMessage(messageId, TransportType.INTERNET)
+                        // Fail fast on duplicate messages before any decode/history/receipt side effects.
+                        val (isDuplicate, timeVarianceMs, firstTransport) = gateInboundMessage(messageId)
                         if (isDuplicate) {
                             Timber.i("Message duplicate detected (core transport): $messageId time_variance=${timeVarianceMs}ms first_transport=$firstTransport")
                             return@launch
                         }
-                    }
 
-                    logDeliveryAttempt(
-                        messageId = messageId,
-                        medium = "core",
-                        phase = "rx",
-                        outcome = "received",
-                        detail = "sender=$senderId",
-                        callerContext = "onMessageReceived"
-                    )
-                    try {
+                        logDeliveryAttempt(
+                            messageId = messageId,
+                            medium = "core",
+                            phase = "rx",
+                            outcome = "received",
+                            detail = "sender=$senderId",
+                            callerContext = "onMessageReceived"
+                        )
+
                         // Check if relay/messaging is enabled (bidirectional control)
                         // Treat null/missing settings as disabled (fail-safe)
                         // Cache settings value to avoid race condition during check

@@ -626,6 +626,7 @@ impl MeshService {
         // std::sync::Mutex), but releasing early is still the safest pattern.
         let (libp2p_keys, headless_mode) = self.resolve_swarm_keypair_and_mode()?;
 
+        let _ = self.swarm_bridge.clear_handle_if_unhealthy();
         let has_existing_handle = self.swarm_bridge.handle.lock().is_some();
         let existing_mode = *self.swarm_headless_mode.lock();
         if has_existing_handle {
@@ -3252,6 +3253,19 @@ impl SwarmBridge {
 
 // Non-UniFFI internal methods for SwarmBridge
 impl SwarmBridge {
+    fn clear_handle_if_unhealthy(&self) -> bool {
+        let mut guard = self.handle.lock();
+        let should_clear = guard
+            .as_ref()
+            .map(|handle| !handle.is_event_loop_alive())
+            .unwrap_or(false);
+        if should_clear {
+            tracing::warn!("Clearing stale swarm handle after swarm event loop exit");
+            *guard = None;
+        }
+        should_clear
+    }
+
     /// Set the SwarmHandle for this bridge.
     /// This must be called after starting the swarm to wire up network operations.
     pub fn set_handle(&self, handle: SwarmHandle) {
@@ -3275,6 +3289,7 @@ impl SwarmBridge {
     // ------------------------------------------------------------------
 
     pub(crate) fn get_peers_blocking(&self) -> Vec<String> {
+        self.clear_handle_if_unhealthy();
         let handle = match self.handle.lock().clone() {
             Some(h) => h,
             None => return Vec::new(),
@@ -3288,6 +3303,7 @@ impl SwarmBridge {
     }
 
     pub(crate) fn get_listeners_blocking(&self) -> Vec<String> {
+        self.clear_handle_if_unhealthy();
         let handle = match self.handle.lock().clone() {
             Some(h) => h,
             None => return Vec::new(),
@@ -3301,6 +3317,7 @@ impl SwarmBridge {
     }
 
     pub(crate) fn get_external_addresses_blocking(&self) -> Vec<String> {
+        self.clear_handle_if_unhealthy();
         let handle = match self.handle.lock().clone() {
             Some(h) => h,
             None => return Vec::new(),
@@ -3315,6 +3332,7 @@ impl SwarmBridge {
 
     #[allow(dead_code)]
     pub(crate) fn get_topics_blocking(&self) -> Vec<String> {
+        self.clear_handle_if_unhealthy();
         let handle = match self.handle.lock().clone() {
             Some(h) => h,
             None => return Vec::new(),
@@ -3324,6 +3342,7 @@ impl SwarmBridge {
     }
 
     pub(crate) fn shutdown_blocking(&self) {
+        self.clear_handle_if_unhealthy();
         if let Some(handle) = self.handle.lock().clone() {
             let rt = self.get_runtime_handle();
             let _ = rt.block_on(handle.shutdown());
@@ -3650,6 +3669,15 @@ mod tests {
             "start_swarm must not report success before SwarmBridge is usable"
         );
         service.stop();
+    }
+
+    #[test]
+    fn stale_swarm_handle_is_cleared_before_restart_decisions() {
+        let bridge = SwarmBridge::new();
+        bridge.set_handle(SwarmHandle::new_for_liveness_test(false));
+
+        assert!(bridge.clear_handle_if_unhealthy());
+        assert!(bridge.handle.lock().is_none());
     }
 
     // -----------------------------------------------------------------------

@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 use web_time::SystemTime;
@@ -1789,12 +1790,26 @@ pub enum SwarmEvent2 {
 #[derive(Clone)]
 pub struct SwarmHandle {
     command_tx: mpsc::Sender<SwarmCommand>,
+    event_loop_alive: Arc<AtomicBool>,
     // Retained for API symmetry; event loop holds its own core handle.
     #[allow(dead_code)]
     core_handle: Option<Weak<crate::IronCore>>,
 }
 
 impl SwarmHandle {
+    pub fn is_event_loop_alive(&self) -> bool {
+        self.event_loop_alive.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_liveness_test(is_alive: bool) -> Self {
+        Self {
+            command_tx: mpsc::channel(1).0,
+            event_loop_alive: Arc::new(AtomicBool::new(is_alive)),
+            core_handle: None,
+        }
+    }
+
     /// Send an encrypted envelope to a peer.
     ///
     /// `recipient_identity_id` and `intended_device_id` carry WS13 tight-pair metadata.
@@ -2511,8 +2526,10 @@ pub async fn start_swarm_with_config(
         }
 
         let (command_tx, mut command_rx) = mpsc::channel::<SwarmCommand>(256);
+        let event_loop_alive = Arc::new(AtomicBool::new(true));
         let handle = SwarmHandle {
             command_tx: command_tx.clone(),
+            event_loop_alive: event_loop_alive.clone(),
             core_handle: core_handle.clone(),
         };
 
@@ -2665,6 +2682,15 @@ pub async fn start_swarm_with_config(
 
         // Spawn the swarm event loop
         tokio::spawn(async move {
+            struct SwarmTaskLivenessGuard(Arc<AtomicBool>);
+
+            impl Drop for SwarmTaskLivenessGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+
+            let _liveness_guard = SwarmTaskLivenessGuard(event_loop_alive);
             // PHASE 6: Retry interval for failed deliveries
             let mut retry_interval = tokio::time::interval(Duration::from_millis(500));
 
@@ -5849,8 +5875,10 @@ pub async fn start_swarm_with_config(
         }
 
         let (command_tx, mut command_rx) = mpsc::channel::<SwarmCommand>(256);
+        let event_loop_alive = Arc::new(AtomicBool::new(true));
         let handle = SwarmHandle {
             command_tx: command_tx.clone(),
+            event_loop_alive: event_loop_alive.clone(),
             core_handle: core_handle.clone(),
         };
 
@@ -5911,6 +5939,15 @@ pub async fn start_swarm_with_config(
         let mut sync_sessions: HashMap<PeerId, SyncSession> = HashMap::new();
 
         wasm_bindgen_futures::spawn_local(async move {
+            struct SwarmTaskLivenessGuard(Arc<AtomicBool>);
+
+            impl Drop for SwarmTaskLivenessGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+
+            let _liveness_guard = SwarmTaskLivenessGuard(event_loop_alive);
             loop {
                 let command_fut = command_rx.recv().fuse();
                 let swarm_fut = swarm.select_next_some().fuse();
