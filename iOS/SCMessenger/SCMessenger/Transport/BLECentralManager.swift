@@ -45,6 +45,11 @@ final class BLECentralManager: NSObject {
     // Characteristics cache (names match Android BleGattServer)
     private var messageCharacteristics: [UUID: CBCharacteristic] = [:] // Write: central → peripheral
     private var syncCharacteristics: [UUID: CBCharacteristic] = [:]    // Notify: peripheral → central
+    // CoreBluetooth reports the result of the CCCD write asynchronously. Keep
+    // the request state separate from the confirmed state so Android can rely
+    // on an actual subscription before sending notifications.
+    private var messageNotifyAttempts: [UUID: Int] = [:]
+    private let maxMessageNotifyAttempts = 3
     
     // Connection state monitoring and auto-reconnection
     private var connectionRetries: [UUID: Int] = [:]
@@ -329,6 +334,7 @@ final class BLECentralManager: NSObject {
         connectedPeripherals.removeAll()
         messageCharacteristics.removeAll()
         syncCharacteristics.removeAll()
+        messageNotifyAttempts.removeAll()
     }
 
     private func cleanupPeerCache() {
@@ -390,6 +396,7 @@ extension BLECentralManager: CBCentralManagerDelegate {
         connectedPeripherals.removeValue(forKey: peripheral.identifier)
         messageCharacteristics.removeValue(forKey: peripheral.identifier)
         syncCharacteristics.removeValue(forKey: peripheral.identifier)
+        messageNotifyAttempts.removeValue(forKey: peripheral.identifier)
         writeInProgress.removeValue(forKey: peripheral.identifier)
         pendingWrites.removeValue(forKey: peripheral.identifier)
         reassemblyBuffers.removeValue(forKey: peripheral.identifier)
@@ -467,8 +474,7 @@ extension BLECentralManager: CBPeripheralDelegate {
             switch characteristic.uuid {
             case MeshBLEConstants.messageCharUUID:
                 messageCharacteristics[peripheral.identifier] = characteristic
-                peripheral.setNotifyValue(true, for: characteristic)
-                appendRepositoryDiagnostic("ble_central_subscribed_message id=\(peripheral.identifier)")
+                requestMessageNotifications(for: peripheral, characteristic: characteristic)
             case MeshBLEConstants.syncCharUUID:
                 syncCharacteristics[peripheral.identifier] = characteristic
                 appendRepositoryDiagnostic("ble_central_found_sync id=\(peripheral.identifier)")
@@ -482,6 +488,51 @@ extension BLECentralManager: CBPeripheralDelegate {
             default:
                 break
             }
+        }
+    }
+
+    private func requestMessageNotifications(for peripheral: CBPeripheral, characteristic: CBCharacteristic) {
+        let peripheralId = peripheral.identifier
+        guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
+            logger.error("Message characteristic does not support notifications for \(peripheralId)")
+            appendRepositoryDiagnostic("ble_central_subscribe_message_fail id=\(peripheralId) reason=notify_not_supported")
+            return
+        }
+
+        let attempt = (messageNotifyAttempts[peripheralId] ?? 0) + 1
+        messageNotifyAttempts[peripheralId] = attempt
+        appendRepositoryDiagnostic("ble_central_notify_request id=\(peripheralId) attempt=\(attempt)")
+        peripheral.setNotifyValue(true, for: characteristic)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == MeshBLEConstants.messageCharUUID else { return }
+
+        let peripheralId = peripheral.identifier
+        if let error {
+            logger.error("Failed to subscribe to message notifications for \(peripheralId): \(error.localizedDescription)")
+            appendRepositoryDiagnostic("ble_central_subscribe_message_fail id=\(peripheralId) err=\(error.localizedDescription)")
+        } else if characteristic.isNotifying {
+            messageNotifyAttempts.removeValue(forKey: peripheralId)
+            appendRepositoryDiagnostic("ble_central_subscribed_message id=\(peripheralId)")
+            return
+        } else {
+            appendRepositoryDiagnostic("ble_central_subscribe_message_fail id=\(peripheralId) reason=not_notifying")
+        }
+
+        guard messageNotifyAttempts[peripheralId, default: 0] < maxMessageNotifyAttempts,
+              peripheral.state == .connected else {
+            appendRepositoryDiagnostic("ble_central_subscribe_message_exhausted id=\(peripheralId)")
+            return
+        }
+
+        // Android may expose the service before its CCCD is ready. Retry only
+        // after CoreBluetooth reports the failed request, preserving GATT's
+        // serial operation ordering.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak peripheral] in
+            guard let self, let peripheral,
+                  let characteristic = self.messageCharacteristics[peripheral.identifier] else { return }
+            self.requestMessageNotifications(for: peripheral, characteristic: characteristic)
         }
     }
 

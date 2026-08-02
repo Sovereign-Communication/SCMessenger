@@ -109,7 +109,7 @@ jobs:
   # ============================================================================
   build-ios:
     name: iOS Build & Simulator Test
-    runs-on: macos-14  # Apple Silicon M1 runner
+    runs-on: macos-15  # Apple Silicon runner with the current Xcode toolchain
     # A cold run needs ~27min of Rust compilation before Xcode starts, plus the
     # Swift build and the simulator test run. 90min lets the first cold run
     # finish and populate the Rust cache; warm runs land around 20min (see
@@ -158,6 +158,14 @@ jobs:
       - name: Build Rust core for iOS Simulator (aarch64-apple-ios-sim)
         run: cargo build --release --target aarch64-apple-ios-sim -p scmessenger-core
 
+      # The Xcode "Build Rust Library" phase builds the simulator library in
+      # the Debug profile when the test scheme is used.  Prebuild that exact
+      # artifact here so a cold runner does not spend the entire opaque
+      # xcodebuild step compiling Rust again; rust-cache can also persist it
+      # independently when a later Swift/XCTest step fails.
+      - name: Prebuild Rust simulator library for Xcode (Debug)
+        run: cargo build --target aarch64-apple-ios-sim -p scmessenger-core
+
       # --- XCFramework ---
       # Required on CI: only the headers of iOS/SCMessengerCore.xcframework are
       # committed. The static libraries are excluded by the `*.a` rule in
@@ -183,6 +191,23 @@ jobs:
       - name: Verify Swift bindings are up to date
         run: |
           ./scripts/verify_ios_bindings.sh
+
+      # Rust's release, host-debug, and simulator-debug trees can exceed the
+      # free disk on a GitHub macOS runner even though Xcode only needs the
+      # final simulator static library at this point. Preserve that one
+      # artifact and rebuild the small expected path after pruning; the Xcode
+      # build phase is explicitly told to reuse it below.
+      - name: Prune Rust artifacts before Xcode
+        run: |
+          set -euo pipefail
+          PREBUILT="$RUNNER_TEMP/scmessenger-ios-simulator-debug.a"
+          cp target/aarch64-apple-ios-sim/debug/libscmessenger_core.a "$PREBUILT"
+          rm -rf target
+          mkdir -p target/aarch64-apple-ios-sim/debug
+          cp "$PREBUILT" target/aarch64-apple-ios-sim/debug/libscmessenger_core.a
+          echo "[INFO] Rust artifacts pruned; retained simulator library:"
+          du -sh target
+          df -h .
 
       # --- Xcode project sanity check ---
       # Shared application and test schemes are committed. Printing the
@@ -278,6 +303,8 @@ jobs:
       # execute XCTest tests with test-without-building.
       - name: Build for testing (iOS Simulator)
         working-directory: iOS
+        env:
+          SCMESSENGER_RUST_PREBUILT: "1"
         run: |
           set -o pipefail
           xcodebuild build-for-testing \
@@ -286,7 +313,8 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Run iOS tests
         working-directory: iOS

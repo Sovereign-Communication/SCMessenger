@@ -33,9 +33,17 @@ cargo run --bin gen_swift --features gen-bindings
 SWIFT_GEN_DIR="$ROOT_DIR/core/target/generated-sources/uniffi/swift"
 IOS_GEN_DIR="$ROOT_DIR/iOS/SCMessenger/SCMessenger/Generated"
 mkdir -p "$IOS_GEN_DIR"
-cp "$SWIFT_GEN_DIR/SCMessengerCore.swift" "$IOS_GEN_DIR/api.swift"
-cp "$SWIFT_GEN_DIR/scmessenger_core.h" "$IOS_GEN_DIR/apiFFI.h"
-cp "$SWIFT_GEN_DIR/scmessenger_core.modulemap" "$IOS_GEN_DIR/apiFFI.modulemap"
+# Keep the staged files byte-for-byte compatible with the checked-in
+# canonical bindings.  In particular, Xcode deploys apiFFI.h, while UniFFI's
+# raw module map refers to scmessenger_core.h.  A raw copy here causes the
+# subsequent binding verification step to fail in CI.
+awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$SWIFT_GEN_DIR/SCMessengerCore.swift" > "$IOS_GEN_DIR/api.swift"
+awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$SWIFT_GEN_DIR/scmessenger_core.h" > "$IOS_GEN_DIR/apiFFI.h"
+sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
+    "$SWIFT_GEN_DIR/scmessenger_core.modulemap" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$IOS_GEN_DIR/apiFFI.modulemap"
 
 echo "Creating xcframework..."
 
