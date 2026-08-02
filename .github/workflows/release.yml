@@ -7,13 +7,25 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  verify-release-version:
+    name: Verify release version metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify platform version and build-number agreement
+        run: bash scripts/verify_versions.sh --require-tag
+
   # CLI Builds (Linux, macOS, Windows)
   build-cli:
     name: Build CLI - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: verify-release-version
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +96,7 @@ jobs:
   build-android:
     name: Build Android Release
     runs-on: ubuntu-latest
+    needs: verify-release-version
     steps:
       - uses: actions/checkout@v7
 
@@ -151,10 +164,12 @@ jobs:
         if: always()
         run: rm -f android/release.keystore
 
+      - name: Require non-empty signed release artifacts
+        run: |
+          test -n "$(find android/app/build/outputs/bundle/release -type f -name '*.aab' -size +0c -print -quit)"
+          test -n "$(find android/app/build/outputs/apk/release -type f -name '*.apk' -size +0c -print -quit)"
+
       - name: Upload signed release artifacts
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
-        env:
-          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: android-release-signed
@@ -237,6 +252,7 @@ jobs:
   build-wasm:
     name: Build WASM Release
     runs-on: ubuntu-latest
+    needs: verify-release-version
     steps:
       - uses: actions/checkout@v7
 
@@ -299,10 +315,9 @@ jobs:
           path: wasm/pkg/*
 
   # Create GitHub Release
-  # Note: build-ios is intentionally excluded -- iOS distribution requires an
-  # Apple Developer account ($99/yr) which is a pending human decision. The
-  # iOS build job still runs independently so failures surface in CI, but the
-  # release is not blocked on it.
+  # iOS distribution is intentionally absent: an IPA would require an archive,
+  # export options, and distribution signing gates that this workflow does not
+  # configure. iOS CI owns simulator verification separately.
   create-release:
     name: Create GitHub Release
     needs: [build-cli, build-android, build-wasm]
@@ -325,7 +340,7 @@ jobs:
       - name: Generate Combined Checksums
         run: |
           # Find all binary files (excluding checksums)
-          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.ipa" -o -name "*.wasm" \) ! -name "*.sha256" | while read file; do
+          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.wasm" \) ! -name "*.sha256" | while read file; do
             if [ -f "$file" ]; then
               sha256sum "$file" >> SHA256SUMS.txt
             fi
@@ -340,7 +355,6 @@ jobs:
             **/scm-*
             **/*.apk
             **/*.aab
-            **/*.ipa
             **/*.wasm
             **/*.js
             **/*.ts

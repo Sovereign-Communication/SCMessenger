@@ -88,10 +88,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq fakeroot dpkg-dev libfuse2
 
-      - name: Sync version
-        run: |
-          chmod +x ./scripts/sync_version.sh
-          ./scripts/sync_version.sh
+      - name: Verify version metadata
+        run: bash ./scripts/verify_versions.sh
 
       - name: Build .deb package
         run: |
@@ -198,10 +196,8 @@ jobs:
           chmod +x /tmp/appimagetool
           sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
 
-      - name: Sync version
-        run: |
-          chmod +x ./scripts/sync_version.sh
-          ./scripts/sync_version.sh
+      - name: Verify version metadata
+        run: bash ./scripts/verify_versions.sh
 
       - name: Build AppImage
         run: |

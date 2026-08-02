@@ -76,20 +76,17 @@ Use the version sync script to update all platforms:
 # Update version in Cargo.toml first
 vim Cargo.toml  # Change version = "0.2.1" to "0.2.2"
 
-# Sync to all platforms
-./scripts/sync_version.sh
+# Supply independently increasing platform build numbers, then sync
+./scripts/sync_version.sh \
+  --android-build-number 14 \
+  --ios-build-number 8
 ```
 
-This updates:
-- Android: `android/app/build.gradle` (versionName, versionCode)
-- iOS: `iOS/SCMessenger/Info.plist` (CFBundleShortVersionString, CFBundleVersion)
-- WASM: `wasm/package.json` (version)
-
-**Android versionCode Calculation:**
-```
-versionCode = MAJOR * 10000 + MINOR * 100 + PATCH
-Example: 0.2.1 → 201
-```
+This updates Android metadata in `android/build.gradle`, iOS metadata in both
+`iOS/SCMessenger/SCMessenger/Info.plist` and the Xcode project, and desktop
+metadata in `shared/build.gradle.kts`. WASM inherits the Cargo workspace
+version. The script requires explicit build numbers greater than each
+platform's current value and then runs the read-only cross-platform verifier.
 
 ### Version Validation
 
@@ -223,85 +220,36 @@ cd android
 
 ### iOS
 
-#### Initial Setup
+#### Distribution status
 
-1. **Export Signing Assets (macOS only):**
-   ```bash
-   ./scripts/setup_ios_signing.sh
-   ```
+The repository currently has authoritative simulator build/test coverage, but
+the release workflow intentionally produces no IPA. A distributable build
+requires an approved Apple team, a distribution certificate and provisioning
+profile installed on the Mac, and a reviewed `ExportOptions.plist`.
 
-2. **Configure GitHub Secrets:**
-   - Copy values from `ios_signing_assets/ios_signing_config.txt`
-   - Add to GitHub: Settings → Secrets → Actions
-   - Required secrets:
-     - `IOS_CERTIFICATE_BASE64`
-     - `IOS_CERTIFICATE_PASSWORD`
-     - `IOS_PROVISIONING_PROFILE_BASE64`
+After those operator-owned prerequisites exist, create the archive from the
+real project path:
 
-3. **Create ExportOptions.plist:**
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-   <plist version="1.0">
-   <dict>
-       <key>method</key>
-       <string>app-store</string>
-       <key>teamID</key>
-       <string>YOUR_TEAM_ID</string>
-       <key>uploadBitcode</key>
-       <true/>
-       <key>uploadSymbols</key>
-       <true/>
-       <key>provisioningProfiles</key>
-       <dict>
-           <key>com.yourcompany.scmessenger</key>
-           <string>YOUR_PROVISIONING_PROFILE_NAME</string>
-       </dict>
-   </dict>
-   </plist>
-   ```
-
-4. **Uncomment Release Build in Workflow:**
-   Edit `.github/workflows/release.yml` and uncomment the iOS release signing section.
-
-#### Build Process
-
-**Local:**
 ```bash
-cd iOS
-xcodebuild -workspace SCMessenger.xcworkspace \
+xcodebuild -project iOS/SCMessenger/SCMessenger.xcodeproj \
   -scheme SCMessenger \
   -configuration Release \
-  -archivePath build/SCMessenger.xcarchive \
+  -destination 'generic/platform=iOS' \
+  -archivePath tmp/SCMessenger.xcarchive \
   archive
 
 xcodebuild -exportArchive \
-  -archivePath build/SCMessenger.xcarchive \
-  -exportPath build \
-  -exportOptionsPlist ExportOptions.plist
+  -archivePath tmp/SCMessenger.xcarchive \
+  -exportPath tmp/ios-export \
+  -exportOptionsPlist /path/to/reviewed/ExportOptions.plist
 ```
-
-**CI:**
-- Triggered automatically on version tags
-- Builds IPA for App Store
-
-**Artifacts:**
-- `SCMessenger.ipa`
 
 #### App Store Submission
 
-**Manual:**
-1. Download IPA from GitHub Release
-2. Open Xcode → Window → Organizer
-3. Distribute App → App Store Connect
-4. Upload IPA
-5. Go to [App Store Connect](https://appstoreconnect.apple.com)
-6. Add release notes and submit for review
-
-**Automated (Optional):**
-- Use `fastlane` for automation
-- Configure `fastlane deliver`
-- Add App Store Connect API key to secrets
+Upload only the exported, signed artifact from the validated Mac archive using
+Xcode Organizer or an approved App Store Connect credential path. Record the
+archive/export result and App Store Connect build identifier as release
+evidence. Do not infer distribution readiness from simulator CI.
 
 ### WASM
 
@@ -393,8 +341,10 @@ git pull origin main
 # Update version in Cargo.toml
 vim Cargo.toml  # Change version
 
-# Sync versions across platforms
-./scripts/sync_version.sh
+# Sync versions with independently increasing platform build numbers
+./scripts/sync_version.sh \
+  --android-build-number 14 \
+  --ios-build-number 8
 
 # Review changes
 git diff
@@ -468,10 +418,10 @@ sha256sum -c SHA256SUMS.txt
 4. Rollout to production
 
 **iOS:**
-1. Download IPA from GitHub Release
-2. Upload to App Store Connect
-3. Add release notes
-4. Submit for review
+The GitHub release workflow does not create or publish an IPA. Distribution
+remains blocked until a Mac signing lane imports approved credentials, creates
+an archive, exports it with a reviewed `ExportOptions.plist`, and records App
+Store Connect evidence.
 
 ### Pre-Release Process
 
@@ -481,8 +431,10 @@ For alpha/beta/rc releases:
 # Use pre-release version
 vim Cargo.toml  # version = "0.2.2-beta.1"
 
-# Follow same process
-./scripts/sync_version.sh
+# Follow the same process with new platform build numbers
+./scripts/sync_version.sh \
+  --android-build-number 15 \
+  --ios-build-number 9
 git commit -m "chore: bump version to 0.2.2-beta.1"
 git tag v0.2.2-beta.1
 git push origin main --tags

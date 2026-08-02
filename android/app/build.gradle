@@ -13,6 +13,20 @@ if (keystorePropertiesFile.canRead()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+def releaseSigningReady = {
+    def envStoreFile = System.getenv("SCMESSENGER_KEYSTORE_PATH") ?: System.getenv("KEYSTORE_FILE")
+    def envStorePass = System.getenv("SCMESSENGER_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+    def envKeyAlias = System.getenv("SCMESSENGER_KEY_ALIAS") ?: System.getenv("KEYSTORE_ALIAS")
+    def envKeyPass = System.getenv("SCMESSENGER_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD")
+    def environmentSigning = envStoreFile && envStorePass && envKeyAlias && envKeyPass && file(envStoreFile).isFile()
+    def propertiesSigning = keystorePropertiesFile.canRead() &&
+        ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].every {
+            keystoreProperties.containsKey(it) && keystoreProperties[it]?.toString()?.trim()
+        } &&
+        file(keystoreProperties['storeFile']).isFile()
+    return environmentSigning || propertiesSigning
+}()
+
 def getGitHash = { ->
     def stdout = new ByteArrayOutputStream()
     try {
@@ -24,6 +38,18 @@ def getGitHash = { ->
         return result.isEmpty() ? "unknown" : result
     } catch (Exception e) {
         return "unknown"
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    // Source-set lint and test tasks also contain "Release" in their names.
+    // Gate only tasks that can actually assemble, package, publish, or install
+    // a release artifact.
+    def releaseRequested = graph.allTasks.any {
+        it.name ==~ /(?i)(assemble|bundle|package|publish|install).*release.*/
+    }
+    if (releaseRequested && !releaseSigningReady) {
+        throw new GradleException("Release signing is required. Configure a real release keystore; debug signing is never valid for release artifacts.")
     }
 }
 
@@ -45,7 +71,6 @@ android {
             //   1. SCMESSENGER_KEYSTORE_PATH / _PASSWORD / _ALIAS / _PASSWORD (env-driven)
             //   2. KEYSTORE_FILE / KEYSTORE_PASSWORD / KEYSTORE_ALIAS / KEY_PASSWORD (legacy)
             //   3. keystore.properties file (do not commit — see keystore.properties.template)
-            //   4. Debug keystore fallback (with WARNING)
             def envStoreFile = System.getenv("SCMESSENGER_KEYSTORE_PATH") ?: System.getenv("KEYSTORE_FILE")
             def envStorePass = System.getenv("SCMESSENGER_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
             def envKeyAlias  = System.getenv("SCMESSENGER_KEY_ALIAS") ?: System.getenv("KEYSTORE_ALIAS")
@@ -68,17 +93,9 @@ android {
                 keyPassword keystoreProperties['keyPassword']
                 println "Signing: Using keystore.properties (file-driven release signing)"
             } else {
-                // Automated fallback for environment-ready builds
-                def debugKeystore = file("${System.getProperty('user.home')}/.android/debug.keystore")
-                if (debugKeystore.exists()) {
-                    storeFile debugKeystore
-                    storePassword "android"
-                    keyAlias "androiddebugkey"
-                    keyPassword "android"
-                    println "WARNING: Using debug keystore for release. Set SCMESSENGER_KEYSTORE_PATH and related env vars (or create keystore.properties) for production."
-                } else {
-                    println "WARNING: No release or debug keystore found. Build may fail if signing is required."
-                }
+                // Never substitute the debug key for a release artifact. AGP
+                // will reject a release task with this incomplete config.
+                println "Release signing is not configured; release tasks must fail."
             }
         }
     }

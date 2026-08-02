@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.compose") version "1.5.11"
 }
 
+// Kept in lockstep with Cargo.toml by scripts/sync_version.sh.
+version = "0.3.5"
+
 kotlin {
     jvm("desktop")
 
