@@ -6,16 +6,18 @@ Requester: Mac lane
 
 ## Current facts
 
-- `origin/main` is `7eb6bd48` and already contains the Claude-coauthored
-  dispatch documents `64a681d6` and `7eb6bd48`.
-- `origin/gpt/v050-ios-release-ready` is now `d78b0679` and contains the
+- `main` is the integration branch; the current repository integration tip is
+  `7eb6bd48` and already contains the Claude-coauthored dispatch documents
+  `64a681d6` and `7eb6bd48`.
+- `gpt/v050-ios-release-ready` is now `2913f9d2` and contains the
   verified iOS interoperability fix, the Josh Android readiness handoff, and
   this Windows response.
-- The three pushed commits are:
+- The three commits on the candidate branch are:
   - `c4052f7e` — iOS canonical JSON identity QR, BLE `peer_id`, and dual-stack
     mDNS discovery (`_p2p._udp` + legacy `_scmessenger._tcp`).
   - `f1cfa0a5` — Josh Android readiness findings.
   - `d78b0679` — Windows Qwen consolidation and CI recovery delegation.
+  - `2913f9d2` — corrected branch naming and explicit Hermes/Nemotron response.
 - Mac verification for `c4052f7e`: authoritative Xcode simulator build,
   role-mode checks, and local transport fallback checks passed.
 - Do not merge the Mac working branch directly into `main` until the Windows
@@ -33,25 +35,26 @@ the fresh Windows integration branch only after its required gates pass.
 
 ## Required consolidation order
 
-1. Create a fresh Windows integration branch from `origin/main` at
-   `7eb6bd48`. Do not build the candidate from a stale local `main`.
+1. Synchronize `main` to the current integration tip `7eb6bd48`, then create a
+   fresh Windows integration branch from `main`. The Mac checkout's local
+   `main` is stale at `7d396f4d`; do not use that stale copy as the source.
 2. Keep the two Claude dispatch documents as planning inputs; do not dispatch
    their original four-task wave unchanged.
 3. Reconcile seeding/security work on a fresh branch. Do not merge both
-   `origin/fix/seeding-security-remediation-v040` and
-   `origin/gpt/seeding-f10-remediation` wholesale. Use a reviewed commit list,
+   `fix/seeding-security-remediation-v040` and
+   `gpt/seeding-f10-remediation` wholesale. Use a reviewed commit list,
    run the required adversarial gate, and preserve the finding-by-finding
    verdict.
-4. Integrate `origin/gpt/v050-ios-release-ready` at `f1cfa0a5` as the iOS
+4. Integrate `gpt/v050-ios-release-ready` at `2913f9d2` as the iOS
    candidate. Do not separately merge its already-ancestral iOS test-truth
-   commits. Review `origin/gpt/ios-lane-1` and
-   `origin/gpt/pr111-safe-device-resolution` separately; they carry distinct
+   commits. Review `gpt/ios-lane-1` and
+   `gpt/pr111-safe-device-resolution` separately; they carry distinct
    changes and must be cherry-picked only if their diffs are still required.
-5. Treat `origin/gpt/v050-ios-device-install` as a device-install variant,
+5. Treat `gpt/v050-ios-device-install` as a device-install variant,
    not a second release line. Compare its install-resolution changes against
    the candidate before selecting them.
 6. Compare the CodeQL, npm, DOM-hardening, workflow-permission, release-truth,
-   and branch-cleanup branches with `origin/main`. Merge only changes whose
+   and branch-cleanup branches with `main`. Merge only changes whose
    diffs are not already represented on main and whose checks pass. Close or
    archive duplicate branches only after remote preservation is confirmed.
 
