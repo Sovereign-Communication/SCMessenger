@@ -931,7 +931,7 @@ fun IdentitySection(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "Identity",
+                text = stringResource(R.string.settings_section_identity),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
@@ -974,7 +974,7 @@ fun IdentitySection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Peer ID (Network)",
+                        text = stringResource(R.string.identity_label_peer_id),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1004,7 +1004,7 @@ fun IdentitySection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Identity Hash",
+                        text = stringResource(R.string.identity_label_hash),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1034,7 +1034,7 @@ fun IdentitySection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Public Key",
+                        text = stringResource(R.string.identity_label_public_key),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1113,11 +1113,11 @@ fun IdentityUnavailableSection(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Identity",
+                text = stringResource(R.string.settings_section_identity),
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "This node is currently relay-only. Create an identity to enable chats and contacts.",
+                text = stringResource(R.string.settings_identity_unavailable_description),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1142,7 +1142,7 @@ fun PrivacySection(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "Privacy",
+                text = stringResource(R.string.settings_section_privacy),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
@@ -1212,7 +1212,7 @@ fun AdvancedSettingsSection(
             ) {
                 Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Share SCMessenger App (Bluetooth / QR Host)")
+                Text(stringResource(R.string.settings_button_share_apk))
             }
 
             Spacer(modifier = Modifier.height(8.dp))

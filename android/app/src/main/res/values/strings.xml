@@ -5,6 +5,16 @@
     <string name="app_full_description">SCMessenger is a secure, decentralized messaging application that works over local mesh networks (BLE, WiFi) and the internet. It provides end-to-end encrypted communication without relying on central servers.</string>
     <string name="privacy_policy_url">https://scmessenger-privacy.netlify.app/</string>
 
+    <!-- APK Share Dialog -->
+    <string name="apk_share_button_system_share">Share APK File via Bluetooth/QuickShare</string>
+    <string name="apk_share_qr_title">Scan to Download over Local Wi-Fi</string>
+    <string name="apk_share_qr_content_description">QR Code for APK download</string>
+    <string name="apk_share_button_copy_link">Copy Link</string>
+    <string name="apk_share_toast_url_copied">URL copied to clipboard</string>
+    <string name="apk_share_timer_active">Ephemeral node server active for %1$s</string>
+    <string name="apk_share_server_starting">Starting node HTTP server...</string>
+    <string name="apk_share_button_stop">Stop Sharing</string>
+
     <!-- Service notifications -->
     <string name="mesh_service_notification_title">Mesh Network Active</string>
     <string name="mesh_service_notification_text">Relaying messages and discovering peers</string>
@@ -99,11 +109,12 @@
     <string name="settings_section_advanced">Advanced</string>
     <string name="settings_advanced_reliability_note">Reliability: messages may appear as pending/stored/forwarding before delivered while routes are discovered.</string>
     <string name="settings_advanced_permissions_note">Permissions rationale: Bluetooth, Location, and Nearby WiFi are required for peer discovery and transport fallback.</string>
+    <string name="settings_button_share_apk">Share SCMessenger App (Bluetooth / QR Host)</string>
     <string name="settings_nav_mesh_title">Mesh Settings</string>
     <string name="settings_nav_mesh_description">Configure relay, transport, and discovery settings</string>
     <string name="settings_nav_power_title">Power Settings</string>
     <string name="settings_nav_power_description">AutoAdjust engine and battery management</string>
-    <string name="settings_mesh_relay_warning_title">⚠️ Relay = Messaging (Bidirectional)</string>
+    <string name="settings_mesh_relay_warning_title">[WARNING] Relay = Messaging (Bidirectional)</string>
     <string name="settings_mesh_relay_warning_description">OFF = no sending OR receiving. Complete shutdown both directions. ON = full participation.</string>
     <string name="settings_label_mesh_participation">Mesh Participation</string>
     <string name="settings_description_mesh_participation">Controls ALL communication. OFF = bidirectional shutdown.</string>

@@ -30,6 +30,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # WHY THIS IS A SEPARATE JOB FROM "Android Debug APK"
+  # -----------------------------------------------------
+  # JVM unit tests (testDebugUnitTest) do not need the Android NDK, Rust
+  # toolchain, or cargo-ndk -- those are only required for the native
+  # assembleDebug step that compiles the Rust core via JNI. Running unit
+  # tests in the heavy job means a slow or failing native build blocks
+  # test feedback, and the native build is not triggered on PRs that
+  # touch only Kotlin. A standalone JVM job gives sub-3-minute test
+  # feedback on every pull_request and runs even when the APK build is
+  # skipped. This also satisfies .claude/rules/android.md which requires
+  # RoleNavigationPolicyTest as a pre-merge gate -- docker-test-suite.yml
+  # triggers only on push to main / cron / workflow_dispatch, NOT on
+  # pull_request, so it cannot serve as the PR gate on its own.
+  android-unit-tests:
+    name: Android JVM Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Run JVM unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
   android:
     name: Android Debug APK
     runs-on: ubuntu-latest

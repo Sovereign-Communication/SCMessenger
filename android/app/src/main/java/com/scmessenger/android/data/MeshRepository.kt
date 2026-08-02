@@ -8507,17 +8507,78 @@ open class MeshRepository(
         }
     }
 
+    /**
+     * SECURITY: default-deny address admission.
+     *
+     * This gate gained a remotely-reachable caller when contact-import and
+     * deep-link payloads began carrying a `listeners` array, so an untrusted
+     * QR code or URL can now propose dial targets. It previously returned
+     * `true` for anything that was not literal `/ip4/`, which admitted every
+     * `/ip6/`, `/dns4/`, `/dns6/`, `/dnsaddr/` and `/dns/` form -- reaching
+     * loopback, link-local, ULA and NAT64-mapped metadata addresses, and
+     * allowing DNS rebinding. Unknown forms are now rejected rather than
+     * allowed.
+     */
     private fun isDialableAddress(multiaddr: String): Boolean {
-        if (multiaddr.contains("/p2p-circuit")) return true
+        // DNS forms are never accepted from import-sourced hints: the name can
+        // be re-pointed after validation (rebinding). The Rust seed path
+        // enforces the same rule via DnsPolicy::Reject.
+        if (multiaddr.contains("/dns")) return false
 
-        val ip = extractIpv4FromMultiaddr(multiaddr) ?: return true
-        if (isSpecialUseIpv4(ip)) return false
-
-        return if (isPrivateIpv4(ip)) {
-            isSameLanAddress(multiaddr)
-        } else {
-            true
+        val ipv4 = extractIpv4FromMultiaddr(multiaddr)
+        if (ipv4 != null) {
+            if (isSpecialUseIpv4(ipv4)) return false
+            val ipv4Ok = if (isPrivateIpv4(ipv4)) isSameLanAddress(multiaddr) else true
+            if (!ipv4Ok) return false
+            // A circuit address carries a real socket to the relay hop, which
+            // is the leading IP just validated above.
+            return true
         }
+
+        val ipv6 = extractIpv6FromMultiaddr(multiaddr)
+        if (ipv6 != null) {
+            return !isRestrictedIpv6(ipv6)
+        }
+
+        // Circuit address with no resolvable leading IP, or an unrecognised
+        // protocol stack. Default deny.
+        return false
+    }
+
+    /** Extract the address literal from a `/ip6/<addr>/...` multiaddr. */
+    private fun extractIpv6FromMultiaddr(multiaddr: String): String? {
+        val marker = "/ip6/"
+        val start = multiaddr.indexOf(marker)
+        if (start == -1) return null
+        val rest = multiaddr.substring(start + marker.length)
+        val end = rest.indexOf('/')
+        val literal = if (end == -1) rest else rest.substring(0, end)
+        return literal.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * IPv6 equivalents of [isSpecialUseIpv4]. Unique-local (fc00::/7) is
+     * rejected outright here rather than LAN-gated: there is no reliable
+     * same-subnet test for ULA on Android without the interface prefix, and
+     * admitting it would reopen the internal-probe vector.
+     */
+    private fun isRestrictedIpv6(ip: String): Boolean {
+        val v = ip.lowercase().trim()
+        if (v.isEmpty()) return true
+        if (v == "::" || v == "::1") return true // unspecified, loopback
+        // Link-local fe80::/10 spans fe80..febf.
+        if (v.startsWith("fe8") || v.startsWith("fe9") ||
+            v.startsWith("fea") || v.startsWith("feb")
+        ) {
+            return true
+        }
+        if (v.startsWith("ff")) return true // multicast ff00::/8
+        if (v.startsWith("fc") || v.startsWith("fd")) return true // ULA fc00::/7
+        // IPv4-mapped/compatible and NAT64 (64:ff9b::/96) can smuggle a
+        // restricted IPv4 target through the IPv6 path.
+        if (v.startsWith("::ffff:") || v.startsWith("64:ff9b:")) return true
+        if (v.startsWith("2002:")) return true // 6to4, embeds an IPv4 target
+        return false
     }
 
     private fun parseIpv4Octets(ip: String): List<Int>? {
