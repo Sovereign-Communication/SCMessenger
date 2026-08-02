@@ -158,6 +158,14 @@ jobs:
       - name: Build Rust core for iOS Simulator (aarch64-apple-ios-sim)
         run: cargo build --release --target aarch64-apple-ios-sim -p scmessenger-core
 
+      # The Xcode "Build Rust Library" phase builds the simulator library in
+      # the Debug profile when the test scheme is used.  Prebuild that exact
+      # artifact here so a cold runner does not spend the entire opaque
+      # xcodebuild step compiling Rust again; rust-cache can also persist it
+      # independently when a later Swift/XCTest step fails.
+      - name: Prebuild Rust simulator library for Xcode (Debug)
+        run: cargo build --target aarch64-apple-ios-sim -p scmessenger-core
+
       # --- XCFramework ---
       # Required on CI: only the headers of iOS/SCMessengerCore.xcframework are
       # committed. The static libraries are excluded by the `*.a` rule in
