@@ -2149,6 +2149,7 @@ open class MeshRepository(
                         Timber.e(e, "Failed to process received message")
                     }
                 }
+                }
 
                 override fun onReceiptReceived(messageId: String, status: String) {
                     // [VERBOSE] Log: Receipt arrived from core
