@@ -113,6 +113,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.git_branch || github.ref }}
 
+      - name: Test install-device ID resolution
+        run: bash iOS/tests/install-device-resolution-test.sh
+
       # --- Rust Toolchain ---
       - name: Install Rust toolchain with iOS targets
         uses: dtolnay/rust-toolchain@stable
