@@ -1767,6 +1767,7 @@ open class MeshRepository(
                             callerContext = "onMessageReceived"
                         )
 
+                        try {
                         // Check if relay/messaging is enabled (bidirectional control)
                         // Treat null/missing settings as disabled (fail-safe)
                         // Cache settings value to avoid race condition during check
