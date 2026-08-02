@@ -131,6 +131,7 @@ fn offline_partition_custody_and_outbox_survive_restart_until_reconnect_delivery
 #[test]
 fn partition_recency_recovery_prefers_fresh_relays_deterministically() {
     let mut delivery = MultiPathDelivery::new();
+    let now = now_secs();
     let target = PeerId::random();
     let relay_a = PeerId::random();
     let relay_b = PeerId::random();
@@ -141,8 +142,8 @@ fn partition_recency_recovery_prefers_fresh_relays_deterministically() {
     delivery.record_success("seed-b", vec![relay_b, target], 120);
 
     // During partition, relay A has fresher recipient visibility.
-    delivery.record_recipient_seen_via_relay(relay_a, target, 100);
-    delivery.record_recipient_seen_via_relay(relay_b, target, 90);
+    delivery.record_recipient_seen_via_relay(relay_a, target, now.saturating_sub(10));
+    delivery.record_recipient_seen_via_relay(relay_b, target, now.saturating_sub(20));
     let during_partition = delivery.ranked_routes(&target, 3);
     let during_partition_repeat = delivery.ranked_routes(&target, 3);
 
@@ -159,7 +160,7 @@ fn partition_recency_recovery_prefers_fresh_relays_deterministically() {
     );
 
     // After partition heal, fresher signal via relay B should deterministically win.
-    delivery.record_recipient_seen_via_relay(relay_b, target, 150);
+    delivery.record_recipient_seen_via_relay(relay_b, target, now);
     let after_heal = delivery.ranked_routes(&target, 3);
     let after_heal_repeat = delivery.ranked_routes(&target, 3);
     assert_eq!(after_heal[0].path, vec![target]);
