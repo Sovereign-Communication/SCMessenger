@@ -4,7 +4,7 @@
 //
 //  mDNS/DNS-SD service discovery for cross-platform LAN discovery
 //  Mirrors: android/.../transport/WifiDirectTransport.kt DNS-SD implementation
-//  Service type: _scmessenger._tcp (matches Android)
+//  Service types: _p2p._udp (libp2p/Android) and _scmessenger._tcp (legacy iOS)
 //
 
 import Foundation
@@ -14,26 +14,23 @@ import Combine
 
 /// mDNS/DNS-SD service discovery for cross-platform LAN discovery
 ///
-/// This implements the same DNS-SD service type as Android's WiFi Direct transport,
-/// allowing iOS devices to discover Android devices on the same local network.
-///
-/// Service type: _scmessenger._tcp (matches Android's WifiDirectTransport.SERVICE_TYPE)
+/// Browse both the libp2p service used by Android and the legacy iOS service.
+/// Keeping both avoids regressing iOS-to-iOS discovery while adding Android parity.
 final class mDNSServiceDiscovery: NSObject {
     private let logger: Logger = Logger(subsystem: "com.scmessenger", category: "mDNS")
     private weak var meshRepository: MeshRepository?
 
     // Service discovery
-    private var netServiceBrowser: NetServiceBrowser?
+    private var netServiceBrowsers: [NetServiceBrowser] = []
     private var discoveredServices: [String: NetService] = [:]
     private var isBrowsing: Bool = false
 
     // Service advertisement
-    private var localService: NetService?
+    private var localServices: [NetService] = []
     private var isAdvertising: Bool = false
     private var advertisingGeneration: UInt64 = 0
 
-    // Service type (must match Android's WifiDirectTransport.SERVICE_TYPE)
-    private let serviceType: String = "_scmessenger._tcp"
+    private let serviceTypes: [String] = ["_p2p._udp", "_scmessenger._tcp"]
     private let serviceName: String = "SCMessenger"
 
     /// Callback when a LAN peer is resolved (`peerId`, `host`, `port`).
@@ -53,24 +50,27 @@ final class mDNSServiceDiscovery: NSObject {
             return
         }
 
-        logger.info("Starting mDNS browsing for \(self.serviceType)")
-        netServiceBrowser = NetServiceBrowser()
-        netServiceBrowser?.delegate = self
-        netServiceBrowser?.searchForServices(ofType: serviceType, inDomain: "local.")
+        logger.info("Starting mDNS browsing for \(self.serviceTypes.joined(separator: ", "))")
+        netServiceBrowsers = serviceTypes.map { serviceType in
+            let browser = NetServiceBrowser()
+            browser.delegate = self
+            browser.searchForServices(ofType: serviceType, inDomain: "local.")
+            return browser
+        }
         isBrowsing = true
     }
 
     func stopBrowsing() {
         guard isBrowsing else { return }
         logger.info("Stopping mDNS browsing")
-        netServiceBrowser?.stop()
-        netServiceBrowser = nil
+        netServiceBrowsers.forEach { $0.stop() }
+        netServiceBrowsers.removeAll()
         discoveredServices.removeAll()
         isBrowsing = false
     }
 
     func startAdvertising(port: Int32) {
-        guard localService == nil else {
+        guard localServices.isEmpty else {
             logger.debug("Already advertising mDNS service")
             return
         }
@@ -78,21 +78,24 @@ final class mDNSServiceDiscovery: NSObject {
         advertisingGeneration &+= 1
         let generation = advertisingGeneration
         logger.info("Starting mDNS advertising for \(self.serviceName) on port \(port)")
-        let service = NetService(
-            domain: "local.",
-            type: serviceType,
-            name: serviceName,
-            port: port
-        )
-        service.delegate = self
-        localService = service
+        let services = serviceTypes.map { serviceType in
+            let service = NetService(
+                domain: "local.",
+                type: serviceType,
+                name: serviceName,
+                port: port
+            )
+            service.delegate = self
+            return service
+        }
+        localServices = services
         isAdvertising = true
 
         // Set TXT records for cross-platform compatibility (match Android format)
         Task { @MainActor [weak self] in
             guard let self,
                   self.advertisingGeneration == generation,
-                  self.localService === service else { return }
+                  self.localServices.count == services.count else { return }
 
             if let identity = self.meshRepository?.getFullIdentityInfo(),
                let peerId = identity.libp2pPeerId,
@@ -104,20 +107,22 @@ final class mDNSServiceDiscovery: NSObject {
                     "version": Data("1.0".utf8),
                     "transport": Data("tcp".utf8)
                 ]
-                service.setTXTRecord(NetService.data(fromTXTRecord: txtRecord))
+                services.forEach { $0.setTXTRecord(NetService.data(fromTXTRecord: txtRecord)) }
                 self.logger.debug("mDNS TXT record set: \(txtRecord.keys.sorted())")
             }
-            service.publish()
+            services.forEach { $0.publish() }
         }
     }
 
     func stopAdvertising() {
         advertisingGeneration &+= 1
-        guard localService != nil || isAdvertising else { return }
+        guard !localServices.isEmpty || isAdvertising else { return }
         logger.info("Stopping mDNS advertising")
-        localService?.stop()
-        localService?.delegate = nil
-        localService = nil
+        localServices.forEach {
+            $0.stop()
+            $0.delegate = nil
+        }
+        localServices.removeAll()
         isAdvertising = false
     }
 

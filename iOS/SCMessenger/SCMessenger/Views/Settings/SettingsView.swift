@@ -12,6 +12,7 @@ struct SettingsView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var viewModel: SettingsViewModel?
     @State private var showingIdentityQr: Bool = false
+    @State private var identityQrPayload: String = ""
     @State private var showingResetConfirmation: Bool = false
     @State private var identitySetupError: String?
     @State private var nicknameDraft: String = ""
@@ -211,7 +212,10 @@ struct SettingsView: View {
                     }
 
                     Button {
-                        showingIdentityQr = true
+                        Task { @MainActor in
+                            identityQrPayload = await viewModel?.getIdentityExportString() ?? ""
+                            showingIdentityQr = !identityQrPayload.isEmpty
+                        }
                     } label: {
                         Label("Show Identity QR", systemImage: "qrcode")
                     }
@@ -333,7 +337,7 @@ struct SettingsView: View {
             identitySetupError = nil
         }
         .sheet(isPresented: $showingIdentityQr) {
-            IdentityQrSheet(payload: repository.getIdentityQrPayload())
+            IdentityQrSheet(payload: identityQrPayload)
         }
         .sheet(isPresented: $showingExportBackup) {
             if let viewModel {

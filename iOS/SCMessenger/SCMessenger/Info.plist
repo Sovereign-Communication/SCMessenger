@@ -29,6 +29,7 @@
 	<string>SCMessenger uses Bluetooth to advertise itself to nearby mesh nodes.</string>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_p2p._udp</string>
 		<string>_scmesh._tcp</string>
 		<string>_scmesh._udp</string>
 		<string>_scmessenger._tcp</string>

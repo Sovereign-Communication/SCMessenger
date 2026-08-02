@@ -6317,6 +6317,7 @@ final class MeshRepository {
                 "identity_id": info.identityId ?? "",
                 "public_key": publicKeyHex,
                 "nickname": nickname,
+                "peer_id": info.libp2pPeerId ?? "",
                 "libp2p_peer_id": info.libp2pPeerId ?? "",
                 "listeners": listeners,
                 "external_addresses": externalAddresses,
@@ -6343,6 +6344,7 @@ final class MeshRepository {
                 "identity_id": info.identityId ?? "",
                 "public_key": publicKeyHex,
                 "nickname": nickname,
+                "peer_id": info.libp2pPeerId ?? "",
                 "libp2p_peer_id": info.libp2pPeerId ?? "",
                 "listeners": [],
                 "external_addresses": [],
@@ -6958,11 +6960,28 @@ final class MeshRepository {
 
     func getIdentityQrPayload() -> String {
         guard let identity = getFullIdentityInfo(),
-              let peerId = identity.libp2pPeerId,
-              let publicKey = identity.publicKeyHex else {
+              let publicKey = identity.publicKeyHex,
+              !publicKey.isEmpty else {
             return ""
         }
-        return "\(peerId):\(publicKey)"
+        // QR identity cards must use the shared JSON contract. Android's
+        // importer intentionally rejects the old colon-delimited form, while
+        // JSON preserves routing and multi-device fields for a routable contact.
+        let payload: [String: Any] = [
+            "version": "1.0",
+            "peer_id": identity.libp2pPeerId ?? "",
+            "public_key": publicKey,
+            "device_id": identity.deviceId ?? "",
+            "identity_id": identity.identityId ?? "",
+            "nickname": identity.nickname ?? "",
+            "libp2p_peer_id": identity.libp2pPeerId ?? ""
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return json
     }
 
     func getIdentitySnippet() -> String {
