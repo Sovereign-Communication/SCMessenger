@@ -12,7 +12,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      
+
       - name: Label by changed files
         uses: actions/github-script@v7
         with:
@@ -22,12 +22,12 @@ jobs:
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
-            
+
             const labels = new Set();
-            
+
             for (const file of files) {
               const filename = file.filename;
-              
+
               // Platform labels
               if (filename.startsWith('core/') || filename.startsWith('mobile/')) {
                 labels.add('rust');
@@ -44,23 +44,23 @@ jobs:
               if (filename.startsWith('cli/')) {
                 labels.add('cli');
               }
-              
+
               // Documentation
               if (filename.startsWith('docs/') || filename.endsWith('.md')) {
                 labels.add('docs');
               }
-              
+
               // CI/CD
               if (filename.startsWith('.github/workflows/') || filename.startsWith('.github/actions/')) {
                 labels.add('ci');
               }
-              
+
               // Tests
               if (filename.includes('test') || filename.includes('tests/')) {
                 labels.add('tests');
               }
             }
-            
+
             if (labels.size > 0) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,

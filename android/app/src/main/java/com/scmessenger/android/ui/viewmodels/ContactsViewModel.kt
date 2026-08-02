@@ -44,7 +44,7 @@ class ContactsViewModel @Inject constructor(
     // Peers should be removed promptly after disconnect to avoid confusing UX
     private val nearbyDisconnectGraceMs = 5_000L
     private val pendingNearbyRemovalJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
-    
+
     // Debounce mechanism for nickname updates (NICKNAME-CRASH-001)
     private val nicknameDebounceMs = 500L
     private val pendingNicknameJobs = mutableMapOf<String, Job>()
@@ -183,9 +183,9 @@ class ContactsViewModel @Inject constructor(
         val sameByPublicKey = peer.publicKey?.let { pk ->
             PeerIdValidator.isSame(pk, event.publicKey)
         } ?: false
-        
+
         if (sameByPublicKey) return true
-        
+
         // Secondary: ID-based matching (for cases where public key may not be available)
         val incomingPeerId = PeerIdValidator.normalize(event.peerId)
         val incomingLibp2p = event.libp2pPeerId?.let { PeerIdValidator.normalize(it) }.orEmpty()
@@ -202,10 +202,10 @@ class ContactsViewModel @Inject constructor(
                 peer.peerId == incomingBle ||
                     peerBle == incomingBle
                 ))
-        
+
         return sameById
     }
-    
+
     /**
      * Check if a nearby peer matches a contact using comprehensive identity matching.
      * Uses public key as primary key to handle ID format mismatches.
@@ -219,14 +219,14 @@ class ContactsViewModel @Inject constructor(
         val sameByPublicKey = nearby.publicKey?.let { npk ->
             PeerIdValidator.isSame(npk, contact.publicKey)
         } ?: false
-        
+
         if (sameByPublicKey) return true
-        
+
         // Secondary: ID-based matching
         val sameByPeerId = PeerIdValidator.isSame(nearby.peerId, contact.peerId)
         val sameByLibp2p = nearby.libp2pPeerId?.let { PeerIdValidator.isSame(it, contact.peerId) } ?: false
         val sameByBle = nearby.blePeerId != null && nearby.blePeerId == contact.peerId
-        
+
         return sameByPeerId || sameByLibp2p || sameByBle
     }
 
@@ -433,7 +433,7 @@ class ContactsViewModel @Inject constructor(
                     // Cancel all pending removal jobs
                     pendingNearbyRemovalJobs.values.forEach { it.cancel() }
                     pendingNearbyRemovalJobs.clear()
-                    
+
                     // Clear nearby peers immediately
                     _nearbyPeers.value = emptyList()
                     Timber.d("Cleared all nearby peers on service stop")
@@ -453,7 +453,7 @@ class ContactsViewModel @Inject constructor(
 
                 val contactList = meshRepository.listContacts()
                 _contacts.value = contactList
-                
+
                 // Drop any nearby entry that is now a saved contact
                 // Use comprehensive identity matching with public key as primary key
                 _nearbyPeers.value = _nearbyPeers.value.filter { nearby ->
@@ -589,13 +589,13 @@ class ContactsViewModel @Inject constructor(
     fun setLocalNickname(peerId: String, nickname: String?) {
         // Cancel any pending nickname update for this peer
         pendingNicknameJobs[peerId]?.cancel()
-        
+
         // Launch a new debounced update
         pendingNicknameJobs[peerId] = viewModelScope.launch {
             try {
                 // Wait for debounce period before syncing
                 delay(nicknameDebounceMs)
-                
+
                 meshRepository.setLocalNickname(peerId, nickname)
                 loadContacts()
 
