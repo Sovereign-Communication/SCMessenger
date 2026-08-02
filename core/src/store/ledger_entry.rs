@@ -5,9 +5,12 @@ use crate::transport::addr_filter::{
 use libp2p::Multiaddr;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::io::Write as _;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io::{Read as _, Write as _};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 fn current_timestamp() -> u64 {
     web_time::SystemTime::now()
@@ -48,18 +51,116 @@ const MAX_LEN_MULTIADDR: usize = 512;
 const MAX_LEN_PEER_ID: usize = 128;
 const MAX_LEN_PUBLIC_KEY: usize = 512;
 const MAX_LEN_NICKNAME: usize = 128;
+/// Legacy topic metadata is local-only and no longer disclosed on the wire.
+/// Bound it anyway so an old ledger cannot retain an attacker-sized vector.
+const MAX_TOPICS_PER_ENTRY: usize = 64;
+/// Topic lengths are measured in UTF-8 bytes, matching the other string caps.
+const MAX_LEN_TOPIC: usize = 256;
 
-/// Hard ceiling on ledger file size (bytes). Files exceeding this are
-/// quarantined on load and recovery starts with an empty ledger.
-/// 1024 entries x ~500 bytes/entry < 1 MB in practice; 16 MB gives 16x
-/// headroom before rejecting as potential DoS artifact.
-const MAX_LEDGER_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// Largest persisted ledger accepted before allocating its JSON contents.
+///
+/// This is deliberately a byte cap as well as the record-count cap: a legacy
+/// or externally modified file must not make startup allocate an unbounded
+/// string before entry-level validation has a chance to run.
+const MAX_PERSISTED_LEDGER_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Failure threshold aligned with `core/src/transport/dial_policy.rs` dead-mark.
 const LEDGER_DEAD_FAILURE_THRESHOLD: u32 = 3;
 
 /// Monotonic nonce for unique temporary ledger files in `save_with_entries`.
 static SAVE_TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+
+struct SharedLedgerState {
+    entries: Arc<Mutex<Vec<LedgerEntry>>>,
+    save_lock: Arc<Mutex<()>>,
+}
+
+fn ledger_state_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedLedgerState>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedLedgerState>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lexically_normalize_absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+/// Resolve one stable absolute path before it is stored or used as a registry
+/// key. Existing paths are canonicalized. For missing suffixes, resolving the
+/// nearest existing ancestor preserves symlink semantics while still producing
+/// the same key before and after `create_dir_all`.
+fn normalize_storage_path(storage_path: &Path) -> Option<PathBuf> {
+    let absolute = if storage_path.is_absolute() {
+        storage_path.to_path_buf()
+    } else {
+        let base = std::env::current_dir().ok()?;
+        base.join(storage_path)
+    };
+
+    let mut existing_ancestor = absolute.clone();
+    let mut missing_suffix: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(mut canonical) = std::fs::canonicalize(&existing_ancestor) {
+            for component in missing_suffix.iter().rev() {
+                if component.as_os_str() == std::ffi::OsStr::new("..") {
+                    canonical.pop();
+                } else if component.as_os_str() != std::ffi::OsStr::new(".") {
+                    canonical.push(component);
+                }
+            }
+            return Some(lexically_normalize_absolute_path(&canonical));
+        }
+
+        let Some(component) = existing_ancestor.components().next_back() else {
+            break;
+        };
+        match component {
+            Component::Prefix(_) | Component::RootDir => break,
+            Component::CurDir | Component::ParentDir | Component::Normal(_) => {
+                missing_suffix.push(component.as_os_str().to_os_string());
+                if !existing_ancestor.pop() {
+                    break;
+                }
+            }
+        }
+    }
+    Some(lexically_normalize_absolute_path(&absolute))
+}
+
+/// Return one process-local state for an already-normalized persisted path.
+///
+/// A single app process can construct a platform-facing `LedgerManager` beside
+/// IronCore for the same directory. Sharing both entries and the save/load lock
+/// prevents those handles from publishing independent stale snapshots.
+///
+/// This registry is deliberately process-local. Cross-process ownership remains
+/// unresolved; atomic replacement protects file integrity but cannot merge two
+/// independently mutated process snapshots.
+fn shared_ledger_state(storage_path: &Path) -> Arc<SharedLedgerState> {
+    let mut registry = ledger_state_registry().lock();
+    registry.retain(|_, state| state.strong_count() > 0);
+    if let Some(existing) = registry.get(storage_path).and_then(Weak::upgrade) {
+        return existing;
+    }
+
+    let state = Arc::new(SharedLedgerState {
+        entries: Arc::new(Mutex::new(Vec::new())),
+        save_lock: Arc::new(Mutex::new(())),
+    });
+    registry.insert(storage_path.to_path_buf(), Arc::downgrade(&state));
+    state
+}
 
 /// A routing-only peer record carried inside an invite (item 1 of the v0.4.0
 /// ledger seeding work).
@@ -249,6 +350,69 @@ fn annotate_identity_locked(
     }
 }
 
+fn sanitize_optional_ledger_text(value: &mut Option<String>, max_len: usize) -> bool {
+    let original = value.take();
+    let sanitized = original.as_ref().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.len() > max_len || trimmed.chars().any(char::is_control) {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let changed = original != sanitized;
+    *value = sanitized;
+    changed
+}
+
+fn sanitize_legacy_topics(topics: &mut Vec<String>) -> bool {
+    let original = std::mem::take(topics);
+    let mut sanitized = Vec::with_capacity(original.len().min(MAX_TOPICS_PER_ENTRY));
+    let mut changed = false;
+
+    for topic in original {
+        if sanitized.len() == MAX_TOPICS_PER_ENTRY {
+            changed = true;
+            break;
+        }
+        let trimmed = topic.trim();
+        if trimmed.is_empty()
+            || trimmed.len() > MAX_LEN_TOPIC
+            || trimmed.chars().any(char::is_control)
+        {
+            changed = true;
+            continue;
+        }
+        if sanitized
+            .iter()
+            .any(|existing| existing.as_str() == trimmed)
+        {
+            changed = true;
+            continue;
+        }
+        if trimmed.len() != topic.len() {
+            changed = true;
+        }
+        sanitized.push(trimmed.to_string());
+    }
+
+    *topics = sanitized;
+    changed
+}
+
+fn serialize_ledger_entries(entries: &[LedgerEntry]) -> Result<String, crate::IronCoreError> {
+    let data = serde_json::to_string_pretty(entries).map_err(|_| crate::IronCoreError::Internal)?;
+    if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES {
+        tracing::warn!(
+            "refusing to persist ledger of {} bytes (maximum {})",
+            data.len(),
+            MAX_PERSISTED_LEDGER_BYTES
+        );
+        return Err(crate::IronCoreError::StorageError);
+    }
+    Ok(data)
+}
+
 /// Who an invite's `seed_ledger` is going to.
 ///
 /// Re-review NEW-7: an invite QR is a durable, forwardable artefact, so its
@@ -276,20 +440,31 @@ pub struct LedgerManager {
     /// node's whole peer topology into a world-readable directory on desktop.
     /// An in-memory core must have an in-memory ledger.
     storage_path: Option<std::path::PathBuf>,
+    /// Keeps the registry entry alive while this persisted manager exists.
+    /// Ephemeral ledgers intentionally have no shared durable state.
+    _shared_state: Option<Arc<SharedLedgerState>>,
     entries: Arc<Mutex<Vec<LedgerEntry>>>,
     /// Serializes durable snapshots so concurrent mutators cannot write out of
     /// snapshot order. Held from before the entries mutation until after rename.
-    save_lock: Mutex<()>,
+    save_lock: Arc<Mutex<()>>,
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 impl LedgerManager {
     #[uniffi::constructor]
     pub fn new(storage_path: String) -> Self {
+        let Some(storage_path) = normalize_storage_path(Path::new(&storage_path)) else {
+            tracing::warn!(
+                "relative ledger storage path could not be resolved; using an in-memory ledger"
+            );
+            return Self::ephemeral();
+        };
+        let shared_state = shared_ledger_state(&storage_path);
         Self {
-            storage_path: Some(std::path::PathBuf::from(storage_path)),
-            entries: Arc::new(Mutex::new(Vec::new())),
-            save_lock: Mutex::new(()),
+            storage_path: Some(storage_path),
+            entries: Arc::clone(&shared_state.entries),
+            save_lock: Arc::clone(&shared_state.save_lock),
+            _shared_state: Some(shared_state),
         }
     }
 
@@ -298,6 +473,13 @@ impl LedgerManager {
             return Ok(());
         };
         let ledger_file = storage_path.join("ledger.json");
+
+        // Keep the load's read/replace sequence in the same order as saves:
+        // save_lock -> filesystem I/O -> entries lock. In particular, do not
+        // read an old file, let a writer save newer state, then install that old
+        // state into memory after the writer. No entries lock spans filesystem
+        // I/O, so readers remain able to observe the last installed snapshot.
+        let _save_guard = self.save_lock.lock();
 
         // Best-effort startup cleanup: remove unique-tmp siblings leaked by a
         // crashed prior writer. Ignore all errors.
@@ -320,124 +502,143 @@ impl LedgerManager {
             }
         }
 
-        if ledger_file.exists() {
-            if let Ok(metadata) = std::fs::metadata(&ledger_file) {
-                if metadata.len() > MAX_LEDGER_FILE_BYTES {
-                    tracing::warn!(
-                        "ledger file is {} bytes (limit {}); quarantining and recovering with empty ledger",
-                        metadata.len(),
-                        MAX_LEDGER_FILE_BYTES,
-                    );
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-                    let oversized_name = format!(
-                        "{}.oversized-{}.{}",
-                        ledger_file
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("ledger.json"),
-                        timestamp,
-                        nonce,
-                    );
-                    let _ =
-                        std::fs::rename(&ledger_file, ledger_file.with_file_name(oversized_name));
-                    // Start fresh -- save an empty ledger so subsequent
-                    // writes do not resurrect the oversized file.
-                    let _save_guard = self.save_lock.lock();
-                    *self.entries.lock() = Vec::new();
-                    let _ = self.save_with_entries(&[]);
-                    return Ok(());
+        // Opening first makes the metadata check and read refer to one file
+        // descriptor. A missing file is still the default empty-ledger case.
+        // If another process replaces or grows the file after this check, the
+        // bounded read below consumes at most MAX+1 bytes and rejects rather
+        // than installing a partial or unbounded snapshot.
+        let mut file = match std::fs::File::open(&ledger_file) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(crate::IronCoreError::StorageError),
+        };
+        let metadata = file
+            .metadata()
+            .map_err(|_| crate::IronCoreError::StorageError)?;
+        if !metadata.is_file() || metadata.len() > MAX_PERSISTED_LEDGER_BYTES {
+            tracing::warn!(
+                "refusing persisted ledger of {} bytes (maximum {})",
+                metadata.len(),
+                MAX_PERSISTED_LEDGER_BYTES
+            );
+            return Err(crate::IronCoreError::StorageError);
+        }
+
+        let mut data = String::new();
+        file.by_ref()
+            .take(MAX_PERSISTED_LEDGER_BYTES + 1)
+            .read_to_string(&mut data)
+            .map_err(|_| crate::IronCoreError::StorageError)?;
+        let size_after_read = file
+            .metadata()
+            .map_err(|_| crate::IronCoreError::StorageError)?
+            .len();
+        if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES
+            || size_after_read > MAX_PERSISTED_LEDGER_BYTES
+        {
+            tracing::warn!(
+                "refusing persisted ledger that grew beyond {} bytes while reading",
+                MAX_PERSISTED_LEDGER_BYTES
+            );
+            return Err(crate::IronCoreError::StorageError);
+        }
+        // Close before the corrupt-file recovery rename below; Windows does
+        // not permit replacing an open file handle in the common case.
+        drop(file);
+
+        let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
+            Ok(entries) => entries,
+            Err(err) => {
+                tracing::warn!(
+                    "ledger file corrupted; quarantining without replacing live state: {}",
+                    err
+                );
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+                let corrupt_name = format!(
+                    "{}.corrupt-{}.{}",
+                    ledger_file
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("ledger.json"),
+                    timestamp,
+                    nonce
+                );
+                std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name))
+                    .map_err(|_| crate::IronCoreError::StorageError)?;
+
+                // A second same-path manager may already have a valid shared
+                // state. Preserve it and, when non-empty, restore that exact
+                // bounded snapshot after quarantining the corrupt file.
+                let live_snapshot = { self.entries.lock().clone() };
+                if !live_snapshot.is_empty() {
+                    let restored_data = serialize_ledger_entries(&live_snapshot)?;
+                    self.write_serialized_ledger(&restored_data)?;
                 }
+                return Ok(());
             }
-            let data = std::fs::read_to_string(&ledger_file)
-                .map_err(|_| crate::IronCoreError::StorageError)?;
-            let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
-                Ok(entries) => entries,
-                Err(err) => {
-                    tracing::warn!(
-                        "ledger file corrupted; recovering with empty ledger: {}",
-                        err
-                    );
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-                    let corrupt_name = format!(
-                        "{}.corrupt-{}.{}",
-                        ledger_file
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("ledger.json"),
-                        timestamp,
-                        nonce
-                    );
-                    let _ = std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name));
-                    Vec::new()
+        };
+        drop(data);
+        let parsed_len = entries.len();
+        entries.retain(|entry| {
+            // Ingest parity: ingest accepts an empty peer_id string, so load admits None or Some("") and rejects only non-empty invalid peer ids.
+            let peer_id_ok = match entry.peer_id.as_deref() {
+                None | Some("") => true,
+                Some(peer_id) => {
+                    peer_id.len() <= MAX_LEN_PEER_ID && peer_id.parse::<libp2p::PeerId>().is_ok()
                 }
             };
-            let parsed_len = entries.len();
-            entries.retain(|entry| {
-                let public_key_ok = entry
-                    .public_key
-                    .as_ref()
-                    .is_none_or(|value| value.trim().len() <= MAX_LEN_PUBLIC_KEY);
-                let nickname_ok = entry
-                    .nickname
-                    .as_ref()
-                    .is_none_or(|value| value.trim().len() <= MAX_LEN_NICKNAME);
-                // Ingest parity: ingest accepts an empty peer_id string, so load admits None or Some("") and rejects only non-empty invalid peer ids.
-                let peer_id_ok = match entry.peer_id.as_deref() {
-                    None | Some("") => true,
-                    Some(peer_id) => {
-                        peer_id.len() <= MAX_LEN_PEER_ID
-                            && peer_id.parse::<libp2p::PeerId>().is_ok()
-                    }
-                };
-                entry.multiaddr.len() <= MAX_LEN_MULTIADDR
-                    && peer_id_ok
-                    && public_key_ok
-                    && nickname_ok
+            entry.multiaddr.len() <= MAX_LEN_MULTIADDR && peer_id_ok
+        });
+        let mut changed = entries.len() != parsed_len;
+        if entries.len() > MAX_LEDGER_ENTRIES {
+            entries.sort_by(|a, b| {
+                (b.success_count > 0)
+                    .cmp(&(a.success_count > 0))
+                    .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
+                    .then_with(|| a.multiaddr.cmp(&b.multiaddr))
             });
-            let mut changed = entries.len() != parsed_len;
-            if entries.len() > MAX_LEDGER_ENTRIES {
-                entries.sort_by(|a, b| {
-                    (b.success_count > 0)
-                        .cmp(&(a.success_count > 0))
-                        .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
-                        .then_with(|| a.multiaddr.cmp(&b.multiaddr))
-                });
-                entries.truncate(MAX_LEDGER_ENTRIES);
-                changed = true;
-            }
-            // Acquire save_lock BEFORE replacing entries so a concurrent
-            // save cannot snapshot the old contents between our swap and
-            // our persist (W1: stale-load-overwrites-newer-save fix).
-            let _save_guard = self.save_lock.lock();
-            *self.entries.lock() = entries;
-            if changed {
-                let snapshot = { self.entries.lock().clone() };
-                if let Err(err) = self.save_with_entries(&snapshot) {
-                    tracing::warn!("ledger shrink persist failed: {}", err);
-                }
-            }
+            entries.truncate(MAX_LEDGER_ENTRIES);
+            changed = true;
         }
+        for entry in &mut entries {
+            changed |= sanitize_optional_ledger_text(&mut entry.public_key, MAX_LEN_PUBLIC_KEY);
+            changed |= sanitize_optional_ledger_text(&mut entry.nickname, MAX_LEN_NICKNAME);
+            changed |= sanitize_legacy_topics(&mut entry.topics);
+        }
+
+        // Compact input can expand beyond the durable bound when pretty
+        // serialized (indentation and escaped characters). Preflight the exact
+        // representation before either publishing it in memory or rewriting it.
+        let durable_data = serialize_ledger_entries(&entries)?;
+        if changed {
+            self.write_serialized_ledger(&durable_data)?;
+        }
+        *self.entries.lock() = entries;
         Ok(())
     }
 
     fn save_with_entries(&self, entries: &[LedgerEntry]) -> Result<(), crate::IronCoreError> {
+        if self.storage_path.is_none() {
+            return Ok(());
+        }
+        let data = serialize_ledger_entries(entries)?;
+        self.write_serialized_ledger(&data)
+    }
+
+    fn write_serialized_ledger(&self, data: &str) -> Result<(), crate::IronCoreError> {
         let Some(storage_path) = self.storage_path.as_ref() else {
             return Ok(());
         };
+        if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES {
+            return Err(crate::IronCoreError::StorageError);
+        }
         std::fs::create_dir_all(storage_path).map_err(|_| crate::IronCoreError::StorageError)?;
 
         let ledger_file = storage_path.join("ledger.json");
-        let data =
-            serde_json::to_string_pretty(entries).map_err(|_| crate::IronCoreError::Internal)?;
-
         let tmp_file = ledger_file.with_file_name(format!(
             "ledger.json.tmp.{}.{}",
             std::process::id(),
@@ -645,14 +846,14 @@ impl LedgerManager {
     ///
     /// WHY A SEPARATE ACCESSOR rather than relaxing
     /// [`Self::dialable_addresses`]: that filter (`success_count > 0 &&
-    /// failure_count < 5`) means "addresses we have actually reached", and the
-    /// CLI depends on exactly that meaning -- its startup `DialScheduler` sweep,
-    /// its relay ranking and its ledger display all read it. Folding unproven,
-    /// attacker-suppliable seed addresses into it would silently change what
-    /// every existing caller believes it is getting. Seeds are a strictly
-    /// lower-confidence tier, so they get their own accessor and callers opt in
-    /// by name: sweep the proven set first, then this one. A first successful
-    /// connection promotes a seed into the proven set via
+    /// failure_count < LEDGER_DEAD_FAILURE_THRESHOLD`) means "addresses we have
+    /// actually reached", and the CLI depends on exactly that meaning -- its
+    /// startup `DialScheduler` sweep, its relay ranking and its ledger display
+    /// all read it. Folding unproven, attacker-suppliable seed addresses into it
+    /// would silently change what every existing caller believes it is getting.
+    /// Seeds are a strictly lower-confidence tier, so they get their own accessor
+    /// and callers opt in by name: sweep the proven set first, then this one. A
+    /// first successful connection promotes a seed into the proven set via
     /// [`Self::record_connection`] with no special casing.
     ///
     /// `limit` bounds the returned Vec (review F4). The seed tier is the
@@ -789,8 +990,9 @@ impl LedgerManager {
     pub fn ephemeral() -> Self {
         Self {
             storage_path: None,
+            _shared_state: None,
             entries: Arc::new(Mutex::new(Vec::new())),
-            save_lock: Mutex::new(()),
+            save_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -1082,6 +1284,80 @@ mod tests {
     }
 
     #[test]
+    fn storage_path_normalization_unifies_relative_absolute_and_parent_aliases() {
+        let cwd = std::env::current_dir().expect("current directory");
+        let canonical_cwd = std::fs::canonicalize(&cwd).expect("canonical current directory");
+        let cwd_name = canonical_cwd.file_name().expect("non-root test directory");
+        let parent_alias = canonical_cwd.join("..").join(cwd_name);
+
+        let relative = normalize_storage_path(Path::new(".")).expect("relative path");
+        let absolute = normalize_storage_path(&canonical_cwd).expect("absolute path");
+        let with_parent = normalize_storage_path(&parent_alias).expect("parent alias");
+
+        assert!(relative.is_absolute());
+        assert_eq!(relative, absolute);
+        assert_eq!(absolute, with_parent);
+
+        let relative_state = shared_ledger_state(&relative);
+        let absolute_state = shared_ledger_state(&absolute);
+        let parent_state = shared_ledger_state(&with_parent);
+        assert!(Arc::ptr_eq(&relative_state, &absolute_state));
+        assert!(Arc::ptr_eq(&absolute_state, &parent_state));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_parent_alias = dir.path().join("missing").join("..").join("ledger");
+        let direct = dir.path().join("ledger");
+        assert_eq!(
+            normalize_storage_path(&missing_parent_alias),
+            normalize_storage_path(&direct)
+        );
+        let alias_manager = LedgerManager::new(missing_parent_alias.to_string_lossy().to_string());
+        let direct_manager = LedgerManager::new(direct.to_string_lossy().to_string());
+        assert_eq!(alias_manager.storage_path, direct_manager.storage_path);
+        assert!(alias_manager
+            .storage_path
+            .as_ref()
+            .is_some_and(|path| path.is_absolute()));
+        assert!(Arc::ptr_eq(&alias_manager.entries, &direct_manager.entries));
+        assert!(Arc::ptr_eq(
+            &alias_manager.save_lock,
+            &direct_manager.save_lock
+        ));
+
+        #[cfg(unix)]
+        {
+            let real = dir.path().join("real");
+            std::fs::create_dir(&real).expect("real directory");
+            let alias = dir.path().join("alias");
+            std::os::unix::fs::symlink(&real, &alias).expect("symlink");
+            assert_eq!(
+                normalize_storage_path(&alias.join("missing").join("ledger")),
+                normalize_storage_path(&real.join("missing").join("ledger"))
+            );
+        }
+    }
+
+    #[test]
+    fn shared_state_registry_purges_dead_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dead_path = normalize_storage_path(&dir.path().join("dead-ledger")).expect("dead path");
+        let state = shared_ledger_state(&dead_path);
+        assert!(
+            ledger_state_registry().lock().contains_key(&dead_path),
+            "fixture weak entry was not registered"
+        );
+        drop(state);
+
+        let trigger_path =
+            normalize_storage_path(&dir.path().join("live-ledger")).expect("trigger path");
+        let _trigger = shared_ledger_state(&trigger_path);
+        assert!(
+            !ledger_state_registry().lock().contains_key(&dead_path),
+            "dead registry entry was not purged"
+        );
+    }
+
+    #[test]
     fn seed_threshold_boundary() {
         let (_dir, mgr) = manager();
         assert_eq!(
@@ -1216,6 +1492,142 @@ mod tests {
             .iter()
             .any(|e| e.multiaddr == proven && e.success_count > 0));
         assert!(!loaded.iter().any(|e| e.multiaddr == oldest_zero));
+    }
+
+    #[test]
+    fn load_rejects_oversized_file_before_replacing_memory() {
+        let (dir, mgr) = manager();
+        let retained_addr = "/ip4/198.51.100.99/tcp/9001".to_string();
+        mgr.entries.lock().push(LedgerEntry {
+            multiaddr: retained_addr.clone(),
+            peer_id: None,
+            public_key: None,
+            nickname: None,
+            success_count: 0,
+            failure_count: 0,
+            last_seen: None,
+            topics: Vec::new(),
+        });
+
+        std::fs::write(
+            dir.path().join("ledger.json"),
+            vec![b' '; (MAX_PERSISTED_LEDGER_BYTES + 1) as usize],
+        )
+        .expect("write oversized ledger");
+
+        assert!(mgr.load().is_err(), "oversized ledger must fail closed");
+        let entries = mgr.entries.lock();
+        assert_eq!(entries.len(), 1, "failed load replaced live state");
+        assert_eq!(entries[0].multiaddr, retained_addr);
+    }
+
+    #[test]
+    fn load_rejects_near_cap_input_whose_durable_form_exceeds_cap() {
+        let (dir, mgr) = manager();
+        let retained_addr = "/ip4/198.51.100.97/tcp/9001".to_string();
+        mgr.entries.lock().push(LedgerEntry {
+            multiaddr: retained_addr.clone(),
+            peer_id: None,
+            public_key: None,
+            nickname: None,
+            success_count: 0,
+            failure_count: 0,
+            last_seen: None,
+            topics: Vec::new(),
+        });
+
+        let topic_suffix = "x".repeat(242);
+        let topics: Vec<String> = (0..MAX_TOPICS_PER_ENTRY)
+            .map(|i| format!("{i:02}{topic_suffix}"))
+            .collect();
+        assert!(topics.iter().all(|topic| topic.len() == 244));
+        let entries: Vec<LedgerEntry> = (0..MAX_LEDGER_ENTRIES)
+            .map(|i| LedgerEntry {
+                multiaddr: format!("/ip4/198.51.{}.{}/tcp/9001", i / 250, (i % 250) + 1),
+                peer_id: None,
+                public_key: None,
+                nickname: None,
+                success_count: 0,
+                failure_count: 0,
+                last_seen: None,
+                topics: topics.clone(),
+            })
+            .collect();
+        let compact = serde_json::to_vec(&entries).expect("compact ledger");
+        let pretty = serde_json::to_vec_pretty(&entries).expect("pretty ledger");
+        assert!(
+            compact.len() as u64 <= MAX_PERSISTED_LEDGER_BYTES,
+            "fixture input is not loadable: {} bytes",
+            compact.len()
+        );
+        assert!(
+            pretty.len() as u64 > MAX_PERSISTED_LEDGER_BYTES,
+            "fixture durable form does not cross cap: {} bytes",
+            pretty.len()
+        );
+        drop(pretty);
+        std::fs::write(dir.path().join("ledger.json"), compact).expect("write near-cap ledger");
+        drop(entries);
+
+        assert!(
+            mgr.load().is_err(),
+            "load installed state that cannot be durably represented"
+        );
+        let live = mgr.entries.lock();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].multiaddr, retained_addr);
+    }
+
+    #[test]
+    fn save_rejects_escape_expansion_before_creating_ledger_file() {
+        let (dir, mgr) = manager();
+        let escaped_topic = "\0".repeat(64);
+        {
+            let mut entries = mgr.entries.lock();
+            for i in 0..700usize {
+                entries.push(LedgerEntry {
+                    multiaddr: format!("/ip4/198.51.{}.{}/tcp/9001", i / 250, (i % 250) + 1),
+                    peer_id: None,
+                    public_key: None,
+                    nickname: None,
+                    success_count: 0,
+                    failure_count: 0,
+                    last_seen: None,
+                    topics: vec![escaped_topic.clone(); MAX_TOPICS_PER_ENTRY],
+                });
+            }
+        }
+
+        assert!(
+            mgr.save().is_err(),
+            "escaped durable representation exceeded the cap but was accepted"
+        );
+        assert!(
+            !dir.path().join("ledger.json").exists(),
+            "oversized durable representation reached the filesystem"
+        );
+    }
+
+    #[test]
+    fn load_missing_file_keeps_the_current_in_memory_ledger() {
+        let (dir, mgr) = manager();
+        let retained_addr = "/ip4/198.51.100.98/tcp/9001".to_string();
+        assert!(!dir.path().join("ledger.json").exists());
+        mgr.entries.lock().push(LedgerEntry {
+            multiaddr: retained_addr.clone(),
+            peer_id: None,
+            public_key: None,
+            nickname: None,
+            success_count: 0,
+            failure_count: 0,
+            last_seen: None,
+            topics: Vec::new(),
+        });
+
+        mgr.load().expect("missing ledger is the default state");
+        let entries = mgr.entries.lock();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].multiaddr, retained_addr);
     }
 
     #[test]
@@ -1916,6 +2328,53 @@ mod tests {
     }
 
     #[test]
+    fn same_path_managers_share_state_and_persist_all_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_string_lossy().to_string();
+        let first = Arc::new(LedgerManager::new(path.clone()));
+        let second = Arc::new(LedgerManager::new(path.clone()));
+        assert!(
+            Arc::ptr_eq(&first.entries, &second.entries),
+            "same-path managers must share one in-process ledger state"
+        );
+        assert!(
+            Arc::ptr_eq(&first.save_lock, &second.save_lock),
+            "same-path managers must serialize durable snapshots together"
+        );
+
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let first_start = Arc::clone(&start);
+        let first_worker = Arc::clone(&first);
+        let first_handle = std::thread::spawn(move || {
+            first_start.wait();
+            for i in 0..20u32 {
+                first_worker
+                    .record_connection(format!("/ip4/198.51.100.{}/tcp/9001", i + 1), peer());
+            }
+        });
+        let second_start = Arc::clone(&start);
+        let second_worker = Arc::clone(&second);
+        let second_handle = std::thread::spawn(move || {
+            second_start.wait();
+            for i in 0..20u32 {
+                second_worker.annotate_identity(
+                    format!("/ip4/198.51.101.{}/tcp/9001", i + 1),
+                    peer(),
+                    None,
+                    None,
+                );
+            }
+        });
+        first_handle.join().expect("first manager worker");
+        second_handle.join().expect("second manager worker");
+
+        assert_eq!(first.entries.lock().len(), 40);
+        let reloaded = LedgerManager::new(path);
+        reloaded.load().expect("reload");
+        assert_eq!(reloaded.entries.lock().len(), 40);
+    }
+
+    #[test]
     fn save_is_always_parseable() {
         let (dir, mgr) = manager();
         let ledger_file = dir.path().join("ledger.json");
@@ -2038,6 +2497,91 @@ mod tests {
     }
 
     #[test]
+    fn load_normalizes_optional_text_and_bounds_legacy_topics() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger_file = dir.path().join("ledger.json");
+        let normalized_addr = "/ip4/198.51.100.24/tcp/9001".to_string();
+        let dropped_fields_addr = "/ip4/198.51.100.25/tcp/9001".to_string();
+        let mut topics = vec![
+            "  sc-mesh  ".to_string(),
+            String::new(),
+            "bad\ncontrol".to_string(),
+            "T".repeat(MAX_LEN_TOPIC + 1),
+            "sc-mesh".to_string(),
+        ];
+        topics.extend((0..MAX_TOPICS_PER_ENTRY + 10).map(|i| format!("topic-{i}")));
+        let entries = vec![
+            LedgerEntry {
+                multiaddr: normalized_addr.clone(),
+                peer_id: None,
+                public_key: Some(format!(
+                    "{}public-key{}",
+                    " ".repeat(MAX_LEN_PUBLIC_KEY),
+                    " ".repeat(MAX_LEN_PUBLIC_KEY)
+                )),
+                nickname: Some("  Alice  ".to_string()),
+                success_count: 0,
+                failure_count: 0,
+                last_seen: None,
+                topics,
+            },
+            LedgerEntry {
+                multiaddr: dropped_fields_addr.clone(),
+                peer_id: None,
+                public_key: Some("K".repeat(MAX_LEN_PUBLIC_KEY + 1)),
+                nickname: Some("N".repeat(MAX_LEN_NICKNAME + 1)),
+                success_count: 0,
+                failure_count: 0,
+                last_seen: None,
+                topics: vec!["\0invalid".to_string()],
+            },
+        ];
+        std::fs::write(
+            &ledger_file,
+            serde_json::to_string(&entries).expect("legacy ledger"),
+        )
+        .expect("write legacy ledger");
+
+        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
+        mgr.load().expect("load sanitized ledger");
+        let loaded = mgr.entries.lock().clone();
+        let normalized = loaded
+            .iter()
+            .find(|entry| entry.multiaddr == normalized_addr)
+            .expect("normalized entry");
+        assert_eq!(normalized.public_key.as_deref(), Some("public-key"));
+        assert_eq!(normalized.nickname.as_deref(), Some("Alice"));
+        assert_eq!(normalized.topics.len(), MAX_TOPICS_PER_ENTRY);
+        assert_eq!(normalized.topics[0], "sc-mesh");
+        assert!(normalized.topics.iter().all(|topic| !topic.is_empty()
+            && topic.len() <= MAX_LEN_TOPIC
+            && !topic.chars().any(char::is_control)));
+
+        let dropped_fields = loaded
+            .iter()
+            .find(|entry| entry.multiaddr == dropped_fields_addr)
+            .expect("entry with dropped optional fields");
+        assert!(dropped_fields.public_key.is_none());
+        assert!(dropped_fields.nickname.is_none());
+        assert!(dropped_fields.topics.is_empty());
+        drop(loaded);
+
+        let persisted: Vec<LedgerEntry> =
+            serde_json::from_str(&std::fs::read_to_string(&ledger_file).expect("read rewritten"))
+                .expect("parse rewritten");
+        let persisted_normalized = persisted
+            .iter()
+            .find(|entry| entry.multiaddr == normalized_addr)
+            .expect("persisted normalized entry");
+        assert_eq!(
+            persisted_normalized.public_key.as_deref(),
+            Some("public-key")
+        );
+        assert_eq!(persisted_normalized.nickname.as_deref(), Some("Alice"));
+        assert_eq!(persisted_normalized.topics.len(), MAX_TOPICS_PER_ENTRY);
+    }
+
+    #[test]
     fn load_shrink_is_durable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let ledger_file = dir.path().join("ledger.json");
@@ -2147,24 +2691,33 @@ mod tests {
     }
 
     #[test]
-    fn load_quarantines_oversized_file() {
+    fn corrupt_json_preserves_and_restores_valid_shared_state() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_string_lossy().to_string();
         let ledger_file = dir.path().join("ledger.json");
+        let primary = LedgerManager::new(path.clone());
+        let secondary = LedgerManager::new(path);
+        let retained_addr = "/ip4/198.51.100.32/tcp/9001".to_string();
+        primary.record_connection(retained_addr.clone(), peer());
+        assert_eq!(primary.entries.lock().len(), 1);
+        assert!(Arc::ptr_eq(&primary.entries, &secondary.entries));
 
-        // Write a file exceeding MAX_LEDGER_FILE_BYTES (16 MB).
-        // We only need to exceed the size check; content is irrelevant
-        // since the guard fires before parse.
-        let oversized = vec![b'x'; (MAX_LEDGER_FILE_BYTES as usize) + 1];
-        std::fs::write(&ledger_file, &oversized).unwrap();
-        assert!(ledger_file.exists());
+        let corrupt = b"{ corrupt after a valid in-memory snapshot";
+        std::fs::write(&ledger_file, corrupt).expect("replace with corrupt ledger");
+        secondary
+            .load()
+            .expect("corrupt disk state must not wipe valid shared memory");
 
-        let mgr = LedgerManager::new(dir.path().to_string_lossy().to_string());
-        mgr.load().expect("load quarantines oversized file");
+        let live = primary.entries.lock();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].multiaddr, retained_addr);
+        drop(live);
 
-        // Entries must be empty (fresh start).
-        assert!(mgr.entries.lock().is_empty());
-
-        // Quarantined file must exist with original oversized content.
+        let restored: Vec<LedgerEntry> =
+            serde_json::from_str(&std::fs::read_to_string(&ledger_file).expect("restored ledger"))
+                .expect("restored ledger parses");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].multiaddr, retained_addr);
         let quarantined = std::fs::read_dir(dir.path())
             .expect("read dir")
             .flatten()
@@ -2172,20 +2725,10 @@ mod tests {
                 entry
                     .file_name()
                     .to_str()
-                    .is_some_and(|name| name.starts_with("ledger.json.oversized-"))
+                    .is_some_and(|name| name.starts_with("ledger.json.corrupt-"))
             })
-            .expect("quarantined file must exist");
-        assert_eq!(
-            std::fs::metadata(quarantined.path()).unwrap().len(),
-            (MAX_LEDGER_FILE_BYTES as u64) + 1
-        );
-
-        // A fresh empty ledger.json must have been written at ledger_file location.
-        assert!(ledger_file.exists());
-        let fresh_data: Vec<LedgerEntry> =
-            serde_json::from_str(&std::fs::read_to_string(&ledger_file).unwrap())
-                .expect("fresh ledger must be valid JSON");
-        assert!(fresh_data.is_empty());
+            .expect("corrupt sibling");
+        assert_eq!(std::fs::read(quarantined.path()).unwrap(), corrupt.to_vec());
     }
 
     #[test]
@@ -2314,17 +2857,23 @@ mod tests {
         }
         mgr.save().expect("save at cap");
 
+        let mut expected_addrs: Vec<String> = mgr
+            .entries
+            .lock()
+            .iter()
+            .map(|entry| entry.multiaddr.clone())
+            .collect();
+        expected_addrs.sort_unstable();
+        drop(mgr);
+
         let reloaded = LedgerManager::new(path);
         reloaded.load().expect("reload");
-        let original = mgr.entries.lock();
         let loaded = reloaded.entries.lock();
         assert_eq!(loaded.len(), MAX_LEDGER_ENTRIES);
-        assert_eq!(loaded.len(), original.len());
-        let mut original_addrs: Vec<&str> = original.iter().map(|e| e.multiaddr.as_str()).collect();
-        let mut loaded_addrs: Vec<&str> = loaded.iter().map(|e| e.multiaddr.as_str()).collect();
-        original_addrs.sort_unstable();
+        let mut loaded_addrs: Vec<String> =
+            loaded.iter().map(|entry| entry.multiaddr.clone()).collect();
         loaded_addrs.sort_unstable();
-        assert_eq!(original_addrs, loaded_addrs);
+        assert_eq!(expected_addrs, loaded_addrs);
     }
 
     #[test]
