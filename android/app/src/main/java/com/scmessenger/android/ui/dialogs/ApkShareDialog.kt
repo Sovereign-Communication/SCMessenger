@@ -130,7 +130,8 @@ fun ApkShareDialog(
                         ) {
                             QrCodeImage(
                                 data = downloadUrl!!,
-                                size = 200
+                                size = 200,
+                                contentDescription = "QR Code for APK download"
                             )
 
                             Spacer(modifier = Modifier.height(12.dp))
