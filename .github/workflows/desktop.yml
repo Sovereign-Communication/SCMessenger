@@ -42,5 +42,5 @@ jobs:
       - name: Generate Kotlin bindings
         run: cargo run -p scmessenger-desktop-bridge --bin gen_kotlin --features gen-bindings
 
-      - name: Compile Kotlin for LinuxX64
-        run: ./gradlew :shared:compileKotlinLinuxX64
+      - name: Compile Kotlin for desktop JVM
+        run: ./gradlew :shared:compileKotlinDesktop
