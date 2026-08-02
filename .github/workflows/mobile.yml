@@ -48,19 +48,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Install host Rust dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Run JVM unit tests
         working-directory: android
-        # The app's preBuild hook also invokes the Rust/UniFFI tasks. Keep
-        # this fast JVM-only gate independent from cargo-ndk; native coverage
-        # remains enforced by the Android Debug APK and Cross ABI jobs.
+        # Keep Android's native cross-build out of this gate, but allow the
+        # host-only UniFFI generator to provide the Kotlin API sources used by
+        # KSP. Native coverage remains enforced by the APK and Cross ABI jobs.
         run: >-
           ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
-          -x preBuild -x buildRustAndroid -x generateUniFFIBindings
+          -x buildRustAndroid
 
   android:
     name: Android Debug APK
