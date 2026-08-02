@@ -9,6 +9,13 @@ pluginManagement {
     }
 }
 
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
 include ':android'
 project(':android').projectDir = new File('android')
 include ':shared'
