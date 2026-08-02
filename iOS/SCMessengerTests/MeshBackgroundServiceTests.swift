@@ -12,6 +12,7 @@
 import XCTest
 @testable import SCMessenger
 
+@MainActor
 final class MeshBackgroundServiceTests: XCTestCase {
     private var meshRepository: MeshRepository!
     private var backgroundService: MeshBackgroundService!
