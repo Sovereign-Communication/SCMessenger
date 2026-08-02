@@ -385,7 +385,7 @@ fn sanitize_legacy_topics(topics: &mut Vec<String>) -> bool {
         }
         if sanitized
             .iter()
-            .any(|existing| existing.as_str() == trimmed)
+            .any(|existing: &String| existing.as_str() == trimmed)
         {
             changed = true;
             continue;
@@ -525,7 +525,7 @@ impl LedgerManager {
         }
 
         let mut data = String::new();
-        file.by_ref()
+        std::io::Read::by_ref(&mut file)
             .take(MAX_PERSISTED_LEDGER_BYTES + 1)
             .read_to_string(&mut data)
             .map_err(|_| crate::IronCoreError::StorageError)?;
