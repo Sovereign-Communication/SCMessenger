@@ -33,6 +33,12 @@ jobs:
   android:
     name: Android Debug APK
     runs-on: ubuntu-latest
+    # The PR mobile gate is the installable APK build. JVM unit tests run in
+    # the dedicated Docker Integration Suite, where the native/JNA test
+    # environment is available and its diagnostics are preserved. Running the
+    # same test task here after a cold multi-ABI build has repeatedly hung for
+    # ~50 minutes and exited 1 without producing a usable APK artifact.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -64,7 +70,7 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
