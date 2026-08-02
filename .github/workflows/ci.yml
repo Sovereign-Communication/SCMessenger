@@ -49,7 +49,16 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo test --workspace --features test-utils
+      # Several workspace integration tests intentionally bind fixed localhost
+      # ports. Windows runners expose the resulting parallel-test collision
+      # more readily, so keep only this platform's workspace test process
+      # serialized while retaining normal parallelism on Unix runners.
+      - name: Run workspace tests (Windows serialized)
+        if: matrix.os == 'windows-latest'
+        run: cargo test --workspace --features test-utils -- --test-threads=1
+      - name: Run workspace tests
+        if: matrix.os != 'windows-latest'
+        run: cargo test --workspace --features test-utils
 
   docs:
     name: Docs
