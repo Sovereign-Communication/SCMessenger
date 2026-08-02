@@ -303,6 +303,8 @@ jobs:
       # execute XCTest tests with test-without-building.
       - name: Build for testing (iOS Simulator)
         working-directory: iOS
+        env:
+          SCMESSENGER_RUST_PREBUILT: "1"
         run: |
           set -o pipefail
           xcodebuild build-for-testing \
@@ -312,8 +314,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
-            ENABLE_USER_SCRIPT_SANDBOXING=NO \
-            SCMESSENGER_RUST_PREBUILT=1
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Run iOS tests
         working-directory: iOS
