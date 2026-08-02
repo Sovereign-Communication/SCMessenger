@@ -22,7 +22,7 @@ from datetime import datetime
 
 # ============ CONFIGURATION ============
 LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
-LM_STUDIO_MODEL = "gemma-4-e4b-instruct"  # Already loaded in LM Studio
+LM_STUDIO_MODEL = "gemma4-coding-agent:2"  # Already loaded in LM Studio with parallel=1
 MAX_CONTEXT = 8192
 REPO_ROOT = Path(r"C:\Users\SCM\Documents\GitHub\SCMessenger")
 AUDIT_DIR = REPO_ROOT / "audit_system" / "results_dualpass"
