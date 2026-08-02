@@ -245,161 +245,161 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD0
-typedef void (*UniffiCallbackInterfaceCoreDelegateMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceCoreDelegateMethod0)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD1
-typedef void (*UniffiCallbackInterfaceCoreDelegateMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceCoreDelegateMethod1)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD2
-typedef void (*UniffiCallbackInterfaceCoreDelegateMethod2)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceCoreDelegateMethod2)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD3
-typedef void (*UniffiCallbackInterfaceCoreDelegateMethod3)(uint64_t, RustBuffer, RustBuffer, RustBuffer, uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceCoreDelegateMethod3)(uint64_t, RustBuffer, RustBuffer, RustBuffer, uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CORE_DELEGATE_METHOD4
-typedef void (*UniffiCallbackInterfaceCoreDelegateMethod4)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceCoreDelegateMethod4)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD0
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod0)(uint64_t, uint8_t, int8_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod0)(uint64_t, uint8_t, int8_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD1
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod1)(uint64_t, int8_t, int8_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod1)(uint64_t, int8_t, int8_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD2
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod2)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod2)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD3
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod3)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod3)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD4
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod4)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod4)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD5
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD5
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod5)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod5)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD6
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD6
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod6)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod6)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD7
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD7
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod7)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod7)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD8
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD8
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod8)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod8)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD9
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD9
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod9)(uint64_t, RustBuffer, RustBuffer, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod9)(uint64_t, RustBuffer, RustBuffer, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD10
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD10
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod10)(uint64_t, RustBuffer, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod10)(uint64_t, RustBuffer, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD11
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD11
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod11)(uint64_t, RustBuffer, RustBuffer, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod11)(uint64_t, RustBuffer, RustBuffer, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD12
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD12
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod12)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod12)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD13
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD13
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod13)(uint64_t, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod13)(uint64_t, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD14
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD14
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod14)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod14)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD15
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD15
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod15)(uint64_t, RustBuffer, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod15)(uint64_t, RustBuffer, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD16
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD16
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod16)(uint64_t, RustBuffer, int8_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod16)(uint64_t, RustBuffer, int8_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD17
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PLATFORM_BRIDGE_METHOD17
-typedef void (*UniffiCallbackInterfacePlatformBridgeMethod17)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePlatformBridgeMethod17)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -556,7 +556,7 @@ void uniffi_scmessenger_core_fn_free_ironcore(uint64_t handle, RustCallStatus *_
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_IRONCORE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_IRONCORE_NEW
 uint64_t uniffi_scmessenger_core_fn_constructor_ironcore_new(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_IRONCORE_WITH_STORAGE
@@ -1167,7 +1167,7 @@ void uniffi_scmessenger_core_fn_free_autoadjustengine(uint64_t handle, RustCallS
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_AUTOADJUSTENGINE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_AUTOADJUSTENGINE_NEW
 uint64_t uniffi_scmessenger_core_fn_constructor_autoadjustengine_new(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_AUTOADJUSTENGINE_CLEAR_OVERRIDES
@@ -1653,7 +1653,7 @@ void uniffi_scmessenger_core_fn_free_swarmbridge(uint64_t handle, RustCallStatus
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_SWARMBRIDGE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_CONSTRUCTOR_SWARMBRIDGE_NEW
 uint64_t uniffi_scmessenger_core_fn_constructor_swarmbridge_new(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_SWARMBRIDGE_DIAL
@@ -1781,11 +1781,6 @@ void uniffi_scmessenger_core_fn_method_ledgermanager_record_failure(uint64_t ptr
 void uniffi_scmessenger_core_fn_method_ledgermanager_save(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_LEDGERMANAGER_SAVE_WITH_ENTRIES
-#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_LEDGERMANAGER_SAVE_WITH_ENTRIES
-void uniffi_scmessenger_core_fn_method_ledgermanager_save_with_entries(uint64_t ptr, RustBuffer entries, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_LEDGERMANAGER_SEED_ADDRESSES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_LEDGERMANAGER_SEED_ADDRESSES
 RustBuffer uniffi_scmessenger_core_fn_method_ledgermanager_seed_addresses(uint64_t ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
@@ -1839,12 +1834,72 @@ RustBuffer uniffi_scmessenger_core_fn_func_encode_receipt(RustBuffer receipt, Ru
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_BUILD_PROVENANCE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_BUILD_PROVENANCE
 RustBuffer uniffi_scmessenger_core_fn_func_get_build_provenance(RustCallStatus *_Nonnull out_status
-    
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_EXEMPT_PEER
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_EXEMPT_PEER
+void uniffi_scmessenger_core_fn_func_auto_block_exempt_peer(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_IS_EXEMPT
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_IS_EXEMPT
+int8_t uniffi_scmessenger_core_fn_func_auto_block_is_exempt(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_UNEXEMPT_PEER
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_AUTO_BLOCK_UNEXEMPT_PEER
+void uniffi_scmessenger_core_fn_func_auto_block_unexempt_peer(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_DETECT_SPAM_CONFIDENCE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_DETECT_SPAM_CONFIDENCE
+double uniffi_scmessenger_core_fn_func_detect_spam_confidence(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_KNOWN_DEVICES
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_KNOWN_DEVICES
+RustBuffer uniffi_scmessenger_core_fn_func_get_known_devices(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_REPUTATION_SCORE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_GET_REPUTATION_SCORE
+double uniffi_scmessenger_core_fn_func_get_reputation_score(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_CONTENT_SUSPICIOUS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_CONTENT_SUSPICIOUS
+int8_t uniffi_scmessenger_core_fn_func_is_content_suspicious(RustBuffer envelope_data, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_DEVICE_BLOCKED
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_DEVICE_BLOCKED
+int8_t uniffi_scmessenger_core_fn_func_is_device_blocked(RustBuffer peer_id, RustBuffer device_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_PEER_ABUSIVE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_PEER_ABUSIVE
+int8_t uniffi_scmessenger_core_fn_func_is_peer_abusive(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_PEER_SUSPICIOUS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_IS_PEER_SUSPICIOUS
+int8_t uniffi_scmessenger_core_fn_func_is_peer_suspicious(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_PRUNE_STALE_SPAM_PEERS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_PRUNE_STALE_SPAM_PEERS
+uint32_t uniffi_scmessenger_core_fn_func_prune_stale_spam_peers(uint32_t max_entries, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_RECOMMENDED_TRANSPORT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_RECOMMENDED_TRANSPORT
 RustBuffer uniffi_scmessenger_core_fn_func_recommended_transport(RustBuffer peer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_REGISTER_DEVICE_ID
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_REGISTER_DEVICE_ID
+int8_t uniffi_scmessenger_core_fn_func_register_device_id(RustBuffer peer_id, RustBuffer device_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_FUNC_SAFETY_NUMBER
@@ -2120,1453 +2175,1525 @@ void ffi_scmessenger_core_rust_future_complete_void(uint64_t handle, RustCallSta
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_NEW
 uint16_t uniffi_scmessenger_core_checksum_func_blocked_identity_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_DEVICE_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_DEVICE_ID
 uint16_t uniffi_scmessenger_core_checksum_func_blocked_identity_with_device_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_NOTES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_NOTES
 uint16_t uniffi_scmessenger_core_checksum_func_blocked_identity_with_notes(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_REASON
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_BLOCKED_IDENTITY_WITH_REASON
 uint16_t uniffi_scmessenger_core_checksum_func_blocked_identity_with_reason(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_DECODE_RECEIPT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_DECODE_RECEIPT
 uint16_t uniffi_scmessenger_core_checksum_func_decode_receipt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_ENCODE_RECEIPT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_ENCODE_RECEIPT
 uint16_t uniffi_scmessenger_core_checksum_func_encode_receipt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_BUILD_PROVENANCE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_BUILD_PROVENANCE
 uint16_t uniffi_scmessenger_core_checksum_func_get_build_provenance(void
-    
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_EXEMPT_PEER
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_EXEMPT_PEER
+uint16_t uniffi_scmessenger_core_checksum_func_auto_block_exempt_peer(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_IS_EXEMPT
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_IS_EXEMPT
+uint16_t uniffi_scmessenger_core_checksum_func_auto_block_is_exempt(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_UNEXEMPT_PEER
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_AUTO_BLOCK_UNEXEMPT_PEER
+uint16_t uniffi_scmessenger_core_checksum_func_auto_block_unexempt_peer(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_DETECT_SPAM_CONFIDENCE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_DETECT_SPAM_CONFIDENCE
+uint16_t uniffi_scmessenger_core_checksum_func_detect_spam_confidence(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_KNOWN_DEVICES
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_KNOWN_DEVICES
+uint16_t uniffi_scmessenger_core_checksum_func_get_known_devices(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_REPUTATION_SCORE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_GET_REPUTATION_SCORE
+uint16_t uniffi_scmessenger_core_checksum_func_get_reputation_score(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_CONTENT_SUSPICIOUS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_CONTENT_SUSPICIOUS
+uint16_t uniffi_scmessenger_core_checksum_func_is_content_suspicious(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_DEVICE_BLOCKED
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_DEVICE_BLOCKED
+uint16_t uniffi_scmessenger_core_checksum_func_is_device_blocked(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_PEER_ABUSIVE
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_PEER_ABUSIVE
+uint16_t uniffi_scmessenger_core_checksum_func_is_peer_abusive(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_PEER_SUSPICIOUS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_IS_PEER_SUSPICIOUS
+uint16_t uniffi_scmessenger_core_checksum_func_is_peer_suspicious(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_PRUNE_STALE_SPAM_PEERS
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_PRUNE_STALE_SPAM_PEERS
+uint16_t uniffi_scmessenger_core_checksum_func_prune_stale_spam_peers(void
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_RECOMMENDED_TRANSPORT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_RECOMMENDED_TRANSPORT
 uint16_t uniffi_scmessenger_core_checksum_func_recommended_transport(void
-    
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_REGISTER_DEVICE_ID
+#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_REGISTER_DEVICE_ID
+uint16_t uniffi_scmessenger_core_checksum_func_register_device_id(void
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_SAFETY_NUMBER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_SAFETY_NUMBER
 uint16_t uniffi_scmessenger_core_checksum_func_safety_number(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_UPDATE_PEER_TRANSPORTS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_FUNC_UPDATE_PEER_TRANSPORTS
 uint16_t uniffi_scmessenger_core_checksum_func_update_peer_transports(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_ADD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_ADD
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_add(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_EMERGENCY_RECOVER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_EMERGENCY_RECOVER
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_emergency_recover(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_FLUSH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_FLUSH
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_flush(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_GET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_GET
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_get(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_LIST
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_LIST
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_list(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_MARK_VERIFIED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_MARK_VERIFIED
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_mark_verified(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_MERGE_REMOTE_CONTACTS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_MERGE_REMOTE_CONTACTS
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_merge_remote_contacts(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_RECONCILE_FROM_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_RECONCILE_FROM_HISTORY
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_reconcile_from_history(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_REMOVE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_REMOVE
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_remove(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SEARCH
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_search(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SET_LOCAL_NICKNAME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SET_LOCAL_NICKNAME
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_set_local_nickname(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SET_NICKNAME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_SET_NICKNAME
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_set_nickname(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UNVERIFY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UNVERIFY
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_unverify(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UPDATE_DEVICE_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UPDATE_DEVICE_ID
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_update_device_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UPDATE_LAST_SEEN
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_UPDATE_LAST_SEEN
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_update_last_seen(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_VERIFY_INTEGRITY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_CONTACTMANAGER_VERIFY_INTEGRITY
 uint16_t uniffi_scmessenger_core_checksum_method_contactmanager_verify_integrity(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ABUSE_OVERALL_SCORE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ABUSE_OVERALL_SCORE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_abuse_overall_score(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCK_AND_DELETE_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCK_AND_DELETE_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_block_and_delete_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCK_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCK_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_block_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCKED_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCKED_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_blocked_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCKED_ONLY_PEER_IDS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BLOCKED_ONLY_PEER_IDS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_blocked_only_peer_ids(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BUILD_IDENTITY_BACKUP_PAYLOAD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_BUILD_IDENTITY_BACKUP_PAYLOAD
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_build_identity_backup_payload(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CLASSIFY_NOTIFICATION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CLASSIFY_NOTIFICATION
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_classify_notification(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CLEAR_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CLEAR_HISTORY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_clear_history(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_COMPUTE_JITTER_DELAY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_COMPUTE_JITTER_DELAY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_compute_jitter_delay(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_DISPLAY_NAME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_DISPLAY_NAME
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_contact_display_name(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_FEDERATED_NICKNAME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_FEDERATED_NICKNAME
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_contact_federated_nickname(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_UPDATE_LAST_KNOWN_DEVICE_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACT_UPDATE_LAST_KNOWN_DEVICE_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_contact_update_last_known_device_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACTS_MANAGER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CONTACTS_MANAGER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_contacts_manager(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_AUDIT_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_AUDIT_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_custody_audit_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_GET_REGISTRATION_STATE_INFO
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_GET_REGISTRATION_STATE_INFO
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_custody_get_registration_state_info(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_REGISTRATION_TRANSITIONS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_CUSTODY_REGISTRATION_TRANSITIONS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_custody_registration_transitions(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DERIVE_WIFI_AWARE_PMK
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DERIVE_WIFI_AWARE_PMK
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_derive_wifi_aware_pmk(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DEVICE_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DEVICE_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_device_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRAIN_RECEIVED_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRAIN_RECEIVED_MESSAGES
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_drain_received_messages(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_ACTIVATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_ACTIVATE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_drift_activate(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_DEACTIVATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_DEACTIVATE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_drift_deactivate(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_NETWORK_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_NETWORK_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_drift_network_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_STORE_SIZE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DRIFT_STORE_SIZE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_drift_store_size(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DSPY_GET_SIGNATURE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DSPY_GET_SIGNATURE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_dspy_get_signature(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DSPY_VERIFY_SIGNATURE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_DSPY_VERIFY_SIGNATURE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_dspy_verify_signature(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_AUDIT_LOG
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_AUDIT_LOG
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_audit_log(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_identity_backup(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_FAST
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_FAST
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_identity_backup_fast(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_FAST_WITH_SALT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_FAST_WITH_SALT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_identity_backup_fast_with_salt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_WITH_SALT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_IDENTITY_BACKUP_WITH_SALT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_identity_backup_with_salt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_LOGS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXPORT_LOGS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_export_logs(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXTRACT_PUBLIC_KEY_FROM_PEER_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_EXTRACT_PUBLIC_KEY_FROM_PEER_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_extract_public_key_from_peer_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_EVENTS_BY_TYPE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_EVENTS_BY_TYPE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_audit_events_by_type(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_EVENTS_SINCE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_EVENTS_SINCE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_audit_events_since(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_LOG
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUDIT_LOG
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_audit_log(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUTO_ADJUST_ENGINE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_AUTO_ADJUST_ENGINE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_auto_adjust_engine(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_BLOCKED_PEER_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_BLOCKED_PEER_DEVICES
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_blocked_peer_devices(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_DEVICE_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_DEVICE_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_device_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_DISK_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_DISK_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_disk_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_IDENTITY_INFO
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_IDENTITY_INFO
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_identity_info(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_LIBP2P_PEER_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_LIBP2P_PEER_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_libp2p_peer_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_PEER_REPUTATION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_PEER_REPUTATION
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_peer_reputation(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_PRIVACY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_PRIVACY_CONFIG
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_privacy_config(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_REGISTRATION_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_REGISTRATION_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_registration_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_SENIORITY_TIMESTAMP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GET_SENIORITY_TIMESTAMP
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_get_seniority_timestamp(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GRANT_CONSENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_GRANT_CONSENT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_grant_consent(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_HANDLE_PEER_CONNECTION_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_HANDLE_PEER_CONNECTION_EVENT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_handle_peer_connection_event(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_HISTORY_MANAGER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_HISTORY_MANAGER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_history_manager(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IDENTITY_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IDENTITY_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_identity_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IMPORT_IDENTITY_BACKUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IMPORT_IDENTITY_BACKUP
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_import_identity_backup(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INBOX_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INBOX_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_inbox_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INITIALIZE_IDENTITY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INITIALIZE_IDENTITY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_initialize_identity(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INVITE_GET_SIGNABLE_DATA
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_INVITE_GET_SIGNABLE_DATA
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_invite_get_signable_data(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_CONSENT_GRANTED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_CONSENT_GRANTED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_is_consent_granted(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_PEER_BLOCKED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_PEER_BLOCKED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_is_peer_blocked(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_RUNNING
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_IS_RUNNING
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_is_running(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_list_blocked(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED_PEERS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_list_blocked_peers(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED_PEERS_BRIDGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_LIST_BLOCKED_PEERS_BRIDGE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_list_blocked_peers_bridge(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_MARK_MESSAGE_SENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_MARK_MESSAGE_SENT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_mark_message_sent(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_NOTIFY_PEER_DISCONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_NOTIFY_PEER_DISCONNECTED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_notify_peer_disconnected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_NOTIFY_PEER_DISCOVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_NOTIFY_PEER_DISCOVERED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_notify_peer_discovered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ON_APP_BACKGROUND
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ON_APP_BACKGROUND
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_on_app_background(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ON_APP_RESUME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ON_APP_RESUME
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_on_app_resume(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_OUTBOX_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_OUTBOX_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_outbox_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEEK_RECEIVED_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEEK_RECEIVED_MESSAGES
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_peek_received_messages(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEEL_ONION_LAYER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEEL_ONION_LAYER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_peel_onion_layer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEER_RATE_LIMIT_MULTIPLIER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEER_RATE_LIMIT_MULTIPLIER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_peer_rate_limit_multiplier(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEER_SPAM_SCORE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PEER_SPAM_SCORE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_peer_spam_score(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PERFORM_MAINTENANCE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PERFORM_MAINTENANCE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_perform_maintenance(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_COVER_TRAFFIC
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_COVER_TRAFFIC
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_cover_traffic(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_message(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE_INTERNAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE_INTERNAL
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_message_internal(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE_WITH_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_MESSAGE_WITH_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_message_with_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_ONION_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_ONION_MESSAGE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_onion_message(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_RECEIPT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PREPARE_RECEIPT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_prepare_receipt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PUBLIC_KEY_HEX
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_PUBLIC_KEY_HEX
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_public_key_hex(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RANDOM_PORT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RANDOM_PORT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_random_port(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_HAS_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_HAS_SESSION
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_ratchet_has_session(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_RESET_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_RESET_SESSION
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_ratchet_reset_session(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_SESSION_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RATCHET_SESSION_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_ratchet_session_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RECORD_ABUSE_SIGNAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RECORD_ABUSE_SIGNAL
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_record_abuse_signal(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RECORD_LOG
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RECORD_LOG
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_record_log(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_REGISTER_BLOCKED_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_REGISTER_BLOCKED_DEVICE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_register_blocked_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RELAY_JITTER_DELAY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RELAY_JITTER_DELAY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_relay_jitter_delay(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RESOLVE_IDENTITY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RESOLVE_IDENTITY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_resolve_identity(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RESOLVE_TO_IDENTITY_ID
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RESOLVE_TO_IDENTITY_ID
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_resolve_to_identity_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CALCULATE_DYNAMIC_TTL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CALCULATE_DYNAMIC_TTL
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_calculate_dynamic_ttl(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CLEAR_UNREACHABLE_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CLEAR_UNREACHABLE_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_clear_unreachable_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CURRENT_DISCOVERY_PHASE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_CURRENT_DISCOVERY_PHASE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_current_discovery_phase(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_MARK_GATEWAY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_MARK_GATEWAY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_mark_gateway(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_MARK_PATH_FAILED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_MARK_PATH_FAILED
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_mark_path_failed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_NEGATIVE_CACHE_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_NEGATIVE_CACHE_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_negative_cache_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_PEER_SEEN
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_PEER_SEEN
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_peer_seen(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_PREFETCH_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_PREFETCH_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_prefetch_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_REGISTER_PATH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_REGISTER_PATH
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_register_path(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_SUMMARY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_summary(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_TICK
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_TICK
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_tick(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_TIMEOUT_BUDGET_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_TIMEOUT_BUDGET_SUMMARY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_timeout_budget_summary(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_UPDATE_PEER_HINTS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_UPDATE_PEER_HINTS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_update_peer_hints(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_UPDATE_RELIABILITY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_ROUTING_UPDATE_RELIABILITY
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_routing_update_reliability(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RUN_MAINTENANCE_CYCLE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_RUN_MAINTENANCE_CYCLE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_run_maintenance_cycle(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SEND_MESSAGE_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SEND_MESSAGE_STATUS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_send_message_status(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_DELEGATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_DELEGATE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_set_delegate(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_NICKNAME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_NICKNAME
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_set_nickname(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_PRIVACY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SET_PRIVACY_CONFIG
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_set_privacy_config(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SIGN_DATA
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SIGN_DATA
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_sign_data(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_START
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_START
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_start(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_STOP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_STOP
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_stop(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_CAN_BOOTSTRAP_OTHERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_CAN_BOOTSTRAP_OTHERS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_swarm_can_bootstrap_others(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BEST_PATHS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BEST_PATHS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_swarm_get_best_paths(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BEST_RELAYS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BEST_RELAYS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_swarm_get_best_relays(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BOOTSTRAP_CANDIDATES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_SWARM_GET_BOOTSTRAP_CANDIDATES
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_swarm_get_bootstrap_candidates(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_UNBLOCK_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_UNBLOCK_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_unblock_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_UPDATE_DISK_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_UPDATE_DISK_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_update_disk_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_VALIDATE_AUDIT_CHAIN
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_VALIDATE_AUDIT_CHAIN
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_validate_audit_chain(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_VERIFY_SIGNATURE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_IRONCORE_VERIFY_SIGNATURE
 uint16_t uniffi_scmessenger_core_checksum_method_ironcore_verify_signature(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_CLEAR_OVERRIDES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_CLEAR_OVERRIDES
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_clear_overrides(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_BLE_ADJUSTMENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_BLE_ADJUSTMENT
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_compute_ble_adjustment(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_PROFILE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_PROFILE
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_compute_profile(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_RELAY_ADJUSTMENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_COMPUTE_RELAY_ADJUSTMENT
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_compute_relay_adjustment(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_BLE_ADVERTISE_INTERVAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_BLE_ADVERTISE_INTERVAL
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_override_ble_advertise_interval(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_BLE_SCAN_INTERVAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_BLE_SCAN_INTERVAL
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_override_ble_scan_interval(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_RELAY_MAX_PER_HOUR
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_RELAY_MAX_PER_HOUR
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_override_relay_max_per_hour(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_RELAY_PRIORITY_THRESHOLD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_AUTOADJUSTENGINE_OVERRIDE_RELAY_PRIORITY_THRESHOLD
 uint16_t uniffi_scmessenger_core_checksum_method_autoadjustengine_override_relay_priority_threshold(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_ADD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_ADD
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_add(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CLEAR
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CLEAR
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_clear(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CLEAR_CONVERSATION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CLEAR_CONVERSATION
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_clear_conversation(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CONVERSATION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_CONVERSATION
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_conversation(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_DELETE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_DELETE
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_delete(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_ENFORCE_RETENTION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_ENFORCE_RETENTION
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_enforce_retention(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_FLUSH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_FLUSH
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_flush(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_GET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_GET
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_get(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_HIDE_MESSAGES_FOR_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_HIDE_MESSAGES_FOR_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_hide_messages_for_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_MARK_DELIVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_MARK_DELIVERED
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_mark_delivered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_PRUNE_BEFORE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_PRUNE_BEFORE
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_prune_before(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_recent(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT_INCLUDING_HIDDEN
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT_INCLUDING_HIDDEN
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_recent_including_hidden(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT_INTERNAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_RECENT_INTERNAL
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_recent_internal(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_REMOVE_CONVERSATION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_REMOVE_CONVERSATION
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_remove_conversation(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_SEARCH
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_search(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_UNHIDE_MESSAGES_FOR_PEER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_HISTORYMANAGER_UNHIDE_MESSAGES_FOR_PEER
 uint16_t uniffi_scmessenger_core_checksum_method_historymanager_unhide_messages_for_peer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_DISPATCH_BLE_PACKET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_DISPATCH_BLE_PACKET
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_dispatch_ble_packet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_DISPATCH_PROXIMITY_PACKET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_DISPATCH_PROXIMITY_PACKET
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_dispatch_proximity_packet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_DIAGNOSTICS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_DIAGNOSTICS
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_export_diagnostics(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_export_identity_backup(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_FAST
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_FAST
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_export_identity_backup_fast(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_FAST_WITH_SALT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_FAST_WITH_SALT
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_export_identity_backup_fast_with_salt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_WITH_SALT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_EXPORT_IDENTITY_BACKUP_WITH_SALT
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_export_identity_backup_with_salt(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_ALL_CONNECTION_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_ALL_CONNECTION_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_all_connection_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_AUTO_ADJUST_ENGINE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_AUTO_ADJUST_ENGINE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_auto_adjust_engine(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_CONNECTION_PATH_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_CONNECTION_PATH_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_connection_path_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_CORE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_CORE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_core(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_DEVICE_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_DEVICE_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_device_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_NAT_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_NAT_STATUS
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_nat_status(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_SWARM_BRIDGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_GET_SWARM_BRIDGE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_get_swarm_bridge(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_IMPORT_IDENTITY_BACKUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_IMPORT_IDENTITY_BACKUP
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_import_identity_backup(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_IS_RUNNING
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_IS_RUNNING
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_is_running(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_BATTERY_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_BATTERY_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_battery_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_BLE_DATA_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_BLE_DATA_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_ble_data_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_DATA_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_DATA_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_data_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_ENTERING_BACKGROUND
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_ENTERING_BACKGROUND
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_entering_background(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_ENTERING_FOREGROUND
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_ENTERING_FOREGROUND
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_entering_foreground(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_MOTION_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_MOTION_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_motion_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_NETWORK_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_NETWORK_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_network_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PEER_DISCONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PEER_DISCONNECTED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_peer_disconnected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PEER_DISCOVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PEER_DISCOVERED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_peer_discovered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PROXIMITY_DATA_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_PROXIMITY_DATA_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_proximity_data_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_AWARE_DATA_PATH_CONFIRMED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_AWARE_DATA_PATH_CONFIRMED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_wifi_aware_data_path_confirmed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_AWARE_PEER_DISCOVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_AWARE_PEER_DISCOVERED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_wifi_aware_peer_discovered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_DIRECT_CONNECTION_INFO
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_DIRECT_CONNECTION_INFO
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_wifi_direct_connection_info(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_DIRECT_PEER_DISCOVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ON_WIFI_DIRECT_PEER_DISCOVERED
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_on_wifi_direct_peer_discovered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PAUSE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PAUSE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_pause(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PEEL_ONION_LAYER
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PEEL_ONION_LAYER
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_peel_onion_layer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PREPARE_ONION_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_PREPARE_ONION_MESSAGE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_prepare_onion_message(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RANDOM_PORT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RANDOM_PORT
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_random_port(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_HAS_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_HAS_SESSION
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_ratchet_has_session(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_RESET_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_RESET_SESSION
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_ratchet_reset_session(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_SESSION_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RATCHET_SESSION_COUNT
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_ratchet_session_count(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RECOMMENDED_BEHAVIOR
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RECOMMENDED_BEHAVIOR
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_recommended_behavior(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RESET_STATS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RESET_STATS
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_reset_stats(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RESUME
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RESUME
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_resume(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ROUTING_TICK
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_ROUTING_TICK
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_routing_tick(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RUN_MAINTENANCE_CYCLE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_RUN_MAINTENANCE_CYCLE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_run_maintenance_cycle(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_DELEGATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_DELEGATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_set_delegate(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_PLATFORM_BRIDGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_PLATFORM_BRIDGE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_set_platform_bridge(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_RELAY_BUDGET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_SET_RELAY_BUDGET
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_set_relay_budget(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_START
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_START
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_start(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_START_SWARM
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_START_SWARM
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_start_swarm(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_STOP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_STOP
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_stop(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_UPDATE_DEVICE_STATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_UPDATE_DEVICE_STATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_update_device_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_UPDATE_KEEPALIVE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSERVICE_UPDATE_KEEPALIVE
 uint16_t uniffi_scmessenger_core_checksum_method_meshservice_update_keepalive(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_DEFAULT_SETTINGS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_DEFAULT_SETTINGS
 uint16_t uniffi_scmessenger_core_checksum_method_meshsettingsmanager_default_settings(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_LOAD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_LOAD
 uint16_t uniffi_scmessenger_core_checksum_method_meshsettingsmanager_load(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_SAVE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_SAVE
 uint16_t uniffi_scmessenger_core_checksum_method_meshsettingsmanager_save(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_VALIDATE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_MESHSETTINGSMANAGER_VALIDATE
 uint16_t uniffi_scmessenger_core_checksum_method_meshsettingsmanager_validate(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_DIAL
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_DIAL
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_dial(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_EXTERNAL_ADDRESSES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_EXTERNAL_ADDRESSES
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_get_external_addresses(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_LISTENERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_LISTENERS
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_get_listeners(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_PEERS
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_get_peers(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_TOPICS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_GET_TOPICS
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_get_topics(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_PUBLISH_TOPIC
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_PUBLISH_TOPIC
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_publish_topic(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_MESSAGE
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_send_message(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_MESSAGE_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_MESSAGE_STATUS
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_send_message_status(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_TO_ALL_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SEND_TO_ALL_PEERS
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_send_to_all_peers(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SHUTDOWN
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_shutdown(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SUBSCRIBE_TOPIC
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_SUBSCRIBE_TOPIC
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_subscribe_topic(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_UNSUBSCRIBE_TOPIC
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_SWARMBRIDGE_UNSUBSCRIBE_TOPIC
 uint16_t uniffi_scmessenger_core_checksum_method_swarmbridge_unsubscribe_topic(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_ALL_KNOWN_TOPICS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_ALL_KNOWN_TOPICS
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_all_known_topics(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_ANNOTATE_IDENTITY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_ANNOTATE_IDENTITY
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_annotate_identity(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_DIALABLE_ADDRESSES
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_DIALABLE_ADDRESSES
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_dialable_addresses(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_EXPORT_SEED_ENTRIES
@@ -3578,7 +3705,7 @@ uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_export_seed_entri
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_GET_PREFERRED_RELAYS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_GET_PREFERRED_RELAYS
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_get_preferred_relays(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_IMPORT_SEED_ENTRIES
@@ -3590,31 +3717,25 @@ uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_import_seed_entri
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_LOAD
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_LOAD
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_load(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_RECORD_CONNECTION
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_RECORD_CONNECTION
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_record_connection(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_RECORD_FAILURE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_RECORD_FAILURE
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_record_failure(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SAVE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SAVE
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_save(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SAVE_WITH_ENTRIES
-#define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SAVE_WITH_ENTRIES
-uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_save_with_entries(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SEED_ADDRESSES
@@ -3626,223 +3747,223 @@ uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_seed_addresses(vo
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_LEDGERMANAGER_SUMMARY
 uint16_t uniffi_scmessenger_core_checksum_method_ledgermanager_summary(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_CONTACTMANAGER_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_CONTACTMANAGER_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_contactmanager_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_ironcore_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_WITH_STORAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_WITH_STORAGE
 uint16_t uniffi_scmessenger_core_checksum_constructor_ironcore_with_storage(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_WITH_STORAGE_AND_LOGS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_IRONCORE_WITH_STORAGE_AND_LOGS
 uint16_t uniffi_scmessenger_core_checksum_constructor_ironcore_with_storage_and_logs(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_AUTOADJUSTENGINE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_AUTOADJUSTENGINE_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_autoadjustengine_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_HISTORYMANAGER_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_HISTORYMANAGER_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_historymanager_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_meshservice_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_WITH_STORAGE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_WITH_STORAGE
 uint16_t uniffi_scmessenger_core_checksum_constructor_meshservice_with_storage(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_WITH_STORAGE_AND_LOGS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSERVICE_WITH_STORAGE_AND_LOGS
 uint16_t uniffi_scmessenger_core_checksum_constructor_meshservice_with_storage_and_logs(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSETTINGSMANAGER_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_MESHSETTINGSMANAGER_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_meshsettingsmanager_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_SWARMBRIDGE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_SWARMBRIDGE_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_swarmbridge_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_LEDGERMANAGER_NEW
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_CONSTRUCTOR_LEDGERMANAGER_NEW
 uint16_t uniffi_scmessenger_core_checksum_constructor_ledgermanager_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_DISCOVERED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_DISCOVERED
 uint16_t uniffi_scmessenger_core_checksum_method_coredelegate_on_peer_discovered(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_DISCONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_DISCONNECTED
 uint16_t uniffi_scmessenger_core_checksum_method_coredelegate_on_peer_disconnected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_IDENTIFIED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_PEER_IDENTIFIED
 uint16_t uniffi_scmessenger_core_checksum_method_coredelegate_on_peer_identified(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_MESSAGE_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_MESSAGE_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_coredelegate_on_message_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_RECEIPT_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_COREDELEGATE_ON_RECEIPT_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_coredelegate_on_receipt_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_BATTERY_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_BATTERY_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_battery_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_NETWORK_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_NETWORK_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_network_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_MOTION_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_MOTION_CHANGED
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_motion_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_BLE_DATA_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_BLE_DATA_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_ble_data_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_ENTERING_BACKGROUND
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_ENTERING_BACKGROUND
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_entering_background(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_ENTERING_FOREGROUND
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_ENTERING_FOREGROUND
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_entering_foreground(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_SEND_BLE_PACKET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_SEND_BLE_PACKET
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_send_ble_packet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_PROXIMITY_DATA_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_ON_PROXIMITY_DATA_RECEIVED
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_on_proximity_data_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_SEND_PROXIMITY_PACKET
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_SEND_PROXIMITY_PACKET
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_send_proximity_packet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_PUBLISH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_PUBLISH
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_aware_publish(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_SUBSCRIBE
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_aware_subscribe(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_CREATE_DATA_PATH
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_CREATE_DATA_PATH
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_aware_create_data_path(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_STOP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_AWARE_STOP
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_aware_stop(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_DISCOVER_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_DISCOVER_PEERS
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_direct_discover_peers(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_STOP_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_STOP_DISCOVERY
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_direct_stop_discovery(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_CONNECT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_CONNECT
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_direct_connect(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_CREATE_GROUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_CREATE_GROUP
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_direct_create_group(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_REMOVE_GROUP
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_CHECKSUM_METHOD_PLATFORMBRIDGE_WIFI_DIRECT_REMOVE_GROUP
 uint16_t uniffi_scmessenger_core_checksum_method_platformbridge_wifi_direct_remove_group(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_SCMESSENGER_CORE_UNIFFI_CONTRACT_VERSION
 #define UNIFFI_FFIDEF_FFI_SCMESSENGER_CORE_UNIFFI_CONTRACT_VERSION
 uint32_t ffi_scmessenger_core_uniffi_contract_version(void
-    
+
 );
 #endif
 
