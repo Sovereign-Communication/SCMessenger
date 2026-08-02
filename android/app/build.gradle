@@ -386,8 +386,8 @@ targetList.each { arch ->
         inputs.file('../../core/Cargo.toml')
 
         doLast {
-            def sdkDir = localProps.getProperty('sdk.dir') ?: android.sdkDirectory.absolutePath
-            def ndkDir = localProps.getProperty('ndk.dir') ?: android.ndkDirectory?.absolutePath
+            def sdkDir = localProps.getProperty('sdk.dir') ?: System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME') ?: android.sdkDirectory.absolutePath
+            def ndkDir = localProps.getProperty('ndk.dir') ?: System.getenv('ANDROID_NDK_HOME') ?: System.getenv('ANDROID_NDK_ROOT') ?: android.ndkDirectory?.absolutePath
             if (ndkDir == null || !file(ndkDir).exists()) {
                 ndkDir = "${sdkDir}/ndk/${android.ndkVersion}"
             }
