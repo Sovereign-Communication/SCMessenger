@@ -1504,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn load_rejects_oversized_file_before_replacing_memory() {
+    fn load_quarantines_oversized_file_before_replacing_memory() {
         let (dir, mgr) = manager();
         let retained_addr = "/ip4/198.51.100.99/tcp/9001".to_string();
         mgr.entries.lock().push(LedgerEntry {
@@ -1524,10 +1524,35 @@ mod tests {
         )
         .expect("write oversized ledger");
 
-        assert!(mgr.load().is_err(), "oversized ledger must fail closed");
+        mgr.load()
+            .expect("oversized ledger is quarantined and recovered");
         let entries = mgr.entries.lock();
         assert_eq!(entries.len(), 1, "failed load replaced live state");
         assert_eq!(entries[0].multiaddr, retained_addr);
+
+        let restored: Vec<LedgerEntry> = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("ledger.json")).expect("restored ledger"),
+        )
+        .expect("restored ledger parses");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].multiaddr, retained_addr);
+
+        let quarantined = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("ledger.json.corrupt-"))
+            })
+            .expect("oversized ledger was not quarantined");
+        assert_eq!(
+            std::fs::metadata(quarantined.path())
+                .expect("quarantine metadata")
+                .len(),
+            (MAX_PERSISTED_LEDGER_BYTES + 1) as u64
+        );
     }
 
     #[test]
