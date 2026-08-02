@@ -109,7 +109,7 @@ jobs:
   # ============================================================================
   build-ios:
     name: iOS Build & Simulator Test
-    runs-on: macos-14  # Apple Silicon M1 runner
+    runs-on: macos-15  # Apple Silicon runner with the current Xcode toolchain
     # A cold run needs ~27min of Rust compilation before Xcode starts, plus the
     # Swift build and the simulator test run. 90min lets the first cold run
     # finish and populate the Rust cache; warm runs land around 20min (see
