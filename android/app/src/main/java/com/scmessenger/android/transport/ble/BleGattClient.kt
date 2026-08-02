@@ -76,6 +76,17 @@ class BleGattClient(
         val activeConnections: Int
     )
 
+    /**
+     * Addresses with a live central-side GATT connection.
+     *
+     * Receipt fallback used to inspect only the peripheral/server side. That
+     * made a connected Android central invisible to the delivery router, which
+     * stranded receipts when the peer had no libp2p route yet.
+     */
+    fun getConnectedDeviceAddresses(): List<String> = activeConnections.keys
+        .filter { connectionStates[it] == ConnectionState.CONNECTED }
+        .sorted()
+
     companion object {
         // Initial identity beacon can arrive before the peer publishes final nickname.
         // Re-read shortly after connect to surface nickname promptly in Nearby UI.

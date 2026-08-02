@@ -1,8 +1,8 @@
 # iOS ↔ Android bidirectional messaging debug — 2026-08-02
 
-Status: active physical-device investigation. Do not mark parity complete from
-this report alone; Android-side evidence and a fresh two-direction retest are
-still required.
+Status: active physical-device investigation. The paired Android evidence is
+now available; parity still requires a fresh two-direction retest after the
+transport fixes below.
 
 ## iOS evidence captured
 
@@ -49,6 +49,22 @@ iOS log and no `msg_rx` for this outbound message. There are no
 `ble_central_write_fail` entries, so “BLE accepted” is not proof that Android
 reassembled or processed the three fragments.
 
+## Windows/Claude Android evidence received
+
+The Windows/Claude Pixel capture confirms that an iOS-originated encrypted
+message reached Android's Rust core and was decrypted. Android then attempted
+the delivery receipt repeatedly, but the sender contact had no persisted
+libp2p route or listener hints. The Android capture also shows its GATT server
+seeing the iPhone connection without a MESSAGE-characteristic subscription;
+the link dropped a few seconds later. UUIDs matched, so this is subscription
+lifecycle plus route fallback, not an identity-UUID mismatch.
+
+The committed Android implementation already parses the identity envelope and
+persists valid route hints when they are present. The paired evidence exposed
+two remaining runtime gaps: iOS treated a notification request as successful
+before CoreBluetooth confirmed the CCCD write, and Android's receipt fallback
+considered only GATT-server connections, not its central-side connection.
+
 ## Current working diagnosis
 
 The failure is downstream of iOS message enqueueing and upstream of confirmed
@@ -61,20 +77,20 @@ Android evidence:
 1. Android never sees `IOS_TO_ANDROID_MSG`: investigate BLE characteristic writes,
    fragment framing/reassembly, Android GATT permissions, and the Android
    peripheral/central role mapping.
-2. Android sees and decrypts `IOS_TO_ANDROID_MSG` but sends no receipt: investigate
-   Android inbound identity/contact lookup, receipt routing, or the receipt
-   target UUID/peer mapping.
+2. Android sees and decrypts `IOS_TO_ANDROID_MSG` but sends no receipt: the
+   receipt can be stranded when the contact has no route hints and the active BLE
+   connection is held by the Android central rather than the server.
 
 Do not “fix” this by treating local BLE acceptance as delivery or by adding a
 guessed TCP endpoint. Receipts and the real route must remain authoritative.
 
-## Claude/Windows Android capture request
+## Claude/Windows Android retest request
 
-Please run one fresh controlled pair test using the same installed commit and
-return the Android Diagnostics bundle or a redacted `logcat` export. Keep iOS
-foreground and record UTC timestamps. Reset/clear diagnostics immediately
-before the run, then send exactly one message in each direction with a newly
-generated message ID.
+Please run one fresh controlled pair test using the installed build containing
+the transport fixes and return the Android Diagnostics bundle or a redacted
+`logcat` export. Keep iOS foreground and record UTC timestamps. Reset/clear
+diagnostics immediately before the run, then send exactly one message in each
+direction with a newly generated message ID.
 
 The Android bundle must include, for each direction:
 
@@ -92,6 +108,14 @@ not by asking Josh to grep logs. Redact private keys, backup passphrases,
 message contents, and device-derived identifiers before returning the bundle.
 Preserve message IDs only inside the private diagnostic exchange; the
 committed handoff intentionally uses labels.
+
+## Implemented source changes awaiting device verification
+
+- iOS now logs the notification-state callback, records subscription only
+  after CoreBluetooth reports `isNotifying`, and retries a failed CCCD request
+  up to three times while the peripheral remains connected.
+- Android now includes live central-side GATT connections when selecting a BLE
+  receipt fallback, in addition to peripheral/server connections.
 
 ## Acceptance for the fix
 

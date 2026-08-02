@@ -6283,8 +6283,12 @@ open class MeshRepository(
             }
         }
 
-        val connectedBleDevices = kotlin.runCatching { bleGattServer?.getConnectedDeviceAddresses().orEmpty() }
-            .getOrDefault(emptyList())
+        val connectedBleDevices = buildList {
+            addAll(kotlin.runCatching { bleGattServer?.getConnectedDeviceAddresses().orEmpty() }
+                .getOrDefault(emptyList()))
+            addAll(kotlin.runCatching { bleGattClient?.getConnectedDeviceAddresses().orEmpty() }
+                .getOrDefault(emptyList()))
+        }
             .mapNotNull { it.trim().takeIf { value -> value.isNotEmpty() } }
             .distinct()
         val requestedBlePeerId = blePeerId?.trim()?.takeIf { it.isNotEmpty() }
