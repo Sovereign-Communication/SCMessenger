@@ -1,3 +1,14 @@
+pluginManagement {
+    plugins {
+        id 'org.jetbrains.kotlin.multiplatform' version '1.9.20'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
 include ':android'
 project(':android').projectDir = new File('android')
 include ':shared'
