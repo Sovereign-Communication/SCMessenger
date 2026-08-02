@@ -12,6 +12,7 @@ struct SettingsView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var viewModel: SettingsViewModel?
     @State private var showingIdentityQr: Bool = false
+    @State private var identityQrPayload: String = ""
     @State private var showingResetConfirmation: Bool = false
     @State private var identitySetupError: String?
     @State private var nicknameDraft: String = ""
@@ -211,7 +212,10 @@ struct SettingsView: View {
                     }
 
                     Button {
-                        showingIdentityQr = true
+                        Task { @MainActor in
+                            identityQrPayload = await viewModel?.getIdentityExportString() ?? ""
+                            showingIdentityQr = !identityQrPayload.isEmpty
+                        }
                     } label: {
                         Label("Show Identity QR", systemImage: "qrcode")
                     }
@@ -284,7 +288,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Version")
                     Spacer()
-                    Text("0.4.0")
+                    Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
                         .foregroundStyle(Theme.onSurfaceVariant)
                 }
             } header: {
@@ -333,7 +337,7 @@ struct SettingsView: View {
             identitySetupError = nil
         }
         .sheet(isPresented: $showingIdentityQr) {
-            IdentityQrSheet(payload: repository.getIdentityQrPayload())
+            IdentityQrSheet(payload: identityQrPayload)
         }
         .sheet(isPresented: $showingExportBackup) {
             if let viewModel {
@@ -462,7 +466,7 @@ private struct IdentityQrSheet: View {
     }
 }
 
-// MARK: - Mesh Settings (mirrors Android MeshSettingsScreen.kt)
+// MARK: - Mesh Settings
 
 @MainActor
 struct MeshSettingsView: View {
@@ -479,26 +483,22 @@ struct MeshSettingsView: View {
     var body: some View {
         Form {
             // Transport Settings
-            Section("Transports") {
+            Section {
                 Toggle("Bluetooth LE", isOn: Binding(
                     get: { viewModel?.settings?.bleEnabled ?? true },
                     set: { viewModel?.updateBleEnabled($0) }
                 ))
-
-                Toggle("WiFi Aware", isOn: Binding(
-                    get: { viewModel?.settings?.wifiAwareEnabled ?? false },
-                    set: { viewModel?.updateWifiAwareEnabled($0) }
-                ))
-
-                Toggle("WiFi Direct", isOn: Binding(
-                    get: { viewModel?.settings?.wifiDirectEnabled ?? false },
-                    set: { viewModel?.updateWifiDirectEnabled($0) }
-                ))
+                .disabled(viewModel?.isApplyingTransportSettings ?? false)
 
                 Toggle("Internet / Swarm", isOn: Binding(
                     get: { viewModel?.settings?.internetEnabled ?? true },
                     set: { viewModel?.updateInternetEnabled($0) }
                 ))
+                .disabled(viewModel?.isApplyingTransportSettings ?? false)
+            } header: {
+                Text("Transports")
+            } footer: {
+                Text("Bluetooth controls BLE discovery. Nearby Apple discovery remains automatic. Internet controls the Swarm listener and local-network discovery.")
             }
 
             // Discovery Mode

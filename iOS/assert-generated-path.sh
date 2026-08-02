@@ -19,6 +19,16 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+if ! grep -q 'header "apiFFI.h"' "$CANONICAL_DIR/apiFFI.modulemap"; then
+  echo "error: canonical module map does not reference the deployed apiFFI.h header."
+  exit 1
+fi
+
+if grep -q 'header "scmessenger_core.h"' "$CANONICAL_DIR/apiFFI.modulemap"; then
+  echo "error: canonical module map references a generated header name that is not deployed."
+  exit 1
+fi
+
 if [ -d "$LEGACY_DIR" ]; then
   for file in "${required_files[@]}"; do
     if [ -f "$LEGACY_DIR/$file" ]; then

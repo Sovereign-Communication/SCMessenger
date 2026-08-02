@@ -11,6 +11,7 @@
 		DDAA70022F77700100387CC8 /* LocalTransportFallback.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAA70012F77700100387CC8 /* LocalTransportFallback.swift */; };
 		DDAA70042F77701100387CC8 /* mDNSServiceDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAA70032F77701100387CC8 /* mDNSServiceDiscovery.swift */; };
 		DDEB56C42F3FE0BD00387CC8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DDEB56BE2F3FE0BD00387CC8 /* Assets.xcassets */; };
+		CDA300012F90000100387CC8 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CDA300112F90000100387CC8 /* PrivacyInfo.xcprivacy */; };
 		DDEB56C62F3FE0BD00387CC8 /* JoinMeshView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56BB2F3FE0BD00387CC8 /* JoinMeshView.swift */; };
 		DDEB56C72F3FE0BD00387CC8 /* OnboardingFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56B72F3FE0BD00387CC8 /* OnboardingFlow.swift */; };
 		DDEB56C82F3FE0BD00387CC8 /* MeshRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56952F3FE0BD00387CC8 /* MeshRepository.swift */; };
@@ -96,6 +97,7 @@
 		DDEB56B92F3FE0BD00387CC8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DDEB56BB2F3FE0BD00387CC8 /* JoinMeshView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinMeshView.swift; sourceTree = "<group>"; };
 		DDEB56BE2F3FE0BD00387CC8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CDA300112F90000100387CC8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		DDEB56BF2F3FE0BD00387CC8 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		DDEB56C02F3FE0BD00387CC8 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DDEB56C22F3FE0BD00387CC8 /* SCMessengerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCMessengerApp.swift; sourceTree = "<group>"; };
@@ -315,6 +317,7 @@
 				DDEB56B02F3FE0BD00387CC8 /* ViewModels */,
 				DDEB56BD2F3FE0BD00387CC8 /* Views */,
 				DDEB56BE2F3FE0BD00387CC8 /* Assets.xcassets */,
+				CDA300112F90000100387CC8 /* PrivacyInfo.xcprivacy */,
 				DDEB56BF2F3FE0BD00387CC8 /* Bridging-Header.h */,
 				DDEB56C02F3FE0BD00387CC8 /* ContentView.swift */,
 				DDEB56C22F3FE0BD00387CC8 /* SCMessengerApp.swift */,
@@ -430,6 +433,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DDEB56C42F3FE0BD00387CC8 /* Assets.xcassets in Resources */,
+				CDA300012F90000100387CC8 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -454,7 +458,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nexport IPHONEOS_DEPLOYMENT_TARGET=\"${IPHONEOS_DEPLOYMENT_TARGET}\"\nif [ -f \"$HOME/.cargo/env\" ]; then\n    source \"$HOME/.cargo/env\"\nfi\n\ncd \"${PROJECT_DIR}/../..\"\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    SDK_MIN_FLAG=\"-mios-simulator-version-min=${IPHONEOS_DEPLOYMENT_TARGET}\"\n    if [ \"$(uname -m)\" = \"arm64\" ]; then\n        RUST_TARGET=\"aarch64-apple-ios-sim\"\n    else\n        RUST_TARGET=\"x86_64-apple-ios\"\n    fi\nelse\n    SDK_MIN_FLAG=\"-miphoneos-version-min=${IPHONEOS_DEPLOYMENT_TARGET}\"\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\n# Ensure C/ASM dependencies (for example ring) are compiled with the same min deployment target\nexport CFLAGS_aarch64_apple_ios=\"$SDK_MIN_FLAG\"\nexport CFLAGS_aarch64_apple_ios_sim=\"$SDK_MIN_FLAG\"\nexport CFLAGS_x86_64_apple_ios=\"$SDK_MIN_FLAG\"\nexport CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\nexport CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\nexport CARGO_TARGET_X86_64_APPLE_IOS_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    RUST_PROFILE=\"--release\"\n    RUST_DIR=\"release\"\nelse\n    RUST_PROFILE=\"\"\n    RUST_DIR=\"debug\"\nfi\n\necho \"Building Rust library for target: $RUST_TARGET ($CONFIGURATION)\"\ncargo build $RUST_PROFILE -p scmessenger-core --target \"$RUST_TARGET\"\n\nmkdir -p \"${CONFIGURATION_BUILD_DIR}\"\ncp \"target/${RUST_TARGET}/${RUST_DIR}/libscmessenger_core.a\" \\\n   \"${CONFIGURATION_BUILD_DIR}/libscmessenger_mobile.a\"\n\necho \"✓ Rust library copied to: ${CONFIGURATION_BUILD_DIR}/libscmessenger_mobile.a\"\n";
+			shellScript = "set -e\nexport IPHONEOS_DEPLOYMENT_TARGET=\"${IPHONEOS_DEPLOYMENT_TARGET}\"\nif [ -f \"$HOME/.cargo/env\" ]; then\n    source \"$HOME/.cargo/env\"\nfi\n\ncd \"${PROJECT_DIR}/../..\"\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    SDK_MIN_FLAG=\"-mios-simulator-version-min=${IPHONEOS_DEPLOYMENT_TARGET}\"\n    if [ \"$(uname -m)\" = \"arm64\" ]; then\n        RUST_TARGET=\"aarch64-apple-ios-sim\"\n    else\n        RUST_TARGET=\"x86_64-apple-ios\"\n    fi\nelse\n    SDK_MIN_FLAG=\"-miphoneos-version-min=${IPHONEOS_DEPLOYMENT_TARGET}\"\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\n# Ensure C/ASM dependencies (for example ring) are compiled with the same min deployment target\nexport CFLAGS_aarch64_apple_ios=\"$SDK_MIN_FLAG\"\nexport CFLAGS_aarch64_apple_ios_sim=\"$SDK_MIN_FLAG\"\nexport CFLAGS_x86_64_apple_ios=\"$SDK_MIN_FLAG\"\nexport CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\nexport CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\nexport CARGO_TARGET_X86_64_APPLE_IOS_RUSTFLAGS=\"-C link-arg=$SDK_MIN_FLAG\"\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    RUST_PROFILE=\"--release\"\n    RUST_DIR=\"release\"\nelse\n    RUST_PROFILE=\"\"\n    RUST_DIR=\"debug\"\nfi\n\necho \"Building Rust library for target: $RUST_TARGET ($CONFIGURATION)\"\ncargo build $RUST_PROFILE -p scmessenger-core --target \"$RUST_TARGET\"\n\nmkdir -p \"${CONFIGURATION_BUILD_DIR}\"\ncp \"target/${RUST_TARGET}/${RUST_DIR}/libscmessenger_core.a\" \\\n   \"${CONFIGURATION_BUILD_DIR}/libscmessenger_mobile.a\"\n\necho \"[OK] Rust library copied to: ${CONFIGURATION_BUILD_DIR}/libscmessenger_mobile.a\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -653,7 +657,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = JSZ36WH4C8;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -670,6 +674,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(CONFIGURATION_BUILD_DIR)";
+				MARKETING_VERSION = 0.5.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -700,7 +705,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = JSZ36WH4C8;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -713,7 +718,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(CONFIGURATION_BUILD_DIR)";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.5.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -743,7 +748,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = JSZ36WH4C8;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -753,7 +758,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SovereignCommunications.SCMessengerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -770,7 +775,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = JSZ36WH4C8;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -780,7 +785,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SovereignCommunications.SCMessengerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

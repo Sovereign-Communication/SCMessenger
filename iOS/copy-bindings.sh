@@ -32,13 +32,21 @@ echo "4. Copying files..."
 # canonical names expected by the Xcode project (api.swift, apiFFI.h, apiFFI.modulemap).
 swift_src="target/generated-sources/uniffi/swift"
 if [ -f "$swift_src/SCMessengerCore.swift" ]; then
-  cp "$swift_src/SCMessengerCore.swift" "$canonical_dir/api.swift"
-  cp "$swift_src/scmessenger_core.h"   "$canonical_dir/apiFFI.h"
-  cp "$swift_src/scmessenger_core.modulemap" "$canonical_dir/apiFFI.modulemap"
+  awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$swift_src/SCMessengerCore.swift" > "$canonical_dir/api.swift"
+  awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$swift_src/scmessenger_core.h" > "$canonical_dir/apiFFI.h"
+  sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
+    "$swift_src/scmessenger_core.modulemap" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.modulemap"
 elif [ -f "$swift_src/api.swift" ]; then
-  cp "$swift_src/api.swift"            "$canonical_dir/api.swift"
-  cp "$swift_src/apiFFI.h"             "$canonical_dir/apiFFI.h"
-  cp "$swift_src/apiFFI.modulemap"     "$canonical_dir/apiFFI.modulemap"
+  awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$swift_src/api.swift" > "$canonical_dir/api.swift"
+  awk '{ sub(/[[:space:]]+$/, ""); print }' \
+    "$swift_src/apiFFI.h" > "$canonical_dir/apiFFI.h"
+  sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
+    "$swift_src/apiFFI.modulemap" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.modulemap"
 else
   echo "error: no generated Swift bindings found in $swift_src"
   ls -la "$swift_src/" 2>/dev/null || true

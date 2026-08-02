@@ -224,7 +224,7 @@ struct PermissionsView: View {
 
             VStack(alignment: .leading, spacing: Theme.spacingMedium) {
                 PermissionRow(icon: "antenna.radiowaves.left.and.right", title: "Bluetooth", description: "Required for mesh networking")
-                PermissionRow(icon: "wifi", title: "Local Network", description: "Enables WiFi Direct connections")
+                PermissionRow(icon: "wifi", title: "Local Network", description: "Enables nearby network discovery")
                 PermissionRow(icon: "bell.fill", title: "Notifications", description: "Get notified of new messages")
             }
 

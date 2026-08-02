@@ -35,6 +35,32 @@ private enum DefaultSettings {
 @MainActor
 @Observable
 final class MeshRepository {
+    enum LiveTransportAction: Equatable {
+        case startBle
+        case stopBle
+        case startInternet
+        case stopInternet
+    }
+
+    static func liveTransportActions(
+        serviceRunning: Bool,
+        previousBleEnabled: Bool,
+        nextBleEnabled: Bool,
+        previousInternetEnabled: Bool,
+        nextInternetEnabled: Bool
+    ) -> [LiveTransportAction] {
+        guard serviceRunning else { return [] }
+
+        var actions: [LiveTransportAction] = []
+        if previousBleEnabled != nextBleEnabled {
+            actions.append(nextBleEnabled ? .startBle : .stopBle)
+        }
+        if previousInternetEnabled != nextInternetEnabled {
+            actions.append(nextInternetEnabled ? .startInternet : .stopInternet)
+        }
+        return actions
+    }
+
     enum IdentityHydrationState: Equatable {
         /// A public snapshot may be available, but it has not yet been checked
         /// against the live Rust core and encrypted Keychain backup.
@@ -172,7 +198,8 @@ final class MeshRepository {
     /// Circuit breaker duration - pause retries for this long after threshold reached
     private let circuitBreakerDuration: TimeInterval = 300 // 5 minutes
     private let relayDialDebounceInterval: TimeInterval = 10
-    private let receiptAwaitSeconds: UInt64 = 8
+    static let initialReceiptAwaitSeconds: UInt64 = 60
+    private let receiptAwaitSeconds: UInt64 = MeshRepository.initialReceiptAwaitSeconds
     private let pendingOutboxMaxAttempts: UInt32 = 12
     private let pendingOutboxMaxAgeSeconds: UInt64 = 7 * 24 * 60 * 60
     private var historySyncSentPeers: [String: Date] = [:]
@@ -194,6 +221,16 @@ final class MeshRepository {
         ackedWithoutReceiptCount > 0 &&
             nowEpochSec >= createdAtEpochSec &&
             nowEpochSec - createdAtEpochSec >= maxAgeSeconds
+    }
+
+    static func receiptRetryDelaySeconds(ackedWithoutReceiptCount: UInt32) -> UInt64 {
+        if ackedWithoutReceiptCount <= 3 {
+            return initialReceiptAwaitSeconds
+        }
+        if ackedWithoutReceiptCount <= 8 {
+            return 30
+        }
+        return 120
     }
 
     // TCP/mDNS transport parity: Track peers discovered on LAN via libp2p mDNS.
@@ -599,9 +636,9 @@ final class MeshRepository {
             ledgerManager = LedgerManager(storagePath: storagePath)
             autoAdjustEngine = AutoAdjustEngine()
 
-            // Initialize transport managers
-            bleCentralManager = BLECentralManager(meshRepository: self)
-            blePeripheralManager = BLEPeripheralManager(meshRepository: self)
+            // Transport managers are created only when their persisted setting
+            // is enabled. This prevents CoreBluetooth restoration callbacks
+            // from resurrecting a transport that the user turned off.
             smartTransportRouter = SmartTransportRouter()
 
             // Pre-load data where applicable
@@ -667,9 +704,6 @@ final class MeshRepository {
             try ensureLocalIdentityFederation()
             validatePublishedIdentityAfterHydration()
 
-            // Apply saved BLE settings now that managers are initialized
-            blePeripheralManager?.setRotationEnabled(blePrivacyEnabled)
-            blePeripheralManager?.setRotationInterval(blePrivacyInterval)
         } catch {
             // A startup error is not proof that the snapshot is valid.  Keep the
             // state pending so UI surfaces remain in the identity-creation path
@@ -721,8 +755,9 @@ final class MeshRepository {
                 throw MeshError.notInitialized("SettingsManager not initialized for lazy start")
             }
 
-            // ASYNC FIX: Use default settings initially to avoid blocking I/O during service start
-            let settings = settingsManager.defaultSettings()
+            // Startup must honor persisted transport choices. Defaults are
+            // appropriate only when no readable settings file exists yet.
+            let settings = (try? settingsManager.load()) ?? settingsManager.defaultSettings()
 
             let config = MeshServiceConfig(
                 discoveryIntervalMs: 30000,
@@ -730,12 +765,6 @@ final class MeshRepository {
             )
 
             try startMeshService(config: config)
-            // Async reload of settings after service started
-            Task { [weak self] in
-                if let loaded = try? self?.settingsManager?.load() {
-                    self?.logger.info("Settings reloaded asynchronously after service startup")
-                }
-            }
             logVerbose("[OK] MeshService started lazily")
         }
 
@@ -790,41 +819,17 @@ final class MeshRepository {
             ironCore?.setDelegate(delegate: coreDelegate)
             logger.info("CoreDelegate registered for Rust->Swift callbacks")
 
-            // Broadcast BLE identity beacon so nearby peers can read our public key
-            broadcastIdentityBeacon()
-
-            // Obtain the SwarmBridge from MeshService (managed by Rust)
-            swarmBridge = meshService?.getSwarmBridge()
-
             // Initialize internet transport if enabled.
             // Core auto-selects headless mode when identity is absent and upgrades when identity appears.
-            // ASYNC FIX: Use default settings initially to avoid blocking I/O during service start
-            let defaultSettings = settingsManager?.defaultSettings()
-            var swarmTransportStarted = defaultSettings?.internetEnabled != true
-            if defaultSettings?.internetEnabled == true {
-                // Configure bootstrap nodes from the connection ledger. A fresh
-                // install legitimately has no candidates until invite/QR or LAN
-                // discovery seeds the ledger.
-                let bootstrapAddrs = ledgerBootstrapAddresses()
-
-                // P0_TRANSPORT_001: Use static port 9001 for LAN connectivity with CLI daemon.
-                // This ensures both sides can dial each other using predictable addresses.
-                // `startSwarm` only returns after Rust has installed a usable
-                // SwarmBridge handle and the listener is live. Do not discard
-                // this error: reporting service_start success without that
-                // handle lets the outbox route into swarm_bridge_unavailable.
+            guard let settingsManager else {
+                throw MeshError.notInitialized("SettingsManager unavailable during service start")
+            }
+            let runtimeSettings = (try? settingsManager.load()) ?? settingsManager.defaultSettings()
+            var swarmTransportStarted = false
+            if runtimeSettings.internetEnabled {
                 do {
-                    guard let service = meshService else {
-                        throw MeshError.notInitialized("MeshService was released before Swarm startup")
-                    }
-                    appendDiagnostic("swarm_start bootstrap_count=\(bootstrapAddrs.count)")
-                    try service.startSwarm(
-                        listenAddr: "/ip4/0.0.0.0/tcp/9001",
-                        bootstrapAddrs: bootstrapAddrs
-                    )
+                    try startInternetTransport(reason: "startup")
                     swarmTransportStarted = true
-                    broadcastIdentityBeacon()
-                    logger.info("Internet transport (Swarm) initiated with \(bootstrapAddrs.count) bootstrap nodes")
                 } catch {
                     // Identity/Core startup remains valid without internet transport.
                     // Keep it alive for local data, BLE, Multipeer, and a later
@@ -832,12 +837,6 @@ final class MeshRepository {
                     swarmBridge = nil
                     appendDiagnostic("swarm_start degraded error=\(error.localizedDescription)")
                     logger.error("Swarm transport unavailable; continuing with identity services: \(error.localizedDescription)")
-                }
-            }
-            // Async reload of settings after service started
-            Task { [weak self] in
-                if let loaded = try? self?.settingsManager?.load() {
-                    self?.logger.info("Settings reloaded asynchronously after service startup")
                 }
             }
 
@@ -855,34 +854,16 @@ final class MeshRepository {
             // snapshot is the deterministic fallback if an app container is lost.
             excludeIdentitySubdirFromBackup()
 
-            // Start BLE advertising and scanning
+            // Apple's Multipeer transport remains service-bound and automatic.
             multipeerTransport?.disconnect()
             multipeerTransport = MultipeerTransport(meshRepository: self)
             multipeerTransport?.startAdvertising()
             multipeerTransport?.startBrowsing()
-            blePeripheralManager?.startAdvertising()
-            bleCentralManager?.startScanning()
-
-            // Start mDNS/DNS-SD service discovery for cross-platform LAN peer resolution
-            let discovery = mDNSServiceDiscovery(meshRepository: self)
-            discovery.onLanPeerResolved = { [weak self] peerId, host, port in
-                Task { @MainActor [weak self] in
-                    guard let self, let bridge = self.swarmBridge else { return }
-                    let ipProto = host.contains(":") ? "ip6" : "ip4"
-                    let multiaddr = "/\(ipProto)/\(host)/tcp/\(port)"
-                    self.logger.info("mDNS: Dialing resolved LAN peer \(peerId) at \(multiaddr)")
-                    do {
-                        try await bridge.dial(multiaddr: multiaddr)
-                    } catch {
-                        self.logger.error("mDNS: Failed to dial \(multiaddr): \(error.localizedDescription)")
-                    }
-                }
+            if runtimeSettings.bleEnabled {
+                startBleTransport()
+            } else {
+                stopBleTransport()
             }
-            discovery.startBrowsing()
-            // Publish the same DNS-SD service we browse so Android and CLI
-            // peers can discover this iOS listener, not only the reverse.
-            discovery.startAdvertising(port: 9001)
-            mdnsDiscovery = discovery
             Task { @MainActor [weak self] in
                 await self?.applyPowerAdjustments(reason: "service_started")
             }
@@ -907,7 +888,7 @@ final class MeshRepository {
 
             let info = getIdentityInfo()
             logger.info("SC_IDENTITY_OWN p2p_id=\(info?.libp2pPeerId ?? "unknown") pk=\(info?.publicKeyHex ?? "unknown")")
-            if swarmTransportStarted {
+            if !runtimeSettings.internetEnabled || swarmTransportStarted {
                 logVerbose("[OK] Mesh service started successfully")
                 logDiagnostic("service_start success")
             } else {
@@ -934,6 +915,102 @@ final class MeshRepository {
             appendDiagnostic("service_start failure error=\(error.localizedDescription)")
             throw error
         }
+    }
+
+    private func startBleTransport() {
+        if bleCentralManager == nil {
+            bleCentralManager = BLECentralManager(meshRepository: self)
+        }
+        if blePeripheralManager == nil {
+            blePeripheralManager = BLEPeripheralManager(meshRepository: self)
+        }
+
+        blePeripheralManager?.setRotationEnabled(blePrivacyEnabled)
+        blePeripheralManager?.setRotationInterval(blePrivacyInterval)
+        broadcastIdentityBeacon()
+        blePeripheralManager?.startAdvertising()
+        bleCentralManager?.startScanning()
+        appendDiagnostic("transport_ble enabled")
+    }
+
+    private func stopBleTransport() {
+        bleCentralManager?.stopScanning()
+        blePeripheralManager?.stopAdvertising()
+        bleCentralManager = nil
+        blePeripheralManager = nil
+        appendDiagnostic("transport_ble disabled")
+    }
+
+    private func startMdnsDiscovery() {
+        guard mdnsDiscovery == nil else { return }
+
+        let discovery = mDNSServiceDiscovery(meshRepository: self)
+        discovery.onLanPeerResolved = { [weak self] peerId, host, port in
+            Task { @MainActor [weak self] in
+                guard let self, let bridge = self.swarmBridge else { return }
+                let ipProto = host.contains(":") ? "ip6" : "ip4"
+                let multiaddr = "/\(ipProto)/\(host)/tcp/\(port)"
+                self.logger.info("mDNS: Dialing resolved LAN peer \(peerId) at \(multiaddr)")
+                do {
+                    try await bridge.dial(multiaddr: multiaddr)
+                } catch {
+                    self.logger.error("mDNS: Failed to dial \(multiaddr): \(error.localizedDescription)")
+                }
+            }
+        }
+        discovery.startBrowsing()
+        discovery.startAdvertising(port: 9001)
+        mdnsDiscovery = discovery
+    }
+
+    private func stopMdnsDiscovery() {
+        mdnsDiscovery?.cleanup()
+        mdnsDiscovery = nil
+        mdnsLanPeers.removeAll()
+    }
+
+    private func startInternetTransport(reason: String) throws {
+        if swarmBridge != nil {
+            startMdnsDiscovery()
+            return
+        }
+        guard let service = meshService else {
+            throw MeshError.notInitialized("MeshService is unavailable for Swarm startup")
+        }
+
+        let bootstrapAddrs = ledgerBootstrapAddresses()
+        appendDiagnostic("swarm_start_\(reason) bootstrap_count=\(bootstrapAddrs.count)")
+        do {
+            try service.startSwarm(
+                listenAddr: "/ip4/0.0.0.0/tcp/9001",
+                bootstrapAddrs: bootstrapAddrs
+            )
+            swarmBridge = service.getSwarmBridge()
+            startMdnsDiscovery()
+            broadcastIdentityBeacon()
+            logger.info("[OK] Internet transport (Swarm) started and bridge wired")
+        } catch {
+            stopMdnsDiscovery()
+            swarmBridge = nil
+            throw error
+        }
+    }
+
+    private func stopInternetTransport() throws {
+        // SwarmBridge.shutdown() stops the live handle but the current
+        // MeshService still retains that handle. A later startSwarm() would
+        // therefore treat the dead handle as already running. Recreate the
+        // service so Rust owns a fresh bridge while the newly persisted
+        // internet=false setting keeps Swarm and mDNS disabled.
+        if serviceState == .running {
+            stopMeshService()
+            try ensureServiceInitialized()
+        } else {
+            stopMdnsDiscovery()
+            swarmBridge = nil
+        }
+        appendDiagnostic("transport_internet disabled")
+        logger.info("[OK] Internet transport (Swarm) stopped with fresh service state")
     }
 
     /// Proactively dial the best ledger-sourced relay after mesh startup so an
@@ -973,6 +1050,7 @@ final class MeshRepository {
         statusEvents.send(.serviceStateChanged(.stopping))
 
         meshService?.stop()
+        swarmBridge = nil
         pendingOutboxRetryTask?.cancel()
         pendingOutboxRetryTask = nil
         coverTrafficTask?.cancel()
@@ -992,10 +1070,8 @@ final class MeshRepository {
         serviceState = .stopped
         statusEvents.send(.serviceStateChanged(.stopped))
 
-        mdnsDiscovery?.cleanup()
-        mdnsDiscovery = nil
-        bleCentralManager?.stopScanning()
-        blePeripheralManager?.stopAdvertising()
+        stopMdnsDiscovery()
+        stopBleTransport()
         multipeerTransport?.disconnect()
         multipeerTransport = nil
 
@@ -1039,25 +1115,8 @@ final class MeshRepository {
         let settings = try? settingsManager?.load()
         if settings?.internetEnabled == true {
             do {
-                // Configure bootstrap nodes from the connection ledger.
-                // P0_TRANSPORT_001: Use static port 9001 for LAN connectivity with CLI daemon.
-                guard let service = meshService else {
-                    throw MeshError.notInitialized("MeshService is unavailable for Swarm startup")
-                }
-                let bootstrapAddrs = ledgerBootstrapAddresses()
-                appendDiagnostic("swarm_start_manual bootstrap_count=\(bootstrapAddrs.count)")
-                try service.startSwarm(
-                    listenAddr: "/ip4/0.0.0.0/tcp/9001",
-                    bootstrapAddrs: bootstrapAddrs
-                )
-                // startSwarm only returns once Rust has installed its handle.
-                // Retain the matching bridge before any outbound work can route.
-                swarmBridge = service.getSwarmBridge()
-                broadcastIdentityBeacon()
-                logger.info("[OK] Internet transport (Swarm) started manually and bridge wired")
+                try startInternetTransport(reason: "manual")
             } catch {
-                // Do not leave a stale bridge available after a failed restart.
-                swarmBridge = nil
                 logger.error("Failed to start swarm: \(error.localizedDescription)")
             }
         }
@@ -3112,6 +3171,36 @@ final class MeshRepository {
         logger.info("[OK] Settings saved (relay: \(settings.relayEnabled))")
     }
 
+    func saveAndApplyTransportSettings(_ settings: MeshSettings) async throws {
+        guard let settingsManager else {
+            throw MeshError.notInitialized("SettingsManager not initialized")
+        }
+
+        let previous = (try? settingsManager.load()) ?? settingsManager.defaultSettings()
+        try saveSettings(settings)
+
+        let actions = Self.liveTransportActions(
+            serviceRunning: serviceState == .running,
+            previousBleEnabled: previous.bleEnabled,
+            nextBleEnabled: settings.bleEnabled,
+            previousInternetEnabled: previous.internetEnabled,
+            nextInternetEnabled: settings.internetEnabled
+        )
+
+        for action in actions {
+            switch action {
+            case .startBle:
+                startBleTransport()
+            case .stopBle:
+                stopBleTransport()
+            case .startInternet:
+                try startInternetTransport(reason: "settings")
+            case .stopInternet:
+                try stopInternetTransport()
+            }
+        }
+    }
+
     func validateSettings(_ settings: MeshSettings) -> Bool {
         // Delegate to Rust-side validation via UniFFI for consistency with Android
         guard let settingsManager = settingsManager else {
@@ -3903,8 +3992,11 @@ final class MeshRepository {
             try ensureServiceInitialized()
         }
 
-        bleCentralManager?.startScanning()
-        blePeripheralManager?.startAdvertising()
+        if (try? loadSettings().bleEnabled) != false {
+            startBleTransport()
+        } else {
+            stopBleTransport()
+        }
         multipeerTransport?.startAdvertising()
         multipeerTransport?.startBrowsing()
         updateStats()
@@ -5517,14 +5609,9 @@ final class MeshRepository {
                 // A transport ACK is not a genuine delivery failure. Track it
                 // separately so it never consumes the failure-attempt ceiling.
                 let nextAckedWithoutReceiptCount = ackedWithoutReceiptCount + 1
-                let adaptiveReceiptWait: UInt64
-                if nextAckedWithoutReceiptCount <= 3 {
-                    adaptiveReceiptWait = receiptAwaitSeconds      // 8s for first few
-                } else if nextAckedWithoutReceiptCount <= 8 {
-                    adaptiveReceiptWait = 30                       // 30s for moderate retries
-                } else {
-                    adaptiveReceiptWait = 120                      // 2 min for later retries
-                }
+                let adaptiveReceiptWait = Self.receiptRetryDelaySeconds(
+                    ackedWithoutReceiptCount: nextAckedWithoutReceiptCount
+                )
                 nextQueue.append(
                     PendingOutboundEnvelope(
                         queueId: item.queueId,
@@ -6230,6 +6317,7 @@ final class MeshRepository {
                 "identity_id": info.identityId ?? "",
                 "public_key": publicKeyHex,
                 "nickname": nickname,
+                "peer_id": info.libp2pPeerId ?? "",
                 "libp2p_peer_id": info.libp2pPeerId ?? "",
                 "listeners": listeners,
                 "external_addresses": externalAddresses,
@@ -6256,6 +6344,7 @@ final class MeshRepository {
                 "identity_id": info.identityId ?? "",
                 "public_key": publicKeyHex,
                 "nickname": nickname,
+                "peer_id": info.libp2pPeerId ?? "",
                 "libp2p_peer_id": info.libp2pPeerId ?? "",
                 "listeners": [],
                 "external_addresses": [],
@@ -6871,11 +6960,28 @@ final class MeshRepository {
 
     func getIdentityQrPayload() -> String {
         guard let identity = getFullIdentityInfo(),
-              let peerId = identity.libp2pPeerId,
-              let publicKey = identity.publicKeyHex else {
+              let publicKey = identity.publicKeyHex,
+              !publicKey.isEmpty else {
             return ""
         }
-        return "\(peerId):\(publicKey)"
+        // QR identity cards must use the shared JSON contract. Android's
+        // importer intentionally rejects the old colon-delimited form, while
+        // JSON preserves routing and multi-device fields for a routable contact.
+        let payload: [String: Any] = [
+            "version": "1.0",
+            "peer_id": identity.libp2pPeerId ?? "",
+            "public_key": publicKey,
+            "device_id": identity.deviceId ?? "",
+            "identity_id": identity.identityId ?? "",
+            "nickname": identity.nickname ?? "",
+            "libp2p_peer_id": identity.libp2pPeerId ?? ""
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return json
     }
 
     func getIdentitySnippet() -> String {

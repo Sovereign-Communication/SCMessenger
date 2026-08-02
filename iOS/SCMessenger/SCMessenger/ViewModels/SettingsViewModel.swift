@@ -17,10 +17,13 @@ final class SettingsViewModel {
     var settings: MeshSettings?
     var isLoading = false
     var isSaving = false
+    var isApplyingTransportSettings = false
     var error: String?
     var successMessage: String?
     private var lastSettingUpdateTime: Date = .distantPast
     private let settingDebounceInterval: TimeInterval = 0.5  // 500ms
+    private var pendingSettingsUpdates = 0
+    private var settingsUpdateTask: Task<Void, Never>?
 
     init(repository: MeshRepository) {
         self.repository = repository
@@ -169,16 +172,37 @@ final class SettingsViewModel {
 
     func saveSettings() {
         guard let settings = settings else { return }
+        enqueueSettingsUpdate(settings)
+    }
 
+    private func enqueueSettingsUpdate(_ nextSettings: MeshSettings) {
+        let previousTask = settingsUpdateTask
+        pendingSettingsUpdates += 1
         isSaving = true
-        do {
-            try repository?.saveSettings(settings)
-            successMessage = "Settings saved"
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+        isApplyingTransportSettings = true
+
+        settingsUpdateTask = Task { @MainActor [weak self] in
+            await previousTask?.value
+            guard let self else { return }
+            defer {
+                self.pendingSettingsUpdates -= 1
+                self.isSaving = self.pendingSettingsUpdates > 0
+                self.isApplyingTransportSettings = self.pendingSettingsUpdates > 0
+            }
+
+            guard let repository = self.repository else {
+                self.error = MeshError.notInitialized("MeshRepository unavailable").localizedDescription
+                return
+            }
+
+            do {
+                try await repository.saveAndApplyTransportSettings(nextSettings)
+                self.successMessage = "Settings saved"
+                self.error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
-        isSaving = false
     }
 
     // MARK: - Relay
@@ -190,34 +214,20 @@ final class SettingsViewModel {
         debouncedUpdateSettings { self.saveSettings() }
     }
 
-    // MARK: - Transport Toggles (mirrors Android MeshSettingsScreen)
+    // MARK: - Supported iOS Transport Toggles
 
     func updateBleEnabled(_ enabled: Bool) {
         guard var currentSettings = settings else { return }
         currentSettings.bleEnabled = enabled
         settings = currentSettings
-        debouncedUpdateSettings { self.saveSettings() }
-    }
-
-    func updateWifiAwareEnabled(_ enabled: Bool) {
-        guard var currentSettings = settings else { return }
-        currentSettings.wifiAwareEnabled = enabled
-        settings = currentSettings
-        debouncedUpdateSettings { self.saveSettings() }
-    }
-
-    func updateWifiDirectEnabled(_ enabled: Bool) {
-        guard var currentSettings = settings else { return }
-        currentSettings.wifiDirectEnabled = enabled
-        settings = currentSettings
-        debouncedUpdateSettings { self.saveSettings() }
+        enqueueSettingsUpdate(currentSettings)
     }
 
     func updateInternetEnabled(_ enabled: Bool) {
         guard var currentSettings = settings else { return }
         currentSettings.internetEnabled = enabled
         settings = currentSettings
-        debouncedUpdateSettings { self.saveSettings() }
+        enqueueSettingsUpdate(currentSettings)
     }
 
     // MARK: - Discovery & Mesh Settings
