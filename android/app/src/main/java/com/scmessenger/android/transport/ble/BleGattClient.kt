@@ -722,6 +722,10 @@ class BleGattClient(
                         reassemblyBuffers[deviceAddress]?.clear()
                         Timber.v("BLE-RX (Central): Message start ($totalFrags frags) from $deviceAddress")
                     }
+                    Timber.i(
+                        "mesh_ble_rx_fragment role=central device=$deviceAddress total=$totalFrags " +
+                            "index=$fragIndex bytes=${payload.size}"
+                    )
                     val buffer = reassemblyBuffers.getOrPut(deviceAddress) { ConcurrentHashMap<Int, ByteArray>() }
                     buffer[fragIndex] = payload
                     expectedFragments[deviceAddress] = totalFrags
@@ -740,8 +744,21 @@ class BleGattClient(
                         reassemblyBuffers.remove(deviceAddress)
                         expectedFragments.remove(deviceAddress)
 
-                        Timber.d("Reassembled complete message from $deviceAddress: ${completeData.size} bytes")
+                        val fingerprint = BlePayloadDiagnostics.fingerprint(completeData)
+                        Timber.i(
+                            "mesh_ble_rx_complete role=central device=$deviceAddress bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
+                        Timber.i(
+                            "mesh_ble_forward role=central device=$deviceAddress bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
                         onDataReceived(deviceAddress, completeData)
+                        Timber.i(
+                            "mesh_ble_forward_return role=central device=$deviceAddress bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
+                        Timber.d("Reassembled complete message from $deviceAddress: ${completeData.size} bytes")
                     }
                 }
             }

@@ -7,6 +7,8 @@
 //
 
 import CoreBluetooth
+import CryptoKit
+import Foundation
 import os
 
 /// Advertises self and serves GATT characteristics (iOS Peripheral role)
@@ -173,6 +175,13 @@ final class BLEPeripheralManager: NSObject {
             meshRepository?.appendDiagnostic(message)
         }
     }
+
+    private func payloadFingerprint(_ data: Data) -> String {
+        SHA256.hash(data: data)
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
     
     // MARK: - Connection State Monitoring and Auto-Reconnection
     
@@ -328,7 +337,10 @@ final class BLEPeripheralManager: NSObject {
             }
         }
         if fragments.count > 1 {
-            appendRepositoryDiagnostic("ble_tx_start fragments=\(fragments.count) to=\(central.identifier.uuidString.prefix(8))")
+            appendRepositoryDiagnostic(
+                "ble_tx_start fragments=\(fragments.count) bytes=\(data.count) " +
+                    "payload_sha256_64=\(payloadFingerprint(data)) to=\(central.identifier.uuidString.prefix(8))"
+            )
         }
         return accepted
     }
@@ -554,7 +566,10 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
             reassemblyBuffers.removeValue(forKey: centralId)
 
             logger.info("Reassembled complete \(isSync ? "sync" : "message") (\(completeData.count) bytes) from \(centralId)")
-            appendRepositoryDiagnostic("ble_rx_complete size=\(completeData.count) type=\(isSync ? "sync" : "msg")")
+            appendRepositoryDiagnostic(
+                "ble_rx_complete size=\(completeData.count) type=\(isSync ? "sync" : "msg") " +
+                    "payload_sha256_64=\(payloadFingerprint(completeData))"
+            )
             DispatchQueue.main.async { [weak self] in
                 self?.meshRepository?.onBleDataReceived(peerId: centralId.uuidString, data: completeData)
             }

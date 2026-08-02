@@ -368,9 +368,20 @@ class BleGattServer(
             when (characteristic.uuid) {
                 MESSAGE_CHAR_UUID -> {
                     handleReassembly(device.address, value) { completeData ->
-                        Timber.i("mesh_ble_rx_complete device=${device.address} bytes=${completeData.size}")
-                        Timber.i("mesh_ble_forward device=${device.address} bytes=${completeData.size}")
+                        val fingerprint = BlePayloadDiagnostics.fingerprint(completeData)
+                        Timber.i(
+                            "mesh_ble_rx_complete device=${device.address} bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
+                        Timber.i(
+                            "mesh_ble_forward device=${device.address} bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
                         onDataReceived(device.address, completeData)
+                        Timber.i(
+                            "mesh_ble_forward_return device=${device.address} bytes=${completeData.size} " +
+                                "payload_sha256_64=$fingerprint"
+                        )
                         Timber.d("Reassembled complete message (${completeData.size} bytes) from ${device.address}")
                     }
                     if (responseNeeded) {

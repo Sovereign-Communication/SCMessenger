@@ -7,6 +7,8 @@
 //
 
 import CoreBluetooth
+import CryptoKit
+import Foundation
 import os
 
 /// Scans for and connects to BLE mesh peers (iOS Central role)
@@ -137,7 +139,10 @@ final class BLECentralManager: NSObject {
         let mtu = peripheral.maximumWriteValueLength(for: .withResponse)
         let fragments = fragmentData(data, mtu: mtu)
 
-        appendRepositoryDiagnostic("ble_central_tx_start fragments=\(fragments.count) to=\(peripheralId.uuidString.prefix(8))")
+        appendRepositoryDiagnostic(
+            "ble_central_tx_start fragments=\(fragments.count) bytes=\(data.count) " +
+                "payload_sha256_64=\(payloadFingerprint(data)) to=\(peripheralId.uuidString.prefix(8))"
+        )
         for fragment in fragments {
             enqueueFragment(fragment, for: peripheralId)
         }
@@ -156,6 +161,13 @@ final class BLECentralManager: NSObject {
         Task { @MainActor in
             meshRepository?.appendDiagnostic(message)
         }
+    }
+
+    private func payloadFingerprint(_ data: Data) -> String {
+        SHA256.hash(data: data)
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
     
     // MARK: - Connection State Monitoring and Auto-Reconnection
@@ -607,7 +619,10 @@ extension BLECentralManager: CBPeripheralDelegate {
                 reassemblyBuffers.removeValue(forKey: peripheralID)
 
                 logger.info("Reassembled complete message (\(completeData.count) bytes) from \(peripheralID)")
-                appendRepositoryDiagnostic("ble_central_rx_complete size=\(completeData.count)")
+                appendRepositoryDiagnostic(
+                    "ble_central_rx_complete size=\(completeData.count) " +
+                        "payload_sha256_64=\(payloadFingerprint(completeData))"
+                )
                 DispatchQueue.main.async { [weak self] in
                     self?.meshRepository?.onBleDataReceived(peerId: peripheralID.uuidString, data: completeData)
                 }
