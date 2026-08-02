@@ -245,14 +245,16 @@ fn push_seed_dial_candidate(
 ///   internet-relay tier of the transport priority order and it is normally a
 ///   name.
 /// - `proven` are entries with `success_count > 0`, i.e. addresses this node
-///   actually completed a connection to. `AllowLocallyConfigured` is sound here
-///   only because of a closed loop worth stating explicitly: the sole caller of
-///   `LedgerManager::record_connection` in core passes the resolved remote
-///   address of an established outbound connection, and to have connected we
-///   must already have passed one of these gates. Wire-learned entries arrive
-///   through `annotate_identity` with `success_count = 0`, so they are in the
-///   `seeds` tier, never here. If anything ever promotes an unproven entry
-///   directly, this argument breaks and this tier must become `Reject`.
+///   actually completed a connection to. The policy here is `Reject`, matching
+///   the `seeds` tier. The original rationale for `AllowLocallyConfigured`
+///   relied on a closed-loop argument: `record_connection` in core only
+///   receives the resolved remote address of an established outbound
+///   connection, so provenance was supposedly traceable. That argument is
+///   fragile -- it depends on every future caller of `record_connection`
+///   preserving the invariant, and on no code path promoting an unproven
+///   entry directly. Legacy on-disk ledger entries have unverifiable
+///   provenance (written by a prior build with weaker invariants), so the
+///   proven tier now uses `Reject` as a defence-in-depth measure.
 /// - `seeds` are `success_count == 0`: invite `seed_ledger` content and
 ///   wire-learned addresses. `Reject` -- this is the attacker-suppliable tier
 ///   and the exact vector NEW-1 describes.
@@ -5216,11 +5218,29 @@ pub async fn start_swarm_with_config(
                                             }
 
                                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
+                                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                                    &addr,
+                                                    crate::transport::addr_filter::NetworkMode::Local,
+                                                    crate::transport::addr_filter::DnsPolicy::Reject,
+                                                ) {
+                                                    tracing::debug!("Rejecting non-dialable discovery dial to {} for peer {}", addr, peer_id);
+                                                    continue;
+                                                }
                                                 tracing::debug!("Processing off-loop discovery dial to {} for peer {}", addr, peer_id);
                                                 let _ = swarm.dial(addr);
                                             }
 
                                             SwarmCommand::Dial { addr, reply } => {
+                                // Filter the original address before any synthesis
+                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                    &addr,
+                                    crate::transport::addr_filter::NetworkMode::Local,
+                                    crate::transport::addr_filter::DnsPolicy::Reject,
+                                ) {
+                                    tracing::debug!("Rejecting non-dialable dial target: {}", addr);
+                                    let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
+                                    continue;
+                                }
                                 tracing::debug!("Dialing {} (synthesizing port ladder if applicable)", addr);
                                 let s = addr.to_string();
                                 let is_direct = !s.contains("/p2p-circuit/") && !s.contains("/ws/") && !s.contains("/wss/");
@@ -5305,6 +5325,22 @@ pub async fn start_swarm_with_config(
                                                     candidates.push(relay_addr);
                                                 }
                                             }
+
+                                            // Filter every synthesized candidate through the dial
+                                            // predicate. The original addr was already filtered at
+                                            // entry, but last_good, the port ladder, and relay
+                                            // addresses are synthesized here and must each pass.
+                                            candidates.retain(|c| {
+                                                let ok = crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                                    c,
+                                                    crate::transport::addr_filter::NetworkMode::Local,
+                                                    crate::transport::addr_filter::DnsPolicy::Reject,
+                                                );
+                                                if !ok {
+                                                    tracing::debug!("Dropping non-dialable synthesized candidate: {}", c);
+                                                }
+                                                ok
+                                            });
 
                                             dial_candidate_addrs = candidates
                                                 .iter()
@@ -5934,10 +5970,27 @@ pub async fn start_swarm_with_config(
                                 let _ = reply.send(addresses).await;
                             }
                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
+                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                    &addr,
+                                    crate::transport::addr_filter::NetworkMode::Local,
+                                    crate::transport::addr_filter::DnsPolicy::Reject,
+                                ) {
+                                    tracing::debug!("Rejecting non-dialable discovery dial to {} for peer {}", addr, peer_id);
+                                    continue;
+                                }
                                 tracing::debug!("Processing off-loop discovery dial to {} for peer {}", addr, peer_id);
                                 let _ = swarm.dial(addr);
                             }
                             SwarmCommand::Dial { addr, reply } => {
+                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                    &addr,
+                                    crate::transport::addr_filter::NetworkMode::Local,
+                                    crate::transport::addr_filter::DnsPolicy::Reject,
+                                ) {
+                                    tracing::debug!("Rejecting non-dialable dial target (wasm): {}", addr);
+                                    let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
+                                    continue;
+                                }
                                 match swarm.dial(addr) {
                                     Ok(_) => { let _ = reply.send(Ok(())).await; }
                                     Err(e) => {

@@ -502,6 +502,38 @@ impl LedgerManager {
             }
         }
 
+        // Quarantine helper: renames the bad ledger file aside so the next
+        // launch starts clean, and -- when a live in-memory snapshot exists --
+        // restores it so the node does not lose state it already holds.
+        // Reused by every early-reject path below (non-regular file,
+        // oversized, invalid UTF-8, corrupt JSON) so none of them leave the
+        // offending file in place to fail every subsequent launch.
+        let quarantine_bad_ledger = |reason: &str| -> Result<(), crate::IronCoreError> {
+            tracing::warn!("quarantining ledger: {}", reason);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let corrupt_name = format!(
+                "{}.corrupt-{}.{}",
+                ledger_file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("ledger.json"),
+                timestamp,
+                nonce
+            );
+            std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name))
+                .map_err(|_| crate::IronCoreError::StorageError)?;
+            let live_snapshot = { self.entries.lock().clone() };
+            if !live_snapshot.is_empty() {
+                let restored_data = serialize_ledger_entries(&live_snapshot)?;
+                self.write_serialized_ledger(&restored_data)?;
+            }
+            Ok(())
+        };
+
         // Opening first makes the metadata check and read refer to one file
         // descriptor. A missing file is still the default empty-ledger case.
         // If another process replaces or grows the file after this check, the
@@ -516,19 +548,25 @@ impl LedgerManager {
             .metadata()
             .map_err(|_| crate::IronCoreError::StorageError)?;
         if !metadata.is_file() || metadata.len() > MAX_PERSISTED_LEDGER_BYTES {
-            tracing::warn!(
-                "refusing persisted ledger of {} bytes (maximum {})",
-                metadata.len(),
-                MAX_PERSISTED_LEDGER_BYTES
-            );
-            return Err(crate::IronCoreError::StorageError);
+            drop(file);
+            return quarantine_bad_ledger(&format!(
+                "persisted ledger is not a regular file or exceeds {} bytes (actual: {})",
+                MAX_PERSISTED_LEDGER_BYTES,
+                metadata.len()
+            ));
         }
 
         let mut data = String::new();
-        std::io::Read::by_ref(&mut file)
+        if let Err(err) = std::io::Read::by_ref(&mut file)
             .take(MAX_PERSISTED_LEDGER_BYTES + 1)
             .read_to_string(&mut data)
-            .map_err(|_| crate::IronCoreError::StorageError)?;
+        {
+            drop(file);
+            return quarantine_bad_ledger(&format!(
+                "reading ledger failed (invalid UTF-8 or I/O error): {}",
+                err
+            ));
+        }
         let size_after_read = file
             .metadata()
             .map_err(|_| crate::IronCoreError::StorageError)?
@@ -536,11 +574,11 @@ impl LedgerManager {
         if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES
             || size_after_read > MAX_PERSISTED_LEDGER_BYTES
         {
-            tracing::warn!(
-                "refusing persisted ledger that grew beyond {} bytes while reading",
+            drop(file);
+            return quarantine_bad_ledger(&format!(
+                "persisted ledger grew beyond {} bytes while reading",
                 MAX_PERSISTED_LEDGER_BYTES
-            );
-            return Err(crate::IronCoreError::StorageError);
+            ));
         }
         // Close before the corrupt-file recovery rename below; Windows does
         // not permit replacing an open file handle in the common case.
@@ -549,36 +587,7 @@ impl LedgerManager {
         let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
             Ok(entries) => entries,
             Err(err) => {
-                tracing::warn!(
-                    "ledger file corrupted; quarantining without replacing live state: {}",
-                    err
-                );
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-                let corrupt_name = format!(
-                    "{}.corrupt-{}.{}",
-                    ledger_file
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("ledger.json"),
-                    timestamp,
-                    nonce
-                );
-                std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name))
-                    .map_err(|_| crate::IronCoreError::StorageError)?;
-
-                // A second same-path manager may already have a valid shared
-                // state. Preserve it and, when non-empty, restore that exact
-                // bounded snapshot after quarantining the corrupt file.
-                let live_snapshot = { self.entries.lock().clone() };
-                if !live_snapshot.is_empty() {
-                    let restored_data = serialize_ledger_entries(&live_snapshot)?;
-                    self.write_serialized_ledger(&restored_data)?;
-                }
-                return Ok(());
+                return quarantine_bad_ledger(&format!("corrupt JSON: {}", err));
             }
         };
         drop(data);

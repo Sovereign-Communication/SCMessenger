@@ -103,7 +103,7 @@ fun ApkShareDialog(
                 ) {
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Share APK File via Bluetooth/QuickShare")
+                    Text(stringResource(R.string.apk_share_button_system_share))
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -112,7 +112,7 @@ fun ApkShareDialog(
 
                 // Option 2: Scan to Install QR Code
                 Text(
-                    text = "Scan to Download over Local Wi-Fi",
+                    text = stringResource(R.string.apk_share_qr_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -131,7 +131,7 @@ fun ApkShareDialog(
                             QrCodeImage(
                                 data = downloadUrl!!,
                                 size = 200,
-                                contentDescription = "QR Code for APK download"
+                                contentDescription = stringResource(R.string.apk_share_qr_content_description)
                             )
 
                             Spacer(modifier = Modifier.height(12.dp))
@@ -150,12 +150,12 @@ fun ApkShareDialog(
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     val clip = ClipData.newPlainText("Download URL", downloadUrl)
                                     clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.apk_share_toast_url_copied), Toast.LENGTH_SHORT).show()
                                 }
                             ) {
                                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Copy Link")
+                                Text(stringResource(R.string.apk_share_button_copy_link))
                             }
                         }
                     }
@@ -165,7 +165,7 @@ fun ApkShareDialog(
                     val timerStr = String.format("%02d:%02d", minutes, seconds)
 
                     Text(
-                        text = "Ephemeral node server active for $timerStr",
+                        text = stringResource(R.string.apk_share_timer_active, timerStr),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 8.dp)
@@ -173,7 +173,7 @@ fun ApkShareDialog(
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(32.dp))
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("Starting node HTTP server...", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.apk_share_server_starting), style = MaterialTheme.typography.bodySmall)
                 }
             }
         },
@@ -186,7 +186,7 @@ fun ApkShareDialog(
             ) {
                 Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Stop Sharing")
+                Text(stringResource(R.string.apk_share_button_stop))
             }
         }
     )

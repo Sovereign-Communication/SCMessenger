@@ -1,7 +1,12 @@
 package com.scmessenger.android.utils
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val TAG = "ContactImportParser"
+private const val MAX_LISTENERS = 6
+private const val MAX_LISTENER_LENGTH = 256
 
 data class ImportedContactPayload(
     val peerId: String,
@@ -79,6 +84,22 @@ fun parseContactImportPayload(raw: String): ContactImportParseResult {
             .filter { it.isNotBlank() }
             .distinct()
     }
+    // Bound listener list size and per-entry length to match the deep-link
+    // path cap (MainViewModel) and to prevent a crafted QR from persisting a
+    // multi-megabyte notes field (see V040_FINDING_DISPOSITIONS.md M6).
+    val boundedListeners = listeners
+        .filter {
+            if (it.length > MAX_LISTENER_LENGTH) {
+                Log.d(TAG, "Dropping over-long listener entry (${it.length} chars): ${it.take(64)}...")
+                false
+            } else true
+        }
+        .take(MAX_LISTENERS)
+        .also {
+            if (listeners.size > it.size) {
+                Log.d(TAG, "Listener list truncated from ${listeners.size} to ${it.size} entries.")
+            }
+        }
 
     return ContactImportParseResult.Valid(
         ImportedContactPayload(
@@ -86,7 +107,7 @@ fun parseContactImportPayload(raw: String): ContactImportParseResult {
             publicKey = publicKey.trim(),
             nickname = nickname,
             libp2pPeerId = libp2pPeerId?.trim()?.takeIf { it.isNotBlank() },
-            listeners = listeners
+            listeners = boundedListeners
         )
     )
 }

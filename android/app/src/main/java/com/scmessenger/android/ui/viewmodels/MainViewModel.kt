@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
 import com.scmessenger.android.utils.ContactImportParseResult
+import com.scmessenger.android.utils.DeepLinkValidator
 import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.parseContactImportPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -218,6 +219,19 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Mirror of the public-key validation inside
+     * [com.scmessenger.android.data.MeshRepository.addContact]. That function
+     * returns Unit and drops invalid contacts silently, so callers must check
+     * the same condition themselves to avoid reporting success for a contact
+     * that was never stored.
+     */
+    internal fun isValidPublicKeyHex(key: String?): Boolean {
+        val trimmed = key?.trim() ?: return false
+        if (trimmed.length != 64) return false
+        return trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+    }
+
     fun importContact(jsonString: String) {
         viewModelScope.launch {
             try {
@@ -250,6 +264,18 @@ class MainViewModel @Inject constructor(
                             verifiedAt = null,
                             isTombstone = false
                         )
+                        // SECURITY: MeshRepository.addContact returns Unit and
+                        // silently drops a contact whose public key is empty,
+                        // not 64 chars, or non-hex. Without mirroring that
+                        // check here the import reported success -- and dialed
+                        // the payload's addresses -- for a contact that was
+                        // never stored. Validate at the boundary so failure is
+                        // observable and nothing is dialed on a rejected import.
+                        if (!isValidPublicKeyHex(payload.publicKey)) {
+                            Timber.e("Contact import rejected: invalid public key")
+                            _importError.value = "Invalid public key in contact payload"
+                            return@launch
+                        }
                         meshRepository.addContact(contact)
                         Timber.i("Contact imported: ${payload.publicKey.take(8)}...")
                         if (!payload.libp2pPeerId.isNullOrEmpty() && payload.listeners.isNotEmpty()) {
@@ -298,26 +324,43 @@ class MainViewModel @Inject constructor(
         if (!rawRoutePeerId.isNullOrBlank() && routePeerId == null) {
             Timber.w("Deep link has invalid libp2p peer ID; suppressing automatic dial: $rawRoutePeerId")
         }
-        val listeners = (
+        // Parse multiaddrs from multiple query params: 'listeners' (repeated),
+        // 'connection_hints', 'listener', and 'bootstrap' (single, comma-separated).
+        // The APK share flow uses 'bootstrap' in the download URL.
+        val rawListeners = (
             uri.getQueryParameters("listeners") +
                 uri.getQueryParameters("connection_hints") +
-                uri.getQueryParameters("listener")
+                uri.getQueryParameters("listener") +
+                listOfNotNull(uri.getQueryParameter("bootstrap"))
         )
             .flatMap { it.split(',') }
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
-            .take(6)
+
+        // Validate multiaddrs to prevent attacker-chosen addresses from untrusted QR codes.
+        // SECURITY: This is a new attack surface -- validation is critical.
+        val deviceIp = meshRepository.getLocalIpAddress()
+        val listeners = if (routePeerId != null) {
+            DeepLinkValidator.sanitizeDeepLinkMultiaddrs(rawListeners, deviceIp)
+        } else {
+            emptyList()
+        }
+
         val data = DeepLinkData(
             publicKey = publicKey,
             peerId = routePeerId,
             nickname = uri.getQueryParameter("nickname")?.trim(),
             identityId = uri.getQueryParameter("identity_id")?.trim(),
             libp2pPeerId = routePeerId,
-            listeners = if (routePeerId != null) listeners else emptyList()
+            listeners = listeners
         )
-        Timber.i("Deep link parsed: peerId=${data.peerId}, nickname=${data.nickname}")
+        Timber.i("Deep link parsed: peerId=${data.peerId}, nickname=${data.nickname}, listeners=${data.listeners.size}")
         _pendingDeepLink.value = data
+
+        // TODO: Wire auto-dial via MeshRepository.connectToPeer(peerId, addresses)
+        // once validation is reviewed and approved by the operator.
+        // For now, only parse and expose via DeepLinkData.listeners.
     }
 
     fun consumeDeepLink(): DeepLinkData? {

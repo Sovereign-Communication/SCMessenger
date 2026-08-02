@@ -82,4 +82,57 @@ class ContactImportParserTest {
 
         assertTrue(result is ContactImportParseResult.Invalid)
     }
+
+    @Test
+    fun `listener list capped at six entries to match deep-link path`() {
+        val nineListeners = (1..9).map { "/ip4/10.0.0.$it/tcp/9123" }
+        val json = buildString {
+            append("""{"peer_id":"p1","public_key":"aa","listeners":[""")
+            append(nineListeners.joinToString(",") { "\"$it\"" })
+            append("]}")
+        }
+
+        val result = parseContactImportPayload(json)
+
+        assertTrue(result is ContactImportParseResult.Valid)
+        val listeners = (result as ContactImportParseResult.Valid).payload.listeners
+        assertEquals(6, listeners.size)
+        assertEquals(nineListeners.take(6), listeners)
+    }
+
+    @Test
+    fun `over-long listener entry dropped silently`() {
+        val longEntry = "/ip4/10.0.0.1/tcp/9123" + "x".repeat(300)
+        val shortEntry = "/ip4/10.0.0.2/tcp/9123"
+        val json = """
+            {
+              "peer_id": "p1",
+              "public_key": "aa",
+              "listeners": ["$longEntry", "$shortEntry"]
+            }
+        """.trimIndent()
+
+        val result = parseContactImportPayload(json)
+
+        assertTrue(result is ContactImportParseResult.Valid)
+        val listeners = (result as ContactImportParseResult.Valid).payload.listeners
+        assertEquals(listOf(shortEntry), listeners)
+    }
+
+    @Test
+    fun `normal listener list under cap is preserved intact`() {
+        val listeners = listOf("/ip4/10.0.0.1/tcp/9123", "/ip4/10.0.0.2/tcp/9123")
+        val json = """
+            {
+              "peer_id": "p1",
+              "public_key": "aa",
+              "listeners": ["/ip4/10.0.0.1/tcp/9123", "/ip4/10.0.0.2/tcp/9123"]
+            }
+        """.trimIndent()
+
+        val result = parseContactImportPayload(json)
+
+        assertTrue(result is ContactImportParseResult.Valid)
+        assertEquals(listeners, (result as ContactImportParseResult.Valid).payload.listeners)
+    }
 }
