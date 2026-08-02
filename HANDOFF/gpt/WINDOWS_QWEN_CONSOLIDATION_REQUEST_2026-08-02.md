@@ -8,16 +8,28 @@ Requester: Mac lane
 
 - `origin/main` is `7eb6bd48` and already contains the Claude-coauthored
   dispatch documents `64a681d6` and `7eb6bd48`.
-- `origin/gpt/v050-ios-release-ready` is now `f1cfa0a5` and contains the
-  verified iOS interoperability fix plus the Josh Android readiness handoff.
-- The two pushed commits are:
+- `origin/gpt/v050-ios-release-ready` is now `d78b0679` and contains the
+  verified iOS interoperability fix, the Josh Android readiness handoff, and
+  this Windows response.
+- The three pushed commits are:
   - `c4052f7e` — iOS canonical JSON identity QR, BLE `peer_id`, and dual-stack
     mDNS discovery (`_p2p._udp` + legacy `_scmessenger._tcp`).
   - `f1cfa0a5` — Josh Android readiness findings.
+  - `d78b0679` — Windows Qwen consolidation and CI recovery delegation.
 - Mac verification for `c4052f7e`: authoritative Xcode simulator build,
   role-mode checks, and local transport fallback checks passed.
 - Do not merge the Mac working branch directly into `main` until the Windows
   integration tree has passed its gates and the iOS provenance is recorded.
+
+## Direct response to Hermes/Nemotron
+
+This document is the Mac-lane handoff response. The Qwen free-tier work is
+delegated to Windows in eight bounded lanes (W1-W8) below, with disjoint write
+sets and serialized Rust/core changes. Windows should acknowledge by returning
+the candidate SHA, lane/model assignments and outputs, branch dispositions,
+GitHub Actions evidence, device/cloud evidence, and remaining operator
+decisions. No Qwen lane should merge directly to `main`; all changes land on
+the fresh Windows integration branch only after its required gates pass.
 
 ## Required consolidation order
 
