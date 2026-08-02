@@ -621,64 +621,6 @@ impl LedgerManager {
         Ok(())
     }
 
-    fn save_with_entries(&self, entries: &[LedgerEntry]) -> Result<(), crate::IronCoreError> {
-        if self.storage_path.is_none() {
-            return Ok(());
-        }
-        let data = serialize_ledger_entries(entries)?;
-        self.write_serialized_ledger(&data)
-    }
-
-    fn write_serialized_ledger(&self, data: &str) -> Result<(), crate::IronCoreError> {
-        let Some(storage_path) = self.storage_path.as_ref() else {
-            return Ok(());
-        };
-        if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES {
-            return Err(crate::IronCoreError::StorageError);
-        }
-        std::fs::create_dir_all(storage_path).map_err(|_| crate::IronCoreError::StorageError)?;
-
-        let ledger_file = storage_path.join("ledger.json");
-        let tmp_file = ledger_file.with_file_name(format!(
-            "ledger.json.tmp.{}.{}",
-            std::process::id(),
-            SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed)
-        ));
-
-        let tmp_result = (|| {
-            let mut file = std::fs::File::create(&tmp_file)?;
-            file.write_all(data.as_bytes())?;
-            file.sync_all()
-        })();
-        if let Err(err) = tmp_result {
-            let _ = std::fs::remove_file(&tmp_file);
-            tracing::warn!("ledger tmp write failed: {}", err);
-            return Err(crate::IronCoreError::StorageError);
-        }
-
-        if let Err(err) = std::fs::rename(&tmp_file, &ledger_file) {
-            let _ = std::fs::remove_file(&tmp_file);
-            tracing::warn!("ledger rename failed: {}", err);
-            return Err(crate::IronCoreError::StorageError);
-        }
-
-        #[cfg(unix)]
-        {
-            // Best-effort directory fsync so the rename itself is durable.
-            if let Ok(dir) = std::fs::File::open(storage_path) {
-                let _ = dir.sync_all();
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            // Same-directory std::fs::rename maps to MoveFileExW with replace
-            // semantics; Windows gives atomic replacement without a separate
-            // directory fsync surface here.
-        }
-
-        Ok(())
-    }
-
     pub fn save(&self) -> Result<(), crate::IronCoreError> {
         let _save_guard = self.save_lock.lock();
         let entries = {
@@ -980,6 +922,64 @@ impl LedgerManager {
 /// [`NetworkMode`] or exist purely to keep the swarm event loop bounded, and
 /// neither concept belongs in the mobile binding.
 impl LedgerManager {
+    fn save_with_entries(&self, entries: &[LedgerEntry]) -> Result<(), crate::IronCoreError> {
+        if self.storage_path.is_none() {
+            return Ok(());
+        }
+        let data = serialize_ledger_entries(entries)?;
+        self.write_serialized_ledger(&data)
+    }
+
+    fn write_serialized_ledger(&self, data: &str) -> Result<(), crate::IronCoreError> {
+        let Some(storage_path) = self.storage_path.as_ref() else {
+            return Ok(());
+        };
+        if data.len() as u64 > MAX_PERSISTED_LEDGER_BYTES {
+            return Err(crate::IronCoreError::StorageError);
+        }
+        std::fs::create_dir_all(storage_path).map_err(|_| crate::IronCoreError::StorageError)?;
+
+        let ledger_file = storage_path.join("ledger.json");
+        let tmp_file = ledger_file.with_file_name(format!(
+            "ledger.json.tmp.{}.{}",
+            std::process::id(),
+            SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed)
+        ));
+
+        let tmp_result = (|| {
+            let mut file = std::fs::File::create(&tmp_file)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()
+        })();
+        if let Err(err) = tmp_result {
+            let _ = std::fs::remove_file(&tmp_file);
+            tracing::warn!("ledger tmp write failed: {}", err);
+            return Err(crate::IronCoreError::StorageError);
+        }
+
+        if let Err(err) = std::fs::rename(&tmp_file, &ledger_file) {
+            let _ = std::fs::remove_file(&tmp_file);
+            tracing::warn!("ledger rename failed: {}", err);
+            return Err(crate::IronCoreError::StorageError);
+        }
+
+        #[cfg(unix)]
+        {
+            // Best-effort directory fsync so the rename itself is durable.
+            if let Ok(dir) = std::fs::File::open(storage_path) {
+                let _ = dir.sync_all();
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Same-directory std::fs::rename maps to MoveFileExW with replace
+            // semantics; Windows gives atomic replacement without a separate
+            // directory fsync surface here.
+        }
+
+        Ok(())
+    }
+
     /// A ledger that lives entirely in memory and never touches the disk.
     ///
     /// Review F11: `IronCore::new()` -- the storage-less constructor -- used to
