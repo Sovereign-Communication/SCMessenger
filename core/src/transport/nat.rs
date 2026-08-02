@@ -1,12 +1,11 @@
-// Phase 4D: NAT Traversal and Hole Punching
+// Phase 4D: NAT observation and relay-circuit bookkeeping.
 //
-// Provides NAT detection and traversal mechanisms for establishing direct
-// connections between peers behind NAT/firewalls.
+// Direct hole punching is provided by libp2p DCUtR in transport/swarm.rs.
+// This module must not report simulated direct-connect success.
 //
 // This module provides:
 // - NAT type detection (Open, Restricted, Symmetric, Unknown)
-// - Hole-punch coordination between peers
-// - Relay circuit fallback when hole-punch fails
+// - Relay circuit bookkeeping and fallback
 // - STUN server support for external address discovery
 // - Configurable timeouts and retry logic
 
@@ -30,8 +29,6 @@ pub enum NatTraversalError {
     ProbesFailed(String),
     #[error("No external address detected")]
     NoExternalAddress,
-    #[error("Hole-punch failed: {0}")]
-    HolePunchFailed(String),
     #[error("Relay circuit failed: {0}")]
     RelayCircuitFailed(String),
     #[error("Timeout waiting for peer response")]
@@ -225,50 +222,10 @@ impl PeerAddressDiscovery {
 }
 
 // ============================================================================
-// HOLE PUNCH ATTEMPT
-// ============================================================================
-
-/// Hole-punch attempt state and metadata
-#[derive(Debug, Clone)]
-pub struct HolePunchAttempt {
-    /// Local peer identifier
-    pub local_peer_id: PeerId,
-    /// Remote peer identifier
-    pub remote_peer_id: PeerId,
-    /// Local external address
-    pub local_external_addr: SocketAddr,
-    /// Remote external address
-    pub remote_external_addr: SocketAddr,
-    /// Attempt number (0-indexed)
-    pub attempt_num: u32,
-    /// Creation timestamp (unix seconds)
-    pub created_at: u64,
-    /// Status of the hole-punch
-    pub status: HolePunchStatus,
-}
-
-/// Hole-punch attempt status
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HolePunchStatus {
-    /// Waiting for peer to respond
-    Pending,
-    /// Coordinating addresses
-    Coordinating,
-    /// Attempting direct connection
-    Attempting,
-    /// Successful hole-punch
-    Success,
-    /// Failed, will retry
-    Failed,
-    /// Hole-punch abandoned
-    Abandoned,
-}
-
-// ============================================================================
 // RELAY CIRCUIT
 // ============================================================================
 
-/// Relay circuit for when hole-punch fails
+/// Relay circuit for when a direct libp2p DCUtR connection fails
 #[derive(Debug, Clone)]
 pub struct RelayCircuit {
     /// Source peer ID
@@ -297,12 +254,8 @@ pub struct NatConfig {
     pub peer_reflectors: Vec<String>,
     /// Timeout for relay circuit establishment (seconds)
     pub relay_timeout: u64,
-    /// Maximum hole-punch attempts
-    pub max_attempts: u32,
     /// Timeout per attempt (seconds)
     pub attempt_timeout: u64,
-    /// Enable hole-punching
-    pub enable_hole_punch: bool,
     /// Enable relay fallback
     pub enable_relay_fallback: bool,
 }
@@ -314,9 +267,7 @@ impl Default for NatConfig {
             // Bootstrap nodes and web deploys are prime candidates
             peer_reflectors: vec![],
             relay_timeout: 30,
-            max_attempts: 5,
             attempt_timeout: 10,
-            enable_hole_punch: true,
             enable_relay_fallback: true,
         }
     }
@@ -330,7 +281,6 @@ impl Default for NatConfig {
 pub struct NatTraversal {
     config: NatConfig,
     nat_type: Arc<RwLock<NatType>>,
-    hole_punch_attempts: Arc<RwLock<HashMap<String, HolePunchAttempt>>>,
     relay_circuits: Arc<RwLock<HashMap<String, RelayCircuit>>>,
     external_address: Arc<RwLock<Option<SocketAddr>>>,
 }
@@ -338,16 +288,9 @@ pub struct NatTraversal {
 impl NatTraversal {
     /// Create a new NAT traversal instance
     pub fn new(config: NatConfig) -> Result<Self, NatTraversalError> {
-        if config.max_attempts == 0 {
-            return Err(NatTraversalError::InvalidConfig(
-                "max_attempts must be > 0".to_string(),
-            ));
-        }
-
         Ok(Self {
             config,
             nat_type: Arc::new(RwLock::new(NatType::Unknown)),
-            hole_punch_attempts: Arc::new(RwLock::new(HashMap::new())),
             relay_circuits: Arc::new(RwLock::new(HashMap::new())),
             external_address: Arc::new(RwLock::new(None)),
         })
@@ -386,127 +329,7 @@ impl NatTraversal {
         *self.external_address.read()
     }
 
-    /// Start hole-punch attempt to remote peer
-    pub async fn start_hole_punch(
-        &self,
-        local_peer_id: PeerId,
-        remote_peer_id: PeerId,
-        remote_external_addr: SocketAddr,
-    ) -> Result<(), NatTraversalError> {
-        if !self.config.enable_hole_punch {
-            return Err(NatTraversalError::HolePunchFailed(
-                "Hole-punching disabled".to_string(),
-            ));
-        }
-
-        let local_external_addr = self
-            .get_external_address()
-            .ok_or(NatTraversalError::NoExternalAddress)?;
-
-        let attempt_key = format!("{}-{}", local_peer_id, remote_peer_id);
-        let attempt_count = self.hole_punch_attempts.read().len();
-
-        // Check if already attempting
-        if attempt_count > 0 && self.hole_punch_attempts.read().contains_key(&attempt_key) {
-            return Err(NatTraversalError::HolePunchFailed(
-                "Hole-punch already in progress".to_string(),
-            ));
-        }
-
-        let attempt = HolePunchAttempt {
-            local_peer_id,
-            remote_peer_id,
-            local_external_addr,
-            remote_external_addr,
-            attempt_num: 0,
-            created_at: current_unix_timestamp(),
-            status: HolePunchStatus::Pending,
-        };
-
-        self.hole_punch_attempts
-            .write()
-            .insert(attempt_key.clone(), attempt);
-
-        info!(
-            "Started hole-punch attempt: {} <-> {}",
-            local_peer_id, remote_peer_id
-        );
-
-        // Simulate sending probe packets
-        self.send_hole_punch_probes(&attempt_key).await?;
-
-        Ok(())
-    }
-
-    /// Send hole-punch probe packets
-    async fn send_hole_punch_probes(&self, attempt_key: &str) -> Result<(), NatTraversalError> {
-        let mut attempts = self.hole_punch_attempts.write();
-
-        if let Some(attempt) = attempts.get_mut(attempt_key) {
-            attempt.status = HolePunchStatus::Attempting;
-            debug!(
-                "Sending hole-punch probes to {}",
-                attempt.remote_external_addr
-            );
-
-            // Implement UDP hole-punching sequence
-            // Real hole-punching protocol:
-            // 1. Both peers send UDP packets to each other's external address
-            // 2. First packets create NAT mapping on each side
-            // 3. Subsequent packets traverse the opened NAT holes
-            // 4. Success when bidirectional communication established
-            //
-            // Timing is critical:
-            // - Send packets simultaneously (coordinated via relay/signaling)
-            // - Continue sending until bidirectional communication confirmed
-            // - Typically takes 3-10 probe packets
-
-            info!(
-                "Initiating UDP hole-punch sequence to remote peer at {}",
-                attempt.remote_external_addr
-            );
-
-            // In production, this would:
-            // 1. Create UDP socket bound to local external port
-            // 2. Send probe packets to remote_external_addr
-            // 3. Listen for incoming probe packets from remote
-            // 4. Confirm bidirectional connectivity
-            //
-            // Example probe packet format:
-            // - 4 bytes: Magic number (0x48505443 = "HPTC")
-            // - 16 bytes: Transaction ID (random)
-            // - 8 bytes: Timestamp
-            // - 32 bytes: Ed25519 signature
-            //
-            // Success criteria:
-            // - Received probe packet from remote peer
-            // - Remote peer acknowledged our probes
-            // - RTT < 500ms
-
-            debug!("Hole-punch probes sent, waiting for bidirectional confirmation");
-
-            // Simulate success after protocol execution
-            attempt.status = HolePunchStatus::Success;
-            info!("UDP hole-punch successful with remote peer");
-        }
-
-        Ok(())
-    }
-
-    /// Get hole-punch attempt status
-    pub fn get_hole_punch_status(
-        &self,
-        local_peer_id: PeerId,
-        remote_peer_id: PeerId,
-    ) -> Option<HolePunchStatus> {
-        let attempt_key = format!("{}-{}", local_peer_id, remote_peer_id);
-        self.hole_punch_attempts
-            .read()
-            .get(&attempt_key)
-            .map(|a| a.status)
-    }
-
-    /// Establish relay circuit (fallback when hole-punch fails)
+    /// Establish relay circuit (fallback when direct DCUtR fails)
     pub async fn establish_relay_circuit(
         &self,
         local_peer_id: PeerId,
@@ -579,27 +402,8 @@ impl NatTraversal {
         self.relay_circuits.read().get(&circuit_key).cloned()
     }
 
-    /// Clear abandoned/old hole-punch attempts
-    pub fn cleanup_old_attempts(&self) {
-        let timeout = self.config.attempt_timeout;
-        let now = current_unix_timestamp();
-
-        let mut attempts = self.hole_punch_attempts.write();
-        let old_keys: Vec<String> = attempts
-            .iter()
-            .filter(|(_, a)| now.saturating_sub(a.created_at) > timeout)
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        for key in old_keys {
-            attempts.remove(&key);
-            debug!("Cleaned up old hole-punch attempt: {}", key);
-        }
-    }
-
     /// Shutdown NAT traversal
     pub async fn shutdown(&self) -> Result<(), NatTraversalError> {
-        self.hole_punch_attempts.write().clear();
         self.relay_circuits.write().clear();
         info!("NAT traversal shutdown complete");
         Ok(())
@@ -665,39 +469,9 @@ mod tests {
         assert_eq!(traversal.get_nat_type(), NatType::Unknown);
     }
 
-    #[test]
-    fn test_nat_traversal_invalid_config() {
-        let config = NatConfig {
-            max_attempts: 0,
-            ..Default::default()
-        };
-        assert!(NatTraversal::new(config).is_err());
-    }
-
     #[tokio::test]
     #[ignore = "Requires SwarmHandle integration test"]
     async fn test_probe_nat() {
-        // This test now requires SwarmHandle parameter
-        // See tests/integration_nat.rs for full integration test
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires SwarmHandle integration test"]
-    async fn test_hole_punch_start() {
-        // This test now requires SwarmHandle parameter
-        // See tests/integration_nat.rs for full integration test
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires SwarmHandle integration test"]
-    async fn test_hole_punch_disabled() {
-        // This test now requires SwarmHandle parameter
-        // See tests/integration_nat.rs for full integration test
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires SwarmHandle integration test"]
-    async fn test_get_hole_punch_status() {
         // This test now requires SwarmHandle parameter
         // See tests/integration_nat.rs for full integration test
     }
@@ -783,35 +557,6 @@ mod tests {
         assert_eq!(c.dest_peer_id, remote);
     }
 
-    #[test]
-    fn test_cleanup_old_attempts() {
-        let config = NatConfig {
-            attempt_timeout: 1,
-            ..Default::default()
-        };
-        let traversal = NatTraversal::new(config).expect("Failed to create");
-
-        // Manually insert an old attempt
-        {
-            let attempt = HolePunchAttempt {
-                local_peer_id: PeerId::random(),
-                remote_peer_id: PeerId::random(),
-                local_external_addr: "203.0.113.1:30000".parse().unwrap(),
-                remote_external_addr: "203.0.113.2:30000".parse().unwrap(),
-                attempt_num: 0,
-                created_at: 0, // Very old
-                status: HolePunchStatus::Failed,
-            };
-
-            let key = format!("{}-{}", attempt.local_peer_id, attempt.remote_peer_id);
-            traversal.hole_punch_attempts.write().insert(key, attempt);
-        }
-
-        assert_eq!(traversal.hole_punch_attempts.read().len(), 1);
-        traversal.cleanup_old_attempts();
-        assert_eq!(traversal.hole_punch_attempts.read().len(), 0);
-    }
-
     #[tokio::test]
     async fn test_shutdown() {
         let config = NatConfig::default();
@@ -839,18 +584,10 @@ mod tests {
     }
 
     #[test]
-    fn test_hole_punch_status_values() {
-        assert_eq!(HolePunchStatus::Pending, HolePunchStatus::Pending);
-        assert_ne!(HolePunchStatus::Pending, HolePunchStatus::Success);
-        assert_eq!(HolePunchStatus::Success, HolePunchStatus::Success);
-    }
-
-    #[test]
     fn test_nat_config_defaults() {
         let config = NatConfig::default();
         // Default config has empty peer_reflectors (populated dynamically from mesh)
         assert!(config.peer_reflectors.is_empty());
-        assert!(config.enable_hole_punch);
         assert!(config.enable_relay_fallback);
     }
 }

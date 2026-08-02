@@ -192,13 +192,13 @@ async fn main() -> anyhow::Result<()> {
                 scmessenger_core::transport::nat::NatType::FullCone => {
                     println!("\n   📖 Full Cone NAT means:");
                     println!("      • NAT present but permissive");
-                    println!("      • Hole-punching will work");
+                    println!("      • Direct libp2p DCUtR may work");
                     println!("      • Good for peer-to-peer");
                 }
                 scmessenger_core::transport::nat::NatType::Symmetric => {
                     println!("\n   📖 Symmetric NAT means:");
                     println!("      • Strict NAT with port randomization");
-                    println!("      • Hole-punching difficult");
+                    println!("      • Direct libp2p DCUtR may be difficult");
                     println!("      • Relay fallback recommended");
                 }
                 _ => {
@@ -245,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
     println!("• Mobile clients discovering external address");
     println!("• Browser nodes behind NAT");
     println!("• Automatic NAT traversal setup");
-    println!("• Hole-punch coordination");
+    println!("• Direct connectivity via libp2p DCUtR");
     println!("• Relay fallback decision");
 
     println!("\n✨ Demo Complete!");

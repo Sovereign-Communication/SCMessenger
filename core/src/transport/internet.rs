@@ -457,56 +457,7 @@ impl InternetRelay {
     }
 }
 
-// ============================================================================
-// NAT TRAVERSAL (for future enhancement)
-// ============================================================================
-
 impl InternetRelay {
-    /// Attempt hole-punch between two peers through a relay
-    pub async fn attempt_hole_punch(
-        &self,
-        local_peer_id: PeerId,
-        remote_peer_id: PeerId,
-        relay_peer_id: PeerId,
-    ) -> Result<(), InternetTransportError> {
-        debug!(
-            "Attempting hole-punch: {} <-> {} via relay {}",
-            local_peer_id, remote_peer_id, relay_peer_id
-        );
-
-        // Implement hole-punching via relay coordination
-        // 1. Contact relay to get remote peer's address
-        let relay_key = relay_peer_id.to_string();
-        let relays = self.active_relays.read();
-        let relay_info = relays
-            .get(&relay_key)
-            .ok_or_else(|| InternetTransportError::RelayPeerNotFound(relay_key.clone()))?;
-
-        if relay_info.relay_addresses.is_empty() {
-            return Err(InternetTransportError::Other(
-                "Relay has no addresses".to_string(),
-            ));
-        }
-
-        drop(relays);
-
-        // 2. Request relay to coordinate hole-punch by exchanging addresses
-        info!(
-            "Requesting hole-punch coordination from relay {} for local {} <-> remote {}",
-            relay_peer_id, local_peer_id, remote_peer_id
-        );
-
-        // 3. In production, both peers would send UDP packets to each other's public address
-        // The relay would provide the observed addresses and coordinate timing
-        // For now, we log the attempt
-        debug!(
-            "Hole-punch setup initiated between {} and {} via relay {}",
-            local_peer_id, remote_peer_id, relay_peer_id
-        );
-
-        Ok(())
-    }
-
     /// Establish a relay circuit for continuous relaying
     pub async fn establish_relay_circuit(
         &self,
@@ -829,27 +780,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config2.relay_mode, RelayMode::Both);
-    }
-
-    #[tokio::test]
-    async fn test_nat_traversal_hole_punch() {
-        let config = InternetTransportConfig::default();
-        let relay_inst = InternetRelay::new(config).expect("Failed to create relay");
-
-        let local = PeerId::random();
-        let remote = PeerId::random();
-        let relay = PeerId::random();
-
-        // First add the relay to active relays
-        relay_inst
-            .connect_to_relay(relay, "/ip4/127.0.0.1/tcp/9000".parse().unwrap())
-            .await
-            .unwrap();
-
-        assert!(relay_inst
-            .attempt_hole_punch(local, remote, relay)
-            .await
-            .is_ok());
     }
 
     #[tokio::test]

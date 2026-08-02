@@ -3423,22 +3423,6 @@ impl IronCore {
         crate::routing::AdaptiveTTLManager::calculate_dynamic_ttl(1800, battery_level, peer_count)
     }
 
-    /// Get NAT hole-punch status for a peer pair.
-    /// Returns `None` if the NAT traversal manager is not available.
-    /// Note: NAT traversal is session-based and created on-demand. Use
-    /// `NatTraversalManager::get_hole_punch_status()` directly when you have
-    /// an active NAT traversal session.
-    pub fn get_hole_punch_status(
-        &self,
-        local_peer_id: libp2p::PeerId,
-        remote_peer_id: libp2p::PeerId,
-    ) -> Option<crate::transport::nat::HolePunchStatus> {
-        // NAT traversal is not held by IronCore directly; it's created on-demand.
-        // Return None to indicate status is unavailable without an active NAT session.
-        let _ = (local_peer_id, remote_peer_id);
-        None
-    }
-
     /// Get active multipath delivery paths for a peer from the routing engine.
     /// Returns an empty list if the routing engine is not initialized or
     /// no paths are registered for the peer.
@@ -3501,29 +3485,6 @@ impl IronCore {
         self.transport_manager
             .write()
             .disable_transport(transport_type);
-    }
-
-    /// Initiate a NAT hole-punch attempt to a remote peer.
-    /// Delegates to `NatTraversal::start_hole_punch`.
-    /// Returns the created attempt key on success, or an error description on failure.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub async fn start_hole_punch(
-        &self,
-        local_peer_id: libp2p::PeerId,
-        remote_peer_id: libp2p::PeerId,
-        remote_external_addr: std::net::SocketAddr,
-    ) -> Result<String, String> {
-        use crate::transport::nat::NatTraversal;
-        let nat_config = crate::transport::nat::NatConfig::default();
-        let nat_manager = match NatTraversal::new(nat_config) {
-            Ok(m) => m,
-            Err(e) => return Err(e.to_string()),
-        };
-        nat_manager
-            .start_hole_punch(local_peer_id, remote_peer_id, remote_external_addr)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(format!("{}-{}", local_peer_id, remote_peer_id))
     }
 
     /// Register a callback to be invoked when transport connection state changes.
