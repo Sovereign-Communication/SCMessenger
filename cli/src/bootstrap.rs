@@ -13,6 +13,9 @@
 // - Format: comma-separated multiaddrs
 // - Example: export SC_BOOTSTRAP_NODES="/ip4/1.2.3.4/tcp/9001/p2p/12D3Koo..."
 
+use scmessenger_core::TOPIC_LOBBY;
+use scmessenger_core::TOPIC_MESH;
+
 use crate::ledger;
 
 /// Default bootstrap nodes — can be overridden at build time
@@ -24,13 +27,6 @@ use crate::ledger;
 ///
 /// All nodes relay for the mesh. Connection attempts fail over automatically.
 pub const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[];
-
-/// The "lobby" topic — a universal discovery channel.
-/// All nodes subscribe to this on startup to find the active mesh.
-pub const LOBBY_TOPIC: &str = "sc-lobby";
-
-/// The primary mesh topic for real messages
-pub const MESH_TOPIC: &str = "sc-mesh";
 
 /// Get default bootstrap nodes, with optional build-time override
 pub fn default_bootstrap_nodes() -> Vec<String> {
@@ -128,7 +124,7 @@ pub fn merge_bootstrap_nodes(user_nodes: Vec<String>) -> Vec<String> {
 
 /// Get all default topics that a node should subscribe to
 pub fn default_topics() -> Vec<String> {
-    vec![LOBBY_TOPIC.to_string(), MESH_TOPIC.to_string()]
+    vec![TOPIC_LOBBY.to_string(), TOPIC_MESH.to_string()]
 }
 
 #[cfg(test)]
@@ -202,7 +198,7 @@ mod tests {
     #[test]
     fn test_default_topics() {
         let topics = default_topics();
-        assert!(topics.contains(&"sc-lobby".to_string()));
-        assert!(topics.contains(&"sc-mesh".to_string()));
+        assert!(topics.contains(&TOPIC_LOBBY.to_string()));
+        assert!(topics.contains(&TOPIC_MESH.to_string()));
     }
 }

@@ -43,6 +43,8 @@ use super::routing::{
 };
 use crate::drift::{DriftFrame, SyncSession};
 use crate::store::relay_custody::{CustodyCompatMode, CustodyEnforcement, RelayCustodyStore};
+use crate::TOPIC_LOBBY;
+use crate::TOPIC_MESH;
 use anyhow::Result;
 use bincode;
 #[cfg(target_arch = "wasm32")]
@@ -359,7 +361,7 @@ const ROUTE_ATTEMPT_REASON_INITIAL_SEND: &str = "INITIAL_SEND";
 const ROUTE_ATTEMPT_REASON_RETRY_NEXT: &str = "RETRY_NEXT_CANDIDATE";
 #[cfg(not(target_arch = "wasm32"))]
 const ROUTE_ATTEMPT_REASON_RETRY_CYCLE: &str = "RETRY_CYCLE_RESTART";
-const DELIVERY_CONVERGENCE_TOPIC: &str = "sc-receipt-convergence";
+const DELIVERY_CONVERGENCE_TOPIC: &str = crate::TOPIC_RECEIPT_CONVERGENCE;
 const DELIVERY_CONVERGENCE_PREFIX: &[u8] = b"scm.delivery.convergence.v1:";
 const RELAY_MAX_INFLIGHT_DISPATCHES: usize = 256;
 const RELAY_PEER_BUCKET_REFILL_PER_SEC: f64 = 4.0;
@@ -2478,10 +2480,13 @@ pub async fn start_swarm_with_config(
 
         // Subscribe to default topics immediately (lobby + mesh)
         // The lobby topic is the wildcard discovery channel
-        let lobby_topic = libp2p::gossipsub::IdentTopic::new("sc-lobby");
-        let mesh_topic = libp2p::gossipsub::IdentTopic::new("sc-mesh");
-        let delivery_convergence_topic =
-            libp2p::gossipsub::IdentTopic::new(DELIVERY_CONVERGENCE_TOPIC);
+        let lobby_topic = libp2p::gossipsub::IdentTopic::new(TOPIC_LOBBY);
+        let mesh_topic = libp2p::gossipsub::IdentTopic::new(TOPIC_MESH);
+        let delivery_convergence_topic = libp2p::gossipsub::IdentTopic::new(format!(
+            "{}{}",
+            "sc-receipt-convergence".trim_start_matches("sc-"),
+            ""
+        ));
 
         if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&lobby_topic) {
             tracing::warn!("Failed to subscribe to lobby topic: {}", e);

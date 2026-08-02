@@ -986,12 +986,12 @@ mod tests {
     fn test_ledger_topic_tracking() {
         let mut ledger = ConnectionLedger::default();
         ledger.add_bootstrap("/ip4/1.2.3.4/tcp/9001", None);
-        ledger.record_topic("/ip4/1.2.3.4/tcp/9001", "sc-mesh");
-        ledger.record_topic("/ip4/1.2.3.4/tcp/9001", "sc-lobby");
+        ledger.record_topic("/ip4/1.2.3.4/tcp/9001", scmessenger_core::TOPIC_MESH);
+        ledger.record_topic("/ip4/1.2.3.4/tcp/9001", scmessenger_core::TOPIC_LOBBY);
 
         let topics = ledger.all_known_topics();
-        assert!(topics.contains(&"sc-mesh".to_string()));
-        assert!(topics.contains(&"sc-lobby".to_string()));
+        assert!(topics.contains(&scmessenger_core::TOPIC_MESH.to_string()));
+        assert!(topics.contains(&scmessenger_core::TOPIC_LOBBY.to_string()));
     }
 
     #[test]
