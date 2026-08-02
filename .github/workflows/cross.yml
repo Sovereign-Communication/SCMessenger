@@ -27,6 +27,8 @@ jobs:
             target: armv7-linux-androideabi
           - abi: x86_64
             target: x86_64-linux-android
+          - abi: x86
+            target: i686-linux-android
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
