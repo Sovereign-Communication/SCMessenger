@@ -8,7 +8,7 @@ cross-internet Hawaii<->PA custody cell is 040-S5 (operator + Josh/Lucas,
 infra-gated) and stays separate.
 
 Cloud node facts: /ip4/100.56.248.69/tcp/9001; health http://100.56.248.69:9876/health
-(port 9876, NOT 8080); image testbotz/scmessenger (container scm-alpha-relay).
+(port 9876, NOT 8080); image testbotz/scmessenger (container scm-alpha-node).
 Peer id per newer alpha doc: 12D3KooWGhDbFE4YrSHEphHtrpZ79WdBV7VX1ZUqGnBsKhYHsGXB
 (2026-07-20 proof recorded 12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg;
 dialing is promiscuous -- record both, trust the live cloud node's identify).

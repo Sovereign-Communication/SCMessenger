@@ -85,48 +85,157 @@ MODEL_TOKEN_LIMITS = {
 # Default output token cap when model is not in MODEL_TOKEN_LIMITS
 DEFAULT_MAX_TOKENS = 8192
 
-# Qwen model rotation pool (approx 1M token limit each, rotate on 403 quota)
-# Source: docs/QWEN_QUOTA_LEDGER.md -- only verified code-capable text models
-# Excludes: VL/vision, MT/translation, unsupported, video, OCR models
-# Priority: coder-specific > large reasoning > general-purpose > small
-QWEN_MODEL_POOL = [
-    # Tier 1: Coder-specific (best for Rust implementation tasks)
-    "qwen3-coder-480b-a35b-instruct",   # 991k remaining
-    "qwen3-coder-next",                  # 1M remaining
-    "qwen3-coder-plus",                  # 1M remaining
-    "qwen3-coder-plus-2025-09-23",       # 1M remaining
-    "qwen3-coder-plus-2025-07-22",       # 1M remaining
-    "qwen3-coder-30b-a3b-instruct",      # 1M remaining
-    "qwen3-coder-flash",                 # ~1M remaining
-    "qwen3-coder-flash-2025-07-28",      # 1M remaining
-    # Tier 2: Large reasoning models
-    "qwen3-max",                         # 1M remaining
-    "qwen3-max-preview",                 # 1M remaining
-    "qwen3-max-2025-09-23",              # 1M remaining
-    "qwen3.5-397b-a17b",                 # 1M remaining
-    "qwen3.5-122b-a10b",                 # 1M remaining
-    "qwen3-235b-a22b",                   # 1M remaining
-    "qwen3-next-80b-a3b-instruct",       # 1M remaining
-    # Tier 3: General-purpose (still strong for code)
-    "qwen-max",                          # 995k remaining
-    "qwen-plus-2025-07-28",              # 1M remaining
-    "qwen3-32b",                         # 1M remaining
-    "qwen3-30b-a3b",                     # 1M remaining
-    "qwen3-14b",                         # 1M remaining
-]
+# ---------------------------------------------------------------------------
+# Ledger-aware model resolution (added 2026-08-02).
+#
+# Operator directive: NO blind model rotation. When a Qwen dispatch fails with
+# 404 / 403 / 429 / "Not Supported", the script must fail fast with an
+# actionable message that points at docs/QWEN_QUOTA_LEDGER.md and prints the
+# current high-capacity candidates parsed from that ledger at runtime.
+# Bare aliases that the ledger marks "Not Supported" (e.g. qwen3.7-plus) are
+# refused up front -- the API accepts them but the spend lands on an untracked
+# row, which is how qwen3-coder-plus-2025-09-23 got drained to 14%.
+# ---------------------------------------------------------------------------
 
-def get_next_qwen_model():
-    """Return next model from rotation pool, persisting index in tmp/qwen_model_index.txt."""
-    index_path = os.path.join(os.path.dirname(__file__), "tmp", "qwen_model_index.txt")
+_LEDGER_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "docs", "QWEN_QUOTA_LEDGER.md",
+)
+
+# Non-text model families to exclude from tier resolution and "top candidates".
+_TEXT_SKIP_PATTERNS = ("-vl-", "-mt-", "ocr", "wan2.2", "-character", "-kf2v-")
+
+# Tier -> keyword matchers. "standard" is the residual bucket (no keyword match).
+_TIER_KEYWORDS = {
+    "thinking": ["thinking", "qwq-"],
+    "max":      ["-max"],
+    "plus":     ["-plus"],
+    "flash":    ["-flash"],
+}
+
+
+def _is_text_model(model):
+    """True if the model code is a plain text/code model (not VL/MT/OCR/video)."""
+    return not any(p in model for p in _TEXT_SKIP_PATTERNS)
+
+
+def _parse_ledger():
+    """Parse docs/QWEN_QUOTA_LEDGER.md at runtime.
+
+    Returns:
+        quota:       dict model_code -> {'remaining': int, 'enabled': bool, 'status': str}
+        unsupported: dict model_code -> status_string (from the Unsupported section)
+    """
+    quota = {}
+    unsupported = {}
     try:
-        with open(index_path, "r", encoding="utf-8") as f:
-            idx = int(f.read().strip())
-    except Exception:
-        idx = 0
-    model = QWEN_MODEL_POOL[idx % len(QWEN_MODEL_POOL)]
-    with open(index_path, "w", encoding="utf-8") as f:
-        f.write(str((idx + 1) % len(QWEN_MODEL_POOL)))
-    return model
+        with open(_LEDGER_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return quota, unsupported
+
+    sections = re.split(r"(?=^## )", content, flags=re.MULTILINE)
+
+    for section in sections:
+        header = section.split("\n", 1)[0].strip()
+
+        if header.startswith("## Unsupported"):
+            rows = re.findall(
+                r"^\|([^|\n]+)\|([^|\n]+)\|([^|\n]*)\|",
+                section, flags=re.MULTILINE,
+            )
+            for cells in rows:
+                cells = [c.strip() for c in cells]
+                if not cells[0] or cells[0].startswith("-") or cells[0] == "Model Code":
+                    continue
+                unsupported[cells[0]] = " ".join(c for c in cells[1:] if c).strip()
+            continue
+
+        if "Quota Summary" in header:
+            rows = re.findall(
+                r"^\|([^|\n]+)\|([^|\n]+)\|([^|\n]+)\|([^|\n]+)\|([^|\n]+)\|",
+                section, flags=re.MULTILINE,
+            )
+            for cells in rows:
+                cells = [c.strip() for c in cells]
+                if not cells[0] or cells[0].startswith("-") or cells[0] == "Model Code":
+                    continue
+                model_code = cells[0]
+                remaining_str = cells[1]
+                status_raw = cells[3]
+                m = re.search(r"Remaining\s+([\d,]+)", remaining_str)
+                remaining = int(m.group(1).replace(",", "")) if m else 0
+                enabled = "Not Enabled" not in status_raw
+                quota[model_code] = {
+                    "remaining": remaining,
+                    "enabled": enabled,
+                    "status": status_raw.replace("**", "").strip(),
+                }
+
+    return quota, unsupported
+
+
+def _resolve_tier(tier, quota):
+    """Pick the highest-remaining ENABLED text model whose name matches the tier.
+
+    Returns (model_code, remaining) or (None, 0) if nothing matches.
+    """
+    candidates = []
+    for model, info in quota.items():
+        if not info["enabled"] or not _is_text_model(model):
+            continue
+        keywords = _TIER_KEYWORDS.get(tier, [])
+        if tier == "standard":
+            # Residual bucket: reject anything that matches another tier.
+            if any(any(k in model for k in kws) for kws in _TIER_KEYWORDS.values()):
+                continue
+        else:
+            if not any(k in model for k in keywords):
+                continue
+        candidates.append((info["remaining"], model))
+    if not candidates:
+        return None, 0
+    candidates.sort(reverse=True)
+    return candidates[0][1], candidates[0][0]
+
+
+def _fail_fast_qwen(model, reason, body_snippet=""):
+    """Print an actionable error and sys.exit(1). NO ROTATION, ever."""
+    quota, unsupported = _parse_ledger()
+
+    print(f"[ERROR] Qwen dispatch failed: model '{model}' {reason}.")
+    if body_snippet:
+        # Cap width so a huge API error body doesn't flood the terminal.
+        snippet = body_snippet.strip().replace("\n", " ")[:300]
+        print(f"        API response: {snippet}")
+    print()
+    print("Do NOT retry blindly. Choose a model deliberately.")
+    print("Ledger: docs/QWEN_QUOTA_LEDGER.md")
+    print()
+
+    if model in unsupported:
+        print(f"Model '{model}' is listed as unsupported in the ledger: {unsupported[model]}")
+        alts = [(info["remaining"], m) for m, info in quota.items()
+                if m.startswith(model + "-") and info["enabled"]]
+        alts.sort(reverse=True)
+        if alts:
+            print("Use a DATED equivalent instead:")
+            for remaining, m in alts[:5]:
+                print(f"  - {m}  ({remaining:,} remaining)")
+        print()
+
+    top = [(info["remaining"], m) for m, info in quota.items()
+           if info["enabled"] and _is_text_model(m)]
+    top.sort(reverse=True)
+    if top:
+        print("Top high-capacity text-model candidates from the ledger:")
+        for remaining, m in top[:7]:
+            print(f"  - {m}  ({remaining:,} remaining)")
+        print()
+
+    print("Re-run with: --provider qwen --model <chosen-model>")
+    sys.exit(1)
+
 
 def _key_from_env_file(path, names):
     try:
@@ -371,20 +480,34 @@ def send_request(args, prompt, resolved_model, display_model, round_num=None):
             return content, response_file
 
         except urllib.error.HTTPError as e:
-            if (e.code == 429 or e.code == 403) and args.provider == "qwen":
-                print("[WARN] Rate limit or Quota hit. Rotating model...")
-                return None, None
+            body = ""
+            try:
+                body = e.read().decode("utf-8")
+            except Exception:
+                pass
+
+            # Qwen free lane: fail fast on any model/quota/rate error.
+            # NO ROTATION. Operator directive 2026-08-02.
+            if args.provider == "qwen" and (
+                e.code in (404, 403, 429)
+                or "not supported" in body.lower()
+            ):
+                if e.code == 404:
+                    reason = "returned HTTP 404 (model not found)"
+                elif e.code == 403:
+                    reason = "returned HTTP 403 (quota exhausted or access denied)"
+                elif e.code == 429:
+                    reason = "returned HTTP 429 (rate limit)"
+                else:
+                    reason = "reported 'Not Supported'"
+                _fail_fast_qwen(resolved_model, reason, body_snippet=body)
+
             if (e.code == 429 or e.code == 403) and args.provider == "qwenpaid":
                 retry_after = e.headers.get("Retry-After") if e.headers else None
                 wait = int(retry_after) if (retry_after or "").isdigit() else 30
                 print(f"[WARN] Paid-plan rate limit / quota hit (HTTP {e.code}); cooling down {wait}s before retry...")
                 time.sleep(wait)
                 return None, None
-            body = ""
-            try:
-                body = e.read().decode("utf-8")
-            except Exception:
-                pass
             # Transient errors on non-qwen lanes: honor Retry-After and retry
             # in place (bounded), instead of crashing the whole dispatch.
             if e.code in (429, 413, 500, 502, 503) and transient_attempts < 2:
@@ -571,21 +694,52 @@ Return your changes as unified diffs, one fenced ```diff block per file, using s
     else:
         file_chunks = [args.files]
 
-    # Resolve model
+    # Resolve model (ledger-aware, 2026-08-02).
+    # --tier and bare-alias checks consult docs/QWEN_QUOTA_LEDGER.md at runtime
+    # so suggestions stay current as quota drains / models are enabled.
+    quota, unsupported = _parse_ledger()
+
     if args.provider == "qwenpaid" and not args.model:
         resolved_model = "qwen3.8-max-preview"
-    elif args.provider == "qwen" and not args.tier and not args.model:
-        resolved_model = get_next_qwen_model()
     elif args.provider == "qwen":
         if args.tier:
-            resolved_model = f"qwen-{args.tier}"
-        else:
+            resolved, remaining = _resolve_tier(args.tier, quota)
+            if resolved is None:
+                print(f"[ERROR] --tier {args.tier}: no enabled text models in the ledger match this tier.")
+                print(f"        Ledger: docs/QWEN_QUOTA_LEDGER.md")
+                sys.exit(1)
+            resolved_model = resolved
+            print(f"[INFO] --tier {args.tier} resolved from ledger: {resolved_model} ({remaining:,} remaining)")
+        elif args.model:
             resolved_model = args.model
+        else:
+            # Refuse to silently pick a model. Operator directive 2026-08-02:
+            # no implicit rotation; caller must choose deliberately.
+            print("[ERROR] --provider qwen requires either --model <name> or --tier <tier>.")
+            print("        Blind model rotation is disabled. See docs/QWEN_QUOTA_LEDGER.md.")
+            sys.exit(1)
     else:
         if not args.model:
-            print(f"Error: --model is required for provider '{args.provider}'.")
+            print(f"[ERROR] --model is required for provider '{args.provider}'.")
             sys.exit(1)
         resolved_model = args.model
+
+    # Bare-alias / unsupported-model gate.
+    # The API may accept e.g. 'qwen3.7-plus', but the spend lands on a row the
+    # ledger does not track -- the same failure shape as the agy shorthand trap.
+    if resolved_model in unsupported:
+        print(f"[ERROR] Model '{resolved_model}' is listed as unsupported in the ledger: {unsupported[resolved_model]}")
+        alts = [(info["remaining"], m) for m, info in quota.items()
+                if m.startswith(resolved_model + "-") and info["enabled"]]
+        alts.sort(reverse=True)
+        if alts:
+            print("        The API may accept this bare alias, but spend lands on an untracked row.")
+            print("        Use a DATED equivalent instead:")
+            for remaining, m in alts[:5]:
+                print(f"          - {m}  ({remaining:,} remaining)")
+        print()
+        print("        Ledger: docs/QWEN_QUOTA_LEDGER.md")
+        sys.exit(1)
 
     display_model = resolved_model
     print(f"Dispatching task {os.path.basename(args.task)} to {args.provider} ({display_model}) in {len(file_chunks)} chunk(s)...")
@@ -604,25 +758,21 @@ Return your changes as unified diffs, one fenced ```diff block per file, using s
 
         chunk_content, response_file = send_request(args, prompt, resolved_model, display_model)
         retry_count = 0
-        while chunk_content is None and retry_count < 10 and args.provider in ("qwen", "qwenpaid"):
-            if args.provider == "qwen":
-                # Qwen-only: rotate through the DashScope model pool. Other
-                # lanes have no in-provider pool here; cross-lake failover is
-                # the orchestrator's job (lake_route.py), not this transport
-                # script's.
-                resolved_model = get_next_qwen_model()
-                print(f"Retrying with rotated model {resolved_model}...")
-            else:
-                # qwenpaid: paid subscription lane, no model pool -- retry the
-                # same model with escalating backoff (operator 2026-07-28;
-                # 30s steps ride out minute-scale rate windows).
-                print(f"Retrying same model {resolved_model} after backoff...")
-                time.sleep(30 * (retry_count + 1))
+        while chunk_content is None and retry_count < 10 and args.provider == "qwenpaid":
+            # qwenpaid: paid subscription lane, retry the SAME model with
+            # escalating backoff (operator 2026-07-28; 30s steps ride out
+            # minute-scale rate windows).
+            # Qwen free lane: send_request already failed fast on 404/403/429/
+            # Not-Supported (no rotation, ever -- operator directive
+            # 2026-08-02). If content is still None here for any other
+            # provider, we fall through to the FAIL below.
+            print(f"Retrying same model {resolved_model} after backoff...")
+            time.sleep(30 * (retry_count + 1))
             chunk_content, response_file = send_request(args, prompt, resolved_model, resolved_model)
             retry_count += 1
 
         if chunk_content is None:
-            print(f"[FAIL] dispatch to {args.provider} failed after retries; no content received")
+            print(f"[FAIL] dispatch to {args.provider} failed; no content received")
             sys.exit(1)
 
         if chunk_content:

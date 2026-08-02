@@ -242,6 +242,18 @@ jobs:
             echo "[OK] No oversized tracked files detected"
           fi
 
+      - name: Architecture doctrine check (nodes-not-relays vocabulary)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Checking architecture doctrine compliance (nodes-not-relays)..."
+          echo "Mode: --changed vs origin/${{ github.base_ref }}"
+          echo "Why --changed not --all: scanning the whole repo drowns PR gating"
+          echo "in 334 legacy violations accumulated before this check existed."
+          echo "--changed mode enforces the doctrine on NEW/modified files only,"
+          echo "so future PRs cannot add violations while the legacy debt is"
+          echo "reviewed and renamed in a separate effort."
+          python scripts/doctrine_check.py --changed --base "origin/${{ github.base_ref }}"
+
       - name: Summary
         if: always()
         run: |

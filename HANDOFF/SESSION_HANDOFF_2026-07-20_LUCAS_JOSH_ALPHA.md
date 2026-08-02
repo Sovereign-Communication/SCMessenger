@@ -10,7 +10,7 @@ and launch the app when boot_completed=1. Last commit on main:
 
 1. Relay `100.56.248.69:9001` running the dial-fix image
    (`testbotz/scmessenger:latest`, digest 72682d13b1e6, includes f2831458).
-   Container `scm-alpha-relay`, `--network host`, `--restart unless-stopped`,
+   Container `scm-alpha-node`, `--network host`, `--restart unless-stopped`,
    cmd: `scm --http-bind 0.0.0.0:9876 relay --listen /ip4/0.0.0.0/tcp/9001
    --http-port 9000 --name alpha-relay`. Restart policy already set.
 2. Health API on `9876` (NOT 8080 — 8080 is the swarm's adaptive transport
