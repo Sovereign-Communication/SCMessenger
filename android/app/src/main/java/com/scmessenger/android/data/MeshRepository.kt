@@ -6701,6 +6701,25 @@ open class MeshRepository(
         
         val localAcked = smartResult.success
 
+        // A transport result is authoritative for this attempt. Do not let a
+        // later core-route check downgrade a successful BLE/Wi-Fi/TCP send to
+        // "no_route_candidates". This is a transport ACK (not proof that the
+        // recipient decrypted/displayed the message), so the caller will keep
+        // its receipt window and can distinguish delivery from acknowledgement.
+        if (localAcked) {
+            logDeliveryAttempt(
+                messageId = traceMessageId,
+                medium = smartResult.transport.value,
+                phase = "aggregate",
+                outcome = "accepted",
+                detail = "ctx=$attemptContext source=smart_router transport_ack=true"
+            )
+            return DeliveryAttemptResult(
+                acked = true,
+                routePeerId = routePeerCandidates.firstOrNull()
+            )
+        }
+
         if (strictBleOnly) {
             logDeliveryAttempt(
                 messageId = traceMessageId,

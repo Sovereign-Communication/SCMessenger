@@ -81,6 +81,22 @@ Android evidence:
    receipt can be stranded when the contact has no route hints and the active BLE
    connection is held by the Android central rather than the server.
 
+### Claude/Windows correction and Android state-machine finding
+
+The latest Windows/Claude handoff corrected its earlier headline: the live
+operator result is still Android -> iOS succeeds and iOS -> Android fails.
+It also found that Android logged a BLE transport success, then continued into
+the core-route branch and returned `no_route_candidates`; the delivery state
+machine subsequently retried and exhausted the same message. That is a real
+Android bug independent of whether the recipient processed the payload.
+
+Android now returns a successful transport ACK immediately from
+`attemptDirectSwarmDelivery` instead of allowing the later core check to
+downgrade it. This ACK only means the selected local transport accepted the
+payload; the receipt window remains authoritative for recipient processing.
+The fresh paired run must therefore show both the new aggregate transport ACK
+and recipient-side reassembly/decrypt/UI/receipt evidence.
+
 Do not “fix” this by treating local BLE acceptance as delivery or by adding a
 guessed TCP endpoint. Receipts and the real route must remain authoritative.
 
@@ -114,8 +130,19 @@ committed handoff intentionally uses labels.
 - iOS now logs the notification-state callback, records subscription only
   after CoreBluetooth reports `isNotifying`, and retries a failed CCCD request
   up to three times while the peripheral remains connected.
+- iOS now records a `ble_central_write_ok` diagnostic for each acknowledged
+  characteristic write; this separates a successful CoreBluetooth write from
+  local queue acceptance.
 - Android now includes live central-side GATT connections when selecting a BLE
   receipt fallback, in addition to peripheral/server connections.
+- Android GATT now records `mesh_ble_rx_write`, `mesh_ble_rx_fragment`,
+  `mesh_ble_rx_complete`, and `mesh_ble_forward` diagnostics. These markers
+  make the iOS-to-Android break observable from the exported Android bundle
+  without asking the operator to infer delivery from UI state or a sender-side
+  timeout.
+- Android now preserves a successful SmartTransportRouter result instead of
+  falling through to a `no_route_candidates` failure after BLE/Wi-Fi/TCP has
+  already accepted the payload.
 
 ## Acceptance for the fix
 

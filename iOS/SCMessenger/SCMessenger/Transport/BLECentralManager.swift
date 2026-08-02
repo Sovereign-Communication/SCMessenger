@@ -626,6 +626,7 @@ extension BLECentralManager: CBPeripheralDelegate {
 
         // Dequeue next write
         let peripheralId = peripheral.identifier
+        appendRepositoryDiagnostic("ble_central_write_ok id=\(peripheralId.uuidString.prefix(8))")
         writeInProgress[peripheralId] = false
         if let next = pendingWrites[peripheralId]?.first {
             pendingWrites[peripheralId]?.removeFirst()
