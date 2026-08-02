@@ -240,7 +240,9 @@ fun MeshNavHost(
                     onContactAdded = { navController.popBackStack() },
                     prefilledPeerId = deepLinkData?.peerId ?: "",
                     prefilledPublicKey = deepLinkData?.publicKey ?: "",
-                    prefilledNickname = deepLinkData?.nickname ?: ""
+                    prefilledNickname = deepLinkData?.nickname ?: "",
+                    prefilledLibp2pPeerId = deepLinkData?.libp2pPeerId,
+                    prefilledListeners = deepLinkData?.listeners ?: emptyList()
                 )
             }
         }

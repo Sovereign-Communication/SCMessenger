@@ -111,10 +111,9 @@ object ApkShareManager {
         durationMinutes: Long = 15,
         onStarted: (String) -> Unit
     ) {
-        val awsRelay = "/ip4/100.56.248.69/tcp/9001"
         if (isHosting) {
             val ip = getLocalIpAddress()
-            onStarted("http://$ip:$hostingPort/scmessenger.apk?bootstrap=$awsRelay")
+            onStarted("http://$ip:$hostingPort/scmessenger.apk")
             return
         }
 
@@ -126,7 +125,10 @@ object ApkShareManager {
             hostingPort = serverSocket!!.localPort
             isHosting = true
             val ip = getLocalIpAddress()
-            val downloadUrl = "http://$ip:$hostingPort/scmessenger.apk?bootstrap=$awsRelay"
+            // This URL is a local, ephemeral file host.  Do not append a relay
+            // hint: the old hardcoded endpoint was dead and caused installers to
+            // seed an unrelated node before the app had verified its identity.
+            val downloadUrl = "http://$ip:$hostingPort/scmessenger.apk"
 
             executor.execute {
                 while (isHosting && serverSocket != null && !serverSocket!!.isClosed) {

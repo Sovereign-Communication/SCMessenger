@@ -512,8 +512,12 @@ class ContactsViewModel @Inject constructor(
                     generatedNotes?.trim()?.takeIf { it.isNotEmpty() }
                 ).joinToString(";").takeIf { it.isNotEmpty() }
 
+                // UNIFIED ID FIX: the contact key is always the public-key
+                // identity. The libp2p peer ID remains in notes as routing
+                // metadata and must never become the persisted contact ID.
+                val canonicalPeerId = trimmedKey.lowercase()
                 val contact = uniffi.api.Contact(
-                    peerId = peerId.trim(),
+                    peerId = canonicalPeerId,
                     nickname = nickname,
                     localNickname = null,
                     publicKey = trimmedKey,
@@ -530,14 +534,15 @@ class ContactsViewModel @Inject constructor(
                 // Update device ID for the contact if we have routing info
                 val discovered = meshRepository.discoveredPeers.value.entries.firstOrNull {
                     PeerIdValidator.isSame(it.key, peerId.trim()) ||
-                    PeerIdValidator.isSame(it.value.peerId, peerId.trim())
+                    PeerIdValidator.isSame(it.value.peerId, peerId.trim()) ||
+                    it.value.publicKey?.trim()?.equals(trimmedKey, ignoreCase = true) == true
                 }
                 val deviceId = discovered?.value?.let { info ->
                     // Extract device ID from discovered peer info if available
                     info.publicKey?.takeIf { it.length == 64 }
                 }
                 if (deviceId != null) {
-                    meshRepository.updateContactDeviceId(peerId.trim(), deviceId)
+                    meshRepository.updateContactDeviceId(canonicalPeerId, deviceId)
                 }
 
                 if (listeners.isNotEmpty()) {
@@ -547,7 +552,7 @@ class ContactsViewModel @Inject constructor(
                 }
 
                 loadContacts()
-                Timber.i("Contact added: $peerId")
+                Timber.i("Contact added: $canonicalPeerId (route=${libp2pPeerId ?: peerId.trim()})")
                 onComplete?.invoke(true)
             } catch (e: Exception) {
                 _error.value = "Failed to add contact: ${e.message}"

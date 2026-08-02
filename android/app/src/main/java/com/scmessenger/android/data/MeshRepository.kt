@@ -3320,8 +3320,9 @@ open class MeshRepository(
             ensureLocalIdentityFederation()
             // Initiate swarm in Rust core.
             // Core auto-selects headless mode when identity is absent and upgrades when identity appears.
-            // P0_TRANSPORT_001: Use static port 9001 for LAN connectivity with CLI daemon.
-            // This ensures both sides can dial each other using predictable addresses.
+            // P0_TRANSPORT_001: Prefer port 9001 for LAN connectivity with the CLI daemon.
+            // The Rust multi-port listener may fall back when that port is unavailable;
+            // all exported identity hints must therefore come from the live listener list.
             // Bootstrap addrs: empty for now — mobile will discover LAN peers via mDNS
             // and relay peers via the ledger exchange protocol. Can be populated from
             // config or QR-scanned contact addrs in future.
@@ -3347,7 +3348,7 @@ open class MeshRepository(
                 performStartupDialSweep()
             }
 
-            Timber.i("[OK] Internet transport (Swarm) listening on tcp/9001 and bridge wired")
+            Timber.i("[OK] Internet transport (Swarm) started and bridge wired; listeners=${getListeningAddresses()}")
         } catch (e: Exception) {
             swarmBridge = null
             Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable")
@@ -3918,13 +3919,18 @@ open class MeshRepository(
             }
         } catch (_: Exception) { null }
 
+        // Public-key hex is the sole persisted contact identity. A libp2p
+        // peer ID is transport routing metadata and may change across device
+        // reinstalls; keeping it as Contact.peerId creates duplicate contacts
+        // and makes message lookup depend on the import surface used.
+        val canonicalContactId = trimmedKey.lowercase()
         val finalContact = if (existingWithKey != null) {
             Timber.i("Idempotent contact upsert: peer ${contact.peerId} matches existing contact ${existingWithKey.peerId} by public key")
             uniffi.api.Contact(
-                peerId = existingWithKey.peerId,
+                peerId = canonicalContactId,
                 nickname = contact.nickname ?: existingWithKey.nickname,
                 localNickname = contact.localNickname ?: existingWithKey.localNickname,
-                publicKey = existingWithKey.publicKey,
+                publicKey = trimmedKey,
                 addedAt = existingWithKey.addedAt,
                 lastSeen = if (contact.lastSeen != null) {
                     val currentLastSeen = existingWithKey.lastSeen ?: 0u
@@ -3936,23 +3942,18 @@ open class MeshRepository(
                 isTombstone = false
             )
         } else {
-            val canonical = canonicalId(contact.peerId)
-            if (canonical != contact.peerId) {
-                uniffi.api.Contact(
-                    peerId = canonical,
-                    nickname = contact.nickname,
-                    localNickname = contact.localNickname,
-                    publicKey = contact.publicKey,
-                    addedAt = contact.addedAt,
-                    lastSeen = contact.lastSeen,
-                    notes = contact.notes,
-                    lastKnownDeviceId = contact.lastKnownDeviceId,
-                    verifiedAt = contact.verifiedAt,
-                    isTombstone = contact.isTombstone
-                )
-            } else {
-                contact
-            }
+            uniffi.api.Contact(
+                peerId = canonicalContactId,
+                nickname = contact.nickname,
+                localNickname = contact.localNickname,
+                publicKey = trimmedKey,
+                addedAt = contact.addedAt,
+                lastSeen = contact.lastSeen,
+                notes = contact.notes,
+                lastKnownDeviceId = contact.lastKnownDeviceId,
+                verifiedAt = contact.verifiedAt,
+                isTombstone = contact.isTombstone
+            )
         }
 
         contactManager?.add(finalContact)
@@ -9308,11 +9309,24 @@ open class MeshRepository(
         return null
     }
 
-    fun getIdentityExportString(
+    suspend fun getIdentityExportString(
         minimalForQr: Boolean = false,
         identityInfo: uniffi.api.IdentityInfo? = null
     ): String {
         val identity = identityInfo ?: getIdentityInfoNonBlocking() ?: return "{}"
+        // Read the authoritative listener list at export time.  The cached list is
+        // retained as a fallback for a just-started swarm, but a guessed port must
+        // never be emitted as routing truth.
+        val liveListeners = try {
+            swarmBridge?.getListeners().orEmpty()
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to read live listeners while exporting identity")
+            emptyList()
+        }
+        if (liveListeners.isNotEmpty()) {
+            listeningAddressesSnapshot = liveListeners
+        }
+        val listenerAddresses = liveListeners.ifEmpty { listeningAddressesSnapshot }
         val localIp = getLocalIpAddress()
         val relay = if (minimalForQr) null else getPreferredRelay()
 
@@ -9330,13 +9344,22 @@ open class MeshRepository(
 
         if (minimalForQr) {
             // P0_ANDROID_QR_FIX: Keep payload small to avoid QR code capacity errors.
-            val minimalHints = mutableListOf<String>()
-            if (localIp != null) {
-                minimalHints.add("/ip4/$localIp/tcp/9001")
-            }
+            // Do not synthesize /tcp/9001: the core may have selected another
+            // port after a bind conflict.  An empty hint list is safer than a
+            // false address; mDNS/ledger discovery remains available.
+            val minimalHints = normalizeOutboundListenerHints(listenerAddresses)
+                .map { addr ->
+                    if (localIp != null && addr.contains("0.0.0.0")) {
+                        addr.replace("0.0.0.0", localIp)
+                    } else {
+                        addr
+                    }
+                }
+                .distinct()
+                .take(3)
             payload.put("connection_hints", org.json.JSONArray(minimalHints))
         } else {
-            var listeners = normalizeOutboundListenerHints(getListeningAddresses()).toMutableList()
+            var listeners = normalizeOutboundListenerHints(listenerAddresses).toMutableList()
             val externalAddresses = normalizeExternalAddressHints(getExternalAddresses())
             
             if (localIp != null) {

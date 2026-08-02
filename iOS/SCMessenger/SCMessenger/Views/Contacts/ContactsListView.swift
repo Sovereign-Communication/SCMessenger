@@ -602,15 +602,16 @@ struct AddContactView: View {
         let peerId = ((json["peer_id"] as? String)
             ?? (json["libp2p_peer_id"] as? String)
             ?? (json["libp2pPeerId"] as? String)
-            ?? (json["identity_id"] as? String)
-            ?? (json["identityId"] as? String)
             ?? (json["peerId"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let libp2pPeerId = ((json["libp2p_peer_id"] as? String)
-            ?? (json["libp2pPeerId"] as? String))?
+            ?? (json["libp2pPeerId"] as? String)
+            ?? (json["peer_id"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedLibp2pPeerId = (libp2pPeerId?.isEmpty == false) ? libp2pPeerId : nil
+        let normalizedLibp2pPeerId = libp2pPeerId.flatMap {
+            PeerIdValidator.isLibp2pPeerId($0) ? $0 : nil
+        }
 
         let listeners = (
             (json["listeners"] as? [String] ?? []) +
@@ -628,7 +629,8 @@ struct AddContactView: View {
             publicKey: publicKey?.isEmpty == false ? publicKey : nil,
             nickname: nickname?.isEmpty == false ? nickname : nil,
             libp2pPeerId: normalizedLibp2pPeerId,
-            listeners: listeners.isEmpty ? nil : listeners
+            // Never auto-dial a listener without a validated libp2p route ID.
+            listeners: normalizedLibp2pPeerId == nil || listeners.isEmpty ? nil : listeners
         )
     }
 

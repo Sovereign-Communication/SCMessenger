@@ -277,7 +277,10 @@ fun ContactsScreen(
                     viewModel.addContact(id, publicKey.trim(), nickname?.trim(), effectiveLibp2p, effectiveListeners, notes)
                     showAddDialog = false
                     nearbyPrefilledPeer = null
-                    onNavigateToChat(id)
+                    // Contacts are persisted by canonical public-key identity;
+                    // use the same key for the chat route after adding a
+                    // nearby/imported libp2p peer.
+                    onNavigateToChat(publicKey.trim().lowercase())
                 }
             }
         )

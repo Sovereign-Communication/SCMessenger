@@ -29,7 +29,6 @@ fun parseContactImportPayload(raw: String): ContactImportParseResult {
         json?.optString("peerId"),           // Legacy fallback
         """"peer_id"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1),
         """"libp2p_peer_id"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1),
-        """"identity_id"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1)
     )
 
     val publicKey = firstNonBlank(
@@ -52,8 +51,10 @@ fun parseContactImportPayload(raw: String): ContactImportParseResult {
     val libp2pPeerId = firstNonBlank(
         json?.optString("libp2p_peer_id"),
         json?.optString("libp2pPeerId"),
+        json?.optString("peer_id"),
         """"libp2p_peer_id"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1),
-        """"libp2pPeerId"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1)
+        """"libp2pPeerId"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1),
+        """"peer_id"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1)
     )
 
     val listeners = if (json != null) {

@@ -60,6 +60,8 @@ fun AddContactScreen(
     prefilledPeerId: String = "",
     prefilledPublicKey: String = "",
     prefilledNickname: String = "",
+    prefilledLibp2pPeerId: String? = null,
+    prefilledListeners: List<String> = emptyList(),
     viewModel: ContactsViewModel = hiltViewModel()
 ) {
     val error by viewModel.error.collectAsState()
@@ -69,8 +71,8 @@ fun AddContactScreen(
     var publicKey by remember(prefilledPublicKey) { mutableStateOf(prefilledPublicKey) }
     var nickname by remember(prefilledNickname) { mutableStateOf(prefilledNickname) }
     var notes by remember { mutableStateOf("") }
-    var libp2pPeerId by remember { mutableStateOf<String?>(null) }
-    var listeners by remember { mutableStateOf<List<String>>(emptyList()) }
+    var libp2pPeerId by remember(prefilledLibp2pPeerId) { mutableStateOf(prefilledLibp2pPeerId) }
+    var listeners by remember(prefilledListeners) { mutableStateOf(prefilledListeners) }
     var isAdding by remember { mutableStateOf(false) }
     var qrError by remember { mutableStateOf<String?>(null) }
 
