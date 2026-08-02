@@ -55,7 +55,12 @@ jobs:
           distribution: 'temurin'
       - name: Run JVM unit tests
         working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        # The app's preBuild hook also invokes the Rust/UniFFI tasks. Keep
+        # this fast JVM-only gate independent from cargo-ndk; native coverage
+        # remains enforced by the Android Debug APK and Cross ABI jobs.
+        run: >-
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+          -x preBuild -x buildRustAndroid -x generateUniFFIBindings
 
   android:
     name: Android Debug APK
