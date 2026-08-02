@@ -4,7 +4,9 @@ Status: requested from Windows/Claude for the first post-fix physical retest.
 
 ## Exact build and window
 
-- Integration SHA: `2cdd6bf23c09af82997529ec225c74312900a85f`
+- Source SHA installed on iOS: `2cdd6bf23c09af82997529ec225c74312900a85f`
+- PR head: `bb513794a071beea237cae78d152a8ffd4cf2ca7` (documentation-only
+  follow-up on the installed source SHA; Android should use the source SHA).
 - iOS: Debug build completed and installed on Christy’s connected iPhone at
   approximately `2026-08-02T22:22Z`.
 - Shared capture window: `2026-08-02T22:30:00Z` through
