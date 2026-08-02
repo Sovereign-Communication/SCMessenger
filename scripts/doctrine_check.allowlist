@@ -1,0 +1,48 @@
+# Architecture doctrine check -- allowlist.
+#
+# Format (one entry per line):
+#   <path_glob>          # reason: <why this file/line is exempt>
+#   <path_glob>:<line>   # reason: <why this specific line is exempt>
+#
+# Every entry MUST end with '# reason: ...' -- enforced by the check,
+# because a reasonless exemption is a bug waiting to happen.
+#
+# Lines beginning with '#' are comments. Blank lines are ignored.
+#
+# PRINCIPLE: an entry here is a deliberate, documented exception to the
+# doctrine. It is NOT a permanent exemption -- each entry should be
+# revisited periodically and removed once the underlying code/doc is
+# brought into compliance. Treat this like a TODO list.
+
+# --- Files that explicitly DENY the concept of dedicated relays -----------
+# These lines say "there are no dedicated relays" / "no relay servers" --
+# that is doctrine-CONSISTENT prose. The violation phrases appear only to
+# deny their existence. Flagging these would be self-defeating.
+cli/README.md:108                  # reason: denies existence of dedicated relays; doctrine-consistent
+docs/BOOTSTRAP_GOVERNANCE.md:7     # reason: denies existence of dedicated relays; doctrine-consistent
+docs/TRANSPORT_ARCHITECTURE.md:14  # reason: denies existence of special relay servers; doctrine-consistent
+
+# --- Module self-references -----------------------------------------------
+# The module core/src/relay/server.rs is named "relay" by libp2p convention
+# (the Circuit Relay v2 server component). Its doc comments refer to
+# "The relay server" meaning the struct in this module. Renaming the module
+# is a separate effort; until then, doc strings inside the module are
+# self-referential, not vocabulary violations.
+core/src/relay/server.rs:56   # reason: doc for RelayServerStats in our relay/ module (libp2p-named)
+core/src/relay/server.rs:101  # reason: doc for RelayServer struct in our relay/ module (libp2p-named)
+core/src/relay/server.rs:114  # reason: doc for constructor in our relay/ module (libp2p-named)
+core/src/relay/server.rs:119  # reason: doc for constructor in our relay/ module (libp2p-named)
+core/src/relay/mod.rs:3       # reason: module doc for our relay/ module (libp2p-named)
+core/src/relay/client.rs:163  # reason: doc for RelayClient struct in our relay/ module (libp2p-named)
+
+# --- Drift cover-traffic engine -------------------------------------------
+# core/src/drift/relay.rs uses "the relay engine" to refer to the cover-
+# traffic generator -- a subsystem, not a node. "relay" here is the verb
+# sense (relaying dummy messages), not the noun sense (a relay node).
+core/src/drift/relay.rs:168  # reason: drift cover-traffic engine (subsystem, not a node)
+core/src/drift/relay.rs:378  # reason: drift cover-traffic engine (subsystem, not a node)
+
+# --- Docs that DENY the concept of dedicated relays -----------------------
+# RELAY_OPERATOR_GUIDE.md line 11 says "no dedicated relays" -- doctrine-
+# consistent prose that denies the concept by naming it.
+docs/RELAY_OPERATOR_GUIDE.md:11  # reason: denies existence of dedicated relays; doctrine-consistent
