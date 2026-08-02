@@ -55,7 +55,12 @@ on:
         type: string
   pull_request:
     paths:
+      - 'android/**'
       - 'iOS/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'core/src/transport/**'
+      - 'core/src/routing/**'
       - 'core/src/api.udl'
       - 'core/src/bin/gen_swift.rs'
       - 'core/src/contacts_bridge.rs'
@@ -69,7 +74,12 @@ on:
     branches:
       - main
     paths:
+      - 'android/**'
       - 'iOS/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'core/src/transport/**'
+      - 'core/src/routing/**'
       - 'core/src/api.udl'
       - 'core/src/bin/gen_swift.rs'
       - 'core/src/contacts_bridge.rs'

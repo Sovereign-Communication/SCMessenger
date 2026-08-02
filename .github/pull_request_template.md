@@ -5,9 +5,9 @@ Briefly describe the change.
 What problem does this PR solve? Link the issue, or explain why no issue exists.
 
 ## Release Scope
-- [ ] Fix or improvement on the current `v0.3.5` alpha baseline
-- [ ] `v1.0.0` Phase 1 scope (Windows/Android transport parity)
-- [ ] `v1.0.0` Phase 2 scope (everything else)
+- [ ] `v0.4.0` Android functionality/parity scope
+- [ ] `v0.5.0` Android/iOS parity scope
+- [ ] Post-0.5.0 follow-up (must not block the unified release)
 - [ ] Repo-governance / documentation / tooling work
 
 ## Documentation Impact
@@ -20,7 +20,10 @@ What problem does this PR solve? Link the issue, or explain why no issue exists.
 - [ ] `cargo clippy --workspace -- -D warnings -A clippy::empty_line_after_doc_comments`
 - [ ] `cargo build --workspace`
 - [ ] `cargo test --workspace`
-- [ ] `./scripts/docs_sync_check.sh`
+- [ ] GitHub Actions `CI` and `Cross` workflows are green
+- [ ] GitHub Actions `Mobile` workflow is green (Android unit tests/APK and iOS build)
+- [ ] GitHub Actions `iOS Build & Test` is green when transport/shared-core paths change
+- [ ] `./scripts/docs_sync_check.sh` (when present)
 - [ ] Targeted platform/manual validation:
 
 ## Risk / Security Notes

@@ -40,7 +40,7 @@ fun parseContactImportPayload(raw: String): ContactImportParseResult {
         """"publicKey"\s*:\s*"([^"]+)"""".toRegex().find(raw)?.groupValues?.get(1)
     )
 
-    if (peerId.isNullOrBlank()) return ContactImportParseResult.Invalid("Missing identity ID in payload.")
+    if (peerId.isNullOrBlank()) return ContactImportParseResult.Invalid("Missing routable peer ID in payload.")
     if (publicKey.isNullOrBlank()) return ContactImportParseResult.Invalid("Missing public key in payload.")
 
     val nickname = firstNonBlank(

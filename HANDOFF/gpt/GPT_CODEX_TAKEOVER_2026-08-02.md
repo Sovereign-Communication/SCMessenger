@@ -13,6 +13,8 @@ Commits to merge into `main` after the Windows Android gate:
 - `b4721e38` — remove both fake hole-punch success APIs; retain real libp2p DCUtR and relay fallback.
 - `f9ea745a` — unify Android/iOS identity routing, use live listener exports, remove the dead APK relay hint, and add Android parser regression tests.
 - `e07a9c4e` — format the restored CLI layer.
+- `2678422c` — bring the latest `main` handoff into the integration branch.
+- `e247a640`, `c4c6a048`, `dbd706a7`, `d255ddc1`, `3f2bc016` — consolidate workflow least-privilege, security remediation, and the iOS lane into this PR branch; the iOS lane's stale static-listener startup code was resolved in favor of the live-listener path above.
 
 The branch is pushed as `origin/gpt/takeover-integration`. The Mac lane must not merge Rust/core changes directly into `main`; Windows owns the final merge and release gate.
 
@@ -58,8 +60,7 @@ Have Josh start the run with the message ID visible on screen, reproduce once, s
 
 ## Remaining blockers
 
-- Android Gradle/device verification is still outstanding on the Mac because no Java runtime is installed; Windows must run it.
+- Android Gradle/device verification is still outstanding on the Mac because no Java runtime is installed; the PR's `Mobile` workflow now runs Android unit tests and `assembleDebug` with the same native-library and binding tasks used by the project, and Windows remains the authoritative device gate.
 - Physical two-phone runtime verification is outstanding even though the Rust workspace and generic iOS build pass.
 - Verify the always-on cloud node has a current identity, reachable listener, synchronized clock, and logs retained for the test interval.
 - Do not merge historical PRs #120, #121, #123, or #124 without re-auditing them against this branch.
-

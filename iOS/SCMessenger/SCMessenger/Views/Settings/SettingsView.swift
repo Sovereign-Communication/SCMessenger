@@ -213,7 +213,10 @@ struct SettingsView: View {
 
                     Button {
                         Task { @MainActor in
-                            identityQrPayload = await viewModel?.getIdentityExportString() ?? ""
+                            // QR cards use the compact shared contract. The full
+                            // export remains available through copy/share and
+                            // may exceed QR capacity on devices with many routes.
+                            identityQrPayload = repository.getIdentityQrPayload()
                             showingIdentityQr = !identityQrPayload.isEmpty
                         }
                     } label: {
