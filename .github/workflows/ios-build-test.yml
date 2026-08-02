@@ -286,7 +286,8 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Run iOS tests
         working-directory: iOS
