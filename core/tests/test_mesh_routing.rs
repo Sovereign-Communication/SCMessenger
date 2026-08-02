@@ -11,6 +11,13 @@ use scmessenger_core::transport::{
 };
 use std::time::Duration;
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[test]
 fn test_relay_stats_tracking() {
     let mut stats = RelayStats::default();
@@ -223,6 +230,7 @@ fn test_multi_path_best_paths_include_relays() {
 #[test]
 fn test_route_ordering_determinism_with_direct_first_policy() {
     let mut delivery = MultiPathDelivery::new();
+    let now = now_secs();
     let target = PeerId::random();
     let relay_a = PeerId::random();
     let relay_b = PeerId::random();
@@ -233,9 +241,9 @@ fn test_route_ordering_determinism_with_direct_first_policy() {
     delivery.add_relay(relay_c);
 
     // Recipient-recency should dominate relay ordering.
-    delivery.record_recipient_seen_via_relay(relay_c, target, 300);
-    delivery.record_recipient_seen_via_relay(relay_a, target, 200);
-    delivery.record_recipient_seen_via_relay(relay_b, target, 200);
+    delivery.record_recipient_seen_via_relay(relay_c, target, now);
+    delivery.record_recipient_seen_via_relay(relay_a, target, now.saturating_sub(10));
+    delivery.record_recipient_seen_via_relay(relay_b, target, now.saturating_sub(10));
 
     let first = delivery.ranked_routes(&target, 4);
     let second = delivery.ranked_routes(&target, 4);
