@@ -464,6 +464,7 @@ private struct IdentityQrSheet: View {
 
 // MARK: - Mesh Settings (mirrors Android MeshSettingsScreen.kt)
 
+@MainActor
 struct MeshSettingsView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var viewModel: SettingsViewModel?

@@ -1,6 +1,7 @@
 import XCTest
 @testable import SCMessenger
 
+@MainActor
 final class OutboxRetryPolicyTests: XCTestCase {
     func testAckedWithoutReceiptStopsAtPatientAgeCeiling() {
         XCTAssertTrue(

@@ -42,6 +42,7 @@ struct DashboardPeer: Identifiable, Equatable {
     }
 }
 
+@MainActor
 struct MeshDashboardView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var stats: ServiceStats?
@@ -98,13 +99,8 @@ struct MeshDashboardView: View {
     }
 
     private func loadDashboardDataAsync() async {
-        await Task.detached {
-            await self.repository.updateStats()
-            let updatedStats = await self.repository.serviceStats
-            await MainActor.run {
-                self.stats = updatedStats
-            }
-        }.value
+        repository.updateStats()
+        stats = repository.serviceStats
     }
 
     private func refreshPeersFromRepositoryAsync() async {
@@ -244,9 +240,7 @@ struct MeshDashboardView: View {
         }
 
         let deduped = deduplicatePeersByIdentityAndAliases(Array(merged.values))
-        await MainActor.run {
-            self.peersByKey = deduped
-        }
+        peersByKey = deduped
     }
 
     private func handlePeerEvent(_ event: MeshEventBus.PeerEvent) {

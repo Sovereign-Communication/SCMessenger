@@ -9,6 +9,7 @@ import SwiftUI
 import VisionKit
 import Vision
 
+@MainActor
 struct JoinMeshView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MeshRepository.self) private var repository

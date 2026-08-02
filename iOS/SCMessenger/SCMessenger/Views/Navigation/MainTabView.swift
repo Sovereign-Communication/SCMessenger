@@ -14,6 +14,7 @@ enum MessagesRoute: Hashable {
     case requestsInbox
 }
 
+@MainActor
 struct MainTabView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var identityInitialized: Bool = false
@@ -132,6 +133,7 @@ struct MainTabView: View {
     }
 }
 
+@MainActor
 struct ConversationListView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var conversations: [Conversation] = []
@@ -305,6 +307,7 @@ struct ConversationListView: View {
     }
 }
 
+@MainActor
 struct RequestsInboxView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var requests: [MessageRequestThread] = []

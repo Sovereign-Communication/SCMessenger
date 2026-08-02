@@ -29,7 +29,7 @@ class NotificationPermissionTests: XCTestCase {
 
     func testPermissionStatusReturnsValidValue() async {
         // Arrange & Act
-        let status: String = notificationManager.currentPermissionStatus()
+        let status: String = await notificationManager.currentPermissionStatus()
 
         // Assert
         XCTAssertNotNil(status)
@@ -39,7 +39,7 @@ class NotificationPermissionTests: XCTestCase {
 
     func testNotificationsEnabledCheck() async {
         // Arrange & Act
-        let isEnabled: Bool = notificationManager.areNotificationsEnabled()
+        let isEnabled: Bool = await notificationManager.areNotificationsEnabled()
 
         // Assert
         XCTAssertTrue(isEnabled || !isEnabled) // Just verify it returns a boolean
@@ -47,26 +47,29 @@ class NotificationPermissionTests: XCTestCase {
     }
 
     func testPermissionFlowNotDetermined() async {
-        // Arrange - This test requires actual permission state handling
-        let result: PermissionVerificationResult = await notificationManager.verifyPermissionFlow()
+        // Headless test runs must never trigger the system permission prompt.
+        let status: String = await notificationManager.currentPermissionStatus()
 
         // Assert
-        XCTAssertTrue([.authorized, .denied, .notDetermined, .unknown].contains(result.status))
-        XCTAssertTrue([.none, .requested, .manualEnable].contains(result.requiredAction))
-        logger.logPermissionResult(result)
+        XCTAssertTrue(["not_determined", "denied", "authorized", "provisional", "ephemeral", "unknown"].contains(status))
+        logger.logTestResult("Permission Flow State", passed: true, details: "Status: \(status)")
     }
 
     func testPermissionFlowAuthorized() async {
         // Arrange - First check current state
-        let initialStatus: String = notificationManager.currentPermissionStatus()
+        let initialStatus: String = await notificationManager.currentPermissionStatus()
 
         // Act - Only request if not authorized
-        if initialStatus == "not_determined" || initialStatus == "denied" {
+        if initialStatus == "denied" {
             let granted: Bool = await notificationManager.requestPermissionIfNeeded()
-            XCTAssertTrue(granted || !granted) // Verify it returns a value
+            XCTAssertFalse(granted)
             logger.logTestResult("Permission Request", passed: granted, details: "Granted: \(granted)")
+        } else if initialStatus == "not_determined" {
+            // Requesting here would display a modal system alert and block CI.
+            XCTAssertEqual(initialStatus, "not_determined")
+            logger.logTestResult("Permission Not Determined", passed: true, details: "Prompt intentionally skipped")
         } else if initialStatus == "authorized" {
-            let isEnabled: Bool = notificationManager.areNotificationsEnabled()
+            let isEnabled: Bool = await notificationManager.areNotificationsEnabled()
             XCTAssertTrue(isEnabled)
             logger.logTestResult("Already Authorized", passed: true, details: "Notifications enabled")
         }
@@ -344,25 +347,25 @@ class NotificationCategoryTests: XCTestCase {
         logger = NotificationLogger.shared
     }
 
-    func testNotificationCategoriesSetup() {
+    func testNotificationCategoriesSetup() async {
         // Arrange & Act
         notificationManager.setupNotificationCategories()
 
         // Assert
         let center: UNUserNotificationCenter = UNUserNotificationCenter.current()
-        let categories = center.notificationCategories()
+        let categories = await center.notificationCategories()
 
         let categoryNames = categories.map { $0.identifier }
         logger.logTestResult("Categories Setup", passed: true, details: "Categories: \(categoryNames.joined(separator: ", "))")
     }
 
-    func testReplyActionAvailable() {
+    func testReplyActionAvailable() async {
         // Arrange & Act
         notificationManager.setupNotificationCategories()
 
         // Assert
         let center: UNUserNotificationCenter = UNUserNotificationCenter.current()
-        let categories = center.notificationCategories()
+        let categories = await center.notificationCategories()
 
         let hasReplyAction = categories.contains { cat in
             cat.actions.contains { action in
@@ -373,13 +376,13 @@ class NotificationCategoryTests: XCTestCase {
         logger.logTestResult("Reply Action Available", passed: hasReplyAction)
     }
 
-    func testMarkReadActionAvailable() {
+    func testMarkReadActionAvailable() async {
         // Arrange & Act
         notificationManager.setupNotificationCategories()
 
         // Assert
         let center: UNUserNotificationCenter = UNUserNotificationCenter.current()
-        let categories = center.notificationCategories()
+        let categories = await center.notificationCategories()
 
         let hasMarkReadAction = categories.contains { cat in
             cat.actions.contains { action in
@@ -404,7 +407,7 @@ class NotificationBackgroundTests: XCTestCase {
 
     func testBackgroundFetchProcessing() async {
         // Arrange & Act
-        let results: BackgroundFetchResults = await backgroundProcessor.testBackgroundFetch(fetchInterval: 300)
+        let results = await backgroundProcessor.testBackgroundFetch(fetchInterval: 300)
 
         // Assert
         XCTAssertTrue(results.backgroundFetch)
@@ -413,7 +416,7 @@ class NotificationBackgroundTests: XCTestCase {
 
     func testSilentNotificationSetup() async {
         // Arrange & Act
-        let results: SilentNotificationResults = await backgroundProcessor.testSilentNotifications()
+        let results = await backgroundProcessor.testSilentNotifications()
 
         // Assert
         logger.logTestResult("Silent Notification Setup", passed: true, details: "Sound configured")
@@ -421,7 +424,7 @@ class NotificationBackgroundTests: XCTestCase {
 
     func testConstraintHandling() async {
         // Arrange & Act
-        let results: ConstraintHandlingResults = await backgroundProcessor.testConstraintHandling()
+        let results = await backgroundProcessor.testConstraintHandling()
 
         // Assert
         logger.logTestResult("Constraint Handling", passed: results.constraintHandling)
@@ -429,7 +432,7 @@ class NotificationBackgroundTests: XCTestCase {
 
     func testProcessingTimeMeasurement() async {
         // Arrange & Act
-        let results: ProcessingTimeResults = await backgroundProcessor.measureProcessingTime()
+        let results = await backgroundProcessor.measureProcessingTime()
 
         // Assert
         logger.logTestResult("Processing Time Measurement", passed: results.constraintHandling, details: "Time: \(String(format: "%.2f", results.processingTime))s")
@@ -453,9 +456,9 @@ class NotificationIntegrationTests: XCTestCase {
         // Arrange
         let messageId: String = "integration_test_\(Date().timeIntervalSince1970)"
 
-        // Act 1: Request permission
-        let permissionResult: PermissionVerificationResult = await notificationManager.verifyPermissionFlow()
-        logger.logPermissionResult(permissionResult)
+        // Act 1: Observe permission without opening a modal system prompt.
+        let permissionStatus: String = await notificationManager.currentPermissionStatus()
+        logger.logTestResult("Integration Permission State", passed: true, details: "Status: \(permissionStatus)")
 
         // Act 2: Send notification
         let decision: NotificationDecision = NotificationDecision(
@@ -495,7 +498,7 @@ class NotificationIntegrationTests: XCTestCase {
         logger.log("Testing background + foreground integration")
 
         // Act 1: Test background fetch
-        let backgroundResults: BackgroundFetchResults = await backgroundProcessor.testBackgroundFetch()
+        let backgroundResults = await backgroundProcessor.testBackgroundFetch()
 
         // Act 2: Test foreground badge management
         notificationManager.updateBadge(count: 5)
@@ -527,20 +530,20 @@ class NotificationAdditionalTests: XCTestCase {
             senderPeerId: "test_peer",
             messageId: messageId,
             shouldAlert: false,
-            suppressionReason: .doNotDisturb
+            suppressionReason: "do_not_disturb"
         )
 
         // Assert
-        XCTAssertEqual(decisionNoAlert.suppressionReason, .doNotDisturb)
+        XCTAssertEqual(decisionNoAlert.suppressionReason, "do_not_disturb")
         logger.logTestResult("Notification Suppression Reasons", passed: true, details: "Suppression reason: \(String(describing: decisionNoAlert.suppressionReason))")
     }
 
     func testNotificationKindVariants() async {
         // Arrange & Act - Test all notification kinds
-        let kinds: [NotificationKind] = [.directMessage, .directMessageRequest, .groupMessage, .groupMessageRequest]
+        let kinds: [NotificationKind] = [.directMessage, .directMessageRequest, .none]
 
         // Assert
-        XCTAssertEqual(kinds.count, 4)
+        XCTAssertEqual(kinds.count, 3)
         logger.logTestResult("Notification Kind Variants", passed: true, details: "Total kinds: \(kinds.count)")
     }
 
@@ -652,7 +655,7 @@ class NotificationAdditionalTests: XCTestCase {
         center.setNotificationCategories([messageCategory])
 
         // Assert
-        let categories: Set<UNNotificationCategory> = center.notificationCategories()
+        let categories: Set<UNNotificationCategory> = await center.notificationCategories()
         XCTAssertTrue(categories.contains { $0.identifier == "MESSAGE_CATEGORY" })
         logger.logTestResult("Notification Category Configuration", passed: true, details: "Category configured: MESSAGE_CATEGORY")
     }

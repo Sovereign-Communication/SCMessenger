@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct DiagnosticsView: View {
     @Environment(MeshRepository.self) private var repository
     @State private var logText: String = ""

@@ -10,6 +10,7 @@
 
 import SwiftUI
 
+@MainActor
 struct VerifySafetyNumberSheet: View {
     let peerId: String
     let viewModel: ContactsViewModel

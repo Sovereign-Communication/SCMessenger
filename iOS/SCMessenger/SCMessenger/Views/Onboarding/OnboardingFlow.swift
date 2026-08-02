@@ -77,6 +77,7 @@ struct WelcomeView: View {
     }
 }
 
+@MainActor
 struct IdentityView: View {
     @Environment(MeshRepository.self) private var repository
     @Environment(OnboardingViewModel.self) private var viewModel
