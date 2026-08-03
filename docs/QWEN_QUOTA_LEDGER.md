@@ -1,11 +1,52 @@
 # Qwen Model Quota Ledger (DashScope)
 
 Status: Active
-Last updated: 2026-07-10
+Last updated: 2026-08-03
 
 This document tracks the verified DashScope/Alibaba Qwen models, their enabling status, actions, and remaining free quota.
 
-## Quota Summary (as of 2026-07-10)
+## Empirical Liveness Probe (2026-08-03)
+
+**The console quota table below does NOT predict whether a dispatch will
+succeed.** Probed directly against the API with a real ~4 KB code-analysis
+payload: `qwen3-32b` and `qwen3-coder-plus` both show "Remaining 1,000,000"
+in the table below and both returned nothing. Trust this section over the
+table, and re-probe before starting any campaign.
+
+A trivial "reply OK" smoke test is also not sufficient evidence -- but note the
+failure mode is NOT payload size. `qwen3.6-35b-a3b` and `qwen3-30b-a3b` failed
+on both small and large prompts; they were simply exhausted, and an earlier
+smoke test that appeared to pass had been misread. Probe with a real payload
+because it is a truer test, not because size is the discriminator.
+
+ALIVE (verified with real payload, 2026-08-03):
+
+| Model | Notes |
+|---|---|
+| qwen3-coder-flash | coder-tuned, cheap -- preferred for file audits |
+| qwen3-coder-flash-2025-07-28 | dated pin of the above |
+| qwen3-coder-next | coder-tuned |
+| qwen3-30b-a3b-instruct-2507 | general instruct |
+| qwen3-next-80b-a3b-instruct | larger, use only when a small model stalls |
+| deepseek-v4-flash | general |
+
+EXHAUSTED / NON-RESPONSIVE (2026-08-03): `qwen3.6-35b-a3b`, `qwen3-30b-a3b`,
+`qwen3-8b`, `qwen3-32b`, `qwen-turbo`, `qwen-plus-latest`, `qwen3-coder-plus`,
+plus the previously recorded `qwen3.7-plus-2026-05-26`,
+`qwen3-coder-30b-a3b-instruct`, `deepseek-v4-pro`, `deepseek-v3.2`, `glm-5.2`.
+
+Probe command (one model, real payload):
+
+```bash
+set -a && source <(grep -E '^[A-Z_]+=' .claude/alibaba_cloud_config.env | sed 's/[[:space:]]*$//') && set +a
+timeout 75 claude --model <id> --dangerously-skip-permissions \
+  -p "In one sentence, what does this Rust code do? $(head -c 4000 core/src/transport/addr_filter.rs)"
+```
+
+Reminder: a model whose quota column shows a dash (`-`) rather than a numeric
+allowance has NO free allowance at all -- do not dispatch to it.
+
+## Quota Summary (as of 2026-07-10, console-reported -- see liveness probe above)
 
 | Model Code | Free Quota Remaining | Expiration Date | Status | Actions |
 |---|---|---|---|---|

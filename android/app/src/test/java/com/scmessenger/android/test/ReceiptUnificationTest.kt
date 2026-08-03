@@ -144,10 +144,28 @@ class ReceiptUnificationTest {
         getField<CoroutineScope>(repo, "repoScope")?.cancel()
     }
 
+    // Repos whose repoScope must be cancelled in @After.
+    //
+    // A test that calls startMeshService() spawns work that NEVER ends on its
+    // own -- the bootstrap retry loop (which backs off to a 60s period and then
+    // retries forever) and the SubnetProbe scan. Those keep the Gradle test
+    // JVM alive after the last test finishes, so :app:testDebugUnitTest ran for
+    // 26m56s and was killed by "Timeout has been exceeded". No test actually
+    // failed; the task just never terminated.
+    //
+    // Registering here rather than calling cancelRepoScope() at the end of each
+    // test means the scope is still torn down if the test throws part-way.
+    private val activeRepos = mutableListOf<MeshRepository>()
+
+    private fun trackRepo(repo: MeshRepository): MeshRepository {
+        activeRepos += repo
+        return repo
+    }
+
     @Test
     fun `inbound gate waits for dedup result and reports duplicates`() = runTest {
         val filesDir = freshFilesDir()
-        val repo = MeshRepository(fakeContext(filesDir))
+        val repo = trackRepo(MeshRepository(fakeContext(filesDir)))
 
         val router = mockk<SmartTransportRouter>()
         coEvery {
@@ -177,6 +195,9 @@ class ReceiptUnificationTest {
 
     @After
     fun cleanup() {
+        // Cancel first: these scopes hold the test JVM open (see activeRepos).
+        activeRepos.forEach { runCatching { cancelRepoScope(it) } }
+        activeRepos.clear()
         testRoot.listFiles()?.forEach { it.deleteRecursively() }
     }
 
@@ -272,7 +293,7 @@ class ReceiptUnificationTest {
     @Test
     fun `receive path processes delivered receipts and deduplicates`() = runTest {
         val filesDir = freshFilesDir()
-        val repo = MeshRepository(fakeContext(filesDir))
+        val repo = trackRepo(MeshRepository(fakeContext(filesDir)))
 
         val ironCore = mockk<IronCore>(relaxed = true) {
             every { getIdentityInfo() } returns IdentityInfo(
@@ -354,7 +375,7 @@ class ReceiptUnificationTest {
     @Test
     fun `receipt arrival overrides high attempt count and clears corruption`() = runTest {
         val filesDir = freshFilesDir()
-        val repo = MeshRepository(fakeContext(filesDir))
+        val repo = trackRepo(MeshRepository(fakeContext(filesDir)))
 
         val ironCore = mockk<IronCore>(relaxed = true)
         val meshService = mockk<MeshService>(relaxed = true) {
@@ -412,7 +433,7 @@ class ReceiptUnificationTest {
     @Test
     fun `send path encodes receipt using core bindings and passes bytes to transport`() = runTest {
         val filesDir = freshFilesDir()
-        val repo = MeshRepository(fakeContext(filesDir))
+        val repo = trackRepo(MeshRepository(fakeContext(filesDir)))
 
         val peerId = "12D3KooWTestPeeridForReceiptUnification24XyzAbcVwxyz"
         val messageId = "msg-test-encode-123"

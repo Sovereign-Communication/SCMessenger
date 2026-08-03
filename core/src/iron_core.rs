@@ -1038,13 +1038,23 @@ impl IronCore {
     /// Notify the core that a peer was discovered.
     /// Blocked peers (peer-level or any known device) are silently ignored.
     pub fn notify_peer_discovered(&self, peer_id: String) {
-        // Suppress discovery notifications for blocked peers
-        if self
-            .blocked_manager
-            .read()
-            .is_blocked(&peer_id, None)
-            .unwrap_or(false)
-        {
+        // Suppress discovery notifications for blocked peers.
+        //
+        // FAIL CLOSED: if the block store cannot be read we cannot prove the
+        // peer is unblocked, so treat it as blocked and suppress. The previous
+        // `unwrap_or(false)` failed OPEN -- any store error silently downgraded
+        // a blocked peer to visible, defeating the block the user set.
+        let blocked = match self.blocked_manager.read().is_blocked(&peer_id, None) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    "[WARN] block lookup failed for discovered peer; suppressing notification (fail-closed): {}",
+                    e
+                );
+                true
+            }
+        };
+        if blocked {
             return;
         }
         if let Some(delegate) = self.delegate.read().as_ref() {
@@ -3068,11 +3078,26 @@ impl IronCore {
             .flatten()
             .and_then(|c| c.last_known_device_id);
 
-        let is_blocked = self
+        // FAIL CLOSED: this value drives `hidden` on the stored message. The
+        // previous `unwrap_or(false)` meant a block-store read error rendered a
+        // blocked sender's message as NOT hidden -- i.e. the message surfaced to
+        // the user despite an active block. On error we cannot prove the sender
+        // is unblocked, so hide it; the message is still retained, not dropped,
+        // so nothing is lost if the store recovers.
+        let is_blocked = match self
             .blocked_manager
             .read()
             .is_blocked(&message.sender_id, sender_device_id.as_deref())
-            .unwrap_or(false);
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    "[WARN] block lookup failed for inbound sender; hiding message (fail-closed): {}",
+                    e
+                );
+                true
+            }
+        };
 
         // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
         if message.message_type == crate::MessageType::Receipt {

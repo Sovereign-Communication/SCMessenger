@@ -5396,6 +5396,22 @@ pub async fn start_swarm_with_config(
                                                     );
                                                     return false;
                                                 }
+                                                // Circuit-relay candidates are EXEMPT from host
+                                                // equality. build_relay_addresses() composes
+                                                // <relay-addr>/p2p/<relay>/p2p-circuit/p2p/<target>,
+                                                // so the only IP in the address is the RELAY's, which
+                                                // by definition never equals base_host (the target's
+                                                // host). Without this exemption the host-equality test
+                                                // drops every relay candidate and silently disables the
+                                                // circuit-relay fallback that "P1 Item 4" adds just
+                                                // above -- the exact path NAT'd peers depend on.
+                                                //
+                                                // This is not an SSRF hole: the relay set is configured
+                                                // and vetted, not attacker-supplied, and the target peer
+                                                // is still pinned by the trailing /p2p/<target>.
+                                                if c.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit)) {
+                                                    return true;
+                                                }
                                                 let cand_host: Option<std::net::IpAddr> = c.iter().find_map(|p| match p {
                                                     libp2p::multiaddr::Protocol::Ip4(ip) => Some(std::net::IpAddr::V4(ip)),
                                                     libp2p::multiaddr::Protocol::Ip6(ip) => Some(std::net::IpAddr::V6(ip)),
