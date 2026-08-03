@@ -726,10 +726,10 @@ impl MeshService {
                             let mut startup_signal = Some(startup_tx);
                             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
-                            let iron_core_handle = {
-                                let core_guard = core.lock();
-                                core_guard.clone()
-                            };
+                            // This site already cloned out of the guard rather than
+                            // holding it; stated directly now so it reads the same
+                            // as every other core access in this file.
+                            let iron_core_handle = core.lock().clone();
 
                             // Extract both the Weak<IronCore> and routing engine handle before
                             // iron_core_handle is consumed by the closure below.
@@ -826,8 +826,31 @@ impl MeshService {
                                                 peer_id,
                                                 envelope_data,
                                             } => {
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and RELEASE the mutex before calling
+                                                // into the core. Holding it across receive_message
+                                                // serialises every other core user behind this call.
+                                                //
+                                                // This was the BLE inbound wedge. `get_core()` (:1514)
+                                                // is `self.core.lock().clone()`, and the BLE path
+                                                // (MeshService::on_data_received, :1385) calls it on the
+                                                // GATT callback thread. While the swarm loop sat inside
+                                                // receive_message holding this guard, every inbound BLE
+                                                // message blocked in get_core(). A device showed 264
+                                                // "mesh_ble_forward" log lines with ZERO matching
+                                                // "mesh_ble_forward_return" -- onDataReceived never
+                                                // returned, 264 times out of 264 -- and later 46/0 on a
+                                                // fresh buffer. It also explains the ANR (GATT callback
+                                                // plus binder threads all parked on one mutex) and the
+                                                // outbox that grew instead of draining: delivery
+                                                // receipts arrive over that same blocked inbound path,
+                                                // so no message could ever be confirmed delivered and
+                                                // the retry guard held them forever.
+                                                //
+                                                // receive_message takes &self, so an owned Arc works and
+                                                // nothing borrows from the guard. The temporary from
+                                                // core.lock() drops at the end of this statement.
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     match core_ref.receive_message(envelope_data.clone()) {
                                                         Ok(msg) => {
                                                             if msg.message_type == crate::message::MessageType::OnionRelay {
@@ -902,8 +925,12 @@ impl MeshService {
                                                     "Peer discovered via Swarm: {}",
                                                     peer_id
                                                 );
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and release the mutex before calling into
+                                                // the core -- same reason as the receive_message site above:
+                                                // holding `core` across a core call serialises every other
+                                                // user of it, including the BLE inbound path via get_core().
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     core_ref.notify_peer_discovered(
                                                         peer_id.to_string(),
                                                     );
@@ -916,8 +943,12 @@ impl MeshService {
                                                     "Peer disconnected via Swarm: {}",
                                                     peer_id
                                                 );
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and release the mutex before calling into
+                                                // the core -- same reason as the receive_message site above:
+                                                // holding `core` across a core call serialises every other
+                                                // user of it, including the BLE inbound path via get_core().
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     core_ref.notify_peer_disconnected(
                                                         peer_id.to_string(),
                                                     );
@@ -933,8 +964,12 @@ impl MeshService {
                                                 let registration_request = if headless_mode {
                                                     None
                                                 } else {
-                                                    let core_guard = core.lock();
-                                                    core_guard
+                                                    // Clone the Arc and release the mutex before calling into
+                                                    // the core -- same reason as the receive_message site above:
+                                                    // holding `core` across a core call serialises every other
+                                                    // user of it, including the BLE inbound path via get_core().
+                                                    let core_opt = core.lock().clone();
+                                                    core_opt
                                                         .as_ref()
                                                         .and_then(|core_ref| {
                                                             core_ref.build_registration_request().ok()
@@ -956,8 +991,12 @@ impl MeshService {
                                                     peer_id,
                                                     agent_version
                                                 );
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and release the mutex before calling into
+                                                // the core -- same reason as the receive_message site above:
+                                                // holding `core` across a core call serialises every other
+                                                // user of it, including the BLE inbound path via get_core().
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     #[cfg(not(target_arch = "wasm32"))]
                                                     {
                                                         // Annotate identity in ledger for each
@@ -1037,8 +1076,12 @@ impl MeshService {
                                                     peer_id,
                                                     signal
                                                 );
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and release the mutex before calling into
+                                                // the core -- same reason as the receive_message site above:
+                                                // holding `core` across a core call serialises every other
+                                                // user of it, including the BLE inbound path via get_core().
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     core_ref.record_abuse_signal(
                                                         peer_id.to_string(),
                                                         signal,
@@ -1049,8 +1092,12 @@ impl MeshService {
                                                 from_peer: _,
                                                 entries,
                                             } => {
-                                                let core_guard = core.lock();
-                                                if let Some(core_ref) = core_guard.as_ref() {
+                                                // Clone the Arc and release the mutex before calling into
+                                                // the core -- same reason as the receive_message site above:
+                                                // holding `core` across a core call serialises every other
+                                                // user of it, including the BLE inbound path via get_core().
+                                                let core_opt = core.lock().clone();
+                                                if let Some(core_ref) = core_opt.as_ref() {
                                                     // Review F3: this is the ONLY live writer of
                                                     // wire-learned ledger entries, fed straight
                                                     // from /sc/ledger-exchange/1.0.0 data sent by
@@ -1941,8 +1988,12 @@ impl MeshService {
         &self,
     ) -> Result<(libp2p::identity::Keypair, bool), crate::IronCoreError> {
         let identity_keypair = {
-            let core_guard = self.core.lock();
-            let core = core_guard
+            // Clone-then-release, consistent with every other core access in
+            // this file. get_libp2p_keypair() is a cheap accessor so this site
+            // was not the wedge, but leaving one guard-across-call behind is how
+            // the pattern grows back.
+            let core_opt = self.core.lock().clone();
+            let core = core_opt
                 .as_ref()
                 .ok_or(crate::IronCoreError::NotInitialized)?;
             core.get_libp2p_keypair().ok()

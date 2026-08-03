@@ -485,6 +485,39 @@ impl IronCore {
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(target_arch = "wasm32"), uniffi::constructor)]
     pub fn with_storage_and_logs(path: String, log_dir: String) -> Self {
+        // Install the tracing subscriber FIRST, before any other init, so
+        // startup diagnostics are captured too.
+        //
+        // This call was missing entirely. `log_dir` was accepted, stored as
+        // `self.log_directory` (:547) and never read; `init_file_tracing` had
+        // ZERO callers anywhere in the crate. So the whole structured-tracing
+        // facility was dead code: Android computes a logs directory
+        // (MeshRepository.kt:1341) and passes it through
+        // MeshService::withStorageAndLogs -> IronCore::with_storage_and_logs,
+        // and core then discarded it.
+        //
+        // The consequence was that the Rust core was COMPLETELY SILENT on
+        // device. `eprintln!` goes to stderr, which Android discards unless
+        // `log.redirect-stdio` is set (verified unset on the test device:
+        // `grep -cF "[IronCore]" logcat` returned 0 across a full buffer while
+        // 264 inbound BLE messages were being processed), and `tracing::` had
+        // no subscriber. That blindness is why the BLE inbound wedge took so
+        // long to localise -- we could not tell whether on_data_received was
+        // even entered.
+        //
+        // init_file_tracing uses try_init() internally, so a warm boot that
+        // recreates MeshService without killing the process is safe. A failure
+        // here must never take the core down: logging is diagnostics, not a
+        // dependency of messaging.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = crate::store::tracing_init::init_file_tracing(&log_dir) {
+            // Cannot use tracing:: here -- if this failed there may be no
+            // subscriber. eprintln is invisible on Android but correct
+            // everywhere else, and this path means diagnostics are degraded
+            // rather than the process being unhealthy.
+            eprintln!("[IronCore] [WARN] file tracing init failed ({}); core diagnostics will not be written to {}", e, log_dir);
+        }
+
         let backend: Arc<dyn StorageBackend> = match SledStorage::new(&path) {
             Ok(s) => Arc::new(s),
             Err(_) => Arc::new(MemoryStorage::new()),
@@ -707,6 +740,57 @@ impl IronCore {
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
             .map_err(|_| IronCoreError::InvalidInput)?;
+        // Reject a recipient id that is well-formed but MEANINGLESS as a key.
+        //
+        // identity_id() is hex(blake3(pubkey)) and public_key_hex() is
+        // hex(pubkey). BOTH are 64 hex chars and BOTH decode to exactly 32
+        // bytes, so the decode above cannot tell them apart, and a hash used
+        // here would be silently encrypted to -- producing ciphertext nobody
+        // can open. See HANDOFF/audit/IDENTITY_HASH_VS_PUBKEY_CONFLICT.md.
+        if recipient_pk.iter().all(|b| *b == 0) {
+            tracing::error!("[ERROR] refusing to send: recipient key is all zeros");
+            return Err(IronCoreError::InvalidInput);
+        }
+
+        // Fast path first: if the recipient resolves to a known contact by
+        // PUBLIC KEY, it is the right kind of value and we are done. Only when
+        // that misses do we pay for a scan, so the common send path stays O(1)
+        // against the contact store rather than hashing every contact.
+        let known_by_pubkey = self
+            .contact_manager
+            .read()
+            .get(recipient_id.to_string())
+            .ok()
+            .flatten()
+            .is_some();
+
+        if !known_by_pubkey {
+            // Miss. Determine whether this is the hash/pubkey confusion, which
+            // deserves a distinct and loud error, or simply an unknown peer,
+            // which stays permitted (sending to a peer we have no contact
+            // record for is existing behaviour and is not broken).
+            if let Ok(contacts) = self.contact_manager.read().list() {
+                for contact in contacts {
+                    let Ok(pk_bytes) = hex::decode(&contact.public_key) else {
+                        continue;
+                    };
+                    if blake3::hash(&pk_bytes).as_bytes() == &recipient_pk {
+                        // Deliberately does NOT log either value: both are
+                        // identity material and this repo is public.
+                        tracing::error!(
+                            "[ERROR] refusing to send: recipient_id is the identity_id (blake3 hash) \
+                             of a known contact, not their public key. Encrypting to a hash produces \
+                             ciphertext nobody can decrypt. The contact record needs repairing."
+                        );
+                        return Err(IronCoreError::InvalidInput);
+                    }
+                }
+            }
+            tracing::warn!(
+                "[WARN] sending to a recipient with no contact record; proceeding \
+                 (unknown-peer sends remain allowed)"
+            );
+        }
 
         let message_id = uuid::Uuid::new_v4().to_string();
         let sender_id = identity.identity_id().unwrap_or_default();
