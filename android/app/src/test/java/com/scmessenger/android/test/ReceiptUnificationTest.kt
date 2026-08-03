@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import com.scmessenger.android.data.MeshRepository
+import com.scmessenger.android.service.TransportType
 import com.scmessenger.android.transport.SmartTransportRouter
 import io.mockk.Awaits
 import io.mockk.coEvery
@@ -26,6 +27,7 @@ import org.junit.BeforeClass
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.api.ContactManager
 import uniffi.api.CoreDelegate
@@ -151,7 +153,7 @@ class ReceiptUnificationTest {
         coEvery {
             router.checkAndRecordMessage(
                 "msg-dup-1",
-                SmartTransportRouter.TransportType.INTERNET
+                SmartTransportRouter.TransportType.CORE
             )
         } returns Triple(true, 42L, SmartTransportRouter.TransportType.CORE)
 
@@ -161,12 +163,12 @@ class ReceiptUnificationTest {
 
         assertTrue(result.first)
         assertEquals(42L, result.second)
-        assertEquals(MeshRepository.TransportType.CORE, result.third)
+        assertEquals(TransportType.INTERNET, result.third)
 
         coVerify(exactly = 1) {
             router.checkAndRecordMessage(
                 "msg-dup-1",
-                SmartTransportRouter.TransportType.INTERNET
+                SmartTransportRouter.TransportType.CORE
             )
         }
 

@@ -574,11 +574,26 @@ impl IronCore {
 
     /// Start the core. Must be called before any messaging operations.
     pub fn start(&self) -> Result<(), IronCoreError> {
-        let mut running = self.running.write();
-        if *running {
-            return Err(IronCoreError::AlreadyRunning);
+        // LOCK ORDERING (deadlock fix): `running` must be RELEASED before any
+        // drift lock is taken. `stop()` acquires drift_active (via
+        // drift_deactivate) and only then `running`. Holding `running` across
+        // drift_activate() here created the reverse order, so a concurrent
+        // start()/stop() -- exactly what a force-stop-and-reopen produces --
+        // could deadlock. parking_lot locks are not reentrant, so there is no
+        // recovery once that happens: the process stays alive with its UI
+        // thread blocked, which surfaces as an Android ANR
+        // ("Input dispatching timed out") while the mesh core itself is fine.
+        //
+        // The compare-and-set stays atomic: the guard scope below still makes
+        // the AlreadyRunning check and the flag write a single critical
+        // section. Only the nested acquisition is removed.
+        {
+            let mut running = self.running.write();
+            if *running {
+                return Err(IronCoreError::AlreadyRunning);
+            }
+            *running = true;
         }
-        *running = true;
         self.drift_activate();
         tracing::info!("IronCore started");
         Ok(())
