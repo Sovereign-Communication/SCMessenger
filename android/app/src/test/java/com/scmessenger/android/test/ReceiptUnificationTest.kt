@@ -9,9 +9,7 @@ import com.scmessenger.android.transport.SmartTransportRouter
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
-import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
 import java.io.File
@@ -409,7 +407,7 @@ class ReceiptUnificationTest {
                 nickname = null,
                 libp2pPeerId = null
             )
-            // `just runs`, NOT `just Awaits`.
+            // `returns true`, NOT `just Awaits`.
             //
             // This one line was the :app:testDebugUnitTest hang. `just Awaits`
             // tells mockk the suspend function never completes, and mockk
@@ -430,8 +428,21 @@ class ReceiptUnificationTest {
             // The test only needs the call to HAPPEN -- it asserts
             // `coVerify(exactly = 1) { ironCore.markMessageSent("msg-1") }`,
             // which records the invocation whether or not the stub completes.
-            // `just runs` satisfies that and returns.
-            coEvery { markMessageSent(any()) } just runs
+            // `returns true` satisfies that and returns immediately.
+            //
+            // NOT `just runs`: mark_message_sent returns bool
+            // (core/src/iron_core.rs:906), so the stub type is Boolean and the
+            // `just runs` overload -- which requires Unit -- does not apply
+            // ("Type mismatch: inferred type is Runs but Awaits was expected").
+            // That type constraint is very likely WHY `just Awaits` was reached
+            // for in the first place: it is generic over T and therefore the
+            // only `just` overload that compiles here. It compiles, and it
+            // hangs. An explicit `returns` is the correct construct.
+            //
+            // true = "the message was marked sent". The caller at
+            // MeshRepository.kt:2315 discards the result, so the value does not
+            // affect the assertions either way.
+            coEvery { markMessageSent(any()) } returns true
         }
         val meshService = mockk<MeshService>(relaxed = true) {
             every { getState() } returns ServiceState.STOPPED
