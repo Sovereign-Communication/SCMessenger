@@ -7052,10 +7052,29 @@ open class MeshRepository(
                 )
                 logMessageDeliveryAttempt(item.historyRecordId, item.attemptCount + 1, "forwarding")
 
-                val envelope = try {
+                // Base64.decode returns a PLATFORM type (ByteArray!), so Kotlin
+                // does not enforce non-null here. It can legitimately be null:
+                // under JVM unit tests android.util.* is stubbed and
+                // `returnDefaultValues = true` (android/app/build.gradle) makes
+                // stubbed object returns null. Without the null branch the null
+                // flowed into attemptDirectSwarmDelivery's non-null
+                // `encryptedData` parameter and threw NullPointerException from
+                // a background coroutine, which surfaced against whichever test
+                // happened to be running.
+                //
+                // A null decode is the same situation as the corrupt-envelope
+                // catch below -- there is no sendable payload -- so it takes the
+                // same path rather than propagating.
+                val envelope: ByteArray? = try {
                     android.util.Base64.decode(item.envelopeBase64, android.util.Base64.NO_WRAP)
                 } catch (_: Exception) {
                     Timber.w("Dropping corrupt pending envelope ${item.queueId}")
+                    iterator.remove()
+                    updated = true
+                    continue
+                }
+                if (envelope == null) {
+                    Timber.w("Dropping pending envelope with undecodable payload ${item.queueId}")
                     iterator.remove()
                     updated = true
                     continue
