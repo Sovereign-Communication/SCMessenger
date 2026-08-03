@@ -34,8 +34,9 @@ pub use crate::store::ledger_entry::{
 };
 pub use addr_filter::{
     is_acceptable_peer_address, is_dialable_multiaddr, is_dialable_multiaddr_parsed,
-    is_disclosable_multiaddr, is_disclosable_multiaddr_parsed, is_self_address, strip_peer_id,
-    strip_peer_id_multiaddr, DnsPolicy, NetworkMode,
+    is_dialable_trusted_local_proxy_parsed, is_disclosable_multiaddr,
+    is_disclosable_multiaddr_parsed, is_self_address, strip_peer_id, strip_peer_id_multiaddr,
+    DnsPolicy, NetworkMode,
 };
 pub use behaviour::{
     DeregistrationPayload, DeregistrationRequest, IronCoreBehaviour, Libp2pMessageRequest,

@@ -1563,7 +1563,26 @@ impl MeshService {
                         } else {
                             format!("/ip4/{}/tcp/{}", path_info.ip_address, path_info.port)
                         };
-                        let _ = swarm_bridge.dial(multiaddr_str).await;
+                        // This address is our own loopback proxy (127.0.0.1),
+                        // not a peer-supplied address, so it goes through the
+                        // trusted-proxy dial predicate rather than the normal
+                        // Local one (which rejects loopback).
+                        match multiaddr_str.parse::<libp2p::Multiaddr>() {
+                            Ok(addr) => {
+                                let _ = swarm_bridge.dial_trusted_local_proxy(addr).await;
+                            }
+                            Err(e) => {
+                                // Never drop this silently: if it fails the
+                                // Wi-Fi Aware data path is established but
+                                // unusable, and without a log that looks
+                                // identical to the peer simply never appearing.
+                                tracing::warn!(
+                                    "[WARN] Wi-Fi Aware proxy multiaddr failed to parse; \
+                                     data path established but not dialed: {}",
+                                    e
+                                );
+                            }
+                        }
                     }
                 }
             });

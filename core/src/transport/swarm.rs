@@ -1614,6 +1614,7 @@ pub enum SwarmCommand {
     /// Dial a peer at a specific address
     Dial {
         addr: Multiaddr,
+        trusted: bool,
         reply: mpsc::Sender<Result<(), String>>,
     },
     /// Dial a discovered address (with rate-limiting)
@@ -1909,6 +1910,27 @@ impl SwarmHandle {
         self.command_tx
             .send(SwarmCommand::Dial {
                 addr,
+                trusted: false,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Swarm task not running"))?;
+
+        reply_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))?
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Dial an address this process created (the Wi-Fi Aware loopback proxy).
+    /// Do NOT use for peer-supplied addresses.
+    pub async fn dial_trusted_local_proxy(&self, addr: Multiaddr) -> Result<()> {
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+        self.command_tx
+            .send(SwarmCommand::Dial {
+                addr,
+                trusted: true,
                 reply: reply_tx,
             })
             .await
@@ -5256,13 +5278,17 @@ pub async fn start_swarm_with_config(
                                                 let _ = swarm.dial(addr);
                                             }
 
-                                            SwarmCommand::Dial { addr, reply } => {
+                                            SwarmCommand::Dial { addr, trusted, reply } => {
+                                let dialable = if trusted {
+                                    crate::transport::addr_filter::is_dialable_trusted_local_proxy_parsed(
+                                        &addr, crate::transport::addr_filter::DnsPolicy::Reject)
+                                } else {
+                                    crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                        &addr, crate::transport::addr_filter::NetworkMode::Local,
+                                        crate::transport::addr_filter::DnsPolicy::Reject)
+                                };
                                 // Filter the original address before any synthesis
-                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
-                                    &addr,
-                                    crate::transport::addr_filter::NetworkMode::Local,
-                                    crate::transport::addr_filter::DnsPolicy::Reject,
-                                ) {
+                                if !dialable {
                                     tracing::debug!("Rejecting non-dialable dial target: {}", addr);
                                     let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
                                     continue;
@@ -6077,12 +6103,16 @@ pub async fn start_swarm_with_config(
                                 tracing::debug!("Processing off-loop discovery dial to {} for peer {}", addr, peer_id);
                                 let _ = swarm.dial(addr);
                             }
-                            SwarmCommand::Dial { addr, reply } => {
-                                if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
-                                    &addr,
-                                    crate::transport::addr_filter::NetworkMode::Local,
-                                    crate::transport::addr_filter::DnsPolicy::Reject,
-                                ) {
+                            SwarmCommand::Dial { addr, trusted, reply } => {
+                                let dialable = if trusted {
+                                    crate::transport::addr_filter::is_dialable_trusted_local_proxy_parsed(
+                                        &addr, crate::transport::addr_filter::DnsPolicy::Reject)
+                                } else {
+                                    crate::transport::addr_filter::is_dialable_multiaddr_parsed(
+                                        &addr, crate::transport::addr_filter::NetworkMode::Local,
+                                        crate::transport::addr_filter::DnsPolicy::Reject)
+                                };
+                                if !dialable {
                                     tracing::debug!("Rejecting non-dialable dial target (wasm): {}", addr);
                                     let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
                                     continue;

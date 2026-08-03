@@ -87,6 +87,33 @@ enum Audience {
     Dial(NetworkMode),
     /// "May I hand it to a stranger?" -- absolute, so it takes no parameter.
     Disclose,
+    /// "Can I reach this proxy THIS PROCESS just created?"
+    ///
+    /// Exists for exactly one caller: the Wi-Fi Aware confirmed-data-path dial
+    /// (`mobile_bridge.rs`, after `create_data_path` resolves).
+    /// `WifiAwareTransport.startLoopbackProxy()` binds a TCP proxy on 127.0.0.1
+    /// and reports THAT address, deliberately -- a Wi-Fi Aware peer is only
+    /// reachable at a link-local IPv6 address, which needs an interface
+    /// scope-id (`/ip6/<addr>%<scope>/tcp/<port>`) on a multi-interface device,
+    /// and libp2p's Multiaddr parser cannot represent a scope-id at all. So
+    /// rejecting loopback on that path does not harden anything; it silently
+    /// disables the whole Wi-Fi Aware transport.
+    ///
+    /// This is a SEPARATE audience rather than a `NetworkMode` variant on
+    /// purpose. `NetworkMode` is public and threaded through many call sites; a
+    /// variant there could be reached by an untrusted caller, and relaxing
+    /// `is_unconditionally_routable_ipv4` itself would leak into
+    /// `is_globally_routable_ipv4` -- and therefore into `Disclose`, letting us
+    /// ADVERTISE a loopback address. Keeping it here means the relaxation is
+    /// unreachable except through the one function below, and every existing
+    /// `Dial(Local)` / `Dial(Public)` / `Disclose` verdict is bit-for-bit
+    /// unchanged.
+    ///
+    /// It relaxes IPv4 loopback ONLY. `::1` stays rejected, matching the
+    /// Kotlin side, which binds `127.0.0.1` explicitly rather than
+    /// `InetAddress.getLoopbackAddress()` (which resolves to `::1` on
+    /// IPv6-preferring devices, where a dial to 127.0.0.1 would find nobody).
+    DialTrustedLocalProxy,
 }
 
 /// Rejects the IPv4 addresses that are never a peer, in any context:
@@ -251,6 +278,9 @@ fn ipv4_permitted(ip: &Ipv4Addr, audience: Audience) -> bool {
             is_unconditionally_routable_ipv4(ip) && !ip.is_private()
         }
         Audience::Disclose => is_globally_routable_ipv4(ip),
+        // Loopback permitted here and ONLY here -- see `DialTrustedLocalProxy`.
+        // Everything else still has to clear the normal Local bar.
+        Audience::DialTrustedLocalProxy => ip.is_loopback() || is_unconditionally_routable_ipv4(ip),
     }
 }
 
@@ -285,6 +315,9 @@ fn ipv6_permitted(ip: &Ipv6Addr, audience: Audience) -> bool {
     let unique_local = (seg0 & 0xfe00) == 0xfc00;
     match audience {
         Audience::Dial(NetworkMode::Local) => true,
+        // TrustedLocalProxy is like Local for IPv6 — but ::1 still falls
+        // through to the loopback early-return above and stays rejected.
+        Audience::DialTrustedLocalProxy => true,
         Audience::Dial(NetworkMode::Public) | Audience::Disclose => !unique_local,
     }
 }
@@ -311,6 +344,13 @@ fn ipv6_permitted(ip: &Ipv6Addr, audience: Audience) -> bool {
 /// dial -- is rejected too.
 pub fn is_dialable_multiaddr_parsed(addr: &Multiaddr, mode: NetworkMode, dns: DnsPolicy) -> bool {
     check_multiaddr(addr, Audience::Dial(mode), dns)
+}
+
+/// Dial verdict for an address THIS PROCESS created (the Wi-Fi Aware
+/// loopback proxy). See `Audience::DialTrustedLocalProxy`. Never call this
+/// with an address that came from a remote peer or from user input.
+pub fn is_dialable_trusted_local_proxy_parsed(addr: &Multiaddr, dns: DnsPolicy) -> bool {
+    check_multiaddr(addr, Audience::DialTrustedLocalProxy, dns)
 }
 
 /// The ONE multiaddr traversal. Both public predicates delegate here so a
@@ -1157,6 +1197,39 @@ mod tests {
             LOCAL,
             REMOTE,
             &my_addrs
+        ));
+    }
+
+    // ------------------------------------------------------------------
+    // TrustedLocalProxy audience -- Wi-Fi Aware loopback proxy gating
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wifi_aware_loopback_proxy_is_dialable_only_via_trusted_audience() {
+        // The trusted audience accepts our own loopback proxy address.
+        assert!(is_dialable_trusted_local_proxy_parsed(
+            &"/ip4/127.0.0.1/tcp/9001".parse::<Multiaddr>().unwrap(),
+            REMOTE
+        ));
+        // But the regular Local dial predicate still rejects it.
+        assert!(!is_dialable_multiaddr(
+            "/ip4/127.0.0.1/tcp/9001",
+            LOCAL,
+            REMOTE
+        ));
+    }
+
+    #[test]
+    fn trusted_proxy_audience_still_rejects_metadata_and_ipv6_loopback() {
+        // Cloud metadata must stay rejected even through the trusted path.
+        assert!(!is_dialable_trusted_local_proxy_parsed(
+            &"/ip4/169.254.169.254/tcp/80".parse::<Multiaddr>().unwrap(),
+            REMOTE
+        ));
+        // IPv6 loopback stays rejected unconditionally (early-return).
+        assert!(!is_dialable_trusted_local_proxy_parsed(
+            &"/ip6/::1/tcp/9001".parse::<Multiaddr>().unwrap(),
+            REMOTE
         ));
     }
 }
