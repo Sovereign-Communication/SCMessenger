@@ -5352,18 +5352,61 @@ pub async fn start_swarm_with_config(
                                                 }
                                             }
 
-                                            // Filter every synthesized candidate through the dial
-                                            // predicate. The original addr was already filtered at
-                                            // entry, but last_good, the port ladder, and relay
-                                            // addresses are synthesized here and must each pass.
+                                            // SSRF gate on the SYNTHESIZED candidate ladder.
+                                            //
+                                            // The original `addr` was already validated at the
+                                            // untrusted-INPUT boundary (QR / deep link / contact
+                                            // import) -- that is where global-routability and
+                                            // private-range filtering BELONGS. Re-applying that same
+                                            // filter here was wrong: it rejected loopback and LAN
+                                            // hosts, breaking same-WiFi peer dials (and the
+                                            // integration_wifi_aware test). Do NOT restore the
+                                            // stricter addr_filter call here; if a host is
+                                            // unacceptable it must be refused at entry, not on the
+                                            // dial path.
+                                            //
+                                            // The only SSRF amplification this ladder can create is
+                                            // reaching a HOST the caller did not name: last_good and
+                                            // the 443/80/8080 port ladder reuse `base_prefix` (same
+                                            // host, new port), and relay addresses name configured
+                                            // relays. So the correct check is HOST EQUALITY, not
+                                            // routability -- retain a candidate only when its IP
+                                            // host is identical to the host of the base `addr`.
+                                            // DNS-form candidates are dropped outright: a name can be
+                                            // re-pointed after validation, so a host-equality check
+                                            // on a name would not hold.
+                                            let base_host: Option<std::net::IpAddr> = addr.iter().find_map(|p| match p {
+                                                libp2p::multiaddr::Protocol::Ip4(ip) => Some(std::net::IpAddr::V4(ip)),
+                                                libp2p::multiaddr::Protocol::Ip6(ip) => Some(std::net::IpAddr::V6(ip)),
+                                                _ => None,
+                                            });
+                                            // base_host is Some whenever we reach here (found_ip == true).
                                             candidates.retain(|c| {
-                                                let ok = crate::transport::addr_filter::is_dialable_multiaddr_parsed(
-                                                    c,
-                                                    crate::transport::addr_filter::NetworkMode::Local,
-                                                    crate::transport::addr_filter::DnsPolicy::Reject,
-                                                );
+                                                let is_dns = c.iter().any(|p| matches!(
+                                                    p,
+                                                    libp2p::multiaddr::Protocol::Dns(_)
+                                                        | libp2p::multiaddr::Protocol::Dns4(_)
+                                                        | libp2p::multiaddr::Protocol::Dns6(_)
+                                                        | libp2p::multiaddr::Protocol::Dnsaddr(_)
+                                                ));
+                                                if is_dns {
+                                                    tracing::debug!(
+                                                        "Dropping synthesized candidate with DNS host (re-pointable after validation): {}",
+                                                        c
+                                                    );
+                                                    return false;
+                                                }
+                                                let cand_host: Option<std::net::IpAddr> = c.iter().find_map(|p| match p {
+                                                    libp2p::multiaddr::Protocol::Ip4(ip) => Some(std::net::IpAddr::V4(ip)),
+                                                    libp2p::multiaddr::Protocol::Ip6(ip) => Some(std::net::IpAddr::V6(ip)),
+                                                    _ => None,
+                                                });
+                                                let ok = cand_host.is_some() && cand_host == base_host;
                                                 if !ok {
-                                                    tracing::debug!("Dropping non-dialable synthesized candidate: {}", c);
+                                                    tracing::debug!(
+                                                        "Dropping synthesized candidate with host mismatch (not the dialed host): {}",
+                                                        c
+                                                    );
                                                 }
                                                 ok
                                             });
