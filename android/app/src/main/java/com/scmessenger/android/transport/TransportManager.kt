@@ -651,9 +651,46 @@ class TransportManager @JvmOverloads constructor(
             // Resume BLE scanning
             scope.launch { bleScanner?.startScanning() }
             bleAdvertiser?.startAdvertising()
+
+            // Restart the GATT SERVER too. This was missing, and it is what
+            // left the device unreachable for ~17 hours.
+            //
+            // Recovery restored the scanner and the advertiser but never the
+            // GATT server, so after any stop the phone went back to
+            // ADVERTISING WITHOUT A SERVER TO CONNECT TO. Confirmed on device
+            // via `adb shell dumpsys bluetooth_manager`:
+            //
+            //   GATT Server Map: AppRecord(08-02 15:13 ~ 08-02 15:28,
+            //     appName=<app>, reason=REASON_UNREGISTER_SERVER)   <-- never returned
+            //   GATT Advertiser Map: Last Advertising 08-03 07:24   <-- recovery DID run
+            //
+            // The paired iPhone's own logs over the same window show the
+            // consequence: 20 central connect attempts, 0 connected, 0 services
+            // discovered, 0 subscriptions, 0 writes. It could see us and had
+            // nothing to connect to.
+            //
+            // BleGattServer.start() early-returns when already running, so
+            // calling it here is safe and idempotent.
+            val serverRestarted = runCatching { bleGattServer?.start() }
+                .onFailure { Timber.e(it, "[ERROR] BLE recovery: GATT server restart failed") }
+                .isSuccess
+            if (bleGattServer == null) {
+                // Nothing to restart: MeshRepository owns construction and
+                // nulls it on stop. Say so loudly rather than silently
+                // recovering into a half-working state that looks healthy.
+                Timber.w(
+                    "[WARN] BLE recovery: no GATT server instance to restart. " +
+                        "Advertising will resume but inbound connections CANNOT succeed " +
+                        "until the mesh service re-creates it."
+                )
+            }
+
             activeTransports[TransportType.BLE] = true
 
-            Timber.i("BLE recovery successful, resuming scanning")
+            Timber.i(
+                "BLE recovery: scanning + advertising resumed, gatt_server_restarted=$serverRestarted " +
+                    "gatt_server_present=${bleGattServer != null}"
+            )
         }
     }
 }

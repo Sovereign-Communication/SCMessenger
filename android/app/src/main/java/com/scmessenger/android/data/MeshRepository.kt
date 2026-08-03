@@ -9958,8 +9958,39 @@ open class MeshRepository(
      * Wired from TransportManager.attemptBleRecovery.
      */
     fun attemptBleRecovery() {
-        transportManager?.attemptBleRecovery()
         Timber.d("Attempting BLE recovery after degradation cooldown")
+
+        // Self-heal, do not just delegate.
+        //
+        // The old body was `transportManager?.attemptBleRecovery()` and nothing
+        // else, which fails silently in exactly the state we hit on device:
+        // stopMeshService() nulls transportManager, so the safe-call became a
+        // no-op and BLE stayed down for the rest of the process. Even when
+        // transportManager survived, its recovery restored only the scanner and
+        // the advertiser -- never the GATT server -- so the phone advertised
+        // with no server to connect to. Verified via dumpsys: GATT server
+        // unregistered 08-02 15:28 and never returned, while advertising
+        // resumed 08-03 07:24.
+        //
+        // initializeAndStartBle() already lazily re-creates every BLE component
+        // it needs, so routing through it repairs a null transportManager, a
+        // null GATT server, or a stopped advertiser in one path. It is
+        // idempotent: BleGattServer.start() early-returns when already running.
+        val needsFullReinit = transportManager == null || bleGattServer == null
+        if (needsFullReinit) {
+            Timber.w(
+                "[WARN] BLE recovery needs full re-init " +
+                    "(transportManager_null=${transportManager == null}, " +
+                    "gattServer_null=${bleGattServer == null}); re-running BLE startup"
+            )
+            repoScope.launch {
+                runCatching { initializeAndStartBle() }
+                    .onFailure { Timber.e(it, "[ERROR] BLE recovery re-init failed") }
+                    .onSuccess { Timber.i("[OK] BLE recovery re-init completed") }
+            }
+        } else {
+            transportManager?.attemptBleRecovery()
+        }
     }
 
     /**

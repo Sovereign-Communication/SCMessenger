@@ -23,12 +23,6 @@ pub fn identity_id(&self) -> String {
 format-indistinguishable and completely different values. The hash is one-way:
 given an identity_id you CANNOT recover the public key.
 
-This is why nothing catches the confusion. Every length and hex check passes for
-either, e.g. `ContactsViewModel.addContact`:
-
-    if (trimmedKey.length != 64) { ... }        // passes for both
-    // hex charset check                         // passes for both
-
 ## Where each is used -- the conflict
 
 | Site | Key actually used |
@@ -104,3 +98,16 @@ iOS must agree on the same convention or the two platforms will disagree about
 peer identity even after Android is fixed. The BLE identity beacon carries both
 `public_key` and `identity_id`, so the wire format already supports doing this
 correctly -- the bug is purely in which field each consumer keys on.
+
+## Validation Added
+
+- **Now rejected**:
+  - Any recipient ID that is a valid `blake3` hash of a known contact's public key (i.e., it matches a contact's identity_id) is rejected with a clear error. This prevents silent failures when a contact's identity hash is mistakenly used as a public key.
+  - All-zero recipient keys are rejected.
+- **Still allowed**:
+  - Valid Ed25519 public keys (64 hex characters, valid curve point) continue to be accepted and used for encryption.
+  - Public keys not found in contacts (but valid) can still be used, though they may fail later during cryptographic operations if the key isn't actually for a known contact.
+- **Remainder for full unification**:
+  - The full canonicalization of recipient identifiers (handling both identity_id and public_key_hex consistently) requires cross-platform coordination with iOS and a data migration path. This is tracked separately in [HANDOFF/audit/IDENTITY_HASH_VS_PUBKEY_CONFLICT.md#future-works].
+
+This change converts silent cryptographic failures into explicit validation errors, improving debugging and preventing accidental encryption to hashes.
