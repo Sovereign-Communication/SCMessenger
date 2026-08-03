@@ -109,7 +109,22 @@ class ContactsViewModelTest {
         }
 
         val contact = contactSlot.captured
-        assertEquals(peer.peerId, contact.peerId)
+        // Contact.peerId is the PUBLIC KEY, not the libp2p peer id. That is
+        // deliberate, not a bug: ContactsViewModel.addContact builds the contact
+        // with `val canonicalPeerId = trimmedKey.lowercase()` and passes it as
+        // peerId (ContactsViewModel.kt:518-520). Core agrees -- it looks
+        // contacts up by public-key hex, e.g.
+        // `get_contact_bundle(&hex::encode(&sender_pubkey))` in
+        // IronCore::receive_message.
+        //
+        // The libp2p peer id is not lost; it is carried in `notes`, which the
+        // assertions below already check.
+        //
+        // The old expectation here (`peer.peerId`) had never actually run in CI:
+        // this suite only reached the gate with PR 129, and before that the task
+        // hung and reported nothing. So this is a stale expectation being
+        // surfaced for the first time, not a regression.
+        assertEquals(validPublicKey.lowercase(), contact.peerId)
         assertEquals(validPublicKey, contact.publicKey)
         assertEquals("Bob", contact.nickname)
         // The generated notes should encode the libp2p peer id and listeners

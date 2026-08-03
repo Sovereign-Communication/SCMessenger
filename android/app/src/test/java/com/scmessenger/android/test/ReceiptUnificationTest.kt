@@ -469,9 +469,37 @@ class ReceiptUnificationTest {
             hidden = false
         )
 
+        // STATEFUL mock, deliberately. The previous version returned the same
+        // `delivered = false` record on every get(), which made the dedup
+        // assertion below unsatisfiable no matter how correct the production
+        // code was.
+        //
+        // Production dedup (MeshRepository.kt:2245) is an AND of two conditions:
+        //
+        //     if (!firstReceiptSeen && wasAlreadyDelivered) { ... return }
+        //
+        // `firstReceiptSeen` comes from the in-memory seen-set
+        // (markDeliveredReceiptSeen) and DOES flip to false on the second
+        // receipt. But `wasAlreadyDelivered` is read from
+        // historyManager.get(messageId).delivered -- and a frozen mock reports
+        // false forever, so the guard evaluated `true && false` and fell
+        // through to `if (!wasAlreadyDelivered)`, marking delivered a second
+        // time. The real store is updated by markDelivered(), so the second
+        // read returns true and dedup fires.
+        //
+        // In other words the test, not the product, was wrong: it asserted
+        // exactly-once while stubbing away the state that makes exactly-once
+        // possible. The exactly-once assertions below are unchanged -- they are
+        // the behaviour under test and they now exercise the real guard.
+        var deliveredFlag = false
         val historyManager = mockk<HistoryManager>(relaxed = true)
-        every { historyManager.get("msg-1") } returns sentRecord
-        every { historyManager.markDelivered("msg-1") } returns Unit
+        every { historyManager.get("msg-1") } answers {
+            sentRecord.copy(delivered = deliveredFlag)
+        }
+        every { historyManager.markDelivered("msg-1") } answers {
+            deliveredFlag = true
+            Unit
+        }
         val contactManager = mockk<ContactManager>(relaxed = true)
         setField(repo, "historyManager", historyManager)
         setField(repo, "contactManager", contactManager)
