@@ -178,3 +178,51 @@ blocking work on both platforms simultaneously.
 Redaction: repo is PUBLIC. No peer ids, public keys, BLE MACs or IP addresses in
 anything committed. Message ids and timestamps are fine and are what we
 correlate on.
+
+---
+
+## 6. ADDENDUM: directional parity as a diagnostic, not just a status
+
+Operator point, and it changes how the matrix should be run: **if one direction
+works and the other does not, that asymmetry localises the fault.** Symmetric
+failure tells you little -- it usually means something upstream of both.
+
+This works because the two directions do not share a mechanism. With Android as
+GATT server and iOS as central:
+
+- **iOS -> Android** = central WRITES a characteristic. Needs connection +
+  service discovery.
+- **Android -> iOS** = server NOTIFIES. Needs connection + service discovery +
+  **iOS subscribed to the CCCD**.
+
+Notify requires a subscription; write does not. So they fail independently, and
+which one fails names the defect:
+
+| iOS -> Android | Android -> iOS | Meaning |
+|---|---|---|
+| FAIL | FAIL | Upstream of both -- connection/discovery/advertising. Do not debug message handling. |
+| WORKS | FAIL | Connection fine, SUBSCRIPTION is not. CCCD write never completed/confirmed. |
+| FAIL | WORKS | Connection fine, WRITE path is not. Permissions, MTU/fragmentation, or the write-request handler. |
+| WORKS | WORKS | Transport good -- remaining failure is crypto/identity/receipts. |
+
+Full version with the exact markers to capture on each side:
+`HANDOFF/audit/DIRECTIONAL_PARITY_DIAGNOSTIC.md`.
+
+Note this retroactively explains the current state. Both directions failed,
+which the table says means "upstream of both" -- and the actual cause was the
+unregistered GATT server. The table would have pointed at connection
+establishment immediately rather than at message handling.
+
+**Two asks for you:**
+
+1. Your capture showed `ble_central_subscribed_message: 0`. If that is still 0
+   after the Android build lands, **Android -> iOS cannot work regardless of
+   what Android does** -- notify has no subscriber. Please treat that single
+   marker as a gate before investigating anything on the Android send path.
+
+2. When we run the 5-node matrix, let us record **directional pairs per
+   transport** rather than one pass/fail per node. A pair that works over LAN
+   but not BLE isolates to that transport; a pair that fails in the SAME
+   direction across all transports isolates above transport. That distinction is
+   invisible in a per-node status light, and it is the difference between the
+   matrix being a report and the matrix being an instrument.
