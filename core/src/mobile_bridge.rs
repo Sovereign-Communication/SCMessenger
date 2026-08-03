@@ -1567,21 +1567,19 @@ impl MeshService {
                         // not a peer-supplied address, so it goes through the
                         // trusted-proxy dial predicate rather than the normal
                         // Local one (which rejects loopback).
-                        match multiaddr_str.parse::<libp2p::Multiaddr>() {
-                            Ok(addr) => {
-                                let _ = swarm_bridge.dial_trusted_local_proxy(addr).await;
-                            }
-                            Err(e) => {
-                                // Never drop this silently: if it fails the
-                                // Wi-Fi Aware data path is established but
-                                // unusable, and without a log that looks
-                                // identical to the peer simply never appearing.
-                                tracing::warn!(
-                                    "[WARN] Wi-Fi Aware proxy multiaddr failed to parse; \
-                                     data path established but not dialed: {}",
-                                    e
-                                );
-                            }
+                        if let Err(e) = swarm_bridge
+                            .dial_trusted_local_proxy(multiaddr_str.clone())
+                            .await
+                        {
+                            // Never drop this silently: on failure the Wi-Fi
+                            // Aware data path is established but unusable, and
+                            // without a log that is indistinguishable from the
+                            // peer simply never appearing.
+                            tracing::warn!(
+                                "[WARN] Wi-Fi Aware trusted-proxy dial failed for {}: {:?}",
+                                multiaddr_str,
+                                e
+                            );
                         }
                     }
                 }
@@ -3160,6 +3158,39 @@ impl SwarmBridge {
                 crate::IronCoreError::NetworkError
             }
         })
+    }
+
+    /// Dial an address THIS PROCESS created -- specifically the Wi-Fi Aware
+    /// loopback proxy bound by `WifiAwareTransport.startLoopbackProxy()`.
+    ///
+    /// Separate from [`Self::dial`] because it uses the trusted-proxy dial
+    /// predicate, which permits IPv4 loopback; the normal predicate rejects it
+    /// (correctly, for peer-supplied addresses). Do NOT route peer-supplied or
+    /// user-supplied addresses here -- see
+    /// `addr_filter::Audience::DialTrustedLocalProxy` for the reasoning.
+    ///
+    /// Takes a `String` rather than a `Multiaddr` because this impl block is
+    /// `#[uniffi::export]`ed and `Multiaddr` is not FFI-liftable. The only
+    /// caller is core-internal (the Wi-Fi Aware data-path task); nothing on the
+    /// Kotlin/Swift side invokes it, which is what keeps the relaxed predicate
+    /// out of reach of platform-supplied addresses.
+    pub async fn dial_trusted_local_proxy(
+        &self,
+        multiaddr: String,
+    ) -> Result<(), crate::IronCoreError> {
+        let handle = self
+            .handle
+            .lock()
+            .clone()
+            .ok_or(crate::IronCoreError::NetworkError)?;
+
+        let addr =
+            Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
+
+        handle
+            .dial_trusted_local_proxy(addr)
+            .await
+            .map_err(|_| crate::IronCoreError::NetworkError)
     }
 
     pub async fn get_peers(&self) -> Vec<String> {
