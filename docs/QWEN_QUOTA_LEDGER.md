@@ -5,6 +5,46 @@ Last updated: 2026-08-03
 
 This document tracks the verified DashScope/Alibaba Qwen models, their enabling status, actions, and remaining free quota.
 
+## Liveness snapshot 2026-08-03 (afternoon) -- quota DRAINS FAST, re-check often
+
+Between the morning and afternoon console reads, an ENTIRE fallback chain went
+from usable to `-`: `glm-5.1`, `qwen3.6-plus-2026-04-02`, `qwen3.7-flash`,
+`qwen3.5-plus-2026-04-20`, `qwen3.6-flash-2026-04-16`. Five dispatches in a row
+returned nothing before the operator supplied a fresh table. Treat any chain
+older than a few hours as stale.
+
+USE (numeric quota, afternoon read):
+
+| Model | Remaining | Best for |
+|---|---|---|
+| `qwen3.8-max` | 999,933 | top tier, newly Enabled -- hardest analysis |
+| `qwen3-next-80b-a3b-thinking` | 948,516 | concurrency / lock tracing |
+| `qwq-plus` | 930,497 | reasoning |
+| `qwen3-32b` | 884,143 | general dense |
+| `qwen3-14b` | 881,528 | mechanical edits |
+| `qwen3-30b-a3b` | 820,041 | general |
+| `qwen3-30b-a3b-thinking-2507` | 768,692 | analysis |
+| `qwen3.5-flash` | 761,849 | fast mechanical |
+| `qwen-max` | 752,981 | general |
+| `qwen3-coder-plus-2025-07-22` | 461,072 | code edits |
+| `qwen3-235b-a22b` | 401,182 | large |
+| `qwen3.6-27b` | 209,502 | small |
+
+DEAD as of this read (all `-`): every bare alias, plus `glm-5.1`, `glm-5.2`,
+`qwen3.7-*` (all), `qwen3.6-flash-2026-04-16`, `qwen3.6-plus-2026-04-02`,
+`qwen3.5-plus-*`, `qwen3.5-397b-a17b`, `qwen3.5-35b-a3b`, `qwen3.5-27b`,
+`qwen3.5-122b-a10b`, `deepseek-*` (all), `kimi-k2.7-code`, `qwen3-coder-next`,
+`qwen3-coder-flash*`, `qwen3-max*`, `qwen3-next-80b-a3b-instruct`.
+
+Note `qwen3-next-80b-a3b-THINKING` is alive while `-INSTRUCT` is dead: the two
+variants are separate pools, exactly like the alias/dated-pin split.
+
+Also relevant: a THINKING model that probes fine can still return nothing on a
+real task because it spends its budget reasoning and never writes the file. Cap
+the deliverable ("under 60 lines") and tell it to write a partial answer FIRST
+and refine after. That single change is what got a usable BLE root-cause
+analysis out of one.
+
 ## THE DASH RULE -- read this before building any fallback chain (2026-08-03)
 
 **A model whose Free Quota column shows `-` has NO free allowance and will 403
