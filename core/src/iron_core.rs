@@ -485,6 +485,39 @@ impl IronCore {
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(target_arch = "wasm32"), uniffi::constructor)]
     pub fn with_storage_and_logs(path: String, log_dir: String) -> Self {
+        // Install the tracing subscriber FIRST, before any other init, so
+        // startup diagnostics are captured too.
+        //
+        // This call was missing entirely. `log_dir` was accepted, stored as
+        // `self.log_directory` (:547) and never read; `init_file_tracing` had
+        // ZERO callers anywhere in the crate. So the whole structured-tracing
+        // facility was dead code: Android computes a logs directory
+        // (MeshRepository.kt:1341) and passes it through
+        // MeshService::withStorageAndLogs -> IronCore::with_storage_and_logs,
+        // and core then discarded it.
+        //
+        // The consequence was that the Rust core was COMPLETELY SILENT on
+        // device. `eprintln!` goes to stderr, which Android discards unless
+        // `log.redirect-stdio` is set (verified unset on the test device:
+        // `grep -cF "[IronCore]" logcat` returned 0 across a full buffer while
+        // 264 inbound BLE messages were being processed), and `tracing::` had
+        // no subscriber. That blindness is why the BLE inbound wedge took so
+        // long to localise -- we could not tell whether on_data_received was
+        // even entered.
+        //
+        // init_file_tracing uses try_init() internally, so a warm boot that
+        // recreates MeshService without killing the process is safe. A failure
+        // here must never take the core down: logging is diagnostics, not a
+        // dependency of messaging.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = crate::store::tracing_init::init_file_tracing(&log_dir) {
+            // Cannot use tracing:: here -- if this failed there may be no
+            // subscriber. eprintln is invisible on Android but correct
+            // everywhere else, and this path means diagnostics are degraded
+            // rather than the process being unhealthy.
+            eprintln!("[IronCore] [WARN] file tracing init failed ({}); core diagnostics will not be written to {}", e, log_dir);
+        }
+
         let backend: Arc<dyn StorageBackend> = match SledStorage::new(&path) {
             Ok(s) => Arc::new(s),
             Err(_) => Arc::new(MemoryStorage::new()),
