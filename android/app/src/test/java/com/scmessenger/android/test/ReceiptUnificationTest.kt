@@ -22,6 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.AfterClass
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Assert.assertArrayEquals
@@ -91,6 +92,43 @@ class ReceiptUnificationTest {
                 libFile.exists()
             )
             System.setProperty("jna.library.path", hostLibDir.absolutePath)
+        }
+
+        /**
+         * Diagnostic for the :app:testDebugUnitTest worker hang.
+         *
+         * Every test in this class PASSES, then the Gradle worker JVM refuses to
+         * exit and the task dies on "Timeout has been exceeded" (10-minute guard
+         * at android/app/build.gradle:203). Gradle then reports
+         * "Terminate orphan process: pid (java)".
+         *
+         * Only a NON-DAEMON thread can hold a JVM open. Two fixes aimed at
+         * coroutine scopes (cancelling repoScope, then routing stopMeshService
+         * through TransportManager.cleanup) both failed -- which is expected in
+         * hindsight, because Dispatchers.IO/Default threads are already daemon
+         * and could never have been the cause.
+         *
+         * Every Executors pool in the Android sources that a test can reach sets
+         * isDaemon = true, so the survivor is most likely created below the
+         * Kotlin layer -- e.g. a JNA callback thread for the Rust core, which is
+         * loaded here (checkNative passes in CI, tests run).
+         *
+         * Rather than guess a third time, this prints the actual survivors. The
+         * next CI run names the culprit in the log. Test-only: no production
+         * code path is affected.
+         */
+        @JvmStatic
+        @AfterClass
+        fun dumpNonDaemonThreads() {
+            val survivors = Thread.getAllStackTraces().keys
+                .filter { !it.isDaemon && it.isAlive }
+                .filter { it.name != "main" && !it.name.startsWith("Test worker") }
+            println("=== NON-DAEMON THREADS ALIVE AFTER SUITE: ${survivors.size} ===")
+            survivors.forEach { t ->
+                println("=== THREAD name=${t.name} state=${t.state} group=${t.threadGroup?.name}")
+                t.stackTrace.take(12).forEach { f -> println("===     at $f") }
+            }
+            println("=== END NON-DAEMON THREAD DUMP ===")
         }
     }
 
