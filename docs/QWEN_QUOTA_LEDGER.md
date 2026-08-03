@@ -5,6 +5,35 @@ Last updated: 2026-08-03
 
 This document tracks the verified DashScope/Alibaba Qwen models, their enabling status, actions, and remaining free quota.
 
+## THE DASH RULE -- read this before building any fallback chain (2026-08-03)
+
+**A model whose Free Quota column shows `-` has NO free allowance and will 403
+on every call, regardless of what any other list says.** This is the single most
+expensive lesson of the 2026-08-03 session: roughly a dozen dispatches were
+burned retrying dash-models while ~50 models with 750K-1M remaining sat unused,
+and the conclusion "Qwen is exhausted" was reported to the operator. It was
+wrong. The operator corrected it.
+
+**The pattern: BARE ALIASES have no quota; DATED PINS do.**
+
+| No quota (`-`) -- do NOT dispatch | Has quota -- use these |
+|---|---|
+| `qwen-flash`, `qwen3-coder-flash`, `qwen3-max`, `qwen3-max-preview`, `qwen3-coder-plus`, `qwen-plus`, `qwen-plus-latest`, `qwen3.6-flash`, `qwen3.7-plus`, `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v3.2`, `glm-5.2`, `kimi-k2.7-code`, `qwen3-coder-next`, `qwen3-30b-a3b-instruct-2507`, `qwen3-next-80b-a3b-instruct` | `qwen3.7-flash-2026-07-15`, `qwen3.6-flash-2026-04-16`, `qwen3.5-flash`, `qwen3.5-35b-a3b`, `qwen3.6-27b`, `qwen3.5-27b`, `qwen3-30b-a3b-thinking-2507`, `qwen3-next-80b-a3b-thinking`, `qwen3-32b`, `qwen3-14b`, `qwen3-8b`, `glm-5.1`, `qwen3.5-397b-a17b`, `qwen3.5-plus-2026-02-15`, `qwen3.7-max-2026-06-08`, `qwen3-max-2025-09-23`, `qwen-max`, `qwen3-235b-a22b-thinking-2507` |
+
+Note the trap: the bare alias and its dated pin are DIFFERENT quota pools.
+`qwen3.6-flash` is dead but `qwen3.6-flash-2026-04-16` has 999,829.
+`qwen3-coder-flash` is dead but `qwen3-14b` has 881,528.
+
+**Picking a model by task:**
+- mechanical wiring / edits -> `qwen3.7-flash-2026-07-15`, `qwen3.6-flash-2026-04-16`
+- planning / prose -> `glm-5.1` (verified: wrote a 408-line plan 2026-08-03)
+- hard analysis, deadlock/lock tracing -> a *thinking* model:
+  `qwen3-next-80b-a3b-thinking`, `qwen3-30b-a3b-thinking-2507`,
+  `qwen3-235b-a22b-thinking-2507`
+
+Build every fallback chain from the right-hand column only, and re-check the
+console table when a chain starts 403ing rather than concluding the lane is dry.
+
 ## Empirical Liveness Probe (2026-08-03)
 
 **The console quota table below does NOT predict whether a dispatch will
