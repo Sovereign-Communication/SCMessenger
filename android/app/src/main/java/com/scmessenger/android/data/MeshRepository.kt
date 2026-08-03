@@ -3647,11 +3647,32 @@ open class MeshRepository(
             .onFailure { Timber.w(it, "Failed to stop WiFi transport") }
 
         // TransportManager.startAll() is called when the service starts (see
-        // above); stopAll() must be called here too so WiFi Aware detaches
+        // above); teardown must happen here too so WiFi Aware detaches
         // (WifiAwareSession.close()) instead of leaking an attach session
         // for the lifetime of the process after the mesh service stops.
-        kotlin.runCatching { transportManager?.stopAll() }
-            .onFailure { Timber.w(it, "Failed to stop TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }
+        //
+        // cleanup(), NOT stopAll(). stopAll() does not cancel TransportManager's
+        // own CoroutineScope (TransportManager.kt:70,
+        // Dispatchers.IO + SupervisorJob) -- it actually LAUNCHES more work on
+        // it on the way out. Only cleanup() calls scope.cancel(). Since
+        // transportManager is set to null a few lines below, the manager is
+        // being discarded here and a full teardown is what is wanted.
+        //
+        // Consequence of the old stopAll(): that scope outlived the mesh
+        // service, so the bootstrap retry loop (which backs off to a 60s period
+        // and then retries forever) and the SubnetProbe sweep kept running.
+        // On device that is a resource leak; in the JVM unit tests it kept the
+        // Gradle test worker alive after the last test finished, so
+        // :app:testDebugUnitTest never exited and died on "Timeout has been
+        // exceeded" (10 min guard at android/app/build.gradle:203, added after
+        // this hang burned 90-151 min of CI while passing locally in 54s).
+        // Cancelling repoScope did not help, because none of that work was ever
+        // owned by repoScope.
+        //
+        // cleanup() calls stopAll() first, so the WiFi Aware detach above is
+        // preserved.
+        kotlin.runCatching { transportManager?.cleanup() }
+            .onFailure { Timber.w(it, "Failed to clean up TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }
 
         // shutdown() is now a suspend FFI call; teardown must complete before
         // meshService.stop() below, so block here (bounded: it only awaits the

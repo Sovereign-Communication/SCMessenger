@@ -3160,39 +3160,6 @@ impl SwarmBridge {
         })
     }
 
-    /// Dial an address THIS PROCESS created -- specifically the Wi-Fi Aware
-    /// loopback proxy bound by `WifiAwareTransport.startLoopbackProxy()`.
-    ///
-    /// Separate from [`Self::dial`] because it uses the trusted-proxy dial
-    /// predicate, which permits IPv4 loopback; the normal predicate rejects it
-    /// (correctly, for peer-supplied addresses). Do NOT route peer-supplied or
-    /// user-supplied addresses here -- see
-    /// `addr_filter::Audience::DialTrustedLocalProxy` for the reasoning.
-    ///
-    /// Takes a `String` rather than a `Multiaddr` because this impl block is
-    /// `#[uniffi::export]`ed and `Multiaddr` is not FFI-liftable. The only
-    /// caller is core-internal (the Wi-Fi Aware data-path task); nothing on the
-    /// Kotlin/Swift side invokes it, which is what keeps the relaxed predicate
-    /// out of reach of platform-supplied addresses.
-    pub async fn dial_trusted_local_proxy(
-        &self,
-        multiaddr: String,
-    ) -> Result<(), crate::IronCoreError> {
-        let handle = self
-            .handle
-            .lock()
-            .clone()
-            .ok_or(crate::IronCoreError::NetworkError)?;
-
-        let addr =
-            Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
-
-        handle
-            .dial_trusted_local_proxy(addr)
-            .await
-            .map_err(|_| crate::IronCoreError::NetworkError)
-    }
-
     pub async fn get_peers(&self) -> Vec<String> {
         let handle = match self.handle.lock().clone() {
             Some(h) => h,
@@ -3303,6 +3270,42 @@ impl SwarmBridge {
 
 // Non-UniFFI internal methods for SwarmBridge
 impl SwarmBridge {
+    /// Dial an address THIS PROCESS created -- specifically the Wi-Fi Aware
+    /// loopback proxy bound by `WifiAwareTransport.startLoopbackProxy()`.
+    ///
+    /// Separate from [`Self::dial`] because it uses the trusted-proxy dial
+    /// predicate, which permits IPv4 loopback; the normal predicate rejects it,
+    /// correctly, for peer-supplied addresses. Do NOT route peer-supplied or
+    /// user-supplied addresses here -- see
+    /// `addr_filter::Audience::DialTrustedLocalProxy` for the full reasoning.
+    ///
+    /// DELIBERATELY IN THIS impl BLOCK, not the `#[uniffi::export]`ed one
+    /// above. Exporting it would put the relaxed loopback predicate on the
+    /// Kotlin/Swift API surface, where platform code could hand it an arbitrary
+    /// address -- which is exactly the reachability this design is meant to
+    /// prevent. Keeping it un-exported is what makes "only core calls this"
+    /// an enforced property rather than a comment. It also leaves the generated
+    /// FFI surface unchanged, so the FFI Surface Contract check stays green
+    /// without regenerating a snapshot.
+    pub async fn dial_trusted_local_proxy(
+        &self,
+        multiaddr: String,
+    ) -> Result<(), crate::IronCoreError> {
+        let handle = self
+            .handle
+            .lock()
+            .clone()
+            .ok_or(crate::IronCoreError::NetworkError)?;
+
+        let addr =
+            Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
+
+        handle
+            .dial_trusted_local_proxy(addr)
+            .await
+            .map_err(|_| crate::IronCoreError::NetworkError)
+    }
+
     fn clear_handle_if_unhealthy(&self) -> bool {
         let mut guard = self.handle.lock();
         let should_clear = guard

@@ -195,8 +195,23 @@ class ReceiptUnificationTest {
 
     @After
     fun cleanup() {
-        // Cancel first: these scopes hold the test JVM open (see activeRepos).
-        activeRepos.forEach { runCatching { cancelRepoScope(it) } }
+        // Order matters. stopMeshService() FIRST: the tests that call
+        // startMeshService() bring up a real TransportManager, which owns its
+        // own CoroutineScope (TransportManager.kt:70) that repoScope knows
+        // nothing about. That scope runs the bootstrap retry loop and the
+        // SubnetProbe sweep, neither of which ever ends on its own, and both of
+        // which kept the Gradle test worker alive past the last test until the
+        // task was killed by the 10-minute timeout guard.
+        //
+        // stopMeshService() now routes to TransportManager.cleanup() (which
+        // cancels that scope) rather than stopAll() (which does not) -- see the
+        // comment at the transportManager teardown in MeshRepository.
+        //
+        // Cancelling repoScope alone was tried and did NOT fix the hang.
+        activeRepos.forEach { repo ->
+            runCatching { repo.stopMeshService() }
+            runCatching { cancelRepoScope(repo) }
+        }
         activeRepos.clear()
         testRoot.listFiles()?.forEach { it.deleteRecursively() }
     }
