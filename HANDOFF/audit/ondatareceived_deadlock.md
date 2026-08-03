@@ -2,7 +2,7 @@
 
 ## Lock Acquisition Order
 
-1. **Mobile Bridge (Android)**: `MeshRepository.kt:2836` calls `meshService?.onDataReceived(peerId, data)`  
+1. **Mobile Bridge (Android)**: `MeshRepository.kt:2836` calls `meshService?.onDataReceived(peerId, data)`
    - This is synchronous UniFFI, on the BLE GATT callback thread
 
 2. **Core Bridge Layer**: `core/src/mobile_bridge.rs:1385` - `MeshService::on_data_received`
@@ -17,15 +17,15 @@
    - Line 3154: `self.audit_log.write().append(...)` - Write lock on audit_log
    - Line 3162: `if let Some(delegate) = self.delegate.read().as_ref()` - Read lock on delegate
    - Lines 3163-3169: Calls `delegate.on_message_received(...)`
-   
+
 ## Root Cause: Re-entrant Deadlock
 
 The deadlock occurs when the delegate callback (`delegate.on_message_received`) calls back into IronCore while holding a read lock on `delegate`:
 
 1. **Initial call path**: `on_data_received` → `receive_message` → acquire `delegate.read()`
 2. **Re-entrant call**: The delegate callback calls back into IronCore (likely through `notify_peer_discovered`, `notify_peer_disconnected`, or other callbacks)
-3. **Deadlock condition**: 
-   - Thread holds `delegate.read()` 
+3. **Deadlock condition**:
+   - Thread holds `delegate.read()`
    - Attempts to acquire `identity.read()` (or another lock)
    - But another thread is holding `identity.read()` and trying to acquire `delegate.read()` (or another lock)
    - Results in circular wait
@@ -43,7 +43,7 @@ Looking at the `on_message_received` delegate call in `iron_core.rs:3162-3170`, 
 The device log shows:
 - 264 "mesh_ble_forward" entries immediately BEFORE the onDataReceived calls
 - 0 "mesh_ble_forward_return" entries immediately AFTER
-- Core reports "0 peers (Core)" 
+- Core reports "0 peers (Core)"
 
 This indicates the `onDataReceived` method is never returning, confirming a deadlock.
 
@@ -55,7 +55,7 @@ This indicates the `onDataReceived` method is never returning, confirming a dead
    if let Some(delegate) = self.delegate.read().as_ref() {
        delegate.on_message_received(...)
    }
-   
+
    // Do:
    let delegate_opt = self.delegate.read().clone();
    if let Some(delegate) = delegate_opt.as_ref() {

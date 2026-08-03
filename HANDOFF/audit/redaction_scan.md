@@ -271,11 +271,11 @@ above where relays are listed together.
 Recommended redaction: `x.x.x.x` or `192.168.x.x`.
 
 **192.168.0.x network (home LAN) -- found in ~80+ locations.** Key devices:
-- 192.168.0.121 (CLI dev machine)
-- 192.168.0.129 (separate LAN device, discovered by mDNS)
-- 192.168.0.138 (Android Pixel phone)
-- 192.168.0.222 (Windows CLI)
-- 192.168.0.230 (Windows host, WSL2)
+- x.x.x.x (CLI dev machine)
+- x.x.x.x (separate LAN device, discovered by mDNS)
+- x.x.x.x (Android Pixel phone)
+- x.x.x.x (Windows CLI)
+- x.x.x.x (Windows host, WSL2)
 
 | File | Line(s) | What |
 |---|---|---|
@@ -304,12 +304,12 @@ Recommended redaction: `x.x.x.x` or `192.168.x.x`.
 
 | File | Line(s) | What |
 |---|---|---|
-| `HANDOFF/INFRASTRUCTURE_REDESIGN_2026-07-18.md` | 23, 25-27, 53, 182 | VPC/subnet plan (172.20-22.x.x, 10.0.0.0/16) |
+| `HANDOFF/INFRASTRUCTURE_REDESIGN_2026-07-18.md` | 23, 25-27, 53, 182 | VPC/subnet plan (172.20-22.x.x, x.x.x.x/16) |
 | `HANDOFF/results/carol-peers.json` | many | Docker container IPs (172.20-21.x.x) |
 | `HANDOFF/results/bob-peers.json` | many | Docker container IPs (172.20-22.x.x) |
 | `docs/historical/DOCKER_TEST_QUICKREF.md` | 61-62 | Docker test network |
 | `docs/historical/DOCKER_TEST_SETUP_COMPLETE.md` | 119, 122, 127-128 | Docker network diagram |
-| `docs/LAN_AUTO_DISCOVERY_STRATEGY.md` | 20-21, 27, 103 | WSL2 NAT bridge (172.26.154.211) |
+| `docs/LAN_AUTO_DISCOVERY_STRATEGY.md` | 20-21, 27, 103 | WSL2 NAT bridge (x.x.x.x) |
 | `docs/historical/plans/DRIFTNET_MESH_BLUEPRINT.md` | 88-89, 995-996, 1019 | Virtual mesh IPs (10.0.0.x, 10.73.x.x) |
 
 ### 4c. Documentation-range / Fixture IPs (RFC 5737)

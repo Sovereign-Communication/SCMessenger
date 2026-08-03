@@ -56,7 +56,7 @@ Evidence:
 
 5. **`core/src/mobile_bridge.rs:881-882`** (line 881-882): The developer explicitly wrote:
    > "CRITICAL: eprintln! is the ONLY way to surface errors on mobile — tracing goes to /dev/null."
-   
+
    This confirms the developer knew tracing had no output sink on Android.
 
 ### What happens today
