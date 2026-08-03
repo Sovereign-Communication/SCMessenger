@@ -22,7 +22,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
-import org.junit.AfterClass
 import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Assert.assertArrayEquals
@@ -118,17 +117,54 @@ class ReceiptUnificationTest {
          * code path is affected.
          */
         @JvmStatic
-        @AfterClass
-        fun dumpNonDaemonThreads() {
-            val survivors = Thread.getAllStackTraces().keys
-                .filter { !it.isDaemon && it.isAlive }
-                .filter { it.name != "main" && !it.name.startsWith("Test worker") }
-            println("=== NON-DAEMON THREADS ALIVE AFTER SUITE: ${survivors.size} ===")
-            survivors.forEach { t ->
-                println("=== THREAD name=${t.name} state=${t.state} group=${t.threadGroup?.name}")
-                t.stackTrace.take(12).forEach { f -> println("===     at $f") }
+        @BeforeClass
+        fun startHangWatchdog() {
+            // @AfterClass was tried first and produced NOTHING: the CI log goes
+            // straight from the last test's SKIPPED line to the Gradle timeout,
+            // so execution never reaches @AfterClass. That means the JVM wedges
+            // during the per-test lifecycle (most likely inside @After), not at
+            // exit -- so any end-of-suite hook is structurally unable to report.
+            //
+            // A daemon watchdog fires regardless of where the wedge is. Daemon
+            // so it cannot itself hold the JVM open, and it dumps every live
+            // NON-DAEMON thread with its stack -- only a non-daemon thread can
+            // block exit, and Kotlin's Dispatchers.IO/Default are already daemon.
+            //
+            // It also dumps threads that are BLOCKED or WAITING regardless of
+            // daemon status, because if the wedge is in @After the culprit is a
+            // blocked test thread rather than a leaked background one.
+            val t = Thread {
+                try {
+                    Thread.sleep(180_000)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                val all = Thread.getAllStackTraces()
+                val nonDaemon = all.keys.filter { !it.isDaemon && it.isAlive }
+                println("=== HANG WATCHDOG FIRED (180s) ===")
+                println("=== NON-DAEMON THREADS ALIVE: ${nonDaemon.size} ===")
+                nonDaemon.forEach { th ->
+                    println("=== NDTHREAD name=${th.name} state=${th.state}")
+                    th.stackTrace.take(15).forEach { f -> println("===     at $f") }
+                }
+                println("=== BLOCKED/WAITING THREADS (any daemon status) ===")
+                all.keys.filter {
+                    it.state == Thread.State.BLOCKED ||
+                        it.state == Thread.State.WAITING ||
+                        it.state == Thread.State.TIMED_WAITING
+                }.forEach { th ->
+                    val top = th.stackTrace.firstOrNull()?.toString() ?: "<no frames>"
+                    // Only the ones parked in our own code are interesting.
+                    if (th.stackTrace.any { it.className.startsWith("com.scmessenger") }) {
+                        println("=== WTHREAD name=${th.name} state=${th.state} daemon=${th.isDaemon} top=$top")
+                        th.stackTrace.take(15).forEach { f -> println("===     at $f") }
+                    }
+                }
+                println("=== END HANG WATCHDOG DUMP ===")
             }
-            println("=== END NON-DAEMON THREAD DUMP ===")
+            t.isDaemon = true
+            t.name = "scm-hang-watchdog"
+            t.start()
         }
     }
 
@@ -246,9 +282,25 @@ class ReceiptUnificationTest {
         // comment at the transportManager teardown in MeshRepository.
         //
         // Cancelling repoScope alone was tried and did NOT fix the hang.
+        // stopMeshService() is NO LONGER called here, deliberately.
+        //
+        // It was added in a previous attempt and did not help: "TransportManager
+        // cleaned up" still appeared exactly ONCE for three repos. Worse, it is
+        // the prime suspect for the CURRENT wedge. The CI log runs straight from
+        // the last test's SKIPPED line to the Gradle timeout with @AfterClass
+        // never reached, which means the JVM wedges inside the per-test
+        // lifecycle -- and this @After is the only thing there that can block.
+        // stopMeshService() contains
+        // `runBlocking { swarmBridge?.shutdown() }`, and the skipped test
+        // constructs its repo BEFORE the assumption fails, so teardown calls a
+        // blocking shutdown on a service that was never started.
+        //
+        // Also note the previous version used bare `runCatching`, which swallows
+        // failures silently -- the same pattern this codebase keeps producing.
+        // Failures are logged now.
         activeRepos.forEach { repo ->
-            runCatching { repo.stopMeshService() }
             runCatching { cancelRepoScope(repo) }
+                .onFailure { println("[WARN] cancelRepoScope failed: $it") }
         }
         activeRepos.clear()
         testRoot.listFiles()?.forEach { it.deleteRecursively() }
