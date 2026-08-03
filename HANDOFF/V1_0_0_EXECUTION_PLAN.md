@@ -129,7 +129,7 @@ Rule of thumb applied below: diagnosis and design are [OPUS+]; almost all implem
 
 ### 1.3 Device/lab inventory (fixed for this plan)
 
-One Windows dev machine (CLI node, BLE adapter, can run firewall profiles and WSL2). One Pixel 6a (real device, `adb` over network, serial `192.168.0.148:43759` — pass `-s`, two adb entries resolve to it). No second Android device. No cloud box. Consequences flagged where they bite (P1-17, P1-18, WS-D QA).
+One Windows dev machine (CLI node, BLE adapter, can run firewall profiles and WSL2). One Pixel 6a (real device, `adb` over network, serial `x.x.x.x:43759` — pass `-s`, two adb entries resolve to it). No second Android device. No cloud box. Consequences flagged where they bite (P1-17, P1-18, WS-D QA).
 
 ### 1.4 Lane rules (file-collision control)
 

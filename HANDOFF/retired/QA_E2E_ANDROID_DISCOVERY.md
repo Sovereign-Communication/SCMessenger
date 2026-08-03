@@ -95,7 +95,7 @@ powershell.exe -NoProfile -File .\scripts\scmdriver.ps1 "send <ANDROID_PEER_ID> 
 
 ## Previous Test Reference (2026-04-30, pre-fix)
 
-- Daemon started successfully: Peer ID `12D3KooWP3RGmGgRNtqGsfBCZgu8Wzao6qSsqYzLeLRmkqBdf5Ag`
+- Daemon started successfully: Peer ID `12D3KooW<redacted>`
 - Contact list: 2 contacts (LukeAndroid `12D3KooWDYF6...`, Treystu `12D3KooWHEY9...`)
 - 0/114 known peers reachable; connection path stuck at "Bootstrapping"
 - Root cause: Android phone likely offline + stale ledger entries

@@ -18,7 +18,7 @@ Updated conditional compilation flags in:
 ### Result
  **mDNS is now active on Windows**:
 ```
-INFO libp2p_mdns::behaviour::iface: creating instance on iface address=192.168.0.121
+INFO libp2p_mdns::behaviour::iface: creating instance on iface address=x.x.x.x
 ```
 
 ---
@@ -26,7 +26,7 @@ INFO libp2p_mdns::behaviour::iface: creating instance on iface address=192.168.0
 ## Current Status
 
 ### Windows CLI
-- **mDNS**:  ACTIVE (libp2p-mdns on 192.168.0.121)
+- **mDNS**:  ACTIVE (libp2p-mdns on x.x.x.x)
 - **BLE**:  ACTIVE (btleplug manager initialized)
 - **Daemon**:  RUNNING (PID 23032)
 - **Discovery**: ️ Not finding Android device yet
@@ -62,7 +62,7 @@ Look for:
 
 While debugging mDNS, connect manually:
 
-1. **Get Android IP** from WiFi settings (e.g., `192.168.0.150`)
+1. **Get Android IP** from WiFi settings (e.g., `x.x.x.x`)
 2. **Get Android Peer ID** from app (starts with `12D3Koo...`)
 3. **Add manually**:
    ```bash

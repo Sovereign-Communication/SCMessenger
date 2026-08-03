@@ -15,7 +15,7 @@
 | 3 P0/P1 fixes (P0_024 re-entrancy, P0_024 defense-in-depth, P1_022 cache) | **Uncommitted** in `E:\SCMessenger-build-p0-024\` (branch `fix/p0-android-024-identity`). 24 LoC across 3 files. |
 | APK | **Built** (291 MB), **installed** on Pixel 6a (versionCode=7, versionName=0.2.1, firstInstall 21:16:45). |
 | Build env verified | NDK r26b at `E:\build-tools\android-sdk\ndk\26.1.10909125` with `-Pandroid.ndkVersion=26.1.10909125` override. Gradle 8.13, JDK 17.0.14, cargo-ndk 4.1.2. |
-| Windows SCMessenger CLI | Tested locally. Peer ID `12D3KooWFjyBaagUcyuweT26YVoAUtyM1u2K8YnKRgkMJ59zY8fD`, listening `/ip4/192.168.0.230/tcp/9101`, mDNS enabled, swarm topics subscribed. Working correctly. |
+| Windows SCMessenger CLI | Tested locally. Peer ID `12D3KooW<redacted>`, listening `/ip4/x.x.x.x/tcp/9101`, mDNS enabled, swarm topics subscribed. Working correctly. |
 | Hermes | Active, Overseer framework warm. Worker pool cold (no active tasks). |
 | Quota | UNTOUCHED this turn. No cloud dispatches. |
 

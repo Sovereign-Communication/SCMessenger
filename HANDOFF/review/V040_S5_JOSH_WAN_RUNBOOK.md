@@ -42,7 +42,7 @@ Tag checklist (operator-executed, terminal):
 | Josh node | Josh (HI) | Physical Android phone, DEBUG APK from the tag | HI cellular (his usual) + HI home WiFi, both tested | AWS-hosted "Josh emulator" path is ABANDONED — corrupt system image, two crash-loop classes, operator decision 2026-07-20 (`HANDOFF/SESSION_HANDOFF_2026-07-20_LUCAS_JOSH_ALPHA.md:209-258`; memory `project_josh_emulator_abandoned`). Never retry that AVD. |
 | Cloud node | infra (AWS t3.micro) | `/ip4/100.56.248.69/tcp/9001`; health `http://100.56.248.69:9876/health` (port 9876, NOT 8080/9000) | public internet | Image `testbotz/scmessenger`, container `scm-alpha-relay`, `--network host --restart unless-stopped` (`SESSION_HANDOFF_2026-07-20...:11-18`). SG `sg-0f195044b0dc7a800` opens 22/9001tcp/9001udp/9000/9876. Do NOT pull the prebuilt-image rule (memory `project_alpha_relay_prebuilt_image`). |
 
-Cloud node peer id: dials are promiscuous — any PeerID accepted. Newer alpha doc records `12D3KooWGhDbFE4YrSHEphHtrpZ79WdBV7VX1ZUqGnBsKhYHsGXB`; the 2026-07-20 proof recorded `12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg`. Record both, trust the live node's identify output (`V040_S4_DELIVERY_PROOF_RUNBOOK.md:12-14`).
+Cloud node peer id: dials are promiscuous — any PeerID accepted. Newer alpha doc records `12D3KooW<redacted>`; the 2026-07-20 proof recorded `12D3KooW<redacted>`. Record both, trust the live node's identify output (`V040_S4_DELIVERY_PROOF_RUNBOOK.md:12-14`).
 
 Topology: both endpoints dial OUTBOUND to the cloud node; the cloud node bridges them. Neither participant needs inbound reachability — this is why the AWS-only test needs no port forwards (Section 9).
 

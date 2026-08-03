@@ -287,7 +287,7 @@ For better connectivity behind NAT/router:
 4. Add rule:
    - **External Port**: 9999
    - **Internal Port**: 9999
-   - **Internal IP**: Your PC's local IP (e.g., 192.168.1.100)
+   - **Internal IP**: Your PC's local IP (e.g., x.x.x.x)
    - **Protocol**: Both TCP and UDP
 5. Save settings
 

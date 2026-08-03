@@ -44,7 +44,7 @@ The `E:\SCMessenger-build-p0-024\` worktree currently has a **broken .git pointe
    git worktree add -b fix/p0-android-025-mdns-listener-collision E:/SCMessenger-build-p0-025 origin/main
    ```
 2. **Apply the 15-LoC fix to `MdnsServiceDiscovery.kt:476`** — per the dispatch ticket `HANDOFF/todo/P0_ANDROID_025_MDNS_LISTENER_COLLISION_CRASH.md`. Either per-service listener (cheap) or pending-resolve set with onComplete cleanup (canonical).
-3. **Build + install + retest end-to-end.** Confirm mDNS discovery works on Pixel 6a with Windows CLI relay on 192.168.0.230:9101 broadcasting.
+3. **Build + install + retest end-to-end.** Confirm mDNS discovery works on Pixel 6a with Windows CLI relay on x.x.x.x:9101 broadcasting.
 4. **Commit on `fix/p0-android-025-mdns-listener-collision`** with reference to the dispatch ticket. Do NOT push.
 
 ### Phase 3 — Commit the uncommitted integration branch work

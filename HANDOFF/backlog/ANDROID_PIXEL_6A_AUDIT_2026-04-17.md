@@ -35,10 +35,10 @@ Loaded 0 contacts, filtered nearby peers to 0
 ### 2. BOOTSTRAP RELAY CONNECTIVITY FAILURES
 **Log Evidence:**
 ```
-Relay bootstrap dial skipped for /ip4/34.135.34.73/udp/9001/quic-v1/p2p/12D3KooWETatHYo4xt9aufXEEDce719fyMEB7KmXJga1SYVUikaw: Network error
-Relay bootstrap dial skipped for /ip4/34.135.34.73/tcp/9001/p2p/12D3KooWETatHYo4xt9aufXEEDce719fyMEB7KmXJga1SYVUikaw: Network error
-Relay bootstrap dial skipped for /ip4/104.28.216.43/udp/9010/quic-v1/p2p/12D3KooWHpmuhytgzLcM4nj1hZvN5b4crB1wka3LCNfKRCd7yHj9: Network error
-Relay bootstrap dial skipped for /ip4/104.28.216.43/tcp/9010/p2p/12D3KooWHpmuhytgzLcM4nj1hZvN5b4crB1wka3LCNfKRCd7yHj9: Network error
+Relay bootstrap dial skipped for /ip4/34.135.34.73/udp/9001/quic-v1/p2p/12D3KooW<redacted>: Network error
+Relay bootstrap dial skipped for /ip4/34.135.34.73/tcp/9001/p2p/12D3KooW<redacted>: Network error
+Relay bootstrap dial skipped for /ip4/104.28.216.43/udp/9010/quic-v1/p2p/12D3KooW<redacted>: Network error
+Relay bootstrap dial skipped for /ip4/104.28.216.43/tcp/9010/p2p/12D3KooW<redacted>: Network error
 Mesh Stats: 0 peers (Core), 0 full, 0 headless (Repo)
 ```
 

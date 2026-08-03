@@ -18,15 +18,15 @@ and launch the app when boot_completed=1. Last commit on main:
    reply" bug). SG `sg-0f195044b0dc7a800` opens 22/9001tcp/9001udp/9000/9876.
 3. Lucas CLI -> relay: real TCP connection verified by
    `ss -tn state established` on the relay showing
-   `172.31.10.249:9001 <- 147.81.41.188:<port>` (Lucas's home fiber public
+   `x.x.x.x:9001 <- 147.81.41.188:<port>` (Lucas's home fiber public
    IP). Relay circuit reservation granted. Ledger exchange completed
    (48 entries shared).
 4. Lucas emulator (local, `emulator-5554`, `-gpu host`) -> relay: app log
    shows `Bootstrap connected: /ip4/100.56.248.69/tcp/9001` and
-   `Connected(peerId=12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg,
+   `Connected(peerId=12D3KooW<redacted>,
    transport=INTERNET)`. APK freshly built from f2831458 source, installed
    via `adb -s emulator-5554 install -r -d`. App identity is "Lucas"
-   (peer `12D3KooWDPrakwzNzryo6CzhGx9AG3QPafhb5U724L6aKWfXRCgt`).
+   (peer `12D3KooW<redacted>`).
    Bootstrap address is HARDCODED at
    `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:8492`
    (`val prioritizedAddresses = listOf("/ip4/100.56.248.69/tcp/9001")`).
@@ -35,7 +35,7 @@ and launch the app when boot_completed=1. Last commit on main:
 
 - `HANDOFF/todo/GRACEFUL_AF_DIAL_POLICY.md` — after the relay connection,
   the CLI promiscuously dials ledger junk including its OWN LAN IP
-  (192.168.0.121) and emulator-internal 10.0.2.x. Needs: self-dial
+  (x.x.x.x) and emulator-internal 10.0.2.x. Needs: self-dial
   prevention, network-aware RFC1918 filtering (only dial private ranges
   the local node is actually on), per-peer exponential backoff, prefer
   circuit-relay routing over promiscuous direct dials. THINK-tier design

@@ -88,7 +88,7 @@ T5: register_dial_attempt("peer-a") → OK (3/3)
 
 **Multiaddr Format:**
 ```
-/ip4/192.168.1.100/tcp/4001/p2p/RELAY_ID/p2p-circuit/p2p/TARGET_ID
+/ip4/x.x.x.x/tcp/4001/p2p/RELAY_ID/p2p-circuit/p2p/TARGET_ID
 ```
 - Tells libp2p: "use peer RELAY_ID to reach TARGET_ID via circuit relay protocol"
 - libp2p handles rest: dial RELAY_ID, establish relay reservation, proxy to TARGET_ID

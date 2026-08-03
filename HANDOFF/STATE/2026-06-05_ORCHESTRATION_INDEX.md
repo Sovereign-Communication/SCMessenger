@@ -214,7 +214,7 @@ Heavy-lift tier active. Full budget for the next 30 min.
 ## Open questions for the user (escalate, don't guess)
 
 1. **Real keystore** — Subagent B added env-driven signing. User needs to provide `SCMESSENGER_KEYSTORE_PATH` before Play Store upload.
-2. **Cross-OS triangulation** — User said "test against Windows and Ubuntu" but hasn't started the Windows CLI daemon yet. WSL→Windows 192.168.0.230:9101 reachable at <1ms (per memory).
+2. **Cross-OS triangulation** — User said "test against Windows and Ubuntu" but hasn't started the Windows CLI daemon yet. WSL→Windows x.x.x.x:9101 reachable at <1ms (per memory).
 3. **7 remaining Subagent C tickets** — auto-dispatch or reprioritize?
 4. **P0 CLI Drift dormancy** — investigate first or just fix?
 

@@ -105,8 +105,8 @@ if [ ! -z "$NODE_NAME" ] && [ -f "$CONFIG_FILE" ]; then
     # Define all node peers (peer_id + message_public_key)
     # These are derived from deterministic seeds
     # Format: "node_name:peer_id:public_key"
-    PEERS="alice:12D3KooWGy7q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q1q:aabbccdd... \
-           bob:12D3KooWRx2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x2x:ddeeff... \
+    PEERS="alice:12D3KooW<redacted>:aabbccdd... \
+           bob:12D3KooW<redacted>:ddeeff... \
            ..."
     
     # For now, skip pre-provisioning here; delegate to post-startup script
@@ -194,7 +194,7 @@ Since `iptables` is unavailable, use **network namespace tricks** or **`tc` rout
 docker exec scm-alice sh -c \
     "tc qdisc add dev eth0 root handle 1: prio && \
      tc filter add dev eth0 parent 1: protocol ip pref 1 u32 \
-       match ip dst 172.20.0.5 action drop"
+       match ip dst x.x.x.x action drop"
 ```
 
 **Option B: Docker network disconnect (cleaner)**

@@ -132,7 +132,7 @@ pub mdns: Toggle<mdns::tokio::Behaviour>,
 
 **Current Bootstrap Node**:
 ```
-/ip4/34.135.34.73/tcp/9001/p2p/12D3KooWETatHYo4xt9aufXEEDce719fyMEB7KmXJga1SYVUikaw
+/ip4/34.135.34.73/tcp/9001/p2p/12D3KooW<redacted>
 ```
 
 **Requirements**:
@@ -272,7 +272,7 @@ While waiting for the mDNS fix, you can manually connect:
 ### Get Android Info
 From Android app logs or UI:
 - Peer ID: `12D3Koo...` (52 characters)
-- LAN IP: Check Android WiFi settings (e.g., `192.168.0.150`)
+- LAN IP: Check Android WiFi settings (e.g., `x.x.x.x`)
 
 ### Add to Windows CLI
 ```bash

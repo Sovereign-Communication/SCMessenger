@@ -31,7 +31,7 @@ docker exec scm-alice cat /root/.local/share/scmessenger/peers.json | jq '.entri
 # Should show: >0 (has peers in ledger)
 
 docker exec scm-alice cat /root/.local/share/scmessenger/peers.json | jq '.entries | keys'
-# Should show list of multiaddrs (e.g., ["/ip4/172.20.0.2/tcp/4001"])
+# Should show list of multiaddrs (e.g., ["/ip4/x.x.x.x/tcp/4001"])
 ```
 
 ### Step 3: Verify Ledger Exchange Logs

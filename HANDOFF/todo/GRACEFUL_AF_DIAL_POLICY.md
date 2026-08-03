@@ -10,9 +10,9 @@ ss verified; then proceeded to promiscuously dial its own LAN IP, emulator
 After the initial relay-connection ledger exchange, the CLI received 48 peer
 addresses via the ledger and began dialing ALL of them with ~5s backoff in a
 "promiscuous" loop. This included:
-- Its own LAN IP (192.168.0.121) — self-dial, wastes resources
+- Its own LAN IP (x.x.x.x) — self-dial, wastes resources
 - Emulator-internal 10.0.2.x addresses (RFC1918 private, but the CLI is on a
-  public internet network, not on 10.0.0.0/8)
+  public internet network, not on x.x.x.x/8)
 - Other private/internal addresses that cannot route from this machine
 
 ## Required Changes
@@ -29,7 +29,7 @@ preferred since the CLI ledger dial loop is the promiscuous source.
 ### 2. Private-range awareness
 The existing `is_dialable_multiaddr` filter (commit 36635cb0) rejects
 loopback/link-local/site-local. It should also reject RFC1918 private
-addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) UNLESS the local
+addresses (x.x.x.x/8, x.x.x.x/12, x.x.x.x/16) UNLESS the local
 node itself is on that private network.
 
 How to determine "my network": compare each private-range address against

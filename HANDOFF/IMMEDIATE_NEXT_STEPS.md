@@ -85,12 +85,12 @@
 1. **Get Android Info**
    - Open Android app
    - Note the Peer ID (starts with `12D3Koo...`)
-   - Check WiFi settings for IP (e.g., `192.168.0.150`)
+   - Check WiFi settings for IP (e.g., `x.x.x.x`)
 
 2. **Add to Windows CLI**
    ```bash
    # Format: /ip4/<android_ip>/tcp/9001/p2p/<android_peer_id>
-   python scripts/core_cli_driver.py raw contact add <android_peer_id> /ip4/192.168.0.150/tcp/9001/p2p/<android_peer_id>
+   python scripts/core_cli_driver.py raw contact add <android_peer_id> /ip4/x.x.x.x/tcp/9001/p2p/<android_peer_id>
    ```
 
 3. **Verify Connection**

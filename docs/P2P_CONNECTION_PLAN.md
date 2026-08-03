@@ -76,8 +76,8 @@ Use the existing `ContactImportParser.kt` to import the CLI contact with the lis
 **JSON format:**
 ```json
 {
-  "peer_id": "12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw",
-  "public_key": "30d0fa678c218b225bd9c20c262b2aededc9e8cd5cd44c45187f8d71bf05967e",
+  "peer_id": "12D3KooW<redacted>",
+  "public_key": "<redacted-pubkey>",
   "nickname": "Windows-Host",
   "listeners": ["/ip4/10.0.2.2/tcp/9001"]
 }
@@ -174,7 +174,7 @@ curl http://127.0.0.1:9876/api/peers
 # Send a message from CLI to Android
 curl -X POST http://127.0.0.1:9876/api/send \
   -H "Content-Type: application/json" \
-  -d '{"recipient":"12D3KooWRLSPmy8bnpC3yeeYGzMM3XF2oQpPzaF6C8MBaXqD4LjZ","message":"test from CLI"}'
+  -d '{"recipient":"12D3KooW<redacted>","message":"test from CLI"}'
 # Check Android app for received message
 # Check CLI diagnostics for outbox delivery
 ```

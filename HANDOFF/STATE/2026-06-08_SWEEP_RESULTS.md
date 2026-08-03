@@ -111,15 +111,15 @@ target/release/scmessenger-cli.exe relay --listen /ip4/0.0.0.0/tcp/19200 --http-
 ```
 
 **Verified working:**
-- Identity loaded (existing identity `080605847bc3aca7efc3bc3a2054185aa15c3487c706e885bd725539460e9585`)
+- Identity loaded (existing identity `<redacted-pubkey>`)
 - HTTP server started (log: "Warp HTTP+WS server listening on ws://127.0.0.1:19201", "HTTP server started on port 19201")
 - P2P swarm started (log: "P2P swarm started on /ip4/0.0.0.0/tcp/19200")
 - BLE GATT advertising stub started
 - Connection ledger loaded: 255 known peers
-- Connected to local relay node (`12D3KooWDwXw9CZosa22LcCUgHbrRNPvLTDUo3y8St93AKiHeFky`) via `/ip4/127.0.0.1/tcp/9002/ws`
+- Connected to local relay node (`12D3KooW<redacted>`) via `/ip4/127.0.0.1/tcp/9002/ws`
 - Peer identified as RELAY (correct agent string `scmessenger/0.2.1/full/relay/...`)
 - Peer exchange (gossipsub): sent 1-peer list, received identification
-- LAN peer discovery: dialing 172.26.144.1:* peers
+- LAN peer discovery: dialing x.x.x.x:* peers
 - Process management: started cleanly, killed cleanly
 
 **Not working:**

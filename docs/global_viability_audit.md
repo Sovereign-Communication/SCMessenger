@@ -68,7 +68,7 @@ These are **confirmed bugs from actual field evidence (WS12.29–WS12.31)**.
 | ---------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | UX-IOS-002       | iOS message list scroll-to-top and erratic refresh during conversation              | UI state not stable under concurrent SwiftUI update emissions                                                                                              | App feels buggy; hurts adoption                                         |
 | AND-ROUTE-001    | Android retries stale route peer IDs; 291 `Network error` events per session        | Failed route IDs were being persisted back into `routePeerId` on failure; WS12.31 attempted fix but evidence not yet captured                              | Messages stuck `stored`; delivery never converges for affected sessions |
-| AND-BLE-001      | Android BLE fallback targets stale unavailable MAC (`65:99:F2:D9:77:01`) repeatedly | BLE cache not invalidated on disconnect; `connectGatt` null handling fixed but stale hint still leaks                                                      | BLE path loops, never converges                                         |
+| AND-BLE-001      | Android BLE fallback targets stale unavailable MAC (`XX:XX:XX:XX:XX:XX`) repeatedly | BLE cache not invalidated on disconnect; `connectGatt` null handling fixed but stale hint still leaks                                                      | BLE path loops, never converges                                         |
 | IOS-DIAG-001     | iOS diagnostic file pull fails via socket (large files ~21MB)                       | [ios_diagnostics.log](file:///Users/christymaxwell/Desktop/Luke_Stuff/GitHub/SCMessenger/ios_diagnostics.log) grows to 10–21MB; socket closes mid-transfer | Slows debugging; can't get device-side ground truth                     |
 | FIELD-BINARY-001 | Physical iOS device running stale build (v0.2.0 build 4) without latest hardening   | Manual install required; no OTA push                                                                                                                       | All field evidence from an old binary                                   |
 
@@ -237,13 +237,13 @@ These are sequenced to unblock the **critical path** to global viability. Each i
 
 ###  PRIORITY 6 — Stale Route/BLE Cache Fix Confirmation
 
-**Goal:** Confirm WS12.31 route-hint fixes actually eliminate the stale-route loops seen in field logs (291 `Network error` events, repeated `65:99:F2:D9:77:01` BLE retries).
+**Goal:** Confirm WS12.31 route-hint fixes actually eliminate the stale-route loops seen in field logs (291 `Network error` events, repeated `XX:XX:XX:XX:XX:XX` BLE retries).
 
 **Actions:**
 
 1. Deploy WS12.31+ binaries to physical Android.
 2. Run a 10-minute live session with a paired iOS device. Extract `android-mesh_diagnostics-device.log`.
-3. Check: zero retries to `65:99:F2:D9:77:01` (old stale MAC). Check: `Network error` count is substantially lower than 291.
+3. Check: zero retries to `XX:XX:XX:XX:XX:XX` (old stale MAC). Check: `Network error` count is substantially lower than 291.
 4. Confirm: fresh BLE peer discovered after reconnect uses the new address, not the cached stale one.
 5. **Acceptance gate:** `AND-ROUTE-001` and `AND-BLE-001` can be marked `Closed` in [WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md](file:///Users/christymaxwell/Desktop/Luke_Stuff/GitHub/SCMessenger/docs/WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md).
 

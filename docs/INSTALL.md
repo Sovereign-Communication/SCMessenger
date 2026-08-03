@@ -157,7 +157,7 @@ Initializing SCMessenger...
   [OK] Identity created
 
 Identity Information:
-  ID:         405252b2635a155c2d66ecbdd5939e9f03a04e2ffda9eed520239d249a458fa3
+  ID:         <redacted-pubkey>
   Public Key: 8c7a3b1e...
 
 Next steps:
@@ -264,7 +264,7 @@ Before you can send messages, add contacts:
 **Example:**
 ```bash
 ./target/release/scmessenger-cli contact add \
-  12D3KooWJArWtR6YD8M3fSzLAcZER6Fk77aZ3wPf46rs8Vs11qrH \
+  12D3KooW<redacted> \
   8c7a3b1e4f9d2a6c5e8b7a4d3f6e9c2b5a8d7e6f9c3a6b5e8d7f \
   --name "Bob"
 ```

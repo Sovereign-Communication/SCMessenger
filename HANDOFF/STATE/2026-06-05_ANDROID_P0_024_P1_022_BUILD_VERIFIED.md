@@ -143,8 +143,8 @@ After the build verified, ran the test the user requested:
 |---|---|
 | `adb install -r app-debug.apk` (after uninstall) | **Success** (signature match required uninstall first) |
 | `am start -n com.scmessenger.android/.ui.MainActivity` | App launched, PID 25810 |
-| `scmessenger-cli.exe relay --listen /ip4/0.0.0.0/tcp/9101 --http-port 9102` (PowerShell-launched, avoids Git Bash maddr prefix bug) | **Running**, Peer ID `12D3KooWFjyBaagUcyuweT26YVoAUtyM1u2K8YnKRgkMJ59zY8fD`, listening on `/ip4/192.168.0.230/tcp/9101` and `/ip4/172.26.144.1/tcp/9101` |
-| Windows mDNS broadcast | Reached the phone (confirmed: `WifiTransportManager: WiFi Peer discovered: de:a2:66:67:89:ca` and `[MdnsAdvertiser] Removing service with ID 1004`) |
+| `scmessenger-cli.exe relay --listen /ip4/0.0.0.0/tcp/9101 --http-port 9102` (PowerShell-launched, avoids Git Bash maddr prefix bug) | **Running**, Peer ID `12D3KooW<redacted>`, listening on `/ip4/x.x.x.x/tcp/9101` and `/ip4/x.x.x.x/tcp/9101` |
+| Windows mDNS broadcast | Reached the phone (confirmed: `WifiTransportManager: WiFi Peer discovered: XX:XX:XX:XX:XX:XX` and `[MdnsAdvertiser] Removing service with ID 1004`) |
 | Android mDNS resolve on the Windows CLI | **CRASHED** — see P0_ANDROID_025 below |
 
 ### New P0 bug discovered: mDNS listener collision

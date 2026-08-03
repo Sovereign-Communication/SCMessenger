@@ -12,7 +12,7 @@
 **Problem**: mDNS was compile-time disabled on Windows  
 **Solution**: Enabled mDNS on Windows by updating conditional compilation flags  
 **Status**:  **FIXED** - mDNS now active on Windows  
-**Evidence**: Logs show `INFO libp2p_mdns::behaviour::iface: creating instance on iface address=192.168.0.121`
+**Evidence**: Logs show `INFO libp2p_mdns::behaviour::iface: creating instance on iface address=x.x.x.x`
 
 **Files Modified**:
 - `core/src/transport/behaviour.rs`

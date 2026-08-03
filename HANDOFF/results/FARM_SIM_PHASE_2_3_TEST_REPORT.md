@@ -174,9 +174,9 @@ Most "errors" are actually DEBUG/WARN level messages:
 - Resource Usage: Stable throughout execution
 
 **Network Topology:**
-- network-a: alice, carol, relay1 (172.20.0.0/24)
-- network-b: bob, david, relay1, relay2 (172.21.0.0/24)
-- network-c: eve, relay2 (172.22.0.0/24)
+- network-a: alice, carol, relay1 (x.x.x.x/24)
+- network-b: bob, david, relay1, relay2 (x.x.x.x/24)
+- network-c: eve, relay2 (x.x.x.x/24)
 
 **Status:** All networks operational, no packet loss or latency observed in normal state.
 

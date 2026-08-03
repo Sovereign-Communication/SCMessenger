@@ -16,7 +16,7 @@
 3. **App responsive through 5+ rapid peer-scan triggers** — PASS. mDNS service restarted cleanly (PID 8871 -> 9242), app alive throughout.
 
 ## Bonus: full bidirectional mDNS discovery
-- **Android discovered the Windows CLI's mDNS broadcast** at 192.168.0.138:9001 (peer-id `12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98`) and fed it to SwarmBridge.
+- **Android discovered the Windows CLI's mDNS broadcast** at x.x.x.x:9001 (peer-id `12D3KooW<redacted>`) and fed it to SwarmBridge.
 - **Windows CLI discovered the Android phone's mDNS broadcast** (same peer-id) via `libp2p_mdns::behaviour`, registered it with `capabilities: [Internet, Local], reachable=true`, and shared its 245-entry ledger with it.
 - The complete Android<->Windows LAN discovery round-trip is now working end-to-end.
 

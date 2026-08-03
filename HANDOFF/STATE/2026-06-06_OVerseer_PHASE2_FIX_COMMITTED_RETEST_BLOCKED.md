@@ -21,7 +21,7 @@
    - Updated `stop()` to clear `inFlightResolves` for tidiness.
    - Net: +38/-15 LoC. All comments carry P0_ANDROID_025 markers.
 6. **Committed** as `e84f4fc3` on `fix/p0-android-025-mdns-listener-collision`. **Not pushed.**
-7. **Live retest BLOCKED**: Pixel 6a is offline. adb shows no devices; mDNS discovery of `_adb-tls-connect._tcp` returns empty; ARP table on 192.168.0.0/24 has no Pixel 6a MAC. Phone is either WiFi-asleep, USB-unplugged, or both. Windows CLI relay from prior session also no longer running (PID 5072 is `svchost` owning 9001/9002 — the prior `scmessenger-cli.exe` is gone).
+7. **Live retest BLOCKED**: Pixel 6a is offline. adb shows no devices; mDNS discovery of `_adb-tls-connect._tcp` returns empty; ARP table on x.x.x.x/24 has no Pixel 6a MAC. Phone is either WiFi-asleep, USB-unplugged, or both. Windows CLI relay from prior session also no longer running (PID 5072 is `svchost` owning 9001/9002 — the prior `scmessenger-cli.exe` is gone).
 
 ## Acceptance gates status (from HANDOFF/todo/P0_ANDROID_025)
 

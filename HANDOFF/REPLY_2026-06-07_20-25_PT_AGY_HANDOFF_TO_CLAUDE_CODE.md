@@ -16,7 +16,7 @@ Agy (Gemini Pro in your Windows cmd) ran for 35 minutes doing serious on-device 
 2. **2 UI alignment bugs** in `ContactsScreen.kt` (no `weight(1f)` + missing FAB padding)
 3. **Canonical CLI operations reference** Agy compiled — promote to `docs/CLI_OPERATIONS_REFERENCE.md` after a worker validates it
 4. **Empirical runtime evidence:** identity works, P2P handshake works, gossipsub works, but mDNS-direct-dial fails 100% of the time with `os error 10061` (connection actively refused) — this is the live signature of the mDNS listener-port bug
-5. **Pixel 6a is still offline** (192.168.0.138:9001 actively refusing) — your PHASE 2 retest blocker from 2026-06-06 still holds
+5. **Pixel 6a is still offline** (x.x.x.x:9001 actively refusing) — your PHASE 2 retest blocker from 2026-06-06 still holds
 
 ## Quota + slots
 
@@ -34,7 +34,7 @@ Agy (Gemini Pro in your Windows cmd) ran for 35 minutes doing serious on-device 
 
 - **Slot 1:** Reconcile the existing `[VALIDATED]_P0_ANDROID_024_Identity_Generation_Reentrant_Guard.md` with Agy's catalog (Bugs 1, 2, 3, 5 are the same root cause). Update or supersede, then dispatch.
 - **Slot 2:** New P1 ticket wrapping Bug 6 (mDNS) + Finding A + Finding B (UI alignment) into one workstream — overlapping files.
-- **Slot 3:** Verifier that re-runs `assembleDebug` + the device test (when 192.168.0.138 comes back) and cleans up the dirty test files.
+- **Slot 3:** Verifier that re-runs `assembleDebug` + the device test (when x.x.x.x comes back) and cleans up the dirty test files.
 
 ## What I'm doing now
 

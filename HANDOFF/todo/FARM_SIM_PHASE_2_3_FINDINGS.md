@@ -26,11 +26,11 @@ The farm-sim topology is **operationally healthy at the transport/mesh layer** b
 
 ```
 All 7 containers UP and HEALTHY:
-  - relay1: 12D3KooWMuJLPcpAR5nveAPaqKzJeg94Q1N9dJMC4kAHswtvhYGs (bootstrap)
-  - relay2: 12D3KooWJuzJntKvAUgeiVFXpBHJgtAhrreSE9ZuE3aZGoHB8EXd
-  - alice:  12D3KooWHFZbWJ1h99mBkPff7baqkbTfppPi5r8jDBvPbTrPDH9j
-  - bob:    12D3KooWLqmkAzjn926wnrA7TbCj2tkbns35EztW2NaraJc6ohHe
-  - carol:  12D3KooWCxgZU7wUUHxh2rpwneFU86v4159BSyrZ4V6izYSqncqt
+  - relay1: 12D3KooW<redacted> (bootstrap)
+  - relay2: 12D3KooW<redacted>
+  - alice:  12D3KooW<redacted>
+  - bob:    12D3KooW<redacted>
+  - carol:  12D3KooW<redacted>
   - david:  (similar structure)
   - eve:    (similar structure)
 ```
@@ -109,7 +109,7 @@ To verify the issue is ONLY contact provisioning, I manually added a contact via
 # Add Bob (peer_id: 12D3KooWLqmkAzjn...) to Alice's contacts
 docker exec scm-alice curl -X POST 127.0.0.1:9876/api/contacts \
   -H "Content-Type: application/json" \
-  -d '{"peer_id":"12D3KooWLqmkAzjn926wnrA7TbCj2tkbns35EztW2NaraJc6ohHe",
+  -d '{"peer_id":"12D3KooW<redacted>",
        "public_key":"DUMMY_KEY_000000000000000000000000000000000000000000",
        "name":"bob"}'
 

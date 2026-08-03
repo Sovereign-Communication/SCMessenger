@@ -338,7 +338,7 @@ sequenceDiagram
 // Example:
 // Key: "relay_registration_state_df222906d561a0bd28fe8a71a6c7949ad225238409d0c2a18b07305b0260cb31"
 // Value: RegistrationRecord {
-//     identity_id: "df222906d561a0bd28fe8a71a6c7949ad225238409d0c2a18b07305b0260cb31",
+//     identity_id: "<redacted-pubkey>",
 //     state: Active { device_id: "550e8400-e29b-41d4-a716-446655440000", seniority_timestamp: 1712649600000 },
 //     updated_at_ms: 1712649600000
 // }

@@ -27,7 +27,7 @@ This note answers: is the legacy-client path actually feasible with available Wi
 There are two very different Windows mechanisms, and conflating them is the trap:
 
 - **(A) Native WiFi Direct P2P (`Windows.Devices.WiFiDirect`).** WinRT `WiFiDirectDevice.FromIdAsync` / `WiFiDirectConnectionListener` — Windows acting as a *P2P peer* (its own GO or P2P client) speaking the Wi-Fi P2P protocol. This is the large, [DEVICE]-heavy path.
-- **(B) Legacy-client join (ordinary Wi-Fi association).** An Android WiFi Direct group-owner is, at the radio layer, a **WPA2 SoftAP** with an SSID (`DIRECT-xy-...`) and a passphrase. Any device with a normal Wi-Fi stack — including Windows — can associate to that SSID as a plain Wi-Fi station **without any WiFi Direct P2P API at all**. Once associated, the GO hands out a DHCP lease (Android GO IP is conventionally `192.168.49.1`), and it becomes an ordinary IP link. Android exposes the SSID and passphrase via `WifiP2pManager` -> `WifiP2pGroup.getNetworkName()` / `getPassphrase()`.
+- **(B) Legacy-client join (ordinary Wi-Fi association).** An Android WiFi Direct group-owner is, at the radio layer, a **WPA2 SoftAP** with an SSID (`DIRECT-xy-...`) and a passphrase. Any device with a normal Wi-Fi stack — including Windows — can associate to that SSID as a plain Wi-Fi station **without any WiFi Direct P2P API at all**. Once associated, the GO hands out a DHCP lease (Android GO IP is conventionally `x.x.x.x`), and it becomes an ordinary IP link. Android exposes the SSID and passphrase via `WifiP2pManager` -> `WifiP2pGroup.getNetworkName()` / `getPassphrase()`.
 
 **The plan explicitly specifies path (B)** ("Windows joins as legacy client over the group's IP link"). Path (B) does **not** require `Windows.Devices.WiFiDirect`. It requires:
 1. getting the SSID + passphrase from the Android GO to the Windows box (a credential-ingress problem, not a radio problem), and
@@ -66,7 +66,7 @@ The GO **port** must be the negotiated/laddered port from P1-13, never a second 
 
 **The legacy-client path (B) is feasible** and can be built with **zero new native dependency** in its smallest form (netsh join OR manual join + QR credential ingress + reuse of the existing CLI TCP dial). A native Wi-Fi join module (`windows` crate `Devices_WiFi` feature) is an *optional* refinement that improves UX but is a stack-addition escalation. The native WiFiDirect P2P module (A) is out of scope and not recommended.
 
-There is one genuine [DEVICE] unknown that no amount of reading can settle: **whether this specific Windows machine's Wi-Fi adapter + driver will associate to a Pixel's `DIRECT-*` SoftAP and get a route to `192.168.49.1`.** Some Windows Wi-Fi drivers refuse or deprioritize `DIRECT-` SSIDs. This must be smoke-tested on hardware **before** committing implementation effort — it is the make-or-break gate and is cheap to check manually (Section 6).
+There is one genuine [DEVICE] unknown that no amount of reading can settle: **whether this specific Windows machine's Wi-Fi adapter + driver will associate to a Pixel's `DIRECT-*` SoftAP and get a route to `x.x.x.x`.** Some Windows Wi-Fi drivers refuse or deprioritize `DIRECT-` SSIDs. This must be smoke-tested on hardware **before** committing implementation effort — it is the make-or-break gate and is cheap to check manually (Section 6).
 
 ---
 
@@ -76,7 +76,7 @@ There is one genuine [DEVICE] unknown that no amount of reading can settle: **wh
 
 Concretely, the recommended sequence is:
 
-1. **[HUMAN + DEVICE pre-check, do this first, before any code]** On the dev Windows box + Pixel: manually create a WiFi Direct group on Android (or use an existing app path that does), read its SSID/passphrase, and manually join it from Windows (Settings -> Wi-Fi, or `netsh wlan connect`). Confirm Windows associates and can `ping`/TCP-reach the GO IP (`192.168.49.1`). **This is the feasibility gate.**
+1. **[HUMAN + DEVICE pre-check, do this first, before any code]** On the dev Windows box + Pixel: manually create a WiFi Direct group on Android (or use an existing app path that does), read its SSID/passphrase, and manually join it from Windows (Settings -> Wi-Fi, or `netsh wlan connect`). Confirm Windows associates and can `ping`/TCP-reach the GO IP (`x.x.x.x`). **This is the feasibility gate.**
    - **If the manual join works:** proceed to build the [SONNET] ticket below (P1-17-IMPL) — the automation is then low-risk.
    - **If Windows refuses to associate to the `DIRECT-*` SoftAP** (driver-level rejection, no route): **take the waiver** — narrow the cell to Android <-> Android [BLOCKED-HW], because path (B) is physically blocked on this hardware and path (A) native WiFiDirect is out of scope. Record the waiver in matrix 2.6 with the driver-rejection reason.
 
@@ -131,7 +131,7 @@ Item 1 is the real decision. Item 2 is a *conditional* stack-addition ask the op
 Pre-check (feasibility gate, manual, do first):
 1. Android creates a WiFi Direct group (becomes GO). Read `getNetworkName()` (SSID) + `getPassphrase()`.
 2. Windows manually joins that SSID with the passphrase (Settings or `netsh wlan connect`).
-3. Confirm Windows gets an IP on the GO subnet and can TCP-reach the GO IP (`192.168.49.1` conventionally). PASS -> build; FAIL(driver rejects `DIRECT-*`) -> waive.
+3. Confirm Windows gets an IP on the GO subnet and can TCP-reach the GO IP (`x.x.x.x` conventionally). PASS -> build; FAIL(driver rejects `DIRECT-*`) -> waive.
 
 Full cell (after implementation):
 4. Credentials reach Windows (QR/paste). CLI joins the group and TCP-dials `go_ip:<negotiated port from P1-13>`.

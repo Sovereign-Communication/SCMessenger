@@ -20,15 +20,15 @@ Single large instance (m7i-flex.large) at 32.197.246.78:
 
 ```
 VPC: scmessenger-farm-sim
-├── Subnet A (172.20.0.0/24)
+├── Subnet A (x.x.x.x/24)
 │   ├── relay1 (t3.micro)
 │   ├── alice (t3.micro)
 │   └── carol (t3.micro)
-├── Subnet B (172.21.0.0/24)
+├── Subnet B (x.x.x.x/24)
 │   ├── relay2 (t3.micro)
 │   ├── bob (t3.micro)
 │   └── david (t3.micro)
-└── Subnet C (172.22.0.0/24)
+└── Subnet C (x.x.x.x/24)
     └── eve (t3.micro)
 
 Network Policy Controller:
@@ -50,7 +50,7 @@ Network Policy Controller:
 ## Infrastructure Components
 
 ### 1. VPC Setup (CloudFormation)
-- VPC: 10.0.0.0/16 (or similar)
+- VPC: x.x.x.x/16 (or similar)
 - 3 subnets (one per network segment)
 - Internet Gateway
 - Route tables
@@ -179,7 +179,7 @@ Resources:
   FarmSimVPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
+      CidrBlock: x.x.x.x/16
 
   # Subnets (3)
   SubnetA, SubnetB, SubnetC

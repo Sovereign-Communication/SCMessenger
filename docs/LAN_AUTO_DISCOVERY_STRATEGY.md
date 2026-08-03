@@ -5,20 +5,20 @@
 ### LAN Topology
 | IP | Device | SCMessenger | Notes |
 |----|--------|-------------|-------|
-| 192.168.0.1 | Router | — | SSH/HTTP/HTTPS |
-| 192.168.0.106 | Unknown | — | Port 80 (web UI) |
-| 192.168.0.129 | Unknown | — | No common ports |
-| 192.168.0.138 | Android Phone |  Not installed | ADB wireless debugging available |
-| 192.168.0.230 | Windows Host |  Running (WSL2) | Daemon on ports 9000/9001/9002 |
+| x.x.x.x | Router | — | SSH/HTTP/HTTPS |
+| x.x.x.x | Unknown | — | Port 80 (web UI) |
+| x.x.x.x | Unknown | — | No common ports |
+| x.x.x.x | Android Phone |  Not installed | ADB wireless debugging available |
+| x.x.x.x | Windows Host |  Running (WSL2) | Daemon on ports 9000/9001/9002 |
 
 ### SCMessenger Daemon Status
-- **Peer ID:** `12D3KooWAtmcRfphWRaj8u6swBRqHUGHdzAV5BmqDfSj47A9Pbts`
+- **Peer ID:** `12D3KooW<redacted>`
 - **P2P Listener:** `/ip4/0.0.0.0/tcp/9001`
 - **Web UI/API:** `/ip4/0.0.0.0/tcp/9002`
 - **mDNS:** Enabled but **does NOT cross WSL2 NAT boundary**
 - **KAD DHT:** Enabled, no bootstrap nodes → "Failed to trigger bootstrap: No known peers"
-- **WSL2 Port Proxies:** Configured (9000, 9001, 9002 → WSL 172.26.154.211)
-- **LAN Reachability:**  192.168.0.230:9001 and :9002 reachable
+- **WSL2 Port Proxies:** Configured (9000, 9001, 9002 → WSL x.x.x.x)
+- **LAN Reachability:**  x.x.x.x:9001 and :9002 reachable
 
 ## Problem: No Peers Discovered
 
@@ -35,7 +35,7 @@ Three distinct issues prevent auto-discovery:
 ### Layer 1: LAN Subnet Scanner (Immediate)
 
 A background task that:
-1. Enumerates the local subnet (192.168.0.0/24)
+1. Enumerates the local subnet (x.x.x.x/24)
 2. TCP-connects to port 9001 on each host (timeout: 500ms)
 3. If a host responds with the libp2p handshake, adds it as a discovered peer
 4. Runs every 30 seconds for the first 5 minutes, then every 2 minutes
@@ -53,7 +53,7 @@ A background task that:
 
 Add known-good nodes to config:
 ```bash
-scm config set bootstrap_nodes /ip4/192.168.0.230/tcp/9001/p2p/12D3KooWAtmcRfphWRaj8u6swBRqHUGHdzAV5BmqDfSj47A9Pbts
+scm config set bootstrap_nodes /ip4/x.x.x.x/tcp/9001/p2p/12D3KooW<redacted>
 ```
 
 For a dedicated Ubuntu relay:
@@ -82,7 +82,7 @@ adb install -r app-release.apk
 ```
 
 The Android app will:
-- Connect to the relay at `192.168.0.230:9001`
+- Connect to the relay at `x.x.x.x:9001`
 - Register with KAD DHT
 - Use BLE for local peer discovery (phone-to-phone)
 - Use WiFi-Direct for direct phone-to-phone transport
@@ -100,7 +100,7 @@ For networks with multiple subnets (e.g., 192.168.0.x, 192.168.1.x, 10.0.0.x):
 
 ### Current: Port Proxy (Working)
 ```
-netsh interface portproxy add v4tov4 listenport=9001 connectaddress=172.26.154.211 connectport=9001
+netsh interface portproxy add v4tov4 listenport=9001 connectaddress=x.x.x.x connectport=9001
 ```
 
 ### Alternative: WSL2 Mirror Mode (Windows 11)

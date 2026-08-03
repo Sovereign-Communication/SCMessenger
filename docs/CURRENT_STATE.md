@@ -199,7 +199,7 @@ The mycorrhizal routing engine is **active** in the production send path. The ta
 ### Summary
 The SCMessenger Windows CLI (`scmessenger-cli.exe`) has been compiled, launched, and verified to have all local discovery transports fully active and functional:
 
-- **mDNS LAN Discovery**: [DONE] Active and broadcasting on the local interface (`192.168.0.222`).
+- **mDNS LAN Discovery**: [DONE] Active and broadcasting on the local interface (`x.x.x.x`).
 - **Bluetooth/BLE Discovery**: [DONE] Active scanning configured with the correct service UUID (`df010000-0000-1000-8000-00805f9b34fb`) via the `btleplug` manager (1 adapter successfully acquired).
 - **WiFi-Aware**: [DONE] Configured and active.
 - **Control API & Warp Server**: [DONE] Listening successfully on loopback (`127.0.0.1:9876` and `127.0.0.1:9000`).
@@ -2040,8 +2040,8 @@ ssh relay-server "journalctl -u scm-relay --since '5 minutes ago'"
     - `logs/device-debug-20260303-140445/ios-crashpull/SCMessenger.cpu_resource_fatal-2026-02-27-213024.ips`
   - Android on-device diagnostics show persistent stale-route/stale-BLE-target retry churn:
     - `Network error` count in extracted log: 291
-    - repeated route target: `12D3KooWHqa2jd8Ec3bbXR24Fn8Lc2rPQQwjeEiY2zUyXXMCez27`
-    - repeated BLE fallback target: `65:99:F2:D9:77:01`
+    - repeated route target: `12D3KooW<redacted>`
+    - repeated BLE fallback target: `XX:XX:XX:XX:XX:XX`
     - source: `logs/device-debug-20260303-140445/android-mesh_diagnostics-device.log`
 - Additional operator-evidence gap identified:
   - direct pull of large iOS `mesh_diagnostics.log` from app container repeatedly failed with file-service socket closure; this blocks deterministic device-side timeline extraction until workflow/tooling is hardened.
@@ -2230,7 +2230,7 @@ ssh relay-server "journalctl -u scm-relay --since '5 minutes ago'"
   - iOS simulator process was active but reported only local Multipeer routing-table self state (`1 nodes`) in sampled logs.
   - GCP relay endpoint `34.135.34.73:9001` was reachable over TCP.
   - GCP relay landing page was reachable on `34.135.34.73:9000`; `:8080` timed out (current deploy script uses `--http-port 9000`).
-  - CLI runtime probe observed relay identity rotation at `34.135.34.73:9001`: `12D3KooWETatHYo4xt9aufXEEDce719fyMEB7KmXJga1SYVUikaw` -> `12D3KooWJaLtGyFYvobdZyecLWKA45cjSLEjzWtKPeorgeFYrsjZ`.
+  - CLI runtime probe observed relay identity rotation at `34.135.34.73:9001`: `12D3KooW<redacted>` -> `12D3KooW<redacted>`.
   - During the same probe, relay-circuit reservation warning remained active (`Could not register relay circuit reservation`), indicating a remaining runtime gap post-redeploy.
 - Verification delta:
   - `./scripts/verify_ws12_matrix.sh` now fails on live suite `integration_relay_custody -- --include-ignored` with timeout at `core/tests/integration_relay_custody.rs:71`.

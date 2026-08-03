@@ -16,8 +16,8 @@ The SCMessenger CLI daemon has been successfully tested with all discovery trans
 ## Test Configuration
 
 ### Node Identity
-- **Peer ID**: `12D3KooWE8DHKCNSrB2NoxvzyCtuoTSBnmikC3vW4u1qXZdhBHaZ`
-- **LAN Address**: `192.168.0.121`
+- **Peer ID**: `12D3KooW<redacted>`
+- **LAN Address**: `x.x.x.x`
 - **Listen Port**: `9000` (HTTP/WebSocket)
 - **P2P Port**: `9001` (TCP)
 - **WebSocket Bridge**: `9002` (libp2p-ws)
@@ -41,11 +41,11 @@ The SCMessenger CLI daemon has been successfully tested with all discovery trans
 
 ###  mDNS (Multicast DNS)
 - **Status**: ENABLED
-- **Interface**: `192.168.0.121`
+- **Interface**: `x.x.x.x`
 - **Purpose**: Local network peer discovery
 - **Verification**: Active in daemon logs
 ```
-INFO libp2p_mdns::behaviour::iface: creating instance on iface address=192.168.0.121
+INFO libp2p_mdns::behaviour::iface: creating instance on iface address=x.x.x.x
 ```
 
 ###  BLE (Bluetooth Low Energy)
@@ -67,7 +67,7 @@ INFO scmessenger_cli::ble_mesh: BLE scan active (filtered to SCM service df01000
 ###  DHT (Distributed Hash Table)
 - **Status**: ENABLED
 - **Purpose**: Wide-area network peer discovery
-- **Bootstrap Node**: `12D3KooWETatHYo4xt9aufXEEDce719fyMEB7KmXJga1SYVUikaw` @ `34.135.34.73:9001`
+- **Bootstrap Node**: `12D3KooW<redacted>` @ `34.135.34.73:9001`
 
 ---
 
@@ -153,9 +153,9 @@ curl http://localhost:9876/api/discovery/status
 The daemon successfully binds to multiple transport protocols:
 
 ```
- TCP:        /ip4/192.168.0.121/tcp/9001
+ TCP:        /ip4/x.x.x.x/tcp/9001
  TCP:        /ip4/127.0.0.1/tcp/9001
- WebSocket:  /ip4/192.168.0.121/tcp/9002/ws
+ WebSocket:  /ip4/x.x.x.x/tcp/9002/ws
  WebSocket:  /ip4/127.0.0.1/tcp/9002/ws
  HTTP/WS:    ws://127.0.0.1:9000
  Control:    http://127.0.0.1:9876

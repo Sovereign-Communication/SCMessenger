@@ -125,7 +125,7 @@ The CLI has both `is_dialable_multiaddr` and `is_self_address`
 (`cli/src/ledger.rs:690-725`, `:760`); neither is reachable from core.
 
 **Repro:** attacker sends ledger entries for `/ip4/169.254.169.254/tcp/80`
-(cloud metadata), `/ip4/127.0.0.1/tcp/8080`, `/ip4/192.168.1.1/tcp/443`. They
+(cloud metadata), `/ip4/127.0.0.1/tcp/8080`, `/ip4/x.x.x.x/tcp/443`. They
 are stored unfiltered and become dial candidates. Dial outcome is a timing
 oracle: refused resolves in ms via `OutgoingConnectionError`, filtered hangs to
 the 10s sweep -- attacker learns open/closed for internal host:port.

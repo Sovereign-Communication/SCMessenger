@@ -25,7 +25,7 @@
 |---|---|---|---|
 | `core/src/transport/swarm.rs` | 1901 | `/ip4/0.0.0.0/tcp/9002/ws` | WebSocket listener (for WASM bridge) |
 | `core/src/transport/discovery.rs` | 47 | "libp2p swarm listens on TCP 9001 and the relay/WS on 9002" | doc comment |
-| `core/src/transport/discovery.rs` | 60 | `/ip4/192.168.0.230/tcp/9001` | multiaddr example |
+| `core/src/transport/discovery.rs` | 60 | `/ip4/x.x.x.x/tcp/9001` | multiaddr example |
 | `core/src/transport/discovery.rs` | 71 | `intArrayOf(9001, 9002)` | SubnetProbe target ports |
 
 ### CLI (`/mnt/e/SCMessenger-Github-Repo/SCMessenger/cli/`)

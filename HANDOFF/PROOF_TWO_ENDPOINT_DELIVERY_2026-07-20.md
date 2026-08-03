@@ -7,9 +7,9 @@ CLI identities over the alpha relay. Evidence below.
 
 ## Setup
 
-- Alice identity: pubkey `b6ffcd97...`, peer ID `12D3KooWN8ibwxVT3ptYomev7VZbjDRhUgvBnsL9mJ5TXLQssECo`
-- Bob identity: pubkey `94c1f6cb...`, peer ID `12D3KooWKq43uMaY1hEcdXzBTvfqLQerz18hbGESBJdQhnz8Vhic`
-- Relay: `/ip4/100.56.248.69/tcp/9001` (peer ID `12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg`)
+- Alice identity: pubkey `b6ffcd97...`, peer ID `12D3KooW<redacted>`
+- Bob identity: pubkey `94c1f6cb...`, peer ID `12D3KooW<redacted>`
+- Relay: `/ip4/100.56.248.69/tcp/9001` (peer ID `12D3KooW<redacted>`)
 - Alice node: `scm start --port 9100 --http-bind 127.0.0.1:19877`, data dir `tmp/alice/`
 - Bob node: `scm start --port 9200 --http-bind 127.0.0.1:19876`, data dir `tmp/bob/`
 
@@ -20,15 +20,15 @@ CLI identities over the alpha relay. Evidence below.
 Alice `/api/peers` response:
 ```json
 [
-  {"peer_id": "12D3KooWKq43uMaY1hEcdXzBTvfqLQerz18hbGESBJdQhnz8Vhic", "reputation": 50.0},
-  {"peer_id": "12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg", "reputation": 50.0}
+  {"peer_id": "12D3KooW<redacted>", "reputation": 50.0},
+  {"peer_id": "12D3KooW<redacted>", "reputation": 50.0}
 ]
 ```
 Bob `/api/peers` response:
 ```json
 [
-  {"peer_id": "12D3KooWN8ibwxVT3ptYomev7VZbjDRhUgvBnsL9mJ5TXLQssECo", "reputation": 50.0},
-  {"peer_id": "12D3KooWBMWT3weueUkNFMM8uLzgydFqYPYQ9qY6Wp2GAQWzCGAg", "reputation": 50.0}
+  {"peer_id": "12D3KooW<redacted>", "reputation": 50.0},
+  {"peer_id": "12D3KooW<redacted>", "reputation": 50.0}
 ]
 ```
 

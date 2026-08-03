@@ -308,7 +308,7 @@ Immediate WS13 verification residue:
    - **Root Cause:** **ID Truncation/Normalization Mismatch** between ContactsViewModel (uses 16-char prefix) and ChatScreen (uses full 64-char ID)
    - **Evidence:**
      - ContactsViewModel: `Peer already saved as contact: df222906d561a0bd` (16 chars)
-     - ChatScreen: `conversationId=df222906d561a0bd28fe8a71a6c7949ad225238409d0c2a18b07305b0260cb31` (64 chars)
+     - ChatScreen: `conversationId=<redacted-pubkey>` (64 chars)
      - Lookup fails due to ID length mismatch
    - **Impact:** User sees hash instead of contact name; broken UX; "Add Contact" button shown for existing contacts
    - **Fix Applied:**
@@ -394,7 +394,7 @@ Immediate WS13 verification residue:
 **Test Scenario 2:** Existing install 8.5-hour monitoring (2026-03-13 audit)
 - Device: Android Pixel 6a, Serial 26261JEGR01896, PID 32459
 - Uptime: 1896 seconds (~31.6 minutes continuous operation)
-- Contact "Christy" discovered via relay: libp2pPeerId `12D3KooWMDrHwP6CiVdHWSwD2RNJNM9VDBTeX8vKTqn9YZxAX198`
+- Contact "Christy" discovered via relay: libp2pPeerId `12D3KooW<redacted>`
 - **Send Message Failure**: Cannot encrypt/send to contact due to ID type confusion
 - **Contact Lookup Failure**: Chat screen shows `contactFound=false` despite contact in database
 - **No Freezing/Crashes**: App remained responsive; no ANR events; no uncaught exceptions

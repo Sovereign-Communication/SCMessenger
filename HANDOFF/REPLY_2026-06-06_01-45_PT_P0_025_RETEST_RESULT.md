@@ -47,20 +47,20 @@ This is the headline: full discovery round-trip between Android and Windows.
 
 **Android -> Windows** (Android discovers CLI's mDNS broadcast):
 ```
-01:28:03.303 D/MdnsServiceDiscovery( 9242): mDNS service resolved: 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 at 192.168.0.138:9001
-01:28:03.333 I/MdnsServiceDiscovery( 9242): mDNS: LAN peer resolved 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 -> /ip4/192.168.0.138/tcp/9001/p2p/12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 -- notifying for SwarmBridge dial
-01:28:03.340 I/TransportManager$getOrCreateMdns( 9242): mDNS LAN peer resolved: 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 at 192.168.0.138:9001 — feeding to SwarmBridge
+01:28:03.303 D/MdnsServiceDiscovery( 9242): mDNS service resolved: 12D3KooW<redacted> at x.x.x.x:9001
+01:28:03.333 I/MdnsServiceDiscovery( 9242): mDNS: LAN peer resolved 12D3KooW<redacted> -> /ip4/x.x.x.x/tcp/9001/p2p/12D3KooW<redacted> -- notifying for SwarmBridge dial
+01:28:03.340 I/TransportManager$getOrCreateMdns( 9242): mDNS LAN peer resolved: 12D3KooW<redacted> at x.x.x.x:9001 — feeding to SwarmBridge
 ```
 
 **Windows -> Android** (CLI discovers Android's mDNS broadcast):
 ```
-08:28:04.646727Z INFO libp2p_mdns::behaviour: discovered peer on address peer=12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 address=/ip4/192.168.0.138/tcp/9001/p2p/12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98
-08:28:04.647814Z INFO scmessenger_cli: Peer discovered: 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98
-08:28:04.648375Z INFO scmessenger_cli::transport_bridge: Registered peer 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 with capabilities: [Internet, Local], reachable=true
-08:28:04.649319Z INFO scmessenger_core::transport::swarm:  Sharing ledger with 12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98 (245 entries)
+08:28:04.646727Z INFO libp2p_mdns::behaviour: discovered peer on address peer=12D3KooW<redacted> address=/ip4/x.x.x.x/tcp/9001/p2p/12D3KooW<redacted>
+08:28:04.647814Z INFO scmessenger_cli: Peer discovered: 12D3KooW<redacted>
+08:28:04.648375Z INFO scmessenger_cli::transport_bridge: Registered peer 12D3KooW<redacted> with capabilities: [Internet, Local], reachable=true
+08:28:04.649319Z INFO scmessenger_core::transport::swarm:  Sharing ledger with 12D3KooW<redacted> (245 entries)
 ```
 
-The Android phone's libp2p peer-id `12D3KooWPD7Mkc9k5Xjyk6BJW2zUKCQpAXEFxv6PvyWCjwiB9z98` was successfully:
+The Android phone's libp2p peer-id `12D3KooW<redacted>` was successfully:
 - Resolved on Android via `MdnsServiceDiscovery.kt:onServiceResolved()` and fed to `SwarmBridge`
 - Discovered on Windows via `libp2p_mdns::behaviour`
 - Registered on Windows as a peer with `capabilities: [Internet, Local]`

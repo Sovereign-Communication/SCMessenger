@@ -36,14 +36,14 @@ The SCMessenger CLI driver (`scripts/core_cli_driver.py`) has been verified to h
 
 ## Current Node Status
 
-**Peer ID**: `12D3KooWE8DHKCNSrB2NoxvzyCtuoTSBnmikC3vW4u1qXZdhBHaZ`  
-**LAN Address**: `192.168.0.121`  
+**Peer ID**: `12D3KooW<redacted>`  
+**LAN Address**: `x.x.x.x`  
 **Daemon PID**: `17192`  
 **Discovery**: All transports active
 
 ### Listening On
-- TCP: `/ip4/192.168.0.121/tcp/9001`
-- WebSocket: `/ip4/192.168.0.121/tcp/9002/ws`
+- TCP: `/ip4/x.x.x.x/tcp/9001`
+- WebSocket: `/ip4/x.x.x.x/tcp/9002/ws`
 - HTTP/WS: `ws://127.0.0.1:9000`
 - Control API: `http://127.0.0.1:9876`
 
@@ -154,7 +154,7 @@ curl http://localhost:9876/api/discovery/peers
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| mDNS Discovery |  PASS | Broadcasting on 192.168.0.121 |
+| mDNS Discovery |  PASS | Broadcasting on x.x.x.x |
 | BLE Discovery |  PASS | Scanning for SCM service UUID |
 | WiFi-Aware |  PASS | Configured and enabled |
 | DHT Discovery |  PASS | Bootstrap node connected |
