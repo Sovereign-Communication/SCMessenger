@@ -6,7 +6,6 @@ import android.net.ConnectivityManager
 import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.service.TransportType
 import com.scmessenger.android.transport.SmartTransportRouter
-import io.mockk.Awaits
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -410,7 +409,29 @@ class ReceiptUnificationTest {
                 nickname = null,
                 libp2pPeerId = null
             )
-            coEvery { markMessageSent(any()) } just Awaits
+            // `just runs`, NOT `just Awaits`.
+            //
+            // This one line was the :app:testDebugUnitTest hang. `just Awaits`
+            // tells mockk the suspend function never completes, and mockk
+            // implements that by parking the CALLING THREAD inside runBlocking
+            // forever (io.mockk.CoFunctionAnswer.answer ->
+            // InternalPlatformDsl.runCoroutine -> runBlocking). The Gradle test
+            // worker thread never came back, so the task died on "Timeout has
+            // been exceeded" -- 10 min here, and 90-151 min before that guard
+            // was added -- while every test still reported PASSED.
+            //
+            // Confirmed by a watchdog thread dump in CI:
+            //   Test worker @kotlinx.coroutines.test runner#169 TIMED_WAITING
+            //     kotlinx.coroutines.BlockingCoroutine.joinBlocking
+            //     kotlinx.coroutines.runBlocking
+            //     io.mockk.InternalPlatformDsl.runCoroutine
+            //     io.mockk.CoFunctionAnswer.answer
+            //
+            // The test only needs the call to HAPPEN -- it asserts
+            // `coVerify(exactly = 1) { ironCore.markMessageSent("msg-1") }`,
+            // which records the invocation whether or not the stub completes.
+            // `just runs` satisfies that and returns.
+            coEvery { markMessageSent(any()) } just runs
         }
         val meshService = mockk<MeshService>(relaxed = true) {
             every { getState() } returns ServiceState.STOPPED
