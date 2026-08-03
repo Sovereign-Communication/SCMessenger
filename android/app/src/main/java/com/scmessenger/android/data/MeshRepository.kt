@@ -1774,7 +1774,7 @@ open class MeshRepository(
                         val currentSettings = settingsManager?.load()
                         if (!Companion.isMeshParticipationEnabled(currentSettings)) {
                             Timber.w("Dropping received message - mesh participation is disabled or settings unavailable")
-                            return
+                            return@launch
                         }
 
                         val normalizedSenderKey = normalizePublicKey(senderPublicKeyHex)
@@ -1833,7 +1833,7 @@ open class MeshRepository(
 
                         if (isBootstrapRelayPeer(canonicalPeerId)) {
                             Timber.i("Ignoring payload attributed to bootstrap relay peer $canonicalPeerId")
-                            return
+                            return@launch
                         }
 
                         // Auto-upsert contact: senderPublicKeyHex is guaranteed valid Ed25519 key
@@ -2034,14 +2034,14 @@ open class MeshRepository(
                                 preferredWifiPeerId = routeWifiPeerId,
                                 preferredListenerHints = hintedDialCandidates
                             )
-                            return
+                            return@launch
                         }
 
                         if (messageKind == "history_sync") {
                             Timber.d("Processed history sync request from $canonicalPeerId")
                             sendHistorySyncDataIfNeeded(canonicalPeerId, routePeerId, senderPublicKeyHex, hintedDialCandidates, routeWifiPeerId)
                             sendDeliveryReceiptAsync(senderPublicKeyHex, messageId, canonicalPeerId, routePeerId, routeWifiPeerId, preferredListenerHints = hintedDialCandidates)
-                            return
+                            return@launch
                         }
                         if (messageKind == "history_sync_data") {
                             Timber.d("Processed history sync data from $canonicalPeerId")
@@ -2086,7 +2086,7 @@ open class MeshRepository(
                                 historyManager?.flush()
                             } catch (e: Exception) { Timber.e(e, "Failed to parse history_sync_data") }
                             sendDeliveryReceiptAsync(senderPublicKeyHex, messageId, canonicalPeerId, routePeerId, routeWifiPeerId, preferredListenerHints = hintedDialCandidates)
-                            return
+                            return@launch
                         }
 
                         val existingRecord = try {
@@ -2104,7 +2104,7 @@ open class MeshRepository(
                                 preferredWifiPeerId = routeWifiPeerId,
                                 preferredListenerHints = hintedDialCandidates
                             )
-                            return
+                            return@launch
                         }
 
                         val content = decodedPayload.text
