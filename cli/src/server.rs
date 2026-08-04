@@ -1340,9 +1340,29 @@ pub async fn handle_jsonrpc_request(
         // doesn't make requests vanish before the user acts on them.
         ClientIntent::GetPendingMessageRequests {} => {
             if let Some(ref core) = ctx.core {
+                // Given a sender identifier that may be either a hex public key
+                // or an identity_id hash, return the additional candidate
+                // identifier it implies. A 32-byte hex public key yields its
+                // blake3 identity_id; anything else yields None, since an
+                // identity_id cannot be reversed back into a public key.
+                fn derived_identity_id(sender_id: &str) -> Option<String> {
+                    let bytes = hex::decode(sender_id).ok()?;
+                    if bytes.len() != 32 {
+                        return None;
+                    }
+                    Some(hex::encode(blake3::hash(&bytes).as_bytes()))
+                }
+
                 let contacts = core.contacts_store_manager().list().unwrap_or_default();
-                let contact_peer_ids: std::collections::HashSet<String> =
-                    contacts.into_iter().map(|c| c.peer_id).collect();
+                // Hold BOTH identifier flavors for every contact: a contact may
+                // be stored keyed by identity_id while an inbound message's
+                // sender_id now carries the canonical public key.
+                let mut contact_peer_ids: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for c in contacts {
+                    contact_peer_ids.insert(c.peer_id);
+                    contact_peer_ids.insert(c.public_key);
+                }
                 let blocked_peer_ids: std::collections::HashSet<String> = core
                     .list_blocked_peers()
                     .unwrap_or_default()
@@ -1354,9 +1374,19 @@ pub async fn handle_jsonrpc_request(
                 let mut by_sender: HashMap<String, Vec<&scmessenger_core::store::ReceivedMessage>> =
                     HashMap::new();
                 for msg in &inbox_messages {
-                    if !contact_peer_ids.contains(&msg.sender_id)
-                        && !blocked_peer_ids.contains(&msg.sender_id)
-                    {
+                    // Match on either flavor. The blocked check matters as much
+                    // as the contact check: a peer blocked under one flavor must
+                    // stay blocked when their message arrives under the other.
+                    let alt_id = derived_identity_id(&msg.sender_id);
+                    let is_known = contact_peer_ids.contains(&msg.sender_id)
+                        || alt_id
+                            .as_ref()
+                            .is_some_and(|a| contact_peer_ids.contains(a));
+                    let is_blocked = blocked_peer_ids.contains(&msg.sender_id)
+                        || alt_id
+                            .as_ref()
+                            .is_some_and(|a| blocked_peer_ids.contains(a));
+                    if !is_known && !is_blocked {
                         by_sender
                             .entry(msg.sender_id.clone())
                             .or_default()
