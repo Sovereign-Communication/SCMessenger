@@ -1,0 +1,1 @@
+{"version":1,"generator":"Qwen-Coder","files":{"SECURITY.md":{"aiChars":10362,"humanChars":2918,"percent":78,"surface":"cli"}},"summary":{"aiPercent":78,"aiChars":10362,"humanChars":2918,"totalFilesTouched":1,"surfaces":["cli"]},"surfaceBreakdown":{"cli":{"aiChars":10362,"percent":78}},"excludedGenerated":[],"excludedGeneratedCount":0,"promptCount":0}
