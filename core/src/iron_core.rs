@@ -3199,6 +3199,22 @@ impl IronCore {
             }
         }
 
+        // DERIVE THE CANONICAL STORAGE PEER ID. History/inbox/audit are keyed
+        // and queried by IDENTITY_ID (block_peer stores by identity_id; history
+        // recent/conversation query by identity_id EXACT match on peer_id), but
+        // the wire sender_id is now a public key after identity canonicalization.
+        // We derive the canonical identity_id from the AUTHENTICATED envelope
+        // public key (sender_pubkey, verified during receive / ratchet
+        // decryption), not from the unauthenticated plaintext sender_id field:
+        // sender_pubkey is always a valid 32-byte Ed25519 key, so
+        // identity_id_from_public_key_hex always hashes to the correct
+        // identity_id. This is unambiguous (no double-hash risk on an
+        // identity_id-valued sender_id) and immune to plaintext-tampering.
+        let canonical_peer_id = crate::identity::keys::identity_id_from_public_key_hex(
+            &hex::encode(&sender_pubkey),
+        )
+        .unwrap_or_else(|| message.sender_id.clone());
+
         // Also check device-specific blocks using the sender's last known device ID
         // Try the contact under both identifier flavors; first hit wins.
         let sender_device_id = sender_candidates.iter().find_map(|candidate| {
@@ -3297,7 +3313,7 @@ impl IronCore {
                 inbox.receive(ReceivedMessage {
                     version: 1,
                     message_id: message.id.clone(),
-                    sender_id: message.sender_id.clone(),
+                    sender_id: canonical_peer_id.clone(),
                     payload: message.payload.clone(),
                     received_at: now,
                     sender_public_key_hex: Some(hex::encode(&sender_pubkey)),
@@ -3309,7 +3325,7 @@ impl IronCore {
         let _ = self.history_manager.add(MessageRecord {
             id: message.id.clone(),
             direction: MessageDirection::Received,
-            peer_id: message.sender_id.clone(),
+            peer_id: canonical_peer_id.clone(),
             content,
             timestamp: message.timestamp,
             sender_timestamp: message.timestamp,
@@ -3320,7 +3336,7 @@ impl IronCore {
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
             local_identity_id,
-            Some(message.sender_id.clone()),
+            Some(canonical_peer_id),
             None,
         );
 
