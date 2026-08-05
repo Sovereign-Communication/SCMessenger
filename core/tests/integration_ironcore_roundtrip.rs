@@ -35,7 +35,7 @@ fn pubkey(node: &IronCore) -> String {
 
 /// Alice encrypts a message addressed to Bob; Bob decrypts it and recovers the
 /// original plaintext.  The sender identity embedded in the decrypted `Message`
-/// must match Alice's identity id.
+/// must match Alice's public key.
 #[test]
 fn test_two_node_message_roundtrip() {
     let alice = make_node();
@@ -66,14 +66,12 @@ fn test_two_node_message_roundtrip() {
     );
 
     // The sender field must identify Alice, not Bob or anyone else.
-    let alice_identity_id = alice
-        .get_identity_info()
-        .identity_id
-        .expect("alice must have an identity id");
-
+    // Under identity canonicalization, message.sender_id carries the sender's
+    // Ed25519 public key (not the Blake3 identity_id).
     assert_eq!(
-        received.sender_id, alice_identity_id,
-        "decrypted message sender_id must equal Alice's identity id"
+        received.sender_id,
+        pubkey(&alice),
+        "decrypted message sender_id must equal Alice's public key"
     );
 }
 

@@ -36,7 +36,8 @@ fn test_e2e_message_flow_two_peers() {
 
     // Step 2: Alice creates a message for Bob
     let message_text = "Hello Bob, this is a test message from Alice!";
-    let message = Message::text(alice_id.clone(), bob_id.clone(), message_text);
+    // sender_id is canonicalized to the sender's Ed25519 public key.
+    let message = Message::text(alice_keys.public_key_hex(), bob_id.clone(), message_text);
 
     // Step 3: Alice encrypts the message
     let message_bytes = bincode::serialize(&message).expect("Failed to serialize message");
@@ -107,7 +108,8 @@ fn test_e2e_message_flow_two_peers() {
     let received_msg = scmessenger_core::store::ReceivedMessage {
         version: 1,
         message_id: received_message.id.clone(),
-        sender_id: received_message.sender_id.clone(),
+        // Inbox is keyed by the stable identity_id, not the wire public key.
+        sender_id: alice_keys.identity_id(),
         payload: received_message.payload.clone(),
         received_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -120,7 +122,8 @@ fn test_e2e_message_flow_two_peers() {
     assert_eq!(bob_inbox.total_count(), 1);
 
     // Step 10: Verify message content
-    assert_eq!(received_message.sender_id, alice_id);
+    // sender_id carries Alice's canonical identifier: her Ed25519 public key.
+    assert_eq!(received_message.sender_id, alice_keys.public_key_hex());
     assert_eq!(received_message.recipient_id, bob_id);
     assert_eq!(received_message.message_type, MessageType::Text);
     assert_eq!(received_message.text_content().unwrap(), message_text);
@@ -129,7 +132,8 @@ fn test_e2e_message_flow_two_peers() {
     let duplicate_msg = scmessenger_core::store::ReceivedMessage {
         version: 1,
         message_id: received_message.id.clone(),
-        sender_id: received_message.sender_id.clone(),
+        // Same message, same canonical inbound key (identity_id).
+        sender_id: alice_keys.identity_id(),
         payload: received_message.payload.clone(),
         received_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

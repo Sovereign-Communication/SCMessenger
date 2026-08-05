@@ -118,7 +118,7 @@ callback interface CoreDelegate {
     void on_peer_disconnected(string peer_id);
     void on_peer_identified(string peer_id, string agent_version, sequence<string> listen_addrs);
     // sender_public_key_hex: Ed25519 hex (64 chars) — use this with prepare_receipt()
-    // sender_id: Blake3 identity_id (64 hex chars) — use this for display / history
+    // sender_id: peer's Ed25519 public key (64 hex chars) — used for identity resolution / display keying
     void on_message_received(string sender_id, string sender_public_key_hex, string message_id, u64 sender_timestamp, bytes data);
     void on_receipt_received(string message_id, string status);
 };
