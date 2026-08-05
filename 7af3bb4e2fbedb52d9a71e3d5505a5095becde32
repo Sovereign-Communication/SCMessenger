@@ -1,0 +1,1 @@
+{"version":1,"generator":"Qwen-Coder","files":{"core/src/transport/manager.rs":{"aiChars":9000,"humanChars":0,"percent":100,"surface":"cli"}},"summary":{"aiPercent":100,"aiChars":9000,"humanChars":0,"totalFilesTouched":1,"surfaces":["cli"]},"surfaceBreakdown":{"cli":{"aiChars":9000,"percent":100}},"excludedGenerated":[],"excludedGeneratedCount":0,"promptCount":0}
