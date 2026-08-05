@@ -57,7 +57,13 @@ OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
-BYOK_DENYLIST_PREFIXES = ("mistralai/",)
+BYOK_DENYLIST_PREFIXES = (
+    "mistralai/",
+    # P0 (2026-08-04): NO Claude/Anthropic models through the OpenRouter paid
+    # endpoint, ever. Costly Sonnet/Opus calls were reaching OpenRouter and
+    # doubling API spend. Any anthropic/-prefixed slug is refused outright.
+    "anthropic/",
+)
 # Operator-set 2026-07-19: 2c default per call.
 DEFAULT_MAX_COST = 0.02
 HARD_MAX_COST = 0.10  # raised 0.05 -> 0.10 with explicit operator approval 2026-07-29 (Tier-B premium panels)
