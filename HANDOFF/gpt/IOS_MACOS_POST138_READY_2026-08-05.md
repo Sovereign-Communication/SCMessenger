@@ -23,7 +23,7 @@ Owner: GPT backup verifier
 - Release device build completed successfully from the current main source.
 - App was installed over the existing bundle; no uninstall, identity wipe, or data reset was performed.
 - Device app inventory reports `SCMessenger` version `0.5.0`, bundle build `9`.
-- Normal launch was attempted but was denied because the iPhone was locked. Unlock the device and retry the normal launch before declaring the device ready.
+- Normal launch succeeded after the iPhone was unlocked; the app process is running.
 
 ## State-preservation rule
 
@@ -31,7 +31,7 @@ This rollout follows the current Windows/Qwen handoff: it is an in-place update,
 
 ## Remaining gate
 
-After the iPhone is unlocked and launches successfully:
+With the iPhone launch gate complete:
 
 1. Confirm both endpoints show the expected current-main provenance.
 2. Run the five-node matrix across iOS, macOS, Android, and the always-on node.
