@@ -1,0 +1,1 @@
+{"version":1,"generator":"Qwen-Coder","files":{"HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md":{"aiChars":291,"humanChars":69,"percent":81,"surface":"cli"}},"summary":{"aiPercent":81,"aiChars":291,"humanChars":69,"totalFilesTouched":1,"surfaces":["cli"]},"surfaceBreakdown":{"cli":{"aiChars":291,"percent":81}},"excludedGenerated":[],"excludedGeneratedCount":0,"promptCount":0}
