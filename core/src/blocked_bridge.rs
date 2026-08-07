@@ -85,7 +85,8 @@ impl BlockedManager {
         peer_id: String,
         device_id: Option<String>,
     ) -> Result<bool, IronCoreError> {
-        self.inner.is_blocked(&peer_id, device_id.as_deref())
+        self.inner
+            .is_blocked_resolved(&peer_id, device_id.as_deref())
     }
 
     /// Get blocked identity details

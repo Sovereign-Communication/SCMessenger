@@ -1053,7 +1053,7 @@ impl IronCore {
     ) -> Result<bool, IronCoreError> {
         self.blocked_manager
             .read()
-            .is_blocked(&peer_id, device_id.as_deref())
+            .is_blocked_resolved(&peer_id, device_id.as_deref())
     }
 
     /// Get the set of peer IDs that are blocked-only (not deleted).
@@ -1139,7 +1139,11 @@ impl IronCore {
         // peer is unblocked, so treat it as blocked and suppress. The previous
         // `unwrap_or(false)` failed OPEN -- any store error silently downgraded
         // a blocked peer to visible, defeating the block the user set.
-        let blocked = match self.blocked_manager.read().is_blocked(&peer_id, None) {
+        let blocked = match self
+            .blocked_manager
+            .read()
+            .is_blocked_resolved(&peer_id, None)
+        {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(
@@ -3230,25 +3234,24 @@ impl IronCore {
         // reuse the same guard for both the blocked+deleted check and the
         // is_blocked check -- one consistent view of the block store, no
         // per-candidate re-acquisition. The guard's scope ends before the
-        // history/audit/delegate work below, so concurrent block_peer()
-        // writers are not held off for the rest of receive processing.
-        let is_blocked = {
+        // history/audit/delegate work below, so concurrent block_peer() writers
+        // are not held off for the rest of receive processing.
+        let any_blocked = {
             let blocked_guard = self.blocked_manager.read();
 
-            // FAIL CLOSED for blocked+deleted: on a block-store read error for
-            // ANY candidate we cannot prove the sender is NOT blocked+deleted,
-            // so drop at ingress instead of processing the payload.
-            for candidate in &sender_candidates {
-                match blocked_guard.is_blocked_and_deleted(candidate) {
-                    Ok(true) => return Err(IronCoreError::Blocked),
-                    Ok(false) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            "[WARN] blocked+deleted lookup failed for inbound sender; dropping message (fail-closed): {}",
-                            e
-                        );
-                        return Err(IronCoreError::Blocked);
-                    }
+            // FAIL CLOSED for blocked+deleted: the manager resolves both
+            // public-key and identity_id flavors under one policy. On a
+            // block-store read error we cannot prove the sender is safe, so
+            // drop at ingress instead of processing the payload.
+            match blocked_guard.is_blocked_and_deleted_resolved(&message.sender_id) {
+                Ok(true) => return Err(IronCoreError::Blocked),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "[WARN] blocked+deleted lookup failed for inbound sender; dropping message (fail-closed): {}",
+                        e
+                    );
+                    return Err(IronCoreError::Blocked);
                 }
             }
 
@@ -3258,26 +3261,18 @@ impl IronCore {
             // the user despite an active block. On error we cannot prove the sender
             // is unblocked, so hide it; the message is still retained, not dropped,
             // so nothing is lost if the store recovers.
-            let mut any_blocked = false;
-            for candidate in &sender_candidates {
-                match blocked_guard.is_blocked(candidate, sender_device_id.as_deref()) {
-                    Ok(b) => {
-                        if b {
-                            any_blocked = true;
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "[WARN] block lookup failed for inbound sender; hiding message (fail-closed): {}",
-                            e
-                        );
-                        any_blocked = true;
-                        break;
-                    }
+            match blocked_guard
+                .is_blocked_resolved(&message.sender_id, sender_device_id.as_deref())
+            {
+                Ok(blocked) => blocked,
+                Err(e) => {
+                    tracing::warn!(
+                        "[WARN] block lookup failed for inbound sender; hiding message (fail-closed): {}",
+                        e
+                    );
+                    true
                 }
             }
-            any_blocked
         };
 
         // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
@@ -3329,7 +3324,7 @@ impl IronCore {
             timestamp: message.timestamp,
             sender_timestamp: message.timestamp,
             delivered: true,
-            hidden: is_blocked,
+            hidden: any_blocked,
         });
 
         self.audit_log.write().append(

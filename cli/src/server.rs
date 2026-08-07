@@ -1386,13 +1386,6 @@ pub async fn handle_jsonrpc_request(
                     contact_peer_ids.insert(c.peer_id);
                     contact_peer_ids.insert(c.public_key);
                 }
-                let blocked_peer_ids: std::collections::HashSet<String> = core
-                    .list_blocked_peers()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|b| b.peer_id)
-                    .collect();
-
                 let inbox_messages = core.peek_received_messages();
                 let mut by_sender: HashMap<String, Vec<&scmessenger_core::store::ReceivedMessage>> =
                     HashMap::new();
@@ -1419,10 +1412,14 @@ pub async fn handle_jsonrpc_request(
                         || alt_id
                             .as_ref()
                             .is_some_and(|a| contact_peer_ids.contains(a));
-                    let is_blocked = blocked_peer_ids.contains(&msg.sender_id)
-                        || alt_id
-                            .as_ref()
-                            .is_some_and(|a| blocked_peer_ids.contains(a));
+                    // T4: resolve block status through the core manager's
+                    // single dual-flavor policy rather than maintaining a
+                    // second CLI-side expansion of public key and identity_id.
+                    // A lookup error fails closed so a blocked sender is not
+                    // exposed as a pending request.
+                    let is_blocked = core
+                        .is_peer_blocked(msg.sender_id.clone(), None)
+                        .unwrap_or(true);
                     // Fail closed: if we cannot resolve the sender to a valid
                     // Ed25519 public key, we cannot say it is unknown-but-valid
                     // (a legitimate new-requester case); suppress it.
