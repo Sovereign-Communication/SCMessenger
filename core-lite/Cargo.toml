@@ -1,0 +1,105 @@
+[package]
+name = "scmessenger-core-lite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = ["uniffi"]
+# Platform targets
+android = []
+ios = []
+# Optional modules
+ratchet = ["libcrux-ml-kem", "ml-dsa"]
+sled-storage = ["sled"]
+# Transport backends
+tcp = ["libp2p/tcp", "libp2p/quic", "libp2p/dns", "libp2p/noise", "libp2p/yamux", "libp2p/tokio"]
+ble = ["btleplug"]
+wifi-aware = []
+wifi-direct = []
+multipeer = []
+# Mesh components
+drift-core = []
+relay-core = []
+routing-mesh = []
+relay-custody = []
+ledger-sharing = []
+lite-mesh = ["drift-core", "relay-core", "routing-mesh", "relay-custody", "ledger-sharing"]
+
+[dependencies]
+# Shared with core (workspace deps)
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+libp2p = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+curve25519-dalek = { workspace = true }
+chacha20poly1305 = { workspace = true }
+sha2 = { workspace = true }
+blake3 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = "0.12"
+web-time = "1.1"
+crc32fast = "1.3"
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+pbkdf2 = { version = "0.12.2", features = ["sha2"] }
+argon2 = "0.5"
+sled = { workspace = true, optional = true }
+dirs = "5.0"
+rustc-hash = "1.1.0"
+
+# UniFFI for Android/iOS
+uniffi = { workspace = true, features = ["wasm-unstable-single-threaded"], optional = true }
+uniffi_bindgen = { version = "0.31", optional = true }
+camino = { version = "1", optional = true }
+
+# Ratchet dependencies
+libcrux-ml-kem = { workspace = true, optional = true }
+ml-dsa = { version = "0.1.1", features = ["getrandom"], optional = true }
+base64 = "0.22"
+
+# Android-specific
+[target.'cfg(target_os = "android")'.dependencies]
+libp2p = { workspace = true, features = [
+  "tcp", "quic", "dns", "tokio", "websocket", "noise", "yamux",
+  "gossipsub", "kad", "autonat", "dcutr", "relay", "identify", "ping", "macros", "request-response", "cbor"
+] }
+tokio-tungstenite = { workspace = true, features = ["handshake", "rustls-tls-webpki-roots"] }
+libc = "0.2"
+jni = "0.21"
+ureq = "2"
+
+# iOS-specific
+[target.'cfg(target_os = "ios")'.dependencies]
+libp2p = { workspace = true, features = [
+  "tcp", "quic", "dns", "tokio", "websocket", "noise", "yamux",
+  "gossipsub", "kad", "autonat", "dcutr", "relay", "identify", "ping", "macros", "request-response", "cbor"
+] }
+tokio-tungstenite = { workspace = true, features = ["handshake", "rustls-tls-webpki-roots"] }
+libc = "0.2"
+
+# Desktop (CLI)
+[target.'cfg(all(not(target_os = "android"), not(target_os = "ios"), not(target_arch = "wasm32")))'.dependencies]
+tokio = { workspace = true, features = ["full"] }
+libp2p = { workspace = true, features = ["tcp", "quic", "dns", "mdns", "tokio", "websocket"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+btleplug = { version = "0.11", default-features = false }
+ureq = "2"
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
+
+[lints]
+workspace = true
