@@ -53,7 +53,15 @@ GCP_ZONE="us-central1-a"
 GCP_HOST="scmessenger-bootstrap"
 GCP_IMAGE="us-central1-docker.pkg.dev/scmessenger-bootstrapnode/scmessenger-repo/scmessenger-cli:latest"
 GCP_CONTAINER_NAME="scmessenger-relay"
-OSX_RUST_LOG="info,libp2p_autonat=debug,libp2p_dcutr=debug,libp2p_relay=debug,scmessenger_core::transport::swarm=debug,scmessenger_core::store::relay_custody=debug,scmessenger_core::mesh::delivery=debug"
+# NOTE: `scmessenger_core::mesh::delivery` was stale -- no `mesh` module
+# exists in core/src (see core/src/lib.rs); EnvFilter silently matches zero
+# spans/events for an unknown target, so that clause was a no-op. Delivery
+# tracing actually lives in store::outbox / store::inbox (see
+# core/src/store/outbox.rs, core/src/store/inbox.rs). Also added
+# libp2p_mdns=trace and if_watch=debug: the mDNS "os error 10040"
+# (WSAEMSGSIZE) failures on Windows/macOS otherwise surface as a single
+# ERROR line with no socket/interface context.
+OSX_RUST_LOG="info,libp2p_autonat=debug,libp2p_dcutr=debug,libp2p_relay=debug,libp2p_mdns=trace,if_watch=debug,scmessenger_core::transport=debug,scmessenger_core::store::relay_custody=debug,scmessenger_core::store::outbox=debug,scmessenger_core::store::inbox=debug"
 
 # Prefer pre-built binary (instant start) over cargo run (30-60s compile)
 if [ -f "target/debug/scmessenger-cli" ]; then
