@@ -1,0 +1,114 @@
+{
+  "completed_functions": [
+    "core/src/crypto/ratchet.rs::as_bytes:55-57",
+    "core/src/iron_core.rs::on_receipt_received:98-99",
+    "core/src/crypto/ratchet.rs::pq_ss_fingerprint:67-72",
+    "core/src/crypto/ratchet.rs::from_bytes:51-53",
+    "core/src/iron_core.rs::on_peer_discovered:87-88",
+    "core/src/crypto/ratchet.rs::new:108-113",
+    "core/src/iron_core.rs::ratchet_disabled:115-125",
+    "core/src/iron_core.rs::hydrated_ledger_manager:296-305",
+    "core/src/crypto/ratchet.rs::fmt:61-63",
+    "core/src/iron_core.rs::default:278-280",
+    "core/src/crypto/ratchet.rs::fmt:85-91",
+    "core/src/iron_core.rs::on_peer_identified:89-90",
+    "core/src/mobile_bridge.rs::fmt:77-84"
+  ],
+  "completed_scopes": {
+    "core/src/crypto/ratchet.rs::from_bytes:51-53": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::as_bytes:55-57": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::fmt:61-63": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::pq_ss_fingerprint:67-72": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::on_peer_discovered:87-88": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::fmt:85-91": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::on_peer_identified:89-90": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::new:108-113": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::on_receipt_received:98-99": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/crypto/ratchet.rs::new_with_index:115-117": [
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::ratchet_disabled:115-125": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::default:278-280": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::hydrated_ledger_manager:296-305": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::new:311-391": [
+      "scope1_high_friction"
+    ],
+    "core/src/iron_core.rs::device_id:712-714": [
+      "scope1_high_friction"
+    ],
+    "core/src/mobile_bridge.rs::fmt:77-84": [
+      "scope3_worldwide_discrimination",
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/mobile_bridge.rs::max_payload_size:66-73": [
+      "scope1_high_friction",
+      "scope2_dualpass_interop"
+    ],
+    "core/src/iron_core.rs::stop:636-640": [
+      "scope1_high_friction"
+    ],
+    "core/src/iron_core.rs::grant_consent:643-646": [
+      "scope1_high_friction"
+    ],
+    "core/src/iron_core.rs::with_storage:396-482": [
+      "scope1_high_friction"
+    ],
+    "core/src/iron_core.rs::identity_id:707-709": [
+      "scope1_high_friction"
+    ],
+    "core/src/iron_core.rs::start:609-633": [
+      "scope2_dualpass_interop"
+    ]
+  },
+  "findings_count": 190
+}

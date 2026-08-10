@@ -1,0 +1,11 @@
+{
+  "completed_tasks": 819,
+  "coverage_percent": 100.0,
+  "created_at": "2026-08-10T07:15:51Z",
+  "files": 1,
+  "manifest_id": "a8828124020ff55a17fac4415461a3b202f3323079d3334b73e6ec896346d391",
+  "missing_tasks": [],
+  "required_tasks": 819,
+  "scope": "iron-core",
+  "synthesis_files": 1
+}

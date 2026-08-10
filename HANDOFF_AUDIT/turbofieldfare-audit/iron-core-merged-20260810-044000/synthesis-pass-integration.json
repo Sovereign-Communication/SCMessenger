@@ -1,0 +1,44 @@
+{
+  "coverage_gaps": [
+    "Verification of the full implementation of `MeshService::update_keepalive` to determine if the stub is a security risk.",
+    "Analysis of the `ratchet_sessions` and `identity` storage backends to determine if they support atomic transactions.",
+    "Review of FFI boundary definitions to see if `test_only_identity_signing_key` is exposed to external callers."
+  ],
+  "findings": [
+    {
+      "confidence": "HIGH",
+      "description": "The method returns a clone of the identity signing key to the caller. If this method is exported via FFI, it allows external callers to extract the private identity key, breaking the security boundary of the core identity.",
+      "evidence": "3165:     pub fn test_only_identity_signing_key(&self) -> ed25519_dalek::SigningKey {\n3171:             clone()",
+      "issue_type": "FFI_SAFETY",
+      "recommendation": "Remove this method or ensure it is not exported to FFI/external boundaries.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The `import_identity_backup` function performs multiple independent state-changing operations without a single atomic transaction. If `ratchet_sessions.write()` fails at line 1859, the identity key has already been permanently changed at line 1848, leaving the system in an inconsistent state.",
+      "evidence": "1846:         let mut identity = self.identity.write();\n1847:             identity\n1848:                 import_key_bytes(&key_bytes)\n1849:                 map_err(|_| IronCoreError::CryptoError)?;\n...\n1855:         if let Some(json) = ratchet_sessions_json {\n1856:             self.ratchet_sessions\n1857:                 write()\n1858:                 deserialize_sessions_strict(&json)\n1859:                 map_err(|_| IronCoreError::CorruptionDetected)?;\n1860:         }",
+      "issue_type": "STATE_INTEGRITY",
+      "recommendation": "Perform all state changes within a single transaction or use a temporary staging object that is only committed to the primary state once all operations succeed.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The outbox state is updated in-memory and then re-enqueued into the persistent store. If the process crashes between the successful `send_to_peer` (line 2979) and the successful `enqueue` (line 3010), the message state in the database will not reflect that it was already sent, leading to duplicate deliveries.",
+      "evidence": "2979: match self.transport_manager.read().send_to_peer(...)\n2994: msg.state = crate::store::outbox::MessageState::Enqueued;\n3010: if let Err(e) = self.outbox.write().enqueue(msg) {",
+      "issue_type": "STATE_INTEGRITY",
+      "recommendation": "Ensure the outbox `enqueue` operation (persistence) occurs before or atomically with the transport dispatch, or implement idempotent delivery handling at the transport layer.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The `policy_engine` lock is released at line 4097 before `drift_apply_policy` is called at line 4100. If another thread calls `update_device_state` between lines 4097 and 4100, the `config` being propagated may be stale or out-of-order relative to the actual state of the `policy_engine`.",
+      "evidence": "4094:         let mut engine = self.policy_engine.write();\n4095:         let profile = engine.update_device_state(&state);\n4096:         let config = engine.to_relay_config();\n4097:         drop(engine);\n4099:         // Propagate relay config to the drift engine if active\n4100:         self.drift_apply_policy(config);",
+      "issue_type": "CONCURRENCY",
+      "recommendation": "Hold the `policy_engine` lock until `drift_apply_policy` completes, or implement versioned state updates to ensure monotonic consistency.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "scope": "synthesis",
+  "status": "ISSUES_FOUND",
+  "summary": "Critical state integrity, FFI safety, and atomicity issues identified across multiple core subsystems."
+}

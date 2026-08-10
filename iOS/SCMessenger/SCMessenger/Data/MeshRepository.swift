@@ -2905,6 +2905,36 @@ final class MeshRepository {
         }
     }
 
+    private func promoteMatchingLedgerSeeds(peerId: String, listenAddrs: [String]) {
+        guard isLibp2pPeerId(peerId), let ledgerManager else { return }
+
+        let seedAddresses = Set(
+            ledgerManager
+                .seedAddresses(limit: 32)
+                .map { $0.multiaddr.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        guard !seedAddresses.isEmpty else { return }
+
+        var promoted = Set<String>()
+        for rawAddress in listenAddrs {
+            guard let normalized = normalizeAddressHint(rawAddress),
+                  !normalized.contains("/p2p-circuit") else { continue }
+
+            let baseAddress = peerIdStrippedMultiaddr(normalized)
+            guard seedAddresses.contains(baseAddress), promoted.insert(baseAddress).inserted else { continue }
+            ledgerManager.recordConnection(multiaddr: baseAddress, peerId: peerId)
+            logger.info("Ledger: promoted verified bootstrap seed \(baseAddress) for \(peerId)")
+        }
+    }
+
+    private func peerIdStrippedMultiaddr(_ multiaddr: String) -> String {
+        guard let range = multiaddr.range(of: "/p2p/", options: .backwards) else {
+            return multiaddr
+        }
+        return String(multiaddr[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func getDialHintsForRoutePeer(_ routePeerId: String) -> [String] {
         let normalizedRoute = routePeerId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isLibp2pPeerId(normalizedRoute) else { return [] }
@@ -3237,6 +3267,27 @@ final class MeshRepository {
         ledgerManager.recordFailure(multiaddr: multiaddr)
     }
 
+    /// Persist bootstrap addresses learned from an invite or QR join bundle.
+    /// Seeds remain lower-confidence until an active transport session
+    /// identifies the peer, but they must survive this screen and app launch.
+    @discardableResult
+    func importSeedAddresses(_ multiaddrs: [String]) -> Int {
+        guard let ledgerManager = ledgerManager else {
+            logger.warning("Cannot import ledger seeds before LedgerManager initialization")
+            return 0
+        }
+
+        let seeds = multiaddrs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { SeedLedgerEntry(multiaddr: $0) }
+        guard !seeds.isEmpty else { return 0 }
+
+        let added = Int(ledgerManager.importSeedEntries(entries: seeds))
+        logger.info("Ledger: imported \(added) bootstrap seed(s) from join bundle")
+        return added
+    }
+
     func getDialableAddresses() throws -> [LedgerEntry] {
         guard let ledgerManager = ledgerManager else {
             throw MeshError.notInitialized("LedgerManager not initialized")
@@ -3245,17 +3296,19 @@ final class MeshRepository {
     }
 
     /// Returns bounded, deduplicated bootstrap candidates from the ledger.
-    /// Preferred relays lead the list, followed by any other proven dialable
-    /// addresses. No platform-owned fallback address is injected.
+    /// Preferred relays lead the list, followed by other proven dialable
+    /// addresses and finally invite/QR seeds for cold-start recovery. No
+    /// platform-owned fallback address is injected.
     private func ledgerBootstrapEntries(maxCount: UInt32 = 10) -> [LedgerEntry] {
         guard let ledgerManager else { return [] }
 
         let preferred = ledgerManager.getPreferredRelays(limit: maxCount)
         let dialable = ledgerManager.dialableAddresses()
+        let seeds = ledgerManager.seedAddresses(limit: maxCount)
         var seen = Set<String>()
         var result: [LedgerEntry] = []
 
-        for entry in preferred + dialable {
+        for entry in preferred + dialable + seeds {
             let address = entry.multiaddr.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !address.isEmpty, seen.insert(address).inserted else { continue }
             result.append(entry)
@@ -4208,6 +4261,12 @@ final class MeshRepository {
             rawAddresses: listenAddrs,
             includeRelayCircuits: true
         )
+
+        // Identify confirms that an active transport session exists. If the
+        // peer advertises an address previously imported from QR/invite, make
+        // that exact seed proven so it participates in relay ranking on the
+        // next launch. Relay circuits are routes, not peer listeners.
+        promoteMatchingLedgerSeeds(peerId: trimmedPeerId, listenAddrs: listenAddrs)
 
         var syncPeerIds: [String] = [peerId]
         let isHeadless = agentVersion.contains("/headless/")

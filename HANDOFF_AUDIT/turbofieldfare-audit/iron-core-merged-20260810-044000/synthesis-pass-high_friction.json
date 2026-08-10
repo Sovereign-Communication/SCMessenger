@@ -1,0 +1,42 @@
+{
+  "coverage_gaps": [
+    "Full verification of cross-file lock ordering and global mutex hierarchy."
+  ],
+  "findings": [
+    {
+      "confidence": "HIGH",
+      "description": "The function holds a write lock on `self.identity` while attempting to acquire write locks on `self.drift_engine`, `self.routing_engine`, and `self.bootstrap_manager`. If other methods acquire these locks in a different order (e.g., `drift_engine` then `identity`), a circular wait deadlock occurs.",
+      "evidence": "663:         let mut identity = self.identity.write();\n680:                 let mut engine = self.drift_engine.write();",
+      "issue_type": "CONCURRENCY",
+      "recommendation": "Release the `identity` write lock before acquiring other component locks, or ensure a strict global lock ordering.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The function performs destructive state updates (importing keys and setting nicknames) before completing all side effects (ratchet sessions, contacts, and bridge contacts). If `deserialize_sessions_strict` or `contact_manager.add` fails, the identity state is left in a partially-imported, inconsistent state where the key is changed but sessions/contacts are not fully synchronized.",
+      "evidence": "1846:         let mut identity = self.identity.write();\n1847:         identity\n1848:             import_key_bytes(&key_bytes)\n1849:             map_err(|_| IronCoreError::CryptoError)?;\n1851:         if let Some(nn) = nickname {\n1852:             let _ = identity.set_nickname(nn);\n1855:         if let Some(json) = ratchet_sessions_json {\n1856:             self.ratchet_sessions\n1857:                 write()\n1858:                 deserialize_sessions_strict(&json)\n1859:                 map_err(|_| IronCoreError::CorruptionDetected)?;\n1860:         }",
+      "issue_type": "STATE_INTEGRITY",
+      "recommendation": "Perform all validation and prepare all new state objects before acquiring write locks or applying changes to the primary identity state. Use a temporary state object and swap it only upon successful completion of all side effects.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The code acquires a write lock on `self.drift_engine`. If `engine.apply_policy_config` attempts to re-acquire a lock on `self.drift_engine` or another lock held by a thread waiting on `drift_engine`, a deadlock occurs. While the lock is released at the end of the block, the pattern of holding a write lock while calling external logic is high-risk.",
+      "evidence": "4212: if let Some(ref mut engine) = *self.drift_engine.write() {\n4213:     engine.apply_policy_config(relay_config);\n4214: }",
+      "issue_type": "CONCURRENCY",
+      "recommendation": "Ensure `apply_policy_config` does not attempt to re-acquire `drift_engine` or trigger callbacks that lock `self`.",
+      "severity": "HIGH"
+    },
+    {
+      "confidence": "HIGH",
+      "description": "The use of.expect() on the identity key results in a process panic if the identity has not been initialized. This is a production-reachable failure path if the object is used before setup.",
+      "evidence": "3169:.expect(\"identity must be initialized\")",
+      "issue_type": "PANIC_RISK",
+      "recommendation": "Return an Option or Result instead of panicking to allow the caller to handle uninitialized state gracefully.",
+      "severity": "HIGH"
+    }
+  ],
+  "scope": "synthesis",
+  "status": "ISSUES_FOUND",
+  "summary": "Critical concurrency deadlocks and state integrity risks exist during identity management and policy application."
+}

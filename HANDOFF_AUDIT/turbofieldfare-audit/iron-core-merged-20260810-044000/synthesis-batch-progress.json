@@ -1,0 +1,24 @@
+{
+  "file": "core/src/iron_core.rs",
+  "final": {
+    "record_hash": "908cc56847a76da8f9b2bfa741c624e9afd637269413368c73b6de3b077af4d3",
+    "status": "persisted"
+  },
+  "manifest_id": "a8828124020ff55a17fac4415461a3b202f3323079d3334b73e6ec896346d391",
+  "mode": "staged",
+  "passes": {
+    "deployment": {
+      "path": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-merged-20260810-044000/synthesis-pass-deployment.json",
+      "status": "persisted"
+    },
+    "high_friction": {
+      "path": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-merged-20260810-044000/synthesis-pass-high_friction.json",
+      "status": "reused"
+    },
+    "integration": {
+      "path": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-merged-20260810-044000/synthesis-pass-integration.json",
+      "status": "persisted"
+    }
+  },
+  "updated_at": "2026-08-10T13:16:34Z"
+}

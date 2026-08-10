@@ -162,6 +162,11 @@ struct JoinMeshView: View {
         }
 
         Task {
+            // Keep the bootstrap path durable. Seeds remain unproven until
+            // transport Identify confirms the peer, but they must be
+            // available on the next app launch.
+            _ = repository.importSeedAddresses(bundle.bootstrap_peers)
+
             for addr in bundle.bootstrap_peers {
                 await repository.connectToPeer("", addresses: [addr])
             }

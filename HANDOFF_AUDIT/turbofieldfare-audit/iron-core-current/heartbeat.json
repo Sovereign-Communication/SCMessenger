@@ -1,0 +1,9 @@
+{
+  "attempt": 1,
+  "elapsed_sec": 15.0,
+  "heartbeat_at": "2026-08-09T19:09:51Z",
+  "mode": "batch",
+  "phase": "generating",
+  "scope": "deployment",
+  "units": 4
+}

@@ -1,0 +1,25 @@
+{
+  "completed_tasks": 575,
+  "conflict_path": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-merged-20260810-044000/merge-conflicts.jsonl",
+  "conflicts_preserved": 191,
+  "coverage_gaps": 128,
+  "event": "ARTIFACT_MERGE",
+  "extras_preserved": 0,
+  "finding_count": 32,
+  "manifest_id": "a8828124020ff55a17fac4415461a3b202f3323079d3334b73e6ec896346d391",
+  "merged_records": 575,
+  "missing_tasks": 244,
+  "output": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-merged-20260810-044000",
+  "preferred": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-20260809-170323",
+  "preferred_records": 191,
+  "rejected_records": 0,
+  "required_tasks": 819,
+  "secondary": "/Users/christylove/Desktop/AI Stuff/SCMessenger-full/HANDOFF_AUDIT/turbofieldfare-audit/iron-core-current",
+  "secondary_records": 575,
+  "status_counts": {
+    "CLEAN": 530,
+    "ISSUES_FOUND": 19,
+    "PARTIAL": 26
+  },
+  "timestamp": "2026-08-10T04:40:57Z"
+}

@@ -3,7 +3,7 @@
 SCMessenger Core CLI Driver — Cross-platform Python harness for the Rust CLI daemon.
 
 Usage:
-    python scripts/core_cli_driver.py start       # Launch daemon in background
+    python scripts/core_cli_driver.py start [args] # Launch daemon in background
     python scripts/core_cli_driver.py stop        # Kill daemon gracefully
     python scripts/core_cli_driver.py status      # Check if daemon is running
     python scripts/core_cli_driver.py identity    # Show local identity (JSON)
@@ -22,6 +22,8 @@ import json
 import subprocess
 import signal
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # ── project-relative paths ──────────────────────────────────────────────
@@ -33,6 +35,7 @@ PID_FILE = TMP_DIR / "daemon.pid"
 LOG_FILE = TMP_DIR / "daemon.log"
 DATA_DIR = TMP_DIR / "daemon_data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+API_HEALTH_URL = "http://127.0.0.1:9876/health"
 
 # ── OS detection ─────────────────────────────────────────────────────────
 IS_WINDOWS = sys.platform == "win32"
@@ -82,7 +85,11 @@ def fail(reason: str, detail: str = ""):
     sys.exit(1)
 
 # ── daemon lifecycle ─────────────────────────────────────────────────────
-def cmd_start():
+def cmd_start(start_args=None):
+    if _api_healthy():
+        emit("daemon_already_running", control_api=API_HEALTH_URL)
+        return
+
     if PID_FILE.exists():
         pid = PID_FILE.read_text().strip()
         if _pid_alive(pid):
@@ -90,7 +97,10 @@ def cmd_start():
             return
         PID_FILE.unlink(missing_ok=True)
 
-    cmd = get_run_cmd(["start"])
+    # Keep the wrapper flexible enough for isolated local nodes.  In
+    # particular, the default P2P port can already be occupied by another
+    # node, while the old wrapper had no way to pass ``start --port N``.
+    cmd = get_run_cmd(["start"] + (start_args or []))
     log_fh = open(str(LOG_FILE), "wb")
 
     if IS_WINDOWS:
@@ -112,10 +122,27 @@ def cmd_start():
         )
 
     PID_FILE.write_text(str(proc.pid))
-    # Give the daemon a moment to start / fail
-    time.sleep(1.5)
+    # Wait through the CLI's port-retry window before declaring success.  The
+    # previous 1.5s delay could report ``daemon_started`` while the process was
+    # still retrying, leaving a stale PID and no usable listener.
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            if proc.returncode == 0 and _api_healthy():
+                PID_FILE.unlink(missing_ok=True)
+                emit("daemon_already_running", control_api=API_HEALTH_URL)
+                return
+            PID_FILE.unlink(missing_ok=True)
+            tail = _tail_log(20)
+            emit("daemon_crashed", pid=proc.pid, exit_code=proc.returncode, log_tail=tail)
+            return
+        time.sleep(0.1)
 
     if proc.poll() is not None:
+        if proc.returncode == 0 and _api_healthy():
+            PID_FILE.unlink(missing_ok=True)
+            emit("daemon_already_running", control_api=API_HEALTH_URL)
+            return
         PID_FILE.unlink(missing_ok=True)
         tail = _tail_log(20)
         emit("daemon_crashed", pid=proc.pid, exit_code=proc.returncode, log_tail=tail)
@@ -153,6 +180,9 @@ def cmd_stop():
 
 def cmd_status():
     if not PID_FILE.exists():
+        if _api_healthy():
+            emit("daemon_running", control_api=API_HEALTH_URL)
+            return
         emit("daemon_not_running", reason="No PID file")
         return
 
@@ -167,6 +197,7 @@ def cmd_status():
     if _pid_alive(pid):
         emit("daemon_running", pid=pid)
     else:
+        PID_FILE.unlink(missing_ok=True)
         emit("daemon_not_running", reason=f"PID {pid} not alive")
 
 
@@ -223,6 +254,10 @@ def run_cli(args: list[str]):
 # ── OS-specific process management ───────────────────────────────────────
 def _pid_alive(pid: int) -> bool:
     """Cross-platform check whether a PID is running."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
     if IS_WINDOWS:
         try:
             out = subprocess.run(
@@ -238,8 +273,22 @@ def _pid_alive(pid: int) -> bool:
         try:
             os.kill(pid, 0)
             return True
-        except (ProcessLookupError, PermissionError, OSError):
+        except PermissionError:
+            # The process can be alive but owned by a different execution
+            # context (for example, a listener launched outside a sandbox).
+            # Permission denied for signal 0 is positive liveness evidence.
+            return True
+        except (ProcessLookupError, OSError):
             return False
+
+
+def _api_healthy() -> bool:
+    """Return whether the daemon's control API answers its health probe."""
+    try:
+        with urllib.request.urlopen(API_HEALTH_URL, timeout=1.0) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 def _kill_process(pid: int) -> bool:
@@ -319,7 +368,7 @@ def main():
     args = sys.argv[2:]
 
     if command == "start":
-        cmd_start()
+        cmd_start(args)
     elif command == "stop":
         cmd_stop()
     elif command == "status":

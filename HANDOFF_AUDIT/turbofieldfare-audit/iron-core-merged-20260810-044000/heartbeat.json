@@ -1,0 +1,10 @@
+{
+  "attempt": 1,
+  "elapsed_sec": 528.7,
+  "error": null,
+  "heartbeat_at": "2026-08-10T13:16:34Z",
+  "mode": "single",
+  "phase": "response_received",
+  "scope": "synthesis",
+  "status": 200
+}
