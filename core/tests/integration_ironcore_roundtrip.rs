@@ -22,6 +22,16 @@ fn make_node() -> IronCore {
     node
 }
 
+/// Use a live routing engine so the sender's message is placed in the active
+/// outbox, allowing the receipt regression to exercise outbox convergence.
+fn make_node_with_routing() -> IronCore {
+    let node = make_node();
+    *node.routing_engine_handle().write() = Some(
+        scmessenger_core::routing::OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]),
+    );
+    node
+}
+
 /// Return the hex-encoded Ed25519 public key for a node.
 fn pubkey(node: &IronCore) -> String {
     node.get_identity_info()
@@ -38,7 +48,7 @@ fn pubkey(node: &IronCore) -> String {
 /// must match Alice's public key.
 #[test]
 fn test_two_node_message_roundtrip() {
-    let alice = make_node();
+    let alice = make_node_with_routing();
     let bob = make_node();
 
     let plaintext = "Hello Bob, this message is for your eyes only.";
@@ -341,21 +351,26 @@ fn test_receipt_roundtrip_flips_state() {
         .expect("receive_message must succeed");
 
     // 3. Bob prepares a receipt for Alice
-    let receipt_bytes = bob
+    let receipt_envelope = bob
         .prepare_receipt(pubkey(&alice), received_msg.id.clone())
         .expect("prepare_receipt must succeed");
-
-    let receipt_str =
-        String::from_utf8(receipt_bytes).expect("receipt bytes must be valid UTF-8 JSON");
-
-    let receipt_envelope = bob
-        .prepare_message_with_id(pubkey(&alice), receipt_str, MessageType::Receipt, None)
-        .expect("prepare_message for receipt must succeed");
+    assert!(
+        alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
+        "the original message must be pending before its delivery receipt arrives"
+    );
 
     // 4. Alice receives Bob's receipt envelope
-    let _ = alice
-        .receive_message(receipt_envelope.envelope_data)
+    let received_receipt = alice
+        .receive_message(receipt_envelope)
         .expect("receive_message for receipt must succeed");
+    assert_eq!(
+        received_receipt.message_type,
+        MessageType::Receipt,
+        "prepare_receipt must return an encrypted receipt message envelope"
+    );
+    let decoded_receipt = scmessenger_core::decode_receipt(received_receipt.payload)
+        .expect("received receipt payload must use the canonical receipt codec");
+    assert_eq!(decoded_receipt.message_id, received_msg.id);
 
     // 5. Assert Alice's CoreDelegate received the receipt callback with Delivered status
     let recorded = receipts.lock().unwrap();
@@ -371,5 +386,9 @@ fn test_receipt_roundtrip_flips_state() {
     assert_eq!(
         recorded[0].1, "Delivered",
         "Receipt status must be Delivered"
+    );
+    assert!(
+        !alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
+        "a Delivered receipt must clear the matching sender outbox entry"
     );
 }
