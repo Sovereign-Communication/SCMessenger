@@ -25,7 +25,7 @@ Network error 54: Connection reset by peer
 
 After the operator restored the Xcode/device connection, `xcrun devicectl list devices` reported the phone as `available (paired)`, and CoreDevice acquired a tunnel and developer disk image services. No uninstall or re-pair was attempted.
 
-The live installed app was bundle `SovereignCommunications.SCMessenger`, version `0.4.0`, build `9`. A direct CoreDevice launch initially returned success with process ID `414`; no uninstall was requested. On the final replay, the exact bundle inventory returned empty and a subsequent launch returned CoreDevice error 10002, `The requested application ... is not installed`. This is consistent with a stale/invalid developer installation being invalidated or removed after launch, while background notification activity came from the prior runtime state. The app-owned background mesh logs still do not prove signed-artifact parity.
+The live installed app was bundle `SovereignCommunications.SCMessenger`, version `0.4.0`, build `9`. A direct CoreDevice launch initially returned success; no uninstall was requested. On the final replay, the exact bundle inventory returned empty and a subsequent launch returned CoreDevice error 10002, `The requested application ... is not installed`. This is consistent with a stale/invalid developer installation being invalidated or removed after launch, while background notification activity came from the prior runtime state. The app-owned background mesh logs still do not prove signed-artifact parity.
 
 ## Existing iOS dump
 
@@ -55,15 +55,15 @@ No profiles for 'SovereignCommunications.SCMessenger' were found.
 
 The local project is configured for Personal Team `JSZ3...6WH4C`, while the installed Apple Development certificate is for team `7FW4...2N396`; Xcode preferences currently expose only the former and no provisioning profile is present. A signed artifact cannot be produced until the account/team is corrected in Xcode. Existing unsigned artifacts must not be installed on the physical phone.
 
-The full-device sysdiagnose and combined CoreDevice diagnose commands were attempted after reconnect. Both returned Apple `CoreDeviceCLISupport.DiagnoseError` code `0`; the combined command produced only a 319-byte partial archive containing its diagnostic error log. The successful artifacts for this round are `tmp/ios-app-current.json` and `tmp/ios-launch-current.json`.
+The full-device sysdiagnose and combined CoreDevice diagnose commands were attempted after reconnect. Both returned Apple `CoreDeviceCLISupport.DiagnoseError` code `0`; the combined command produced only a small partial archive containing its diagnostic error log. The successful artifacts for this round are repository-local files under `tmp/`.
 
 ## macOS CLI state
 
-- Installed `~/.local/bin/scmessenger-cli` from PR head `e5284b7b7af194a53d4207f37d845cc16d2d7c56`; SHA-256 `6e9d50ba4479f0d3626470d3c79bb998db7367c030e855a63a56c774da2c867f`.
-- `~/Library/LaunchAgents/io.scmessenger.cli.plist` is loaded and verified as `gui/501/io.scmessenger.cli`, with the process running and listeners active.
+- Installed `<user-home>/.local/bin/scmessenger-cli` from PR head `e5284b7b7af194a53d4207f37d845cc16d2d7c56`; artifact fingerprint prefix `6e9d50ba4479`.
+- `<user-home>/Library/LaunchAgents/io.scmessenger.cli.plist` is loaded and verified as `gui/<uid-redacted>/io.scmessenger.cli`, with the process running and listeners active.
 - `scripts/install.sh` now sets the application-support working directory, `RunAtLoad`, `KeepAlive`, `ThrottleInterval=30`, durable stdout/stderr paths, plist validation, automatic load/verification, and `RUST_LOG=debug`.
 - Replacing the binary initially triggered launchd `OS_REASON_CODESIGNING: embedded signature doesn't match attached signature`; an explicit ad-hoc re-sign of the installed binary followed by a reload restored a running service.
-- The daemon uses the existing user data directory under `~/Library/Application Support/scmessenger`; preserve it and do not reset it.
+- The daemon uses the existing user data directory under `<user-home>/Library/Application Support/scmessenger`; preserve it and do not reset it.
 - Fresh macOS debug logs show repeated dial backoffs, self/local peer negotiation failures, and endpoint PeerId changes; these remain Windows-lane/transport blockers, not a supervisor failure.
 - Sanitized network correlation retained for cross-lane comparison: `x.x.x.101`, `x.x.x.121`, `x.x.x.126`, `x.x.x.135`, `x.x.x.136`, `x.x.x.139`, and `x.x.x.188`; only IPv4 final octets are exposed.
 
