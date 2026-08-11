@@ -31,7 +31,7 @@ class MdnsServiceDiscovery(
     private val onPeerDiscovered: (peerId: String) -> Unit,
     private val onDataReceived: (peerId: String, data: ByteArray) -> Unit,
     private val onPeerDisconnected: ((peerId: String) -> Unit)? = null,
-    private val onLanPeerResolved: ((peerId: String, host: String, port: Int) -> Unit)? = null,
+    private val onLanPeerResolved: ((peerId: String, host: String, port: Int, multiaddr: String) -> Unit)? = null,
     private val getLocalPeerId: (() -> String?)? = null
 ) {
     private var nsdManager: NsdManager? = null
@@ -93,6 +93,40 @@ class MdnsServiceDiscovery(
 
     // Interop assertion constant: must match libp2p-mdns default exactly.
     companion object { const val EXPECTED_SERVICE_TYPE = "_p2p._udp" }
+
+    /**
+     * Validates that a peer ID string is a plausible Ed25519 libp2p PeerId.
+     * We require non-blank and the standard 12D3KooW prefix used throughout
+     * this project for Ed25519 identities. Rejecting fabricated IDs prevents
+     * polluting downstream peer stores with undialable placeholders.
+     */
+    private fun getValidatedLibp2pPeerId(peerId: String?): String? {
+        if (peerId.isNullOrBlank() || !peerId.startsWith("12D3KooW")) return null
+        return peerId
+    }
+
+    /**
+     * Returns a non-loopback, non-link-local IPv4 address from local interfaces,
+     * or null if none can be determined. Used to populate the dnsaddr TXT record
+     * with a reachable LAN address rather than a wildcard.
+     */
+    private fun getLocalLanIpv4Address(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return null
+            for (iface in interfaces.asSequence()) {
+                if (!iface.isUp || iface.isLoopback || iface.isVirtual) continue
+                for (addr in iface.inetAddresses.asSequence()) {
+                    if (addr.isLoopbackAddress || addr.isLinkLocalAddress || addr.isAnyLocalAddress) continue
+                    if (addr is java.net.Inet4Address) {
+                        return addr.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.d("Failed to enumerate local LAN addresses: ${e.message}")
+        }
+        return null
+    }
 
     // --- Named callback methods wired from NsdManager listeners ---
 
@@ -165,17 +199,16 @@ class MdnsServiceDiscovery(
         // the peer as gone (TOCTOU between lost and resolved).
         inFlightResolves.remove(serviceName)
 
-        // Derive the same peer-id that onServiceResolved would have used,
-        // so the upper layer can match by peer-id.
-        val cachedAttributes = removed?.attributes
-        val cachedPeerId = cachedAttributes?.get("peer-id")?.let { String(it, Charsets.UTF_8) }
-            ?: cachedAttributes?.get("p2p")?.let { String(it, Charsets.UTF_8) }
-        val peerId = if (!cachedPeerId.isNullOrBlank()) {
-            cachedPeerId
-        } else {
-            "mdns-$serviceName"
+        // Only notify disconnect for peers that were tracked under a valid
+        // libp2p peer id. Fabricated ids are never actionable and should not
+        // propagate to upper layers.
+        val cachedPeerIdRaw = removed?.attributes?.get("peer-id")?.let { String(it, Charsets.UTF_8) }
+            ?: removed?.attributes?.get("p2p")?.let { String(it, Charsets.UTF_8) }
+        val cachedPeerId = getValidatedLibp2pPeerId(cachedPeerIdRaw) ?: run {
+            Timber.d("mDNS: ignoring service lost for $serviceName without valid peer id")
+            return
         }
-        onPeerDisconnected?.invoke(peerId)
+        onPeerDisconnected?.invoke(cachedPeerId)
     }
 
     /**
@@ -227,12 +260,11 @@ class MdnsServiceDiscovery(
         // Try to extract libp2p peer-id from TXT records
         val libp2pPeerId = txtMap["peer-id"] ?: txtMap["p2p"]
 
-        // Create a peer ID. Prefer the TXT-embedded peer-id;
-        // fall back to deriving from the DNS-SD instance name.
-        val peerId = if (!libp2pPeerId.isNullOrBlank()) {
-            libp2pPeerId
-        } else {
-            "mdns-${resolvedInfo.serviceName}"
+        // Reject services that do not advertise a valid libp2p peer id.
+        // Synthesizing identifiers pollutes peer stores and produces undialable entries.
+        val peerId = getValidatedLibp2pPeerId(libp2pPeerId) ?: run {
+            Timber.d("mDNS: ignoring resolved service ${resolvedInfo.serviceName} without valid libp2p peer id")
+            return
         }
 
         // Self-loopback guard: NsdManager can hand back this device's own
@@ -258,15 +290,10 @@ class MdnsServiceDiscovery(
         val port = resolvedInfo.port
 
         if (host != null && port > 0) {
-            // Reconstruct a libp2p multiaddr from resolved IP:port + optional TXT peer-id.
-            // Format: /ip4/<host>/tcp/<port>[/p2p/<peerId>]
-            val multiaddr = if (!libp2pPeerId.isNullOrBlank()) {
-                "/ip4/$host/tcp/$port/p2p/$libp2pPeerId"
-            } else {
-                "/ip4/$host/tcp/$port"
-            }
+            // Build canonical pinned multiaddr so downstream dialers can verify identity.
+            val multiaddr = "/ip4/$host/tcp/$port/p2p/$peerId"
             Timber.i("mDNS: LAN peer resolved $peerId -> $multiaddr -- notifying for SwarmBridge dial")
-            onLanPeerResolved?.invoke(peerId, host, port)
+            onLanPeerResolved?.invoke(peerId, host, port, multiaddr)
         }
     }
 
@@ -578,7 +605,14 @@ class MdnsServiceDiscovery(
             if (!localId.isNullOrBlank()) {
                 setAttribute("peer-id", localId)
                 setAttribute("p2p", localId)
-                setAttribute("dnsaddr", "/ip4/0.0.0.0/tcp/$servicePort/p2p/$localId")
+                // Advertise a concrete LAN address rather than a wildcard. If no
+                // suitable IPv4 address is available, omit dnsaddr entirely so
+                // remote peers do not attempt to dial an unreachable endpoint.
+                val lanAddr = getLocalLanIpv4Address()
+                if (lanAddr != null) {
+                    setAttribute("dnsaddr", "/ip4/$lanAddr/tcp/$servicePort/p2p/$localId")
+                    Timber.i("mDNS advertising dnsaddr: /ip4/$lanAddr/tcp/$servicePort/p2p/$localId")
+                }
                 Timber.i("mDNS advertising TXT peer-id: $localId")
             }
         }

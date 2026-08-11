@@ -442,7 +442,7 @@ fn dns_addresses_cannot_be_recorded_as_proven_connections() {
     assert!(core.ledger_manager.export_seed_entries(64).is_empty());
     assert!(core
         .ledger_manager
-        .exchange_response_entries(64, "stranger")
+        .exchange_response_entries(64, "stranger", &[])
         .is_empty());
 
     // A real address still works, so this is a gate and not an outage.
@@ -493,7 +493,9 @@ fn the_exchange_request_and_response_payloads_are_the_same_function() {
     }
 
     let requester = "12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay";
-    let payload = core.ledger_manager.exchange_response_entries(64, requester);
+    let payload = core
+        .ledger_manager
+        .exchange_response_entries(64, requester, &[]);
 
     assert_eq!(payload.len(), 64, "the shared cap was not applied");
     assert!(
@@ -536,9 +538,11 @@ fn lan_only_node_discloses_nothing_to_a_stranger() {
     }
     assert_eq!(core.ledger_manager.dialable_addresses().len(), 6);
 
-    let disclosed = core
-        .ledger_manager
-        .exchange_response_entries(64, "12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay");
+    let disclosed = core.ledger_manager.exchange_response_entries(
+        64,
+        "12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay",
+        &[],
+    );
     assert!(
         disclosed.is_empty(),
         "internal subnets, live host:ports and neighbour peer ids disclosed to a \

@@ -151,6 +151,7 @@ fun `getAutoAdjustEngine`(): AutoAdjustEngine
 fun `getAutoAdjustEngine`(): AutoAdjustEngine
 fun `getBlockedPeerDevices`(`peerId`: kotlin.String): List<kotlin.String>
 fun `getBuildProvenance`(): kotlin.String {
+fun `getCanonicalPeerId`(`peerId`: kotlin.String): kotlin.String?
 fun `getConnectionPathState`(): ConnectionPathState
 fun `getCore`(): IronCore?
 fun `getDeviceId`(): kotlin.String?

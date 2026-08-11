@@ -76,6 +76,7 @@ open func getAuditLog() -> [AuditEvent]  {
 open func getAutoAdjustEngine() -> AutoAdjustEngine  {
 open func getAutoAdjustEngine() -> AutoAdjustEngine  {
 open func getBlockedPeerDevices(peerId: String)throws  -> [String]  {
+open func getCanonicalPeerId(peerId: String) -> String?  {
 open func getConnectionPathState() -> ConnectionPathState  {
 open func getCore() -> IronCore?  {
 open func getDeviceId() -> String?  {

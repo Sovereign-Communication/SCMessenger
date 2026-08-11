@@ -11,7 +11,7 @@
 
 #![allow(clippy::empty_line_after_outer_attr)]
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 use crate::abuse::auto_block::{AutoBlockConfig, AutoBlockEngine};
@@ -170,6 +170,10 @@ pub struct IronCore {
 
     /// Running state flag.
     running: Arc<RwLock<bool>>,
+
+    /// Serializes complete start/stop transitions without changing the
+    /// documented running/drift lock ordering.
+    lifecycle_transition: Arc<Mutex<()>>,
 
     // -----------------------------------------------------------------------
     // Routing engine (mycorrhizal mesh routing)
@@ -366,6 +370,7 @@ impl IronCore {
             #[cfg(not(target_arch = "wasm32"))]
             ledger_manager: crate::store::LedgerManager::ephemeral(),
             running: Arc::new(RwLock::new(false)),
+            lifecycle_transition: Arc::new(Mutex::new(())),
             routing_engine: Arc::new(RwLock::new(None)),
             cover_traffic_generator: Arc::new(RwLock::new(None)),
             timing_jitter: Arc::new(RwLock::new(None)),
@@ -457,6 +462,7 @@ impl IronCore {
             #[cfg(not(target_arch = "wasm32"))]
             ledger_manager: hydrated_ledger_manager(p),
             running: Arc::new(RwLock::new(false)),
+            lifecycle_transition: Arc::new(Mutex::new(())),
             routing_engine: Arc::new(RwLock::new(None)),
             cover_traffic_generator: Arc::new(RwLock::new(None)),
             timing_jitter: Arc::new(RwLock::new(None)),
@@ -581,6 +587,7 @@ impl IronCore {
             #[cfg(not(target_arch = "wasm32"))]
             ledger_manager: hydrated_ledger_manager(p),
             running: Arc::new(RwLock::new(false)),
+            lifecycle_transition: Arc::new(Mutex::new(())),
             routing_engine: Arc::new(RwLock::new(None)),
             cover_traffic_generator: Arc::new(RwLock::new(None)),
             timing_jitter: Arc::new(RwLock::new(None)),
@@ -607,6 +614,7 @@ impl IronCore {
 
     /// Start the core. Must be called before any messaging operations.
     pub fn start(&self) -> Result<(), IronCoreError> {
+        let _transition = self.lifecycle_transition.lock();
         // LOCK ORDERING (deadlock fix): `running` must be RELEASED before any
         // drift lock is taken. `stop()` acquires drift_active (via
         // drift_deactivate) and only then `running`. Holding `running` across
@@ -634,6 +642,7 @@ impl IronCore {
 
     /// Stop the core gracefully.
     pub fn stop(&self) {
+        let _transition = self.lifecycle_transition.lock();
         self.drift_deactivate();
         *self.running.write() = false;
         tracing::info!("IronCore stopped");
@@ -667,8 +676,13 @@ impl IronCore {
         // Initialize drift engine now that we have a public key
         if let Some(keys) = identity.keys() {
             let pk_bytes = keys.signing_key.verifying_key().to_bytes();
-            let mut engine = self.drift_engine.write();
-            *engine = Some(RelayEngine::new(&pk_bytes, RelayConfig::default()));
+            {
+                let mut engine = self.drift_engine.write();
+                *engine = Some(RelayEngine::new(&pk_bytes, RelayConfig::default()));
+            }
+            // The relay engine owns no reputation state; link it to IronCore's
+            // shared manager after releasing the engine lock to avoid re-entry.
+            self.drift_set_reputation_manager();
 
             // Initialize routing engine with identity-derived peer id and hint.
             // If the swarm has already seeded the engine (via start_swarm_with_config),
@@ -762,12 +776,12 @@ impl IronCore {
         // PUBLIC KEY, it is the right kind of value and we are done. Only when
         // that misses do we pay for a scan, so the common send path stays O(1)
         // against the contact store rather than hashing every contact.
-        let known_by_pubkey = self
-            .contact_manager
-            .read()
+        let contacts = self.contact_manager.read();
+        let known_by_pubkey = contacts
             .get(recipient_id.to_string())
             .ok()
             .flatten()
+            .or_else(|| contacts.get_by_public_key(recipient_id).ok().flatten())
             .is_some();
 
         if !known_by_pubkey {
@@ -811,10 +825,7 @@ impl IronCore {
             recipient_id: recipient_id.to_string(),
             message_type: _msg_type,
             payload: content.as_bytes().to_vec(),
-            timestamp: web_time::SystemTime::now()
-                .duration_since(web_time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            timestamp: crate::util::unix_time_secs(),
         };
         let message_bytes =
             crate::message::encode_message(&message).map_err(|_| IronCoreError::Internal)?;
@@ -887,13 +898,9 @@ impl IronCore {
         if self.privacy_config().onion_routing_enabled {
             let relays = self.swarm_get_best_relays(3);
             if !relays.is_empty() {
-                if let Ok(relays_json) = serde_json::to_string(&relays) {
-                    if let Ok(onion_bytes) =
-                        self.prepare_onion_message(envelope_data.clone(), relays_json)
-                    {
-                        envelope_data = onion_bytes;
-                    }
-                }
+                let relays_json =
+                    serde_json::to_string(&relays).map_err(|_| IronCoreError::Internal)?;
+                envelope_data = self.prepare_onion_message(envelope_data, relays_json)?;
             }
         }
 
@@ -1053,7 +1060,7 @@ impl IronCore {
     ) -> Result<bool, IronCoreError> {
         self.blocked_manager
             .read()
-            .is_blocked(&peer_id, device_id.as_deref())
+            .is_blocked_resolved(&peer_id, device_id.as_deref())
     }
 
     /// Get the set of peer IDs that are blocked-only (not deleted).
@@ -1139,7 +1146,11 @@ impl IronCore {
         // peer is unblocked, so treat it as blocked and suppress. The previous
         // `unwrap_or(false)` failed OPEN -- any store error silently downgraded
         // a blocked peer to visible, defeating the block the user set.
-        let blocked = match self.blocked_manager.read().is_blocked(&peer_id, None) {
+        let blocked = match self
+            .blocked_manager
+            .read()
+            .is_blocked_resolved(&peer_id, None)
+        {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(
@@ -1247,15 +1258,18 @@ impl IronCore {
     }
 
     /// Compute a jitter delay for relay timing obfuscation (returns ms).
-    pub fn relay_jitter_delay(&self, _severity: String) -> u64 {
-        // Base jitter: 50-200ms for Normal, 100-500ms for High, 0-50ms for Low
+    pub fn relay_jitter_delay(&self, severity: String) -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        // Simple deterministic-ish jitter: 50-150ms
-        50 + (seed % 100)
+        let (minimum, span) = match severity.trim().to_ascii_lowercase().as_str() {
+            "low" => (0, 51),
+            "high" => (100, 401),
+            _ => (50, 151),
+        };
+        minimum + (seed % span)
     }
 
     // -----------------------------------------------------------------------
@@ -1385,6 +1399,21 @@ impl IronCore {
         self.inbox.read().all_messages()
     }
 
+    /// Get the canonical peer ID (identity_id) for an explicitly tagged
+    /// identifier. Unprefixed 64-hex values are left unchanged because an
+    /// identity_id can be a valid Ed25519 point by chance.
+    pub fn get_canonical_peer_id(&self, peer_id: &str) -> Option<String> {
+        if let Some(public_key) = peer_id.strip_prefix(crate::identity::keys::PUBLIC_KEY_PREFIX) {
+            return crate::identity::keys::identity_id_from_public_key_hex(public_key);
+        }
+        Some(
+            peer_id
+                .strip_prefix(crate::identity::keys::IDENTITY_ID_PREFIX)
+                .unwrap_or(peer_id)
+                .to_string(),
+        )
+    }
+
     // -----------------------------------------------------------------------
     // Store managers (returned to WASM for bridging)
     // -----------------------------------------------------------------------
@@ -1399,6 +1428,15 @@ impl IronCore {
         device_id: Option<String>,
         reason: Option<String>,
     ) -> Result<(), IronCoreError> {
+        let contact_public_key = self
+            .contact_manager
+            .read()
+            .get(peer_id.clone())
+            .ok()
+            .flatten()
+            .map(|contact| contact.public_key)
+            .filter(|public_key| public_key != &peer_id);
+
         // Register known device IDs from the contact before blocking
         if let Some(contact) = self
             .contact_manager
@@ -1421,8 +1459,8 @@ impl IronCore {
                 .register_device_id(&peer_id, did);
         }
 
-        let blocked = crate::store::blocked::BlockedIdentity::new(peer_id);
-        let blocked = if let Some(did) = device_id {
+        let blocked = crate::store::blocked::BlockedIdentity::new(peer_id.clone());
+        let blocked = if let Some(did) = device_id.clone() {
             crate::store::blocked::BlockedIdentity {
                 device_id: Some(did),
                 ..blocked
@@ -1430,7 +1468,7 @@ impl IronCore {
         } else {
             blocked
         };
-        let blocked = if let Some(r) = reason {
+        let blocked = if let Some(r) = reason.clone() {
             crate::store::blocked::BlockedIdentity {
                 reason: Some(r),
                 ..blocked
@@ -1438,7 +1476,18 @@ impl IronCore {
         } else {
             blocked
         };
-        self.blocked_manager.write().block(blocked)
+        self.blocked_manager.write().block(blocked)?;
+
+        // A contact record is the explicit provenance needed to write the
+        // public-key flavor. Never infer it from curve-point validity.
+        if let Some(public_key) = contact_public_key {
+            let mut public_key_block =
+                crate::store::blocked::BlockedIdentity::new(format!("pk:{public_key}"));
+            public_key_block.device_id = device_id;
+            public_key_block.reason = reason;
+            self.blocked_manager.write().block(public_key_block)?;
+        }
+        Ok(())
     }
 
     pub fn unblock_peer(
@@ -1446,10 +1495,30 @@ impl IronCore {
         peer_id: String,
         device_id: Option<String>,
     ) -> Result<(), IronCoreError> {
+        let contact_public_key = self
+            .contact_manager
+            .read()
+            .get(peer_id.clone())
+            .ok()
+            .flatten()
+            .map(|contact| contact.public_key)
+            .filter(|public_key| public_key != &peer_id);
+
         self.blocked_manager
             .write()
-            .unblock(peer_id.clone(), device_id)?;
+            .unblock(peer_id.clone(), device_id.clone())?;
+        if let Some(public_key) = contact_public_key {
+            self.blocked_manager
+                .write()
+                .unblock(format!("pk:{public_key}"), device_id)?;
+        }
         let _ = self.history_manager.unhide_messages_for_peer(&peer_id);
+        if let Some(canonical) = self
+            .get_canonical_peer_id(&peer_id)
+            .filter(|canonical| canonical != &peer_id)
+        {
+            let _ = self.history_manager.unhide_messages_for_peer(&canonical);
+        }
         Ok(())
     }
 
@@ -1459,6 +1528,15 @@ impl IronCore {
         _device_id: Option<String>,
         reason: Option<String>,
     ) -> Result<(), IronCoreError> {
+        let contact_public_key = self
+            .contact_manager
+            .read()
+            .get(peer_id.clone())
+            .ok()
+            .flatten()
+            .map(|contact| contact.public_key)
+            .filter(|public_key| public_key != &peer_id);
+
         // Register known devices before block_and_delete so they get auto-blocked
         if let Some(contact) = self
             .contact_manager
@@ -1477,10 +1555,22 @@ impl IronCore {
 
         self.blocked_manager
             .write()
-            .block_and_delete(peer_id.clone(), reason)?;
+            .block_and_delete(peer_id.clone(), reason.clone())?;
+        if let Some(public_key) = contact_public_key {
+            self.blocked_manager
+                .write()
+                .block_and_delete(format!("pk:{public_key}"), reason.clone())?;
+        }
         // Purge messages from this peer
         let _ = self.history_manager.remove_conversation(peer_id.clone());
         let _ = self.outbox.write().drain_for_peer(&peer_id);
+        if let Some(canonical) = self
+            .get_canonical_peer_id(&peer_id)
+            .filter(|canonical| canonical != &peer_id)
+        {
+            let _ = self.history_manager.remove_conversation(canonical.clone());
+            let _ = self.outbox.write().drain_for_peer(&canonical);
+        }
         Ok(())
     }
 
@@ -1826,10 +1916,15 @@ impl IronCore {
     // Extended messaging
     // -----------------------------------------------------------------------
 
-    /// Prepare a delivery receipt envelope for the given message.
+    /// Prepare an encrypted delivery receipt envelope ready for send_message.
+    ///
+    /// The receipt JSON is the encrypted MessageType::Receipt payload; callers
+    /// must pass the returned bytes directly to the transport rather than
+    /// wrapping or decoding them again. Use encode_receipt for raw receipt
+    /// codec access.
     pub fn prepare_receipt(
         &self,
-        _recipient_public_key_hex: String,
+        recipient_public_key_hex: String,
         message_id: String,
     ) -> Result<Vec<u8>, IronCoreError> {
         let receipt = crate::Receipt {
@@ -1840,7 +1935,18 @@ impl IronCore {
                 .unwrap_or_default()
                 .as_secs(),
         };
-        crate::message::types::encode_receipt(&receipt).map_err(|_| IronCoreError::Internal)
+        let receipt_payload =
+            crate::message::types::encode_receipt(&receipt).map_err(|_| IronCoreError::Internal)?;
+        let receipt_text =
+            String::from_utf8(receipt_payload).map_err(|_| IronCoreError::Internal)?;
+
+        self.prepare_message_with_id(
+            recipient_public_key_hex,
+            receipt_text,
+            crate::MessageType::Receipt,
+            None,
+        )
+        .map(|prepared| prepared.envelope_data)
     }
 
     /// Generate cover traffic payload (random bytes).
@@ -2489,10 +2595,18 @@ impl IronCore {
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
             engine.record_message_activity(&peer_id_hex);
-            // Update local cell with reachable hints if the peer already exists.
-            for hint in hints {
-                if hint.len() == 4 {
-                    let _ = hint; // Hints are tracked via the routing engine's activity log
+            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
+                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
+                    let parsed_hints: Vec<[u8; 4]> = hints
+                        .into_iter()
+                        .filter_map(|hint| <[u8; 4]>::try_from(hint.as_slice()).ok())
+                        .collect();
+                    // LocalCell intentionally updates only peers already known to
+                    // the local topology; an announcement cannot create a peer.
+                    engine
+                        .base_engine_mut()
+                        .local_cell_mut()
+                        .update_peer_hints(&peer_id, parsed_hints);
                 }
             }
         }
@@ -2515,10 +2629,20 @@ impl IronCore {
 
     /// Update reliability score for a peer based on success/failure.
     pub fn routing_update_reliability(&self, peer_id_hex: String, success: bool) {
-        if success {
-            self.routing_peer_seen(peer_id_hex.clone(), String::new());
-        } else if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.record_unreachable_peer(&peer_id_hex);
+        if let Some(engine) = self.routing_engine.write().as_mut() {
+            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
+                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
+                    engine
+                        .base_engine_mut()
+                        .local_cell_mut()
+                        .update_reliability(&peer_id, success);
+                }
+            }
+            if success {
+                engine.record_message_activity(&peer_id_hex);
+            } else {
+                engine.record_unreachable_peer(&peer_id_hex);
+            }
         }
     }
 
@@ -2875,16 +2999,38 @@ impl IronCore {
                         ) {
                             Ok(crate::transport::manager::SendResult::Queued(transport_type)) => {
                                 tracing::info!(
-                                    event = "outbox_delivery_success",
+                                    event = "outbox_transport_queued",
                                     message_id = %msg_id,
                                     peer_id = %peer_id,
                                     transport = ?transport_type,
-                                    "Message queued to transport"
+                                    "Message queued to transport; awaiting delivery receipt"
                                 );
                                 succeeded += 1;
-                                msg.state = crate::store::outbox::MessageState::Sent;
-                                // Message was sent successfully; remove from outbox
-                                self.outbox.write().remove(&msg_id);
+                                msg.attempts = current_attempt;
+                                msg.state = crate::store::outbox::MessageState::Enqueued;
+                                let now_secs = web_time::SystemTime::now()
+                                    .duration_since(web_time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                if current_attempt >= 12 {
+                                    msg.state = crate::store::outbox::MessageState::Failed;
+                                    msg.next_retry_at = None;
+                                } else {
+                                    let receipt_timeout =
+                                        2u64.saturating_pow(current_attempt.min(12)).min(3600);
+                                    msg.next_retry_at = Some(now_secs + receipt_timeout);
+                                }
+                                // Transport queuing is not delivery confirmation. Keep the
+                                // message in the outbox until an application-level receipt
+                                // calls mark_message_sent.
+                                if let Err(e) = self.outbox.write().enqueue(msg) {
+                                    tracing::error!(
+                                        event = "outbox_enqueue_failed",
+                                        message_id = %msg_id,
+                                        error = %e,
+                                        "Failed to re-enqueue message after transport queue"
+                                    );
+                                }
                             }
                             Err(e) => {
                                 msg.attempts = current_attempt;
@@ -2900,7 +3046,14 @@ impl IronCore {
                                         attempt = current_attempt,
                                         "Delivery attempt failed 3 times; marking as Failed in outbox"
                                     );
-                                    let _ = self.outbox.write().enqueue(msg);
+                                    if let Err(e) = self.outbox.write().enqueue(msg) {
+                                        tracing::error!(
+                                            event = "outbox_enqueue_failed",
+                                            message_id = %msg_id,
+                                            error = %e,
+                                            "Failed to re-enqueue message after persistent failure"
+                                        );
+                                    }
                                     failed += 1;
                                 } else {
                                     // Transient failure (< 3 attempts): leave as Enqueued with exponential backoff
@@ -2935,7 +3088,7 @@ impl IronCore {
                         peer_id = %peer_id,
                         succeeded = succeeded,
                         failed = failed,
-                        "Outbox flush complete: {} sent, {} scheduled for retry",
+                        "Outbox flush complete: {} queued for transport, {} scheduled for retry",
                         succeeded,
                         failed
                     );
@@ -3184,25 +3337,10 @@ impl IronCore {
             IronCoreError::Internal
         })?;
 
-        // Build the candidate identifier set: the sender_id as-is (which after
-        // identity canonicalization is the sender's public key) plus, when it
-        // is a valid 32-byte hex key, the derived identity_id (blake3 hash).
-        // Blocks are stored under the identifier the caller passed to
-        // block_peer()/block_and_delete_peer() -- historically the identity_id
-        // -- so we must check both flavors to avoid missing blocks.
-        let mut sender_candidates = vec![message.sender_id.clone()];
-        if let Some(derived_id) =
-            crate::identity::keys::identity_id_from_public_key_hex(&message.sender_id)
-        {
-            if derived_id != message.sender_id {
-                sender_candidates.push(derived_id);
-            }
-        }
-
         // DERIVE THE CANONICAL STORAGE PEER ID. History/inbox/audit are keyed
         // and queried by IDENTITY_ID (block_peer stores by identity_id; history
         // recent/conversation query by identity_id EXACT match on peer_id), but
-        // the wire sender_id is now a public key after identity canonicalization.
+        // the plaintext sender_id is not trusted for ingress authorization.
         // We derive the canonical identity_id from the AUTHENTICATED envelope
         // public key (sender_pubkey, verified during receive / ratchet
         // decryption), not from the unauthenticated plaintext sender_id field:
@@ -3210,45 +3348,70 @@ impl IronCore {
         // identity_id_from_public_key_hex always hashes to the correct
         // identity_id. This is unambiguous (no double-hash risk on an
         // identity_id-valued sender_id) and immune to plaintext-tampering.
+        let sender_public_key_hex = hex::encode(&sender_pubkey);
         let canonical_peer_id =
-            crate::identity::keys::identity_id_from_public_key_hex(&hex::encode(&sender_pubkey))
-                .unwrap_or_else(|| message.sender_id.clone());
+            crate::identity::keys::identity_id_from_public_key_hex(&sender_public_key_hex)
+                .ok_or(IronCoreError::CryptoError)?;
 
         // Also check device-specific blocks using the sender's last known device ID
-        // Try the contact under both identifier flavors; first hit wins.
-        let sender_device_id = sender_candidates.iter().find_map(|candidate| {
-            self.contact_manager
-                .read()
-                .get(candidate.clone())
-                .ok()
-                .flatten()
-                .and_then(|c| c.last_known_device_id)
-        });
+        // Try the authenticated public key and its canonical identity_id; first
+        // hit wins. A contact read error must fail closed rather than becoming
+        // an apparent unblocked sender.
+        let sender_device_id = {
+            let contacts = self.contact_manager.read();
+            let mut device_id = None;
+            for identifier in [&sender_public_key_hex, &canonical_peer_id] {
+                match contacts.get(identifier.to_string()) {
+                    Ok(Some(contact)) => {
+                        device_id = contact.last_known_device_id;
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "[WARN] contact lookup failed for inbound sender; dropping message (fail-closed): {}",
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            device_id
+        };
 
         // Check blocked status (peer-level and device-specific).
         // SINGLE LOCK SNAPSHOT: acquire the blocked_manager read lock ONCE and
         // reuse the same guard for both the blocked+deleted check and the
         // is_blocked check -- one consistent view of the block store, no
         // per-candidate re-acquisition. The guard's scope ends before the
-        // history/audit/delegate work below, so concurrent block_peer()
-        // writers are not held off for the rest of receive processing.
-        let is_blocked = {
+        // history/audit/delegate work below, so concurrent block_peer() writers
+        // are not held off for the rest of receive processing.
+        let any_blocked = {
             let blocked_guard = self.blocked_manager.read();
 
-            // FAIL CLOSED for blocked+deleted: on a block-store read error for
-            // ANY candidate we cannot prove the sender is NOT blocked+deleted,
-            // so drop at ingress instead of processing the payload.
-            for candidate in &sender_candidates {
-                match blocked_guard.is_blocked_and_deleted(candidate) {
-                    Ok(true) => return Err(IronCoreError::Blocked),
-                    Ok(false) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            "[WARN] blocked+deleted lookup failed for inbound sender; dropping message (fail-closed): {}",
-                            e
-                        );
-                        return Err(IronCoreError::Blocked);
-                    }
+            // The envelope key is authenticated, so tag it explicitly before
+            // asking the block store to resolve its identity alias. Without
+            // the tag, an unprefixed 64-hex value is intentionally opaque and
+            // an identity-ID-only block would not match this ingress path.
+            let authenticated_sender_key = format!(
+                "{}{}",
+                crate::identity::keys::PUBLIC_KEY_PREFIX,
+                sender_public_key_hex
+            );
+
+            // FAIL CLOSED for blocked+deleted: the manager resolves both
+            // public-key and identity_id flavors under one policy. On a
+            // block-store read error we cannot prove the sender is safe, so
+            // drop at ingress instead of processing the payload.
+            match blocked_guard.is_blocked_and_deleted_resolved(&authenticated_sender_key) {
+                Ok(true) => return Err(IronCoreError::Blocked),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "[WARN] blocked+deleted lookup failed for inbound sender; dropping message (fail-closed): {}",
+                        e
+                    );
+                    return Err(IronCoreError::Blocked);
                 }
             }
 
@@ -3258,26 +3421,18 @@ impl IronCore {
             // the user despite an active block. On error we cannot prove the sender
             // is unblocked, so hide it; the message is still retained, not dropped,
             // so nothing is lost if the store recovers.
-            let mut any_blocked = false;
-            for candidate in &sender_candidates {
-                match blocked_guard.is_blocked(candidate, sender_device_id.as_deref()) {
-                    Ok(b) => {
-                        if b {
-                            any_blocked = true;
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "[WARN] block lookup failed for inbound sender; hiding message (fail-closed): {}",
-                            e
-                        );
-                        any_blocked = true;
-                        break;
-                    }
+            match blocked_guard
+                .is_blocked_resolved(&authenticated_sender_key, sender_device_id.as_deref())
+            {
+                Ok(blocked) => blocked,
+                Err(e) => {
+                    tracing::warn!(
+                        "[WARN] block lookup failed for inbound sender; hiding message (fail-closed): {}",
+                        e
+                    );
+                    true
                 }
             }
-            any_blocked
         };
 
         // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
@@ -3289,12 +3444,33 @@ impl IronCore {
                         crate::DeliveryStatus::Delivered => "Delivered".to_string(),
                         _ => "Delivered".to_string(),
                     };
-                    delegate.on_receipt_received(receipt.message_id, status_str);
+                    delegate.on_receipt_received(receipt.message_id.clone(), status_str);
                 }
-            } else {
-                tracing::warn!(
-                    "Failed to parse receipt payload from sender {}: malformed JSON",
-                    message.sender_id
+
+                // A Delivered (or legacy Read) receipt is the application-level
+                // confirmation that releases the sender's retry state. The
+                // delegate callback updates platform history, but it does not
+                // remove the matching outbox/drift entry. Without this call,
+                // the retry loop keeps re-enqueuing an envelope the recipient
+                // already stored, creating duplicates during a long soak.
+                if matches!(
+                    &receipt.status,
+                    crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read
+                ) {
+                    let cleared = self.mark_message_sent(receipt.message_id.clone());
+                    tracing::info!(
+                        event = "receipt_outbox_cleared",
+                        message_id = %receipt.message_id,
+                        removed = cleared,
+                        "Processed application delivery receipt"
+                    );
+                }
+            } else if let Err(e) = crate::message::types::decode_receipt(&message.payload) {
+                tracing::error!(
+                    event = "receipt_parse_failed",
+                    sender_id = %message.sender_id,
+                    error = %e,
+                    "Failed to parse receipt payload from sender: malformed JSON"
                 );
             }
             // Fall through to generic pipeline steps (dedup, metrics, persistence)
@@ -3329,7 +3505,7 @@ impl IronCore {
             timestamp: message.timestamp,
             sender_timestamp: message.timestamp,
             delivered: true,
-            hidden: is_blocked,
+            hidden: any_blocked,
         });
 
         self.audit_log.write().append(
@@ -3763,10 +3939,7 @@ impl IronCore {
     ) -> Option<crate::routing::RoutingDecision> {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now = crate::util::unix_time_ms();
             Some(engine.route_message_optimized(recipient_hint, message_id, priority, now))
         } else {
             None
@@ -3809,13 +3982,12 @@ impl IronCore {
         };
         let guard = self.routing_engine.read();
         if let Some(ref engine) = *guard {
-            engine.base_engine().local_cell().peer_count() > 0
-                && engine
-                    .base_engine()
-                    .local_cell()
-                    .peers_for_hint(&[0u8; 4])
-                    .iter()
-                    .any(|p| p.transports.contains(&tt))
+            engine
+                .base_engine()
+                .local_cell()
+                .active_peers()
+                .iter()
+                .any(|p| p.transports.contains(&tt))
         } else {
             false
         }
@@ -3987,18 +4159,8 @@ impl IronCore {
     /// Links the global abuse reputation system to relay forwarding decisions.
     /// Creates a new Arc reference to the shared abuse manager.
     pub fn drift_set_reputation_manager(&self) {
-        if let Some(ref mut _engine) = *self.drift_engine.write() {
-            // The abuse_manager is Arc<RwLock<EnhancedAbuseReputationManager>>.
-            // We create a new Arc<EnhancedAbuseReputationManager> by cloning the
-            // inner manager through a read lock. This is safe because the inner
-            // manager does not derive Clone, so we must reconstruct.
-            // However, since EnhancedAbuseReputationManager is not Clone, we
-            // instead provide a shared reference pattern. The relay engine's
-            // set_reputation_manager expects Arc<EnhancedAbuseReputationManager>,
-            // so we create a fresh instance and share it.
-            // For now, this is a no-op wiring point until the abuse manager
-            // can be shared via Arc directly.
-            tracing::debug!("drift_set_reputation_manager called (wiring entry point)");
+        if let Some(engine) = self.drift_engine.write().as_mut() {
+            engine.set_shared_reputation_manager(self.abuse_manager.clone());
         }
     }
 
@@ -4418,7 +4580,7 @@ impl IronCore {
         device_id: &str,
     ) -> Result<(), crate::IronCoreError> {
         self.blocked_manager
-            .read()
+            .write()
             .register_device_id(peer_id, device_id)
             .map(|_| ())
     }
@@ -4603,6 +4765,100 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_concurrent_start_stop_keeps_running_and_drift_consistent() {
+        let core = Arc::new(IronCore::new());
+        let mut workers = Vec::new();
+
+        for index in 0..16 {
+            let core = Arc::clone(&core);
+            workers.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    if index % 2 == 0 {
+                        let _ = core.start();
+                    } else {
+                        core.stop();
+                    }
+                }
+            }));
+        }
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(core.is_running(), *core.drift_active.read());
+    }
+
+    #[test]
+    fn lifecycle_repeated_stop_is_harmless() {
+        let core = IronCore::new();
+
+        core.stop();
+        core.stop();
+
+        assert!(!core.is_running());
+        assert!(!*core.drift_active.read());
+    }
+
+    #[test]
+    fn lifecycle_only_one_start_succeeds_from_stopped_state() {
+        let core = Arc::new(IronCore::new());
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let mut workers = Vec::new();
+
+        for _ in 0..16 {
+            let core = Arc::clone(&core);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                core.start().is_ok()
+            }));
+        }
+
+        let successes = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|success| *success)
+            .count();
+
+        assert_eq!(successes, 1);
+        assert!(core.is_running());
+        assert!(*core.drift_active.read());
+    }
+
+    #[test]
+    fn relay_jitter_delay_respects_low_bounds() {
+        let core = IronCore::new();
+        for _ in 0..100 {
+            assert!(core.relay_jitter_delay("  LOW  ".to_string()) <= 50);
+        }
+    }
+
+    #[test]
+    fn relay_jitter_delay_respects_normal_bounds() {
+        let core = IronCore::new();
+        for _ in 0..100 {
+            assert!((50..=200).contains(&core.relay_jitter_delay("NoRmAl".to_string())));
+        }
+    }
+
+    #[test]
+    fn relay_jitter_delay_respects_high_bounds() {
+        let core = IronCore::new();
+        for _ in 0..100 {
+            assert!((100..=500).contains(&core.relay_jitter_delay(" high ".to_string())));
+        }
+    }
+
+    #[test]
+    fn relay_jitter_delay_defaults_unknown_to_normal_bounds() {
+        let core = IronCore::new();
+        for _ in 0..100 {
+            assert!((50..=200).contains(&core.relay_jitter_delay("unrecognized".to_string())));
+        }
+    }
+
+    #[test]
     fn step2_test_sender_id_uses_public_key_not_identity_id() {
         // STEP 2: Verify that when preparing a message, the sender_id is set to
         // the public_key_hex (the actual encryption key) rather than identity_id
@@ -4631,5 +4887,170 @@ mod tests {
         // plaintext message by prepare_message_internal.
         // This test documents the expected behavior; full validation requires
         // checking the encoded message (which is in the integration tests).
+    }
+
+    #[test]
+    fn queued_transport_send_remains_in_outbox_until_receipt() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        let recipient_bytes: [u8; 32] = hex::decode(&recipient).unwrap().try_into().unwrap();
+
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "queued".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+
+        let transport = crate::transport::abstraction::TransportType::BLE;
+        let manager = core.transport_manager.read();
+        manager.register_transport(
+            transport,
+            crate::transport::abstraction::TransportCapabilities::for_transport(transport),
+        );
+        manager.handle_event(
+            crate::transport::abstraction::TransportEvent::PeerDiscovered {
+                peer_id: recipient_bytes,
+                transport,
+                addr: vec![],
+            },
+        );
+        manager.handle_event(
+            crate::transport::abstraction::TransportEvent::ConnectionEstablished {
+                peer_id: recipient_bytes,
+                transport,
+            },
+        );
+        drop(manager);
+
+        core.handle_peer_connection_event(&recipient, true);
+
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &prepared.message_id),
+            "transport queueing must not be treated as delivery"
+        );
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
+        assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    #[test]
+    fn routing_hint_update_populates_local_cell() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [7u8; 32];
+        let hint = [1u8, 2u8, 3u8, 4u8];
+        {
+            let mut engine = core.routing_engine.write();
+            engine
+                .as_mut()
+                .unwrap()
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_seen(peer, crate::routing::TransportType::BLE);
+        }
+
+        core.routing_update_peer_hints(hex::encode(peer), vec![hint.to_vec()]);
+
+        let engine = core.routing_engine.read();
+        let stored = engine
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap();
+        assert_eq!(stored.reachable_hints, vec![hint]);
+    }
+
+    #[test]
+    fn reliability_success_updates_local_score_and_capability_uses_active_peers() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [8u8; 32];
+        {
+            let mut engine = core.routing_engine.write();
+            engine
+                .as_mut()
+                .unwrap()
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_seen(peer, crate::routing::TransportType::BLE);
+        }
+
+        let before = core
+            .routing_engine
+            .read()
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap()
+            .reliability_score;
+        core.routing_update_reliability(hex::encode(peer), true);
+        let after = core
+            .routing_engine
+            .read()
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap()
+            .reliability_score;
+
+        assert!(after > before);
+        assert!(core.get_forwarding_capability("ble"));
+        assert!(!core.get_forwarding_capability("tcp"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn onion_enabled_send_fails_closed_when_relay_wrapping_fails() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        *core.privacy_config.write() = crate::privacy::PrivacyConfig {
+            onion_routing_enabled: true,
+            ..Default::default()
+        };
+        let bootstrap =
+            crate::relay::BootstrapManager::new("local".to_string(), vec![0u8; 32], vec![])
+                .with_seed_peers(vec![crate::relay::SeedPeer::new(
+                    "not-a-public-key".to_string(),
+                    String::new(),
+                    "invalid-relay".to_string(),
+                )]);
+        *core.bootstrap_manager.write() = Some(bootstrap);
+
+        let result = core.prepare_message(
+            recipient,
+            "must not fall back".to_string(),
+            crate::MessageType::Text,
+            None,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(core.outbox_count(), 0);
+    }
+
+    #[test]
+    fn initialize_identity_wires_shared_reputation_manager() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        assert!(core
+            .drift_engine
+            .read()
+            .as_ref()
+            .unwrap()
+            .reputation_manager_is_configured());
     }
 }

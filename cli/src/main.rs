@@ -31,7 +31,7 @@ use scmessenger_core::wasm_support::rpc::{
     PeerDiscoveredParams,
 };
 use scmessenger_core::IronCore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -228,7 +228,7 @@ enum Commands {
     Start {
         #[arg(short, long)]
         port: Option<u16>,
-        /// Automatically echo a reply back to the sender of every text message.
+        /// Send one bounded acknowledgement for each unique incoming text message.
         /// Test-harness capability: without it a CLI node can receive but never
         /// respond, so it can only ever demonstrate one direction of a pair.
         /// Also enabled by setting SCM_AUTO_REPLY=1.
@@ -508,6 +508,18 @@ fn relay_healthy_from_ts(established_at: u64, now: u64) -> bool {
     established_at != 0 && now.saturating_sub(established_at) < RELAY_HEALTHY_TTL_SECS
 }
 
+/// Keep relay fallback eligible even when the ledger knows the circuit's
+/// target PeerId. A `DialKey::Peer` is intentionally suppressed while a relay
+/// is healthy; circuit paths must instead retain their circuit classification
+/// because they are the fallback path being selected.
+fn scheduler_dial_key(addr_str: &str, peer_id: Option<PeerId>) -> ledger::DialKey {
+    if addr_str.contains("/p2p-circuit") {
+        ledger::DialKey::Addr(ledger::strip_peer_id(addr_str))
+    } else {
+        ledger::DialKey::for_target(addr_str, peer_id)
+    }
+}
+
 /// Fire-and-forget outbound dial scheduler.
 ///
 /// Enforces per-peer backoff and limits concurrent outbound dials to unknown
@@ -554,7 +566,7 @@ impl DialScheduler {
         let scheduler = self.clone();
 
         tokio::spawn(async move {
-            let key = ledger::DialKey::for_target(&addr_str, peer_id_opt);
+            let key = scheduler_dial_key(&addr_str, peer_id_opt);
 
             // Optimistic unknown-class check without holding the ledger lock.
             let is_unknown = {
@@ -590,11 +602,14 @@ impl DialScheduler {
                 return;
             }
 
-            let stripped = ledger::strip_peer_id(&addr_str);
-            let addr = match stripped.parse::<Multiaddr>() {
+            // Preserve the complete address, especially the target component
+            // after `/p2p-circuit`. The core needs the relay hop and explicit
+            // target identity to apply known-peer dial conditions without
+            // turning a relay path into an address-only/Always dial.
+            let addr = match addr_str.parse::<Multiaddr>() {
                 Ok(a) => a,
                 Err(e) => {
-                    tracing::error!("Invalid multiaddr: {} - {}", stripped, e);
+                    tracing::error!("Invalid multiaddr: {} - {}", addr_str, e);
                     let mut l = ledger.lock().await;
                     l.complete_dial(&key, false, now, None);
                     drop(permit);
@@ -603,7 +618,10 @@ impl DialScheduler {
             };
 
             tokio::spawn(async move {
-                let result = swarm.dial(addr).await;
+                let result = match peer_id_opt {
+                    Some(peer_id) => swarm.dial_peer(peer_id, addr).await,
+                    None => swarm.dial(addr).await,
+                };
                 let now2 = now_secs();
                 let mut l = ledger.lock().await;
                 match result {
@@ -638,6 +656,60 @@ mod dial_scheduler_tests {
     #[test]
     fn test_relay_healthy_from_ts_stale() {
         assert!(!relay_healthy_from_ts(1_000_000, 1_000_601));
+    }
+
+    #[test]
+    fn circuit_scheduler_key_retains_relay_fallback_classification() {
+        let target = PeerId::random();
+        let addr = format!(
+            "/ip4/192.0.2.1/tcp/443/p2p/{}/p2p-circuit/p2p/{}",
+            PeerId::random(),
+            target
+        );
+
+        assert!(matches!(
+            scheduler_dial_key(&addr, Some(target)),
+            ledger::DialKey::Addr(key) if key.contains("/p2p-circuit")
+        ));
+    }
+
+    #[test]
+    fn auto_reply_is_limited_to_one_ack_per_message_id() {
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+
+        assert!(should_send_auto_reply(
+            "message-1",
+            "stop the spam",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        assert!(!should_send_auto_reply(
+            "message-1",
+            "stop the spam",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        assert!(should_send_auto_reply(
+            "message-2",
+            "a different message",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+    }
+
+    #[test]
+    fn auto_reply_never_answers_machine_messages() {
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+
+        assert!(!should_send_auto_reply(
+            "machine-message",
+            AUTO_REPLY_ACK,
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        assert!(seen_ids.is_empty());
     }
 }
 
@@ -826,6 +898,49 @@ fn get_local_ipv4() -> Option<Ipv4Addr> {
         std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
         _ => None,
     }
+}
+
+/// Return concrete local transport addresses for self-dial filtering.
+///
+/// libp2p commonly reports a wildcard listener (`0.0.0.0`) even though peers
+/// learn the concrete LAN address through Identify.  Comparing the wildcard
+/// against that learned address does not prevent a self-dial, so expand the
+/// wildcard using the active local interface and include any consensus
+/// external addresses the swarm has observed.
+async fn get_local_transport_addresses(swarm: &SwarmHandle) -> Vec<String> {
+    let bound = swarm.get_bound_addresses().await.unwrap_or_default();
+    let external = swarm.get_external_addresses().await.unwrap_or_default();
+    let local_ipv4 = get_local_ipv4();
+    let mut addresses: Vec<String> = Vec::new();
+
+    for address in bound {
+        let value = address.to_string();
+        if !addresses.contains(&value) {
+            addresses.push(value.clone());
+        }
+        if let Some(ip) = local_ipv4 {
+            let concrete = value.replacen("/ip4/0.0.0.0/", &format!("/ip4/{ip}/"), 1);
+            if concrete != value && !addresses.contains(&concrete) {
+                addresses.push(concrete);
+            }
+        }
+    }
+
+    for socket in external {
+        if socket.ip().is_unspecified() || socket.port() == 0 {
+            continue;
+        }
+        let protocol = match socket.ip() {
+            std::net::IpAddr::V4(ip) => format!("/ip4/{ip}"),
+            std::net::IpAddr::V6(ip) => format!("/ip6/{ip}"),
+        };
+        let value = format!("{protocol}/tcp/{}", socket.port());
+        if !addresses.contains(&value) {
+            addresses.push(value);
+        }
+    }
+
+    addresses
 }
 
 fn serve_apk_stream(stream: &mut TcpStream, file_path: &PathBuf, file_size: u64) -> Result<()> {
@@ -1555,7 +1670,17 @@ fn port_pair_available(ports: &[u16]) -> bool {
         ];
         addrs
             .iter()
-            .all(|addr| std::net::TcpListener::bind(addr).is_ok())
+            .all(|addr| match std::net::TcpListener::bind(addr) {
+                Ok(listener) => {
+                    // Drop each probe before checking the next bind address.
+                    // Keeping the first listener alive makes the subsequent
+                    // 0.0.0.0 probe conflict with our own test socket and makes
+                    // every otherwise-free port look occupied.
+                    drop(listener);
+                    true
+                }
+                Err(_) => false,
+            })
     })
 }
 
@@ -1574,6 +1699,33 @@ fn find_free_port_pair(start: u16) -> Option<u16> {
 /// Marks a message as machine-generated so responder nodes do not answer each
 /// other in an unbounded loop.
 const AUTO_REPLY_PREFIX: &str = "[auto-reply] ";
+const AUTO_REPLY_ACK: &str =
+    "[auto-reply] Thank you. Your message was received by this CLI; no further reply will be sent.";
+const AUTO_REPLY_SEEN_CAPACITY: usize = 4096;
+
+/// Permit at most one machine acknowledgement for a logical incoming message.
+///
+/// A transport can deliver the same envelope more than once while a connection
+/// retries or converges. The previous implementation treated each delivery as
+/// a new message, which amplified one incoming message into an auto-reply storm.
+fn should_send_auto_reply(
+    message_id: &str,
+    incoming: &str,
+    seen_ids: &mut HashSet<String>,
+    seen_order: &mut VecDeque<String>,
+) -> bool {
+    if incoming.starts_with(AUTO_REPLY_PREFIX) || !seen_ids.insert(message_id.to_string()) {
+        return false;
+    }
+
+    seen_order.push_back(message_id.to_string());
+    if seen_order.len() > AUTO_REPLY_SEEN_CAPACITY {
+        if let Some(expired_id) = seen_order.pop_front() {
+            seen_ids.remove(&expired_id);
+        }
+    }
+    true
+}
 
 async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: bool) -> Result<()> {
     // Env fallback so a node already under a process supervisor can be flipped
@@ -1585,7 +1737,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         );
     if auto_reply {
         println!(
-            "{} Auto-reply ENABLED: this node will echo a response to every text message it receives",
+            "{} Bounded auto-reply ENABLED: one acknowledgement per unique text message",
             "[INFO]".yellow()
         );
     }
@@ -1794,7 +1946,12 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
 
     println!("{} Network started", "[OK]".green());
 
-    if config.enable_ble {
+    // btleplug's CoreBluetooth adapter starts a worker for each adapters()
+    // call. The central ingress below owns that lifecycle on macOS; a
+    // concurrent diagnostic probe can trigger a btleplug completion panic.
+    // Keep the probe on Windows/Linux, where the existing startup behavior is
+    // safe and remains useful for adapter diagnostics.
+    if config.enable_ble && !cfg!(target_os = "macos") {
         tokio::spawn(async move {
             ble_daemon::probe_and_log().await;
         });
@@ -1855,19 +2012,15 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                 let l = ledger_clone.lock().await;
                 l.dialable_addresses(Some(&local_peer_id.to_string()))
             };
-            let my_addrs: Vec<String> = swarm_clone
-                .get_bound_addresses()
-                .await
-                .unwrap_or_default()
-                .iter()
-                .map(|a| a.to_string())
-                .collect();
-            let addrs: Vec<_> = addrs
-                .into_iter()
-                .filter(|(m, _)| {
-                    ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                })
-                .collect();
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
+            let addrs = ledger::prioritize_dial_candidates(
+                addrs
+                    .into_iter()
+                    .filter(|(m, _)| {
+                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
+                    })
+                    .collect(),
+            );
 
             // Dial all known addresses (bootstrap + discovered)
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
@@ -1977,6 +2130,12 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     let ctrl_c_swarm = swarm_handle.clone();
     let ctrl_c_ledger = ledger.clone();
     let ctrl_c_data_dir = data_dir.clone();
+
+    // Duplicate network deliveries must not create duplicate machine replies.
+    // This cache is intentionally process-local and bounded; delivery retries
+    // of an already-seen message remain covered for the lifetime of the node.
+    let mut auto_reply_seen_ids = HashSet::new();
+    let mut auto_reply_seen_order = VecDeque::new();
 
     // Swarm liveness watchdog.
     //
@@ -2130,26 +2289,35 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                     }
 
                                     // Dial newly discovered peers
-                                    let new_entries: Vec<(String, Option<String>)> = entries
+                                    let new_entries = ledger::prioritize_dial_candidates(
+                                        entries
                                         .iter()
                                         .map(|e| {
-                                            (ledger::strip_peer_id(&e.multiaddr), e.last_peer_id.clone())
+                                            (e.multiaddr.clone(), e.last_peer_id.clone())
                                         })
-                                        .collect();
+                                        .collect(),
+                                    );
                                     drop(l); // release lock before dialing
 
                                     // Graceful-AF dial policy: know our own addresses
                                     // before promiscuously dialing whatever the ledger
                                     // handed us
-                                    let my_addrs: Vec<String> = swarm_handle
-                                        .get_bound_addresses()
-                                        .await
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|a| a.to_string())
-                                        .collect();
+                                    let my_addrs = get_local_transport_addresses(&swarm_handle).await;
 
                                     for (addr_str, peer_id_opt) in new_entries {
+                                        let local_peer_id_string = local_peer_id.to_string();
+                                        if peer_id_opt.as_deref() == Some(local_peer_id_string.as_str())
+                                            || ledger::contains_peer_id_component(
+                                                &addr_str,
+                                                &local_peer_id_string,
+                                            )
+                                        {
+                                            tracing::debug!(
+                                                "Skipping self-targeted ledger address: {}",
+                                                addr_str
+                                            );
+                                            continue;
+                                        }
                                         // Skip non-routable addresses (loopback,
                                         // link-local, site-local) a peer may
                                         // advertise -- dialing them fails forever
@@ -2280,36 +2448,32 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 }
                                             }
 
-                                            // Auto-reply. A delivery ACK proves the
-                                            // envelope arrived; it does NOT prove this
-                                            // node can ENCRYPT TO the sender, because
-                                            // the ACK path and the send path resolve
-                                            // keys differently. Echoing a real Text
-                                            // message back exercises the same code an
-                                            // actual user send would, which is what
-                                            // makes a CLI node usable as the receiving
-                                            // half of a directional pair.
+                                            // Optional machine acknowledgement. Keep it
+                                            // short, do not echo user content, and send
+                                            // at most once per logical message ID. The
+                                            // receipt above already provides delivery
+                                            // evidence; this acknowledgement exists only
+                                            // for the explicit CLI test-harness mode.
                                             if auto_reply {
                                                 let incoming =
                                                     msg.text_content().unwrap_or_default();
-                                                // Never auto-reply to an auto-reply. Run 2
-                                                // has three CLI nodes; any two of them with
-                                                // this flag on would otherwise ping-pong
-                                                // without bound and flood the mesh.
-                                                if incoming.starts_with(AUTO_REPLY_PREFIX) {
+                                                if !should_send_auto_reply(
+                                                    &msg.id,
+                                                    &incoming,
+                                                    &mut auto_reply_seen_ids,
+                                                    &mut auto_reply_seen_order,
+                                                ) {
                                                     tracing::debug!(
-                                                        "auto_reply_suppressed_echo in_reply_to={} from={}",
+                                                        "auto_reply_suppressed_duplicate_or_machine_message in_reply_to={} from={}",
                                                         msg.id,
                                                         peer_id
                                                     );
                                                 } else if let Some(ref pk_hex) =
                                                     sender_public_key_hex
                                                 {
-                                                    let echo =
-                                                        format!("{}{}", AUTO_REPLY_PREFIX, incoming);
                                                     match core_rx.prepare_message_with_id(
                                                         pk_hex.clone(),
-                                                        echo,
+                                                        AUTO_REPLY_ACK.to_string(),
                                                         scmessenger_core::MessageType::Text,
                                                         None,
                                                     ) {
@@ -2319,12 +2483,12 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                                 .await
                                                             {
                                                                 Ok(_) => tracing::info!(
-                                                                    "auto_reply_sent in_reply_to={} to={}",
+                                                                    "auto_reply_ack_queued in_reply_to={} to={}",
                                                                     msg.id,
                                                                     peer_id
                                                                 ),
                                                                 Err(e) => tracing::warn!(
-                                                                    "auto_reply_send_failed in_reply_to={} to={}: {}",
+                                                                    "auto_reply_ack_queue_failed in_reply_to={} to={}: {}",
                                                                     msg.id,
                                                                     peer_id,
                                                                     e
@@ -2335,7 +2499,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                         // caught the run-1 identity defect on
                                                         // the CLI side, so log it loudly.
                                                         Err(e) => tracing::error!(
-                                                            "auto_reply_prepare_failed in_reply_to={} to={}: {}",
+                                                            "auto_reply_ack_prepare_failed in_reply_to={} to={}: {}",
                                                             msg.id,
                                                             peer_id,
                                                             e
@@ -2405,6 +2569,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 if let Ok(messages) = history_rx.conversation(peer_id.clone(), l) {
                                     let history_messages = messages.into_iter().map(|m| {
                                         crate::api::HistoryMessage {
+                                            id: m.id,
                                             peer_id: m.peer_id,
                                             content: m.content,
                                             direction: match m.direction {
@@ -2412,6 +2577,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 MessageDirection::Received => "received".to_string(),
                                             },
                                             timestamp: m.timestamp,
+                                            delivered: m.delivered,
                                         }
                                     }).collect::<Vec<_>>();
                                     let history_messages: Vec<serde_json::Value> = history_messages.into_iter().map(|m| serde_json::to_value(m).unwrap_or_default()).collect();
@@ -2978,7 +3144,9 @@ async fn cmd_relay(
         format!("http://127.0.0.1:{}", api::API_PORT).dimmed()
     );
 
-    if config.enable_ble {
+    // The BLE central task is the sole CoreBluetooth manager owner on macOS;
+    // do not start a second probe worker in the headless startup path.
+    if config.enable_ble && !cfg!(target_os = "macos") {
         tokio::spawn(async move {
             ble_daemon::probe_and_log().await;
         });
@@ -3006,19 +3174,15 @@ async fn cmd_relay(
                 let l = ledger_clone.lock().await;
                 l.dialable_addresses(Some(&local_peer_id.to_string()))
             };
-            let my_addrs: Vec<String> = swarm_clone
-                .get_bound_addresses()
-                .await
-                .unwrap_or_default()
-                .iter()
-                .map(|a| a.to_string())
-                .collect();
-            let addrs: Vec<_> = addrs
-                .into_iter()
-                .filter(|(m, _)| {
-                    ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                })
-                .collect();
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
+            let addrs = ledger::prioritize_dial_candidates(
+                addrs
+                    .into_iter()
+                    .filter(|(m, _)| {
+                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
+                    })
+                    .collect(),
+            );
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
                 let label =
                     ledger::extract_ip_port(multiaddr_str).unwrap_or_else(|| multiaddr_str.clone());
@@ -3044,19 +3208,19 @@ async fn cmd_relay(
                     let l = ledger_clone.lock().await;
                     l.dialable_addresses(Some(&local_peer_id.to_string()))
                 };
-                let my_addrs: Vec<String> = swarm_clone
-                    .get_bound_addresses()
-                    .await
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect();
-                let addrs: Vec<_> = addrs
-                    .into_iter()
-                    .filter(|(m, _)| {
-                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                    })
-                    .collect();
+                let my_addrs = get_local_transport_addresses(&swarm_clone).await;
+                let addrs = ledger::prioritize_dial_candidates(
+                    addrs
+                        .into_iter()
+                        .filter(|(m, _)| {
+                            ledger::is_dialable_for_this_node(
+                                m,
+                                ledger::NetworkMode::Local,
+                                &my_addrs,
+                            )
+                        })
+                        .collect(),
+                );
                 for (multiaddr_str, peer_id_opt) in &addrs {
                     let peer_id = peer_id_opt.as_ref().and_then(|s| s.parse::<PeerId>().ok());
                     scheduler.dial(multiaddr_str.clone(), peer_id);
@@ -3186,22 +3350,29 @@ async fn cmd_relay(
                             let new_entries: Vec<(String, Option<String>)> = entries
                                 .iter()
                                 .map(|e| {
-                                    (ledger::strip_peer_id(&e.multiaddr), e.last_peer_id.clone())
+                                    (e.multiaddr.clone(), e.last_peer_id.clone())
                                 })
                                 .collect();
                             drop(l);
 
                             // Graceful-AF dial policy: know our own addresses before
                             // promiscuously dialing whatever the ledger handed us
-                            let my_addrs: Vec<String> = swarm_handle
-                                .get_bound_addresses()
-                                .await
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|a| a.to_string())
-                                .collect();
+                            let my_addrs = get_local_transport_addresses(&swarm_handle).await;
 
                             for (addr_str, peer_id_opt) in new_entries {
+                                let local_peer_id_string = local_peer_id.to_string();
+                                if peer_id_opt.as_deref() == Some(local_peer_id_string.as_str())
+                                    || ledger::contains_peer_id_component(
+                                        &addr_str,
+                                        &local_peer_id_string,
+                                    )
+                                {
+                                    tracing::debug!(
+                                        "Skipping self-targeted ledger address: {}",
+                                        addr_str
+                                    );
+                                    continue;
+                                }
                                 // Skip non-routable addresses (loopback, link-local,
                                 // site-local) a peer may advertise
                                 if !ledger::is_dialable_multiaddr(&addr_str, ledger::NetworkMode::Local, ledger::DnsPolicy::Reject) {
@@ -3306,7 +3477,8 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
     // Start a temporary swarm to send the message directly (not just queue)
     let data_dir = config::Config::data_dir()?;
     let storage_path = data_dir.join("storage");
-    let core = IronCore::with_storage(path_to_string(&storage_path)?);
+    let core = Arc::new(IronCore::with_storage(path_to_string(&storage_path)?));
+    core.grant_consent();
     core.initialize_identity()
         .context("Failed to load identity")?;
 
@@ -3329,14 +3501,37 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         "{} Starting temporary swarm for immediate send...",
         "".yellow()
     );
-    let (event_tx, mut _event_rx) = tokio::sync::mpsc::channel(16);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(16);
+    let core_for_events = Arc::clone(&core);
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if let SwarmEvent::MessageReceived {
+                peer_id,
+                envelope_data,
+            } = event
+            {
+                match core_for_events.receive_message(envelope_data) {
+                    Ok(message) => tracing::debug!(
+                        "Temporary CLI swarm processed {:?} from {}",
+                        message.message_type,
+                        peer_id
+                    ),
+                    Err(error) => tracing::warn!(
+                        "Temporary CLI swarm failed to process message from {}: {}",
+                        peer_id,
+                        error
+                    ),
+                }
+            }
+        }
+    });
     let routing_handle = scmessenger_core::transport::default_routing_engine_handle();
 
     let swarm_handle = match scmessenger_core::transport::start_swarm(
         network_keypair,
         None, // Let swarm auto-select port
         event_tx,
-        None,
+        Some(Arc::downgrade(&core)),
         true, // headless mode for CLI send
         Some(discovery_config),
         routing_handle,
@@ -3439,6 +3634,9 @@ async fn queue_message_for_later_delivery(
 ) -> Result<()> {
     let storage_path = data_dir.join("storage");
     let core = IronCore::with_storage(path_to_string(&storage_path)?);
+    core.grant_consent();
+    core.initialize_identity()
+        .context("Failed to initialize identity for queued send")?;
 
     let envelope_bytes = core
         .prepare_message(

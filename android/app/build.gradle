@@ -28,10 +28,34 @@ def releaseSigningReady = {
 }()
 
 def getGitHash = { ->
+    def configuredHash = System.getenv('SCM_GIT_HASH')?.trim()
+    if (configuredHash) {
+        return configuredHash
+    }
+
     def stdout = new ByteArrayOutputStream()
     try {
         exec {
             commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = stdout
+        }
+        def result = stdout.toString().trim()
+        return result.isEmpty() ? "unknown" : result
+    } catch (Exception e) {
+        return "unknown"
+    }
+}
+
+def getGitRef = { ->
+    def configuredRef = System.getenv('SCM_GIT_REF')?.trim()
+    if (configuredRef) {
+        return configuredRef
+    }
+
+    def stdout = new ByteArrayOutputStream()
+    try {
+        exec {
+            commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD'
             standardOutput = stdout
         }
         def result = stdout.toString().trim()
@@ -54,6 +78,11 @@ gradle.taskGraph.whenReady { graph ->
 }
 
 def getBuildTime = { ->
+    def configuredTime = System.getenv('SCM_BUILD_TIME')?.trim()
+    if (configuredTime) {
+        return configuredTime
+    }
+
     return new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone("UTC"))
 }
 
@@ -108,6 +137,7 @@ android {
         versionName = rootProject.ext.versionName
         
         buildConfigField "String", "SCM_GIT_HASH", "\"${getGitHash()}\""
+        buildConfigField "String", "SCM_GIT_REF", "\"${getGitRef()}\""
         buildConfigField "String", "SCM_BUILD_TIME", "\"${getBuildTime()}\""
         
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
@@ -346,6 +376,16 @@ def runCargoNdkBuild(String target, String sdkDir, String ndkDir, String rustPro
         environment "ANDROID_HOME", sdkDir
         environment "ANDROID_NDK_HOME", ndkDir
 
+        // Keep the native core's build stamp aligned with the APK metadata.
+        // CI and the Windows lane provide the exact anchor through these
+        // variables; local builds fall back to the checkout in core/build.rs.
+        ['SCM_GIT_HASH', 'SCM_GIT_REF', 'SCM_BUILD_TIME'].each { key ->
+            def value = System.getenv(key)?.trim()
+            if (value) {
+                environment key, value
+            }
+        }
+
         if (isWindows && msysUcrtBin) {
             environment "PATH", "${msysUcrtBin};${System.getenv('PATH')}"
         }
@@ -468,6 +508,12 @@ task generateUniFFIBindings {
             workingDir project.file('../../')
             environment "RUSTFLAGS", ""
             environment "CARGO_INCREMENTAL", "0"
+            ['SCM_GIT_HASH', 'SCM_GIT_REF', 'SCM_BUILD_TIME'].each { key ->
+                def value = System.getenv(key)?.trim()
+                if (value) {
+                    environment key, value
+                }
+            }
             if (isWindows) {
                 commandLine 'cmd', '/c', 'cargo build -p scmessenger-core'
             } else {
@@ -497,6 +543,12 @@ task generateUniFFIBindings {
             workingDir project.file('../../core')
             environment "RUSTFLAGS", ""
             environment "CARGO_INCREMENTAL", "0"
+            ['SCM_GIT_HASH', 'SCM_GIT_REF', 'SCM_BUILD_TIME'].each { key ->
+                def value = System.getenv(key)?.trim()
+                if (value) {
+                    environment key, value
+                }
+            }
             if (isWindows) {
                 commandLine 'cmd', '/c', 'cargo build --bin gen_kotlin --features gen-bindings'
             } else {

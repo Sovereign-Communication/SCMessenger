@@ -46,6 +46,82 @@ Optional: `SCMESSENGER_BIN=/path/to/scmessenger-cli` (bash) or `$env:SCMESSENGER
 | Delivery convergence check | `./scripts/verify_receipt_convergence.sh <android_log> <ios_log>` |
 | BLE-only pairing diagnosis | `./scripts/verify_ble_only_pairing.sh <android_log> <ios_log>` |
 | Interop matrix refresh | `./scripts/generate_interop_matrix.sh` |
+| Is the node up and handing off messages? | `python scripts/inbox_bridge.py status` |
+
+## Inbound message -> orchestrator bridge
+
+`scripts/inbox_bridge.py` polls the running node's control API, turns each new
+inbound message from the allow-listed device into a `HANDOFF/todo/INBOX_*.md`
+ticket, and only then sends an `[ACK]` back to that device. Requires no Rust
+build and touches no daemon code.
+
+| Goal | Command |
+|------|---------|
+| Find the phone's identifier (from decrypted history, not the peer ledger) | `python scripts/inbox_bridge.py discover` |
+| Check config, node reachability, mesh peer count | `python scripts/inbox_bridge.py selftest` |
+| Single drain pass | `python scripts/inbox_bridge.py once` |
+| Poll continuously | `python scripts/inbox_bridge.py run` |
+| Read the heartbeat file | `python scripts/inbox_bridge.py status` |
+
+Config lives at `%APPDATA%\scmessenger\inbox_bridge.json` and must name an
+`allowed_peer_id`; the bridge refuses to start without one. Messages from any
+other peer get no ticket and no ACK.
+
+Two properties the design depends on: the ACK is sent only after the ticket is
+fsync'd to disk, so an ACK proves handoff rather than mere decryption; and
+tickets are keyed on `message_id`, so the retry -> duplicate delivery path
+collapses to one ticket instead of dispatching the orchestrator twice.
+
+Note that the daemon's `/health` is a static literal -- it proves the HTTP task
+is alive, not that the mesh is. `selftest` and `status` therefore also report
+the connected peer count, which is the signal that distinguishes a meshed node
+from a wedged one.
+
+To identify the phone without guessing, run `learn`, then send any message from
+the device. Whoever speaks next is by construction the phone in your hand:
+
+```
+python scripts/inbox_bridge.py learn --write
+```
+
+Do not take the identifier from `storage/ledger.json` -- that ledger binds peer
+identities to addresses that are not theirs.
+
+## Always-on soak (`soak_supervisor.py`)
+
+Keeps a **pinned** node binary running continuously, captures an artifact
+bundle on every failure, and relaunches only when that is safe.
+
+| Goal | Command |
+|------|---------|
+| Pin the build to soak | `python scripts/soak_supervisor.py pin <path-to-scm.exe>` |
+| Start the soak | `python scripts/soak_supervisor.py run --with-bridge` |
+| Check it | `python scripts/soak_supervisor.py status` |
+| Stop it gracefully | `python scripts/soak_supervisor.py stop` |
+| Clear a halt after investigating | `python scripts/soak_supervisor.py resume` |
+
+Artifacts land in `%LOCALAPPDATA%\scmessenger\soak\artifacts\<stamp>_<reason>\`
+and contain the run log, the node's hourly logs for that run, live
+`/api/diagnostics` + peers + listeners (captured *before* any restart, so a
+wedge is diagnosable), and the supervisor's own probe ring buffer.
+
+### The safety constraints, and what each one is for
+
+| Constraint | Default | Prevents |
+|---|---|---|
+| Binary pin (sha256, re-checked each generation) | required | silently soaking a different build than the one under test, so old failures get attributed to new code |
+| Free-disk floor | 2048 MB | a disk-full failure that presents as a node bug -- C: runs near-full on this machine |
+| Restart cap in a rolling hour | 5 | a tight relaunch loop overwriting the evidence of the first failure |
+| Exponential backoff | 5/15/45/120/300s | hammering a node that cannot start |
+| Startup grace | 90s | the supervisor killing a healthy cold start that has not bound HTTP yet, which would be a restart loop of its own making |
+| Fatal-signature list | storage corruption, identity failure, port in use | auto-retrying a class of failure that retrying cannot fix |
+| Single-instance lock | on | two supervisors sharing one sled data dir and producing harness-induced failures |
+| Retention pruning | 40 bundles / 48 node logs | the soak itself filling the disk it is monitoring |
+
+`restart_on_zero_peers` is **off** by default: a node with 0 peers is recorded
+as degraded and captured, but not restarted, because 0 peers is legitimate when
+no peer happens to be online. Override any default in
+`%LOCALAPPDATA%\scmessenger\soak.json`.
 
 ## 5-Node / Multi-Node Debug Stack
 

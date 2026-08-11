@@ -1,6 +1,6 @@
 # P0 -- UPnP panic kills the desktop node ~5 minutes after start
 
-Status: Active
+Status: Fixed in PR #139 hardening branch; Windows soak still required
 Severity: P0 (release blocker for v0.4.0)
 Discovered: 2026-08-08 (Windows orchestrator lane, live node run)
 Affects: all non-Android desktop lanes (Windows CLI, macOS CLI, likely iOS)
@@ -106,8 +106,33 @@ single observation. The `expect("mapping should exist")` in libp2p-upnp is
 consistent with a race or a mapping-expiry timing dependency, which would make
 failure intermittent rather than scheduled.
 
-Next orchestrator: check whether the run-2 node is still alive and record the
-result here.
+### Run 2 -- RESOLVED 2026-08-09: it panicked too, at a DIFFERENT uptime
+
+The next orchestrator checked, as asked. Run 2 did not survive.
+
+```
+tmp/logs/win_node_run2.log:1471
+thread 'tokio-rt-worker' (25816) panicked at
+  ...\libp2p-upnp-0.5.0\src\behaviour.rs:497:38:
+mapping should exist
+2026-08-09T00:32:47.851685Z ERROR scmessenger_cli: swarm_event_loop_died: ...
+[FAIL] Swarm event loop died -- exiting rather than running without a mesh.
+```
+
+- Start 2026-08-09T00:16:05Z, panic 00:32:47Z -- uptime **16m42s**.
+- Identical panic site to run 1 (`behaviour.rs:497`, `mapping should exist`).
+- No `scmessenger` process is running now; both runs self-terminated.
+
+Conclusion: the defect is **reproducible (2 of 2 runs) but not scheduled** --
+5m20s vs 16m42s. That rules out a fixed timer and is consistent with the
+race / mapping-expiry hypothesis. The "5 minutes" figure in this ticket's
+title and Summary is a single-observation artifact; do not design around it.
+It also weakens (does not kill) the theory that UPnP death explains the
+2026-08-08 "other LAN nodes never detected" report -- run 2 was alive for
+nearly 17 minutes and the LAN peers were still not observed for most of it.
+That observation needs its own root cause; see the field-finding tickets.
+
+Next orchestrator: the remaining gate is the post-removal soak, below.
 
 ```bash
 tasklist | grep -i scmess          # NOT `tasklist /FO CSV /NH` -- see caveat below
@@ -118,15 +143,17 @@ Caveat carried forward: `tasklist /FO CSV /NH` silently returns nothing under
 Git Bash (it mangles `/FO` into a path), producing a false "process not
 running". Use plain `tasklist | grep -i`.
 
-## Not yet decided (needs operator direction)
+## Resolution
 
-Candidate directions, NOT yet chosen -- `core/src/transport/` changes are
-merge-blocked pending adversarial review per AGENTS.md rule 8:
+The user-authorized remediation removes the optional `libp2p-upnp` feature and
+the unconditionally constructed UPnP behaviour from the workspace. Relay v2,
+DCUtR, AutoNAT, and ledger-based address exchange remain available for the
+mesh; a gateway port-mapping dependency is no longer allowed to terminate the
+swarm event loop. The Windows authoritative lane must still run a long-lived
+soak and confirm that no `panicked` or `swarm_event_loop_died` lines occur.
 
-- Gate or remove the libp2p `upnp` feature (UPnP contributes nothing to LAN-only
-  testing and is the sole source of this panic).
-- Upgrade `libp2p-upnp` past 0.5.0 if a fix exists upstream.
-- Keep UPnP but isolate the behaviour so its panic cannot take down the swarm
-  event loop.
+## Not selected
 
-Do not implement without operator sign-off and the rule 8 review.
+The previously listed directions are superseded by the feature removal above.
+No additional UPnP code path remains in the workspace; the Windows soak is the
+remaining evidence gate.

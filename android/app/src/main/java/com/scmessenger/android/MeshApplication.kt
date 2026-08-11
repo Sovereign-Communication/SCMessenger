@@ -68,7 +68,14 @@ class MeshApplication : Application() {
 
         schedulePeriodicMaintenance()
 
-        Timber.i("SCMessenger application started")
+        Timber.i(
+            "SCMessenger application started: version=%s (%d), git=%s, ref=%s, build_time=%s",
+            BuildConfig.VERSION_NAME,
+            BuildConfig.VERSION_CODE,
+            BuildConfig.SCM_GIT_HASH,
+            BuildConfig.SCM_GIT_REF,
+            BuildConfig.SCM_BUILD_TIME
+        )
 
         // Application-level initialization
         // The actual mesh service will be started/stopped by user action
@@ -109,6 +116,9 @@ class MeshApplication : Application() {
                         appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
                         appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
                         appendLine("Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                        appendLine("Git: ${BuildConfig.SCM_GIT_HASH}")
+                        appendLine("Git ref: ${BuildConfig.SCM_GIT_REF}")
+                        appendLine("Build time: ${BuildConfig.SCM_BUILD_TIME}")
                         appendLine()
                         appendLine(Log.getStackTraceString(throwable))
                     }

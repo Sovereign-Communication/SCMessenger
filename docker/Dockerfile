@@ -7,6 +7,16 @@ FROM rust:latest AS builder
 ARG SC_BOOTSTRAP_NODES=""
 ENV SC_BOOTSTRAP_NODES=${SC_BOOTSTRAP_NODES}
 
+# GitHub Actions supplies these when publishing a candidate image. The
+# explicit values keep runtime provenance intact even though this Dockerfile
+# deliberately does not copy the repository's .git directory into the build.
+ARG SCM_GIT_HASH=unknown
+ARG SCM_GIT_REF=unknown
+ARG SCM_BUILD_TIME=unknown
+ENV SCM_GIT_HASH=${SCM_GIT_HASH}
+ENV SCM_GIT_REF=${SCM_GIT_REF}
+ENV SCM_BUILD_TIME=${SCM_BUILD_TIME}
+
 WORKDIR /usr/src/scmessenger
 
 # System build dependencies for the workspace's -sys crates: libdbus-sys needs

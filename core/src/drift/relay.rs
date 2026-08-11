@@ -13,6 +13,7 @@ use super::store::{MeshStore, MessageId, StoredEnvelope};
 use super::DriftError;
 use crate::dspy::modules::{DSPyModule, OptimizerPipeline};
 use crate::privacy::cover::{CoverConfig, CoverTrafficScheduler};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -115,8 +116,10 @@ pub struct RelayEngine {
     /// Cover traffic scheduler (privacy: traffic analysis resistance)
     cover_scheduler: Option<CoverTrafficScheduler>,
     /// Reputation manager for abuse-based relay decisions
-    reputation_manager:
-        Option<std::sync::Arc<crate::abuse::reputation::EnhancedAbuseReputationManager>>,
+    reputation_manager: Option<Arc<crate::abuse::reputation::EnhancedAbuseReputationManager>>,
+    /// Shared reputation manager owned by IronCore.
+    shared_reputation_manager:
+        Option<Arc<RwLock<crate::abuse::reputation::EnhancedAbuseReputationManager>>>,
     /// Security audit pipeline for relay custody verification
     security_audit_pipeline: Option<OptimizerPipeline>,
 }
@@ -148,6 +151,7 @@ impl RelayEngine {
             hour_start: now,
             cover_scheduler: None,
             reputation_manager: None,
+            shared_reputation_manager: None,
             security_audit_pipeline,
         }
     }
@@ -188,6 +192,19 @@ impl RelayEngine {
         self.reputation_manager = Some(manager);
     }
 
+    /// Set the shared reputation manager owned by IronCore.
+    pub fn set_shared_reputation_manager(
+        &mut self,
+        manager: Arc<RwLock<crate::abuse::reputation::EnhancedAbuseReputationManager>>,
+    ) {
+        self.shared_reputation_manager = Some(manager);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reputation_manager_is_configured(&self) -> bool {
+        self.reputation_manager.is_some() || self.shared_reputation_manager.is_some()
+    }
+
     /// Check if cover traffic is due and generate a cover message.
     ///
     /// Call this periodically (e.g., during maintenance tick).
@@ -210,14 +227,33 @@ impl RelayEngine {
     /// Process an incoming DriftEnvelope. Returns what to do with it.
     /// This is the central routing decision for every message.
     pub fn process_incoming(&mut self, envelope_data: &[u8]) -> Result<RelayDecision, DriftError> {
+        self.process_incoming_from(envelope_data, None)
+    }
+
+    /// Process an incoming envelope with the authenticated transport identity
+    /// used for reputation accounting. Callers without that identity use the
+    /// compatibility method above, which deliberately skips reputation lookup
+    /// rather than attributing every sender to one shared `unknown` bucket.
+    pub fn process_incoming_from(
+        &mut self,
+        envelope_data: &[u8],
+        sender_peer_id: Option<&str>,
+    ) -> Result<RelayDecision, DriftError> {
         // Parse envelope
         let envelope = DriftEnvelope::from_bytes(envelope_data)?;
 
         // Check for spam patterns if reputation manager is available
-        if let Some(ref reputation_manager) = self.reputation_manager {
-            let sender_peer_id = "unknown"; // In a real implementation, this would be extracted from the envelope
-            let enhanced_score = reputation_manager.get_enhanced_score(sender_peer_id);
+        let enhanced_score = sender_peer_id.and_then(|sender_peer_id| {
+            if let Some(ref reputation_manager) = self.shared_reputation_manager {
+                Some(reputation_manager.read().get_enhanced_score(sender_peer_id))
+            } else {
+                self.reputation_manager
+                    .as_ref()
+                    .map(|reputation_manager| reputation_manager.get_enhanced_score(sender_peer_id))
+            }
+        });
 
+        if let Some(enhanced_score) = enhanced_score {
             if enhanced_score.is_abusive() && enhanced_score.spam_confidence > 0.8 {
                 return Ok(RelayDecision::Dropped {
                     message_id: envelope.message_id,

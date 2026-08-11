@@ -161,13 +161,8 @@ class TransportManager @JvmOverloads constructor(
                     activeTransports[TransportType.TCP_MDNS] = activeTransports[TransportType.TCP_MDNS] == true
                     this@TransportManager.onPeerDisconnected?.invoke(peerId, TransportType.TCP_MDNS)
                 },
-                onLanPeerResolved = { peerId, host, port ->
+                onLanPeerResolved = { peerId, host, port, multiaddr ->
                     Timber.i("mDNS LAN peer resolved: $peerId at $host:$port — feeding to SwarmBridge")
-                    val multiaddr = if (peerId.startsWith("12D3Koo")) {
-                        "/ip4/$host/tcp/$port/p2p/$peerId"
-                    } else {
-                        "/ip4/$host/tcp/$port"
-                    }
                     onLanAddressResolved?.invoke(multiaddr)
                     onPeerDiscovered(peerId, TransportType.TCP_MDNS)
                 },

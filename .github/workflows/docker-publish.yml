@@ -49,4 +49,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SCM_GIT_HASH=${{ github.sha }}
+            SCM_GIT_REF=${{ github.ref_name }}
+            SCM_BUILD_TIME=${{ github.run_started_at }}
           platforms: linux/amd64

@@ -10,11 +10,14 @@ use btleplug::api::{
     Central, CentralEvent, CharPropFlags, Manager as _, Peripheral as PeripheralApi, ScanFilter,
 };
 use btleplug::platform::{Manager, Peripheral};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use scmessenger_core::drift::frame::{DriftFrame, FrameType};
+use scmessenger_core::drift::DriftEnvelope;
+use scmessenger_core::transport::ble::GattFragmentHeader;
 use scmessenger_core::wasm_support::rpc::{notif_message_received, MessageReceivedParams};
 use scmessenger_core::IronCore;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
@@ -49,6 +52,16 @@ fn get_active_peers() -> &'static std::sync::Mutex<HashMap<String, TrackingPerip
     ACTIVE_PEERS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+#[cfg(target_os = "macos")]
+fn note_macos_btleplug_gatt_unavailable() {
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if LOGGED.set(()).is_ok() {
+        tracing::warn!(
+            "BLE: macOS CoreBluetooth GATT unavailable with btleplug 0.11.8; continuing scan-only with backoff"
+        );
+    }
+}
+
 fn scm_service_uuid() -> Uuid {
     Uuid::from_u128(GATT_SERVICE_UUID)
 }
@@ -59,6 +72,63 @@ fn scm_identity_uuid() -> Uuid {
 
 fn scm_notify_uuid() -> Uuid {
     uuid_from_u16(0xDF03)
+}
+
+fn peer_suffix(peer_id: &str) -> String {
+    let suffix: String = peer_id.chars().rev().take(8).collect();
+    suffix.chars().rev().collect()
+}
+
+fn diagnostic_message_id(data: &[u8]) -> String {
+    let envelope = DriftFrame::from_bytes(data)
+        .ok()
+        .filter(|frame| frame.frame_type == FrameType::Data)
+        .map(|frame| frame.payload)
+        .unwrap_or_else(|| data.to_vec());
+
+    DriftEnvelope::from_bytes(&envelope)
+        .map(|parsed| Uuid::from_bytes(parsed.message_id).to_string())
+        .unwrap_or_else(|_| "unavailable".to_string())
+}
+
+fn diagnostic_message_hash(data: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn fragment_metadata(data: &[u8]) -> (Option<usize>, Option<usize>) {
+    GattFragmentHeader::from_bytes(data)
+        .ok()
+        .map(|header| {
+            (
+                Some(header.fragment_index as usize),
+                Some(header.total_fragments as usize),
+            )
+        })
+        .unwrap_or((None, None))
+}
+
+fn log_ble_payload_diagnostic(
+    route: &str,
+    peer: &str,
+    data: &[u8],
+    fragment_index: Option<usize>,
+    fragment_count: Option<usize>,
+    terminal_result: &str,
+) {
+    tracing::info!(
+        message_id = %diagnostic_message_id(data),
+        message_hash = %diagnostic_message_hash(data),
+        fragment_index = ?fragment_index,
+        fragment_count = ?fragment_count,
+        peer_suffix = %peer_suffix(peer),
+        route = route,
+        terminal_result = terminal_result,
+        "BLE payload diagnostic"
+    );
 }
 
 /// Decode Drift-framed or raw envelope bytes; decrypt/verify via [`IronCore::receive_message`].
@@ -233,19 +303,63 @@ async fn subscribe_ingress_for_peripheral(
 
     while let Some(note) = stream.next().await {
         if let Some(params) = decode_ble_payload_for_ui(core.as_ref(), &note.value) {
+            let (fragment_index, fragment_count) = fragment_metadata(&note.value);
+            let peer = guard.peer_id.as_deref().unwrap_or(&addr);
+            log_ble_payload_diagnostic(
+                "ble_gatt_ingress",
+                peer,
+                &note.value,
+                fragment_index,
+                fragment_count,
+                "received_and_decrypted",
+            );
             push_message_to_ui(&ui_tx, params);
+        } else {
+            let (fragment_index, fragment_count) = fragment_metadata(&note.value);
+            let peer = guard.peer_id.as_deref().unwrap_or(&addr);
+            log_ble_payload_diagnostic(
+                "ble_gatt_ingress",
+                peer,
+                &note.value,
+                fragment_index,
+                fragment_count,
+                "decode_or_decrypt_error",
+            );
         }
     }
 }
 
 /// Send a SCMessenger message envelope over BLE to the registered peripheral
 pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (recipient_peer_id, data);
+        note_macos_btleplug_gatt_unavailable();
+        return Err("BLE unavailable on macOS".to_string());
+    }
+
     #[cfg(target_os = "windows")]
     {
         if crate::ble_windows::get_message_characteristic().is_some() {
             if let Err(e) = crate::ble_windows::send_windows_ble_notification(data).await {
+                log_ble_payload_diagnostic(
+                    "ble_windows_gatt",
+                    recipient_peer_id,
+                    data,
+                    None,
+                    None,
+                    "windows_notification_error",
+                );
                 tracing::debug!("Windows BLE: outgoing notification failed: {:?}", e);
             } else {
+                log_ble_payload_diagnostic(
+                    "ble_windows_gatt",
+                    recipient_peer_id,
+                    data,
+                    None,
+                    None,
+                    "windows_notification_complete",
+                );
                 return Ok(());
             }
         }
@@ -259,6 +373,14 @@ pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<()
     };
 
     let Some(TrackingPeripheral::Real(peripheral)) = peripheral else {
+        log_ble_payload_diagnostic(
+            "ble_gatt_central",
+            recipient_peer_id,
+            data,
+            None,
+            None,
+            "peer_not_connected",
+        );
         return Err("Peer not connected over BLE".to_string());
     };
 
@@ -274,19 +396,44 @@ pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<()
         .cloned();
 
     let Some(ch) = ch else {
+        log_ble_payload_diagnostic(
+            "ble_gatt_central",
+            recipient_peer_id,
+            data,
+            None,
+            None,
+            "message_characteristic_missing",
+        );
         return Err("Message characteristic not found on peer".to_string());
     };
 
     // Fragment the message using GattFragmenter from scmessenger_core
-    let fragments = scmessenger_core::transport::ble::GattFragmenter::fragment(data)
-        .map_err(|e| format!("Fragmentation error: {:?}", e))?;
+    let fragments = match scmessenger_core::transport::ble::GattFragmenter::fragment(data) {
+        Ok(fragments) => fragments,
+        Err(e) => {
+            log_ble_payload_diagnostic(
+                "ble_gatt_central",
+                recipient_peer_id,
+                data,
+                None,
+                None,
+                "fragmentation_error",
+            );
+            return Err(format!("Fragmentation error: {:?}", e));
+        }
+    };
 
     tracing::info!(
-        "BLE: sending {} fragments to {}",
-        fragments.len(),
-        recipient_peer_id
+        message_id = %diagnostic_message_id(data),
+        message_hash = %diagnostic_message_hash(data),
+        fragment_index = ?None::<usize>,
+        fragment_count = fragments.len(),
+        peer_suffix = %peer_suffix(recipient_peer_id),
+        route = "ble_gatt_central",
+        terminal_result = "writing",
+        "BLE outbound payload"
     );
-    for fragment in fragments {
+    for (fragment_index, fragment) in fragments.iter().enumerate() {
         let write_type = if ch
             .properties
             .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
@@ -296,12 +443,35 @@ pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<()
             btleplug::api::WriteType::WithResponse
         };
 
-        peripheral
-            .write(&ch, &fragment, write_type)
-            .await
-            .map_err(|e| format!("GATT write failed: {}", e))?;
+        if let Err(e) = peripheral.write(&ch, fragment, write_type).await {
+            log_ble_payload_diagnostic(
+                "ble_gatt_central",
+                recipient_peer_id,
+                data,
+                Some(fragment_index),
+                Some(fragments.len()),
+                "gatt_write_error",
+            );
+            return Err(format!("GATT write failed: {}", e));
+        }
+        log_ble_payload_diagnostic(
+            "ble_gatt_central",
+            recipient_peer_id,
+            data,
+            Some(fragment_index),
+            Some(fragments.len()),
+            "gatt_write_ok",
+        );
     }
 
+    log_ble_payload_diagnostic(
+        "ble_gatt_central",
+        recipient_peer_id,
+        data,
+        None,
+        Some(fragments.len()),
+        "gatt_write_complete",
+    );
     Ok(())
 }
 
@@ -310,6 +480,9 @@ pub async fn run_ble_central_ingress(
     core: Arc<IronCore>,
     ui_tx: tokio::sync::broadcast::Sender<UiOutbound>,
 ) {
+    #[cfg(target_os = "macos")]
+    let _ = (&core, &ui_tx);
+
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = (core, ui_tx);
@@ -324,22 +497,52 @@ pub async fn run_ble_central_ingress(
             GATT_SERVICE_UUID
         );
 
-        let manager = match Manager::new().await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("BLE Manager::new failed: {}", e);
+        let manager = match AssertUnwindSafe(Manager::new()).catch_unwind().await {
+            Ok(Ok(manager)) => manager,
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    route = "ble_gatt_central",
+                    terminal_result = "manager_init_error",
+                    error = %error,
+                    "BLE central unavailable"
+                );
+                return;
+            }
+            Err(_) => {
+                tracing::error!(
+                    route = "ble_gatt_central",
+                    terminal_result = "manager_init_panic_isolated",
+                    "BLE central unavailable"
+                );
                 return;
             }
         };
-        let adapters = match manager.adapters().await {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!("BLE adapters() failed: {}", e);
+        let adapters = match AssertUnwindSafe(manager.adapters()).catch_unwind().await {
+            Ok(Ok(adapters)) => adapters,
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    route = "ble_gatt_central",
+                    terminal_result = "adapter_enumeration_error",
+                    error = %error,
+                    "BLE central unavailable"
+                );
+                return;
+            }
+            Err(_) => {
+                tracing::error!(
+                    route = "ble_gatt_central",
+                    terminal_result = "adapter_enumeration_panic_isolated",
+                    "BLE central unavailable"
+                );
                 return;
             }
         };
         let Some(adapter) = adapters.first() else {
-            tracing::warn!("BLE: no adapters");
+            tracing::warn!(
+                route = "ble_gatt_central",
+                terminal_result = "no_adapter",
+                "BLE central unavailable"
+            );
             return;
         };
 
@@ -353,12 +556,15 @@ pub async fn run_ble_central_ingress(
         const SCAN_START_RETRIES: u32 = 5;
         let mut scan_started = false;
         for attempt in 0..SCAN_START_RETRIES {
-            match adapter.start_scan(ScanFilter::default()).await {
-                Ok(()) => {
+            match AssertUnwindSafe(adapter.start_scan(ScanFilter::default()))
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(())) => {
                     scan_started = true;
                     break;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if attempt + 1 < SCAN_START_RETRIES {
                         let delay_ms = 300u64 << attempt;
                         tracing::debug!(
@@ -371,11 +577,22 @@ pub async fn run_ble_central_ingress(
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     } else {
                         tracing::warn!(
-                            "BLE start_scan failed after {} attempts: {}",
-                            SCAN_START_RETRIES,
-                            e
+                            route = "ble_gatt_central",
+                            terminal_result = "scan_start_error",
+                            attempts = SCAN_START_RETRIES,
+                            error = %e,
+                            "BLE central unavailable"
                         );
                     }
+                }
+                Err(_) => {
+                    tracing::error!(
+                        route = "ble_gatt_central",
+                        terminal_result = "scan_start_panic_isolated",
+                        attempt = attempt + 1,
+                        "BLE central unavailable"
+                    );
+                    return;
                 }
             }
         }
@@ -387,10 +604,23 @@ pub async fn run_ble_central_ingress(
             svc
         );
 
-        let mut events = match adapter.events().await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("BLE events() failed: {}", e);
+        let mut events = match AssertUnwindSafe(adapter.events()).catch_unwind().await {
+            Ok(Ok(events)) => events,
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    route = "ble_gatt_central",
+                    terminal_result = "event_stream_error",
+                    error = %error,
+                    "BLE central unavailable"
+                );
+                return;
+            }
+            Err(_) => {
+                tracing::error!(
+                    route = "ble_gatt_central",
+                    terminal_result = "event_stream_panic_isolated",
+                    "BLE central unavailable"
+                );
                 return;
             }
         };
@@ -450,9 +680,12 @@ pub async fn run_ble_central_ingress(
                 state.active = true;
             }
 
-            let peripheral = match adapter.peripheral(&id).await {
-                Ok(p) => p,
-                Err(_) => {
+            let peripheral = match AssertUnwindSafe(adapter.peripheral(&id))
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(peripheral)) => peripheral,
+                Ok(Err(_)) | Err(_) => {
                     let mut guard = tracked.lock().await;
                     if let Some(state) = guard.get_mut(&id_key) {
                         state.active = false;
@@ -461,8 +694,13 @@ pub async fn run_ble_central_ingress(
                 }
             };
 
-            // In a background task, query properties so we don't block the main event stream
+            // In a background task, query properties so we don't block the main event stream.
+            // On macOS, keep the advertisement/discovery half of central operation, but do not
+            // enter btleplug's CoreBluetooth GATT connect path (0.11.8 can panic in its delegate
+            // after repeated service-discovery callbacks instead of returning an error).
+            #[cfg(not(target_os = "macos"))]
             let core_c = Arc::clone(&core);
+            #[cfg(not(target_os = "macos"))]
             let ui_c = ui_tx.clone();
             let track = Arc::clone(&tracked);
             let key = id_key.clone();
@@ -499,16 +737,37 @@ pub async fn run_ble_central_ingress(
 
                 let mut success = true;
                 if is_match {
-                    tracing::info!("BLE found matching peripheral: {}", key);
-                    let start_time = std::time::Instant::now();
-                    subscribe_ingress_for_peripheral(peripheral, core_c, ui_c).await;
-                    // subscribe_ingress_for_peripheral returns only when the stream
-                    // ends or an error occurs. A session that stayed connected past a
-                    // threshold is a normal disconnect (peer out of range), not a
-                    // backoff-worthy failure; only rapid failures (< threshold) back off.
-                    let session_duration = start_time.elapsed();
-                    if session_duration < std::time::Duration::from_secs(10) {
+                    #[cfg(target_os = "macos")]
+                    {
+                        note_macos_btleplug_gatt_unavailable();
                         success = false;
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        tracing::info!("BLE found matching peripheral: {}", key);
+                        let start_time = std::time::Instant::now();
+                        let session_result = AssertUnwindSafe(subscribe_ingress_for_peripheral(
+                            peripheral, core_c, ui_c,
+                        ))
+                        .catch_unwind()
+                        .await;
+                        if session_result.is_err() {
+                            tracing::error!(
+                                route = "ble_gatt_ingress",
+                                peer_suffix = %peer_suffix(&key),
+                                terminal_result = "session_panic_isolated",
+                                "BLE peripheral session ended with an isolated panic"
+                            );
+                        }
+                        // subscribe_ingress_for_peripheral returns only when the stream
+                        // ends or an error occurs. A session that stayed connected past a
+                        // threshold is a normal disconnect (peer out of range), not a
+                        // backoff-worthy failure; only rapid failures (< threshold) back off.
+                        let session_duration = start_time.elapsed();
+                        if session_duration < std::time::Duration::from_secs(10) {
+                            success = false;
+                        }
                     }
                 }
 
@@ -548,7 +807,26 @@ pub fn handle_incoming_ble_payload(
     data: &[u8],
 ) {
     if let Some(params) = decode_ble_payload_for_ui(core, data) {
+        let (fragment_index, fragment_count) = fragment_metadata(data);
+        log_ble_payload_diagnostic(
+            "ble_gatt_ingress",
+            "unknown",
+            data,
+            fragment_index,
+            fragment_count,
+            "received_and_decrypted",
+        );
         push_message_to_ui(ui_tx, params);
+    } else {
+        let (fragment_index, fragment_count) = fragment_metadata(data);
+        log_ble_payload_diagnostic(
+            "ble_gatt_ingress",
+            "unknown",
+            data,
+            fragment_index,
+            fragment_count,
+            "decode_or_decrypt_error",
+        );
     }
 }
 
@@ -653,5 +931,14 @@ mod tests {
             "Peer should still be in registry"
         );
         assert_eq!(map.get(&peer_id).unwrap().address_string(), new_mac);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_ble_send_reports_unavailable() {
+        assert_eq!(
+            send_ble_message("ignored", &[]).await,
+            Err("BLE unavailable on macOS".to_string())
+        );
     }
 }

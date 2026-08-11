@@ -38,14 +38,13 @@ impl From<CoreBlockedIdentity> for BlockedIdentity {
 
 impl From<BlockedIdentity> for CoreBlockedIdentity {
     fn from(mobile: BlockedIdentity) -> Self {
-        Self {
-            peer_id: mobile.peer_id,
-            device_id: mobile.device_id,
-            blocked_at: mobile.blocked_at,
-            reason: mobile.reason,
-            notes: mobile.notes,
-            is_deleted: mobile.is_deleted,
-        }
+        let mut core = CoreBlockedIdentity::new(mobile.peer_id);
+        core.device_id = mobile.device_id;
+        core.blocked_at = mobile.blocked_at;
+        core.reason = mobile.reason;
+        core.notes = mobile.notes;
+        core.is_deleted = mobile.is_deleted;
+        core
     }
 }
 
@@ -85,7 +84,8 @@ impl BlockedManager {
         peer_id: String,
         device_id: Option<String>,
     ) -> Result<bool, IronCoreError> {
-        self.inner.is_blocked(&peer_id, device_id.as_deref())
+        self.inner
+            .is_blocked_resolved(&peer_id, device_id.as_deref())
     }
 
     /// Get blocked identity details

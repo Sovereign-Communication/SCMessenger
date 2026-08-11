@@ -41,10 +41,17 @@ async fn test_ledger_convergence_between_nodes() {
         dir2.path().to_string_lossy().to_string(),
     ));
 
+    // Seed before either node can connect. Automatic discovery may establish
+    // the connection immediately after swarm2 starts, and the first exchange
+    // is intentionally deduplicated for the lifetime of that peer connection.
+    let seeded_peer_id = libp2p::PeerId::random().to_string();
+    core1
+        .ledger_manager
+        .record_connection("/ip4/1.2.3.4/tcp/9000".to_string(), seeded_peer_id);
+
     let keypair1 = Keypair::generate_ed25519();
     let peer_id1 = libp2p::PeerId::from(keypair1.public());
     let keypair2 = Keypair::generate_ed25519();
-    let peer_id2 = libp2p::PeerId::from(keypair2.public());
 
     let (event_tx1, mut event_rx1) = mpsc::channel(256);
     let (event_tx2, mut event_rx2) = mpsc::channel(256);
@@ -111,14 +118,6 @@ async fn test_ledger_convergence_between_nodes() {
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    // Seed node 1's ledger with an entry node 2 never learns any other way.
-    // It has to be globally routable: the exchange payload is now built by
-    // `exchange_response_entries`, which will not disclose anything else.
-    core1.ledger_manager.record_connection(
-        "/ip4/1.2.3.4/tcp/9000".to_string(),
-        "QmFakePeerXYZ".to_string(),
-    );
-
     // Node 2's event loop: record whatever ledger entries it receives.
     let core2_for_task = core2.clone();
     tokio::spawn(async move {
@@ -142,17 +141,8 @@ async fn test_ledger_convergence_between_nodes() {
     dial_addr.push(libp2p::multiaddr::Protocol::P2p(peer_id1));
     dial_or_already_connected(&swarm2, dial_addr).await;
 
-    // Wait for connection handshake and protocols to negotiate
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-    // Trigger the ledger share directly from Node 1 to Node 2 now that they are
-    // connected. The payload comes from core1's ledger, inside the swarm.
-    swarm1
-        .share_ledger(peer_id2)
-        .await
-        .expect("Failed to share ledger");
-
-    // Let the test wait for 3 seconds so the ledger is received on Node 2
+    // No application layer calls share_ledger: ConnectionEstablished must
+    // initiate convergence from the core for every platform.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let dialable_addresses = core2.ledger_manager.dialable_addresses();
@@ -164,6 +154,9 @@ async fn test_ledger_convergence_between_nodes() {
         has_converged_entry,
         "Node 2's ledger should contain node 1's pre-existing entry via ledger_exchange"
     );
+
+    let _ = swarm1.shutdown().await;
+    let _ = swarm2.shutdown().await;
 }
 
 /// Item 3 of the v0.4.0 ledger work: the ledger-exchange RESPONSE must be
@@ -199,14 +192,16 @@ async fn test_ledger_exchange_response_is_reciprocated_from_core() {
 
     // A proven entry in each ledger that the other node can only learn via
     // ledger exchange.
-    const NODE1_ONLY_ADDR: &str = "/ip4/198.51.100.11/tcp/9000";
-    const NODE2_ONLY_ADDR: &str = "/ip4/203.0.113.22/tcp/9000";
-    core1
-        .ledger_manager
-        .record_connection(NODE1_ONLY_ADDR.to_string(), "QmNode1Only".to_string());
-    core2
-        .ledger_manager
-        .record_connection(NODE2_ONLY_ADDR.to_string(), "QmNode2Only".to_string());
+    const NODE1_ONLY_ADDR: &str = "/ip4/8.8.8.8/tcp/9000";
+    const NODE2_ONLY_ADDR: &str = "/ip4/1.1.1.1/tcp/9000";
+    core1.ledger_manager.record_connection(
+        NODE1_ONLY_ADDR.to_string(),
+        libp2p::PeerId::random().to_string(),
+    );
+    core2.ledger_manager.record_connection(
+        NODE2_ONLY_ADDR.to_string(),
+        libp2p::PeerId::random().to_string(),
+    );
 
     let keypair1 = Keypair::generate_ed25519();
     let peer_id1 = libp2p::PeerId::from(keypair1.public());
@@ -310,7 +305,7 @@ async fn test_ledger_exchange_response_is_reciprocated_from_core() {
     // and the response door are the same door (re-review NEW-2).
     let outbound = core2
         .ledger_manager
-        .exchange_response_entries(64, &peer_id1.to_string());
+        .exchange_response_entries(64, &peer_id1.to_string(), &[]);
     assert!(
         outbound.iter().any(|e| e.multiaddr == NODE2_ONLY_ADDR),
         "node 2 should be offering its own seeded entry; got {:?}",
@@ -355,7 +350,9 @@ async fn test_ledger_exchange_response_is_reciprocated_from_core() {
 /// where mDNS wins the race. Genuine dial failures still surface, because the
 /// convergence assertions below cannot pass without a live connection.
 async fn dial_or_already_connected(swarm: &SwarmHandle, addr: Multiaddr) {
-    if let Err(e) = swarm.dial(addr).await {
+    // The test creates this loopback target itself; use the narrowly scoped
+    // trusted-local path rather than weakening the production untrusted filter.
+    if let Err(e) = swarm.dial_trusted_local_proxy(addr).await {
         let msg = e.to_string();
         let already_connected =
             msg.contains("already connected") || msg.contains("dial is in progress");

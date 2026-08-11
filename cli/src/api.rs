@@ -23,6 +23,10 @@ use tower_http::cors::{Any, CorsLayer};
 pub const API_PORT: u16 = 9876;
 pub const API_ADDR: &str = "127.0.0.1:9876";
 
+const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD_GIT_HASH: &str = env!("SCM_GIT_HASH");
+const BUILD_TIME: &str = env!("SCM_BUILD_TIME");
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageRequest {
     pub recipient: String,
@@ -33,6 +37,19 @@ pub struct SendMessageRequest {
 pub struct SendMessageResponse {
     pub success: bool,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SendMessageStatusResponse {
+    pub message_id: String,
+    pub status: String,
+    pub delivered: bool,
+    pub peer_id: String,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,10 +118,12 @@ pub struct GetHistoryRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HistoryMessage {
+    pub id: String,
     pub peer_id: String,
     pub content: String,
     pub direction: String,
     pub timestamp: u64,
+    pub delivered: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -535,6 +554,165 @@ pub struct ApiContext {
     pub swarm_handle: Arc<scmessenger_core::transport::SwarmHandle>,
 }
 
+#[derive(Debug)]
+struct ApiRecipient {
+    public_key: String,
+    peer_id: libp2p::PeerId,
+    identity_id: String,
+}
+
+fn api_recipient_from_public_key(public_key: String) -> Result<ApiRecipient, (StatusCode, String)> {
+    let public_key = public_key.to_lowercase();
+    let identity_id = scmessenger_core::identity::keys::identity_id_from_public_key_hex(
+        &public_key,
+    )
+    .ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Recipient does not contain a valid Ed25519 public key".to_string(),
+        )
+    })?;
+
+    let key_bytes = hex::decode(&public_key).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Recipient public key is not valid hex".to_string(),
+        )
+    })?;
+    let key_bytes: [u8; 32] = key_bytes.try_into().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Recipient public key must be exactly 32 bytes".to_string(),
+        )
+    })?;
+    let ed25519_key =
+        libp2p::identity::ed25519::PublicKey::try_from_bytes(&key_bytes).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Recipient public key is not a valid Ed25519 key".to_string(),
+            )
+        })?;
+
+    Ok(ApiRecipient {
+        public_key,
+        peer_id: libp2p::identity::PublicKey::from(ed25519_key).to_peer_id(),
+        identity_id,
+    })
+}
+
+fn api_identifier_matches(query: &str, candidate: &str) -> bool {
+    query == candidate || query.eq_ignore_ascii_case(candidate)
+}
+
+/// Resolve a send target without trusting unauthenticated discovery data.
+///
+/// Contacts remain the first-choice source. If a peer has already sent an
+/// authenticated message, its envelope public key is retained in the inbox
+/// and is sufficient to address a reply. We deliberately do not auto-create a
+/// contact here: an explicit reply is allowed, but unsolicited traffic must
+/// not mutate the address book. Block checks run for both paths and fail
+/// closed on storage errors.
+fn resolve_api_recipient(
+    core: &scmessenger_core::IronCore,
+    query: &str,
+) -> Result<ApiRecipient, (StatusCode, String)> {
+    let query = query.trim();
+    let contacts = core.contacts_store_manager();
+    let contact_list = contacts.list().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to list contacts: {:?}", e),
+        )
+    })?;
+
+    for contact in contact_list {
+        // Older contact records can contain a PeerId or identity ID in the
+        // public_key column. They must not poison resolution for a sender
+        // whose authenticated envelope key is still available in the inbox.
+        let recipient = api_recipient_from_public_key(contact.public_key.clone()).ok();
+        let identity_id = recipient
+            .as_ref()
+            .map(|recipient| recipient.identity_id.clone());
+        let peer_id = recipient
+            .as_ref()
+            .map(|recipient| recipient.peer_id.to_string());
+        let nickname_match = contact
+            .nickname
+            .as_deref()
+            .is_some_and(|nickname| nickname.eq_ignore_ascii_case(query))
+            || contact
+                .local_nickname
+                .as_deref()
+                .is_some_and(|nickname| nickname.eq_ignore_ascii_case(query));
+
+        if api_identifier_matches(query, &contact.peer_id)
+            || api_identifier_matches(query, &contact.public_key)
+            || identity_id
+                .as_deref()
+                .is_some_and(|identity| api_identifier_matches(query, identity))
+            || peer_id
+                .as_deref()
+                .is_some_and(|peer| api_identifier_matches(query, peer))
+            || nickname_match
+        {
+            if let Some(recipient) = recipient {
+                return authorize_api_recipient(core, recipient);
+            }
+
+            tracing::warn!(
+                contact_peer_id = %contact.peer_id,
+                "Ignoring contact with malformed public key during API recipient resolution"
+            );
+        }
+    }
+
+    // A valid inline PeerId or public key can be resolved directly. This
+    // covers a connected peer even when discovery did not create a contact.
+    if let Ok(public_key) = core.resolve_identity(query.to_string()) {
+        if let Ok(recipient) = api_recipient_from_public_key(public_key) {
+            return authorize_api_recipient(core, recipient);
+        }
+    }
+
+    // For identity IDs and nicknames carried by an inbound message, use only
+    // the authenticated envelope key retained by the inbox. The decrypted
+    // payload and unauthenticated discovery record are not used as key proof.
+    for message in core.peek_received_messages().into_iter().rev() {
+        let Some(public_key) = message.sender_public_key_hex else {
+            continue;
+        };
+        let Ok(recipient) = api_recipient_from_public_key(public_key) else {
+            continue;
+        };
+        if api_identifier_matches(query, &message.sender_id)
+            || api_identifier_matches(query, &recipient.public_key)
+            || api_identifier_matches(query, &recipient.identity_id)
+            || api_identifier_matches(query, &recipient.peer_id.to_string())
+        {
+            return authorize_api_recipient(core, recipient);
+        }
+    }
+
+    Err((
+        StatusCode::NOT_FOUND,
+        format!("Contact or authenticated peer not found: {}", query),
+    ))
+}
+
+fn authorize_api_recipient(
+    core: &scmessenger_core::IronCore,
+    recipient: ApiRecipient,
+) -> Result<ApiRecipient, (StatusCode, String)> {
+    match core.is_peer_blocked(recipient.identity_id.clone(), None) {
+        Ok(true) => Err((StatusCode::FORBIDDEN, "Recipient is blocked".to_string())),
+        Ok(false) => Ok(recipient),
+        Err(e) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Unable to verify recipient block status: {:?}", e),
+        )),
+    }
+}
+
 pub async fn stop_node_via_api() -> Result<()> {
     use http_body_util::{BodyExt, Empty};
     use hyper::body::Bytes;
@@ -557,43 +735,13 @@ pub async fn stop_node_via_api() -> Result<()> {
 async fn handle_send_message(
     State(ctx): State<Arc<ApiContext>>,
     AxumJson(request): AxumJson<SendMessageRequest>,
-) -> Result<AxumJson<SendMessageResponse>, (StatusCode, String)> {
+) -> Result<(StatusCode, AxumJson<SendMessageResponse>), (StatusCode, String)> {
     let core = &ctx.core;
-    let contacts = core.contacts_store_manager();
-
-    let list = contacts.list().unwrap_or_default();
-    let contact = list
-        .into_iter()
-        .find(|c| c.peer_id == request.recipient || c.nickname.as_ref() == Some(&request.recipient))
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Contact not found".to_string()))?;
-
-    // contact.public_key (and contact.peer_id — they hold the same value) stores
-    // the Ed25519 public key as hex, not a libp2p 12D3Koo... base-58 peer ID.
-    // Derive the libp2p PeerId from the public key bytes.
-    let pk_bytes_vec = hex::decode(&contact.public_key).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid public key hex: {}", e),
-        )
-    })?;
-    let pk_bytes: [u8; 32] = pk_bytes_vec.try_into().map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            "Public key must be exactly 32 bytes".to_string(),
-        )
-    })?;
-    let libp2p_pub =
-        libp2p::identity::ed25519::PublicKey::try_from_bytes(&pk_bytes).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid Ed25519 public key: {}", e),
-            )
-        })?;
-    let peer_id = libp2p::identity::PublicKey::from(libp2p_pub).to_peer_id();
+    let recipient = resolve_api_recipient(core, &request.recipient)?;
 
     let prepared = core
         .prepare_message_with_id(
-            contact.public_key.clone(),
+            recipient.public_key.clone(),
             request.message.clone(),
             scmessenger_core::MessageType::Text,
             None,
@@ -605,25 +753,93 @@ async fn handle_send_message(
             )
         })?;
 
-    let sent = crate::ble_mesh::send_ble_message(&peer_id.to_string(), &prepared.envelope_data)
-        .await
-        .is_ok()
-        || ctx
+    let timestamp = scmessenger_core::util::unix_time_secs();
+    core.history_store_manager()
+        .add(scmessenger_core::store::MessageRecord {
+            id: prepared.message_id.clone(),
+            direction: scmessenger_core::store::MessageDirection::Sent,
+            peer_id: recipient.identity_id.clone(),
+            content: request.message,
+            timestamp,
+            sender_timestamp: timestamp,
+            delivered: false,
+            hidden: false,
+        })
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to persist outbound message: {:?}", e),
+            )
+        })?;
+
+    let ble_result =
+        crate::ble_mesh::send_ble_message(&recipient.peer_id.to_string(), &prepared.envelope_data)
+            .await;
+    let (http_status, status, error) = if ble_result.is_ok() {
+        (StatusCode::OK, "accepted".to_string(), None)
+    } else {
+        match ctx
             .swarm_handle
-            .send_message(peer_id, prepared.envelope_data, None, None)
+            .send_message(
+                recipient.peer_id,
+                prepared.envelope_data,
+                Some(recipient.identity_id.clone()),
+                None,
+            )
             .await
-            .is_ok();
+        {
+            Ok(()) => (StatusCode::OK, "accepted".to_string(), None),
+            Err(e) if ctx.swarm_handle.is_event_loop_alive() => (
+                StatusCode::ACCEPTED,
+                "retrying".to_string(),
+                Some(format!("Initial dispatch failed; retrying: {}", e)),
+            ),
+            Err(e) => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Message was not accepted by BLE or Swarm: {}", e),
+                ));
+            }
+        }
+    };
 
-    if !sent {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to send message via BLE and Swarm".to_string(),
-        ));
-    }
+    Ok((
+        http_status,
+        AxumJson(SendMessageResponse {
+            success: true,
+            error,
+            message_id: Some(prepared.message_id),
+            status: Some(status),
+        }),
+    ))
+}
 
-    Ok(AxumJson(SendMessageResponse {
-        success: true,
-        error: None,
+async fn handle_get_send_status(
+    State(ctx): State<Arc<ApiContext>>,
+    Path(message_id): Path<String>,
+) -> Result<AxumJson<SendMessageStatusResponse>, (StatusCode, String)> {
+    let record = ctx
+        .core
+        .history_store_manager()
+        .get(message_id.clone())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read message status: {:?}", e),
+            )
+        })?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Message not found".to_string()))?;
+
+    Ok(AxumJson(SendMessageStatusResponse {
+        message_id: record.id,
+        status: if record.delivered {
+            "delivered".to_string()
+        } else {
+            "pending".to_string()
+        },
+        delivered: record.delivered,
+        peer_id: record.peer_id,
+        timestamp: record.timestamp,
     }))
 }
 
@@ -783,6 +999,7 @@ async fn handle_get_history(
     let history_messages: Vec<HistoryMessage> = messages
         .into_iter()
         .map(|m| HistoryMessage {
+            id: m.id,
             peer_id: m.peer_id,
             content: m.content,
             direction: match m.direction {
@@ -790,6 +1007,7 @@ async fn handle_get_history(
                 scmessenger_core::store::MessageDirection::Received => "received".to_string(),
             },
             timestamp: m.timestamp,
+            delivered: m.delivered,
         })
         .collect();
 
@@ -1205,8 +1423,20 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
             "/health",
             get(|| async { axum::Json(serde_json::json!({"status": "healthy"})) }),
         )
+        .route(
+            "/version",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "version": BUILD_VERSION,
+                    "git_hash": BUILD_GIT_HASH,
+                    "build_time": BUILD_TIME,
+                    "core_provenance": scmessenger_core::get_build_provenance(),
+                }))
+            }),
+        )
         .route("/api/identity", get(handle_get_identity))
         .route("/api/send", post(handle_send_message))
+        .route("/api/send/:message_id", get(handle_get_send_status))
         .route(
             "/api/contacts",
             get(handle_get_contacts).post(handle_add_contact),
@@ -1246,4 +1476,92 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .context("API server error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_api_recipient, ApiRecipient};
+    use scmessenger_core::identity::keys::KeyPair;
+    use scmessenger_core::store::Contact;
+
+    fn test_recipient() -> ApiRecipient {
+        let key_pair = KeyPair::generate();
+        let public_key = hex::encode(key_pair.verifying_key().to_bytes());
+        super::api_recipient_from_public_key(public_key)
+            .expect("generated test key must resolve to an API recipient")
+    }
+
+    #[test]
+    fn api_send_resolves_contact_aliases_and_peer_id() {
+        let core = scmessenger_core::IronCore::new();
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test core identity should initialize");
+        let recipient = test_recipient();
+        let mut contact = Contact::new(recipient.peer_id.to_string(), recipient.public_key.clone());
+        contact.nickname = Some("Lucaso".to_string());
+        core.contacts_store_manager()
+            .add(contact)
+            .expect("test contact should persist");
+
+        for query in [
+            recipient.peer_id.to_string(),
+            recipient.public_key.clone(),
+            recipient.identity_id.clone(),
+            "Lucaso".to_string(),
+        ] {
+            let resolved =
+                resolve_api_recipient(&core, &query).expect("contact aliases should resolve");
+            assert_eq!(resolved.public_key, recipient.public_key);
+            assert_eq!(resolved.identity_id, recipient.identity_id);
+        }
+    }
+
+    #[test]
+    fn api_send_refuses_blocked_contact_alias() {
+        let core = scmessenger_core::IronCore::new();
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test core identity should initialize");
+        let recipient = test_recipient();
+        core.contacts_store_manager()
+            .add(Contact::new(
+                recipient.peer_id.to_string(),
+                recipient.public_key.clone(),
+            ))
+            .expect("test contact should persist");
+        core.block_peer(
+            recipient.identity_id.clone(),
+            None,
+            Some("api regression".to_string()),
+        )
+        .expect("test block should persist");
+
+        let error = resolve_api_recipient(&core, &recipient.peer_id.to_string())
+            .expect_err("blocked recipient must not resolve");
+        assert_eq!(error.0, axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn api_send_ignores_stale_contact_public_key() {
+        let core = scmessenger_core::IronCore::new();
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test core identity should initialize");
+        let recipient = test_recipient();
+
+        // This is the malformed shape reported by Windows: the contact's
+        // public_key field contains the base58 PeerId instead of Ed25519 hex.
+        core.contacts_store_manager()
+            .add(Contact::new(
+                recipient.peer_id.to_string(),
+                recipient.peer_id.to_string(),
+            ))
+            .expect("stale contact should persist");
+
+        let resolved = resolve_api_recipient(&core, &recipient.peer_id.to_string())
+            .expect("stale contact must not poison PeerId resolution");
+        assert_eq!(resolved.public_key, recipient.public_key);
+        assert_eq!(resolved.peer_id, recipient.peer_id);
+    }
 }

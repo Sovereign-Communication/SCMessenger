@@ -291,6 +291,8 @@ async fn handle_send_message(
     Ok(AxumJson(SendMessageResponse {
         success: true,
         error: None,
+        message_id: None,
+        status: Some("accepted".to_string()),
     }))
 }
 
@@ -400,6 +402,7 @@ async fn handle_get_history(
     let history_messages: Vec<HistoryMessage> = messages
         .into_iter()
         .map(|m| HistoryMessage {
+            id: m.id,
             peer_id: m.peer_id,
             content: m.content,
             direction: match m.direction {
@@ -407,6 +410,7 @@ async fn handle_get_history(
                 scmessenger_core::store::MessageDirection::Received => "received".to_string(),
             },
             timestamp: m.timestamp,
+            delivered: m.delivered,
         })
         .collect();
 

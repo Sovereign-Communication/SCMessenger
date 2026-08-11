@@ -12,7 +12,7 @@
 
 use libp2p::{Multiaddr, PeerId};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use web_time::{Duration, Instant};
@@ -300,6 +300,13 @@ impl CircuitRelayLadder {
         relays.push((relay_peer_id, external_addrs));
     }
 
+    /// Remove a relay after its authenticated connection is gone.
+    pub fn remove_relay(&self, relay_peer_id: &PeerId) {
+        self.relays
+            .write()
+            .retain(|(peer_id, _)| peer_id != relay_peer_id);
+    }
+
     /// Build a list of circuit-relay multiaddrs to a target peer through known relays.
     ///
     /// Returns a list of circuit-relay addresses in the format:
@@ -308,28 +315,46 @@ impl CircuitRelayLadder {
         use libp2p::multiaddr::Protocol;
 
         let relays = self.relays.read();
-        let mut relay_addrs = Vec::new();
+        let mut relay_addrs = HashSet::new();
 
         for (relay_pid, external_addrs) in relays.iter() {
+            // A relay cannot provide a useful circuit to itself. More
+            // importantly, accepting a self-target here creates a circuit
+            // path that returns to the originating node and multiplies during
+            // mesh growth.
+            if relay_pid == &target_peer_id {
+                continue;
+            }
             for relay_addr in external_addrs {
-                // Only use addresses that have a proper IP and port.
+                // Only use direct addresses with a proper IP and port. Identify
+                // can repeat /p2p and /p2p-circuit components when a peer has
+                // already used a relay; appending another circuit suffix would
+                // create nested/self-returning routes.
+                if relay_addr
+                    .iter()
+                    .any(|proto| matches!(proto, Protocol::P2pCircuit))
+                {
+                    continue;
+                }
+                let mut direct_addr = Multiaddr::empty();
                 let mut has_ip = false;
                 let mut has_port = false;
                 for proto in relay_addr.iter() {
                     match proto {
                         Protocol::Ip4(_) | Protocol::Ip6(_) => has_ip = true,
                         Protocol::Tcp(_) | Protocol::Udp(_) => has_port = true,
-                        _ => {}
+                        Protocol::P2p(_) => {}
+                        other => direct_addr.push(other),
                     }
                 }
 
                 if has_ip && has_port {
                     // Construct circuit-relay address: base → /p2p/<relay> → /p2p-circuit → /p2p/<target>
-                    let mut circuit_addr = relay_addr.clone();
+                    let mut circuit_addr = direct_addr;
                     circuit_addr.push(Protocol::P2p(*relay_pid));
                     circuit_addr.push(Protocol::P2pCircuit);
                     circuit_addr.push(Protocol::P2p(target_peer_id));
-                    relay_addrs.push(circuit_addr);
+                    relay_addrs.insert(circuit_addr);
                 }
             }
         }
@@ -342,7 +367,7 @@ impl CircuitRelayLadder {
             );
         }
 
-        relay_addrs
+        relay_addrs.into_iter().collect()
     }
 }
 
@@ -503,6 +528,49 @@ mod tests {
         // Check that the circuit relay address contains both relay and target peer IDs.
         let addr_str = relay_addresses[0].to_string();
         assert!(addr_str.contains("/p2p-circuit/"));
+    }
+
+    #[test]
+    fn circuit_relay_ladder_rejects_nested_and_self_targeted_routes() {
+        let ladder = CircuitRelayLadder::new();
+        let relay_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let other_relay_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        ladder.add_relay(
+            relay_pid,
+            vec![
+                format!("/ip4/192.168.1.100/tcp/4001/p2p/{relay_pid}/p2p-circuit/p2p/{target_pid}")
+                    .parse()
+                    .expect("nested relay fixture is valid"),
+                "/ip4/192.168.1.101/tcp/4001"
+                    .parse()
+                    .expect("direct relay fixture is valid"),
+            ],
+        );
+        ladder.add_relay(
+            other_relay_pid,
+            vec!["/ip4/192.168.1.102/tcp/4001"
+                .parse()
+                .expect("direct relay fixture is valid")],
+        );
+
+        let routes = ladder.build_relay_addresses(target_pid);
+        assert_eq!(routes.len(), 2);
+        assert!(routes
+            .iter()
+            .all(|addr| { addr.to_string().matches("/p2p-circuit/").count() == 1 }));
+        assert!(ladder.build_relay_addresses(relay_pid).iter().all(|addr| {
+            !addr
+                .to_string()
+                .contains(&format!("/p2p/{relay_pid}/p2p-circuit/p2p/{relay_pid}"))
+        }));
     }
 
     #[test]

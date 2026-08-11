@@ -8,6 +8,7 @@ echo " Verifying platform security configurations..."
 echo ""
 
 FAILED=0
+SECRET_PATTERN="(password|secret|api[-_]?key)[[:space:]]*=[[:space:]]*[\"'][^\"']{8,}[\"']"
 
 # ============================================================================
 # Android Security Checks
@@ -21,7 +22,7 @@ if [[ -d "android" ]]; then
     if [[ -f "android/app/build.gradle" ]] || [[ -f "android/app/build.gradle.kts" ]]; then
         echo "Checking ProGuard/R8 configuration..."
         
-        if grep -q "minifyEnabled true" android/app/build.gradle* 2>/dev/null; then
+        if grep -Eq "minifyEnabled[[:space:]]*=?[[:space:]]*true" android/app/build.gradle* 2>/dev/null; then
             echo " ProGuard/R8 is enabled for release builds"
         else
             echo " ProGuard/R8 is NOT enabled for release builds"
@@ -42,8 +43,8 @@ if [[ -d "android" ]]; then
     echo ""
     echo "Checking for hardcoded secrets in Android code..."
     
-    if rg -i '(password|secret|api[_-]?key)\s*=\s*["\'][^"\']{8,}["\']' \
-        android/app/src --type kotlin --type java 2>/dev/null | grep -v "BuildConfig" | grep -v "test" || true; then
+    if rg -i "$SECRET_PATTERN" \
+        android/app/src --type kotlin --type java 2>/dev/null | grep -v "BuildConfig" | grep -v "test"; then
         echo " Potential hardcoded secrets found in Android code"
         FAILED=$((FAILED + 1))
     else
@@ -64,14 +65,15 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Check if iOS directory exists
 if [[ -d "iOS" ]]; then
     # Check App Transport Security (ATS) configuration
-    if [[ -f "iOS/SCMessenger/Info.plist" ]]; then
+    IOS_PLIST="iOS/SCMessenger/SCMessenger/Info.plist"
+    if [[ -f "$IOS_PLIST" ]]; then
         echo "Checking App Transport Security (ATS) configuration..."
         
-        if grep -q "NSAppTransportSecurity" iOS/SCMessenger/Info.plist; then
+        if grep -q "NSAppTransportSecurity" "$IOS_PLIST"; then
             echo " App Transport Security (ATS) is configured"
             
             # Check if ATS is properly configured (not completely disabled)
-            if grep -A 5 "NSAppTransportSecurity" iOS/SCMessenger/Info.plist | grep -q "NSAllowsArbitraryLoads.*true"; then
+            if grep -A 5 "NSAppTransportSecurity" "$IOS_PLIST" | grep -q "NSAllowsArbitraryLoads.*true"; then
                 echo "️  WARNING: ATS allows arbitrary loads (insecure)"
                 echo "   Consider restricting to specific domains with NSExceptionDomains"
             else
@@ -90,8 +92,8 @@ if [[ -d "iOS" ]]; then
     echo ""
     echo "Checking for hardcoded secrets in iOS code..."
     
-    if rg -i '(password|secret|api[_-]?key)\s*=\s*["\'][^"\']{8,}["\']' \
-        iOS/SCMessenger --type swift 2>/dev/null | grep -v "test" || true; then
+    if rg -i "$SECRET_PATTERN" \
+        iOS/SCMessenger --type swift 2>/dev/null | grep -v "test"; then
         echo " Potential hardcoded secrets found in iOS code"
         FAILED=$((FAILED + 1))
     else
@@ -112,9 +114,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Check for hardcoded secrets in Rust code
 echo "Checking for hardcoded secrets in Rust code..."
 
-if rg -i '(password|secret|api[_-]?key)\s*=\s*["\'][^"\']{8,}["\']' \
+if rg -i "$SECRET_PATTERN" \
     core/src mobile/src cli/src --type rust 2>/dev/null | \
-    grep -v "test" | grep -v "example" | grep -v "TODO" || true; then
+    grep -v "test" | grep -v "example" | grep -v "TODO"; then
     echo " Potential hardcoded secrets found in Rust code"
     FAILED=$((FAILED + 1))
 else

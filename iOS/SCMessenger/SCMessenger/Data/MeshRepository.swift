@@ -948,8 +948,12 @@ final class MeshRepository {
         discovery.onLanPeerResolved = { [weak self] peerId, host, port in
             Task { @MainActor [weak self] in
                 guard let self, let bridge = self.swarmBridge else { return }
+                guard self.isLibp2pPeerId(peerId) else {
+                    self.logger.warning("mDNS: refusing to dial unresolved peer ID \(peerId)")
+                    return
+                }
                 let ipProto = host.contains(":") ? "ip6" : "ip4"
-                let multiaddr = "/\(ipProto)/\(host)/tcp/\(port)"
+                let multiaddr = "/\(ipProto)/\(host)/tcp/\(port)/p2p/\(peerId)"
                 self.logger.info("mDNS: Dialing resolved LAN peer \(peerId) at \(multiaddr)")
                 do {
                     try await bridge.dial(multiaddr: multiaddr)
@@ -1773,6 +1777,11 @@ final class MeshRepository {
         let normalizedSenderKey = normalizePublicKey(senderPublicKeyHex)
         let rawContent = String(data: data, encoding: .utf8) ?? "[binary]"
         let decodedPayload = decodeMessageWithIdentityHints(rawContent)
+        let messageKind = decodedPayload.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if messageKind == "receipt" || isBareDeliveryReceiptPayload(decodedPayload.text) {
+            logDiagnostic("msg_rx_suppressed kind=receipt sender=\(senderId) msg=\(messageId)")
+            return
+        }
         let hintedIdentity = decodedPayload.hints
         let hintedKey = normalizePublicKey(hintedIdentity?.publicKey)
         let verifiedHints: MessageIdentityHints? = {
@@ -1822,7 +1831,6 @@ final class MeshRepository {
         }
 
         // Auto-upsert contact: senderPublicKeyHex is guaranteed valid (Rust verified it during decrypt)
-        let messageKind = decodedPayload.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let isChatEvent = messageKind == "text" || messageKind.isEmpty
 
         let existingContact = try? contactManager?.get(peerId: canonicalPeerId)
@@ -1971,7 +1979,7 @@ final class MeshRepository {
             if let routePeerId, routePeerId != canonicalPeerId {
                 updateDiscoveredPeer(routePeerId, info: discoveryInfo)
             }
-            let listeners = ((routePeerId.map(getDialHintsForRoutePeer(_:)) ?? []) + hintedDialCandidates)
+            let listeners = ((routePeerId.map { self.getDialHintsForRoutePeer($0) } ?? []) + hintedDialCandidates)
                 .reduce(into: [String]()) { acc, addr in
                     if !acc.contains(addr) { acc.append(addr) }
                 }
@@ -2626,6 +2634,23 @@ final class MeshRepository {
         return encoded
     }
 
+    private func isBareDeliveryReceiptPayload(_ raw: String) -> Bool {
+        guard let data = raw.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+
+        let allowedKeys: Set<String> = ["message_id", "status", "timestamp"]
+        guard Set(json.keys).isSubset(of: allowedKeys),
+              let messageId = json["message_id"] as? String,
+              !messageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let status = (json["status"] as? String)?.lowercased(),
+              ["sent", "delivered", "read", "failed"].contains(status),
+              let timestamp = json["timestamp"] as? NSNumber,
+              timestamp.int64Value >= 0
+        else { return false }
+        return true
+    }
+
     private func decodeMessageWithIdentityHints(_ raw: String) -> DecodedMessagePayload {
         guard let data = raw.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -2901,7 +2926,40 @@ final class MeshRepository {
         }
     }
 
-    func getDialHintsForRoutePeer(_ routePeerId: String) -> [String] {
+    private func promoteMatchingLedgerSeeds(peerId: String, listenAddrs: [String]) {
+        guard isLibp2pPeerId(peerId), let ledgerManager else { return }
+
+        let seedAddresses = Set(
+            ledgerManager
+                .seedAddresses(limit: 32)
+                .map { $0.multiaddr.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        guard !seedAddresses.isEmpty else { return }
+
+        var promoted = Set<String>()
+        for rawAddress in listenAddrs {
+            guard let normalized = normalizeAddressHint(rawAddress),
+                  !normalized.contains("/p2p-circuit") else { continue }
+
+            let baseAddress = peerIdStrippedMultiaddr(normalized)
+            guard seedAddresses.contains(baseAddress), promoted.insert(baseAddress).inserted else { continue }
+            ledgerManager.recordConnection(multiaddr: baseAddress, peerId: peerId)
+            logger.info("Ledger: promoted verified bootstrap seed \(baseAddress) for \(peerId)")
+        }
+    }
+
+    private func peerIdStrippedMultiaddr(_ multiaddr: String) -> String {
+        guard let range = multiaddr.range(of: "/p2p/", options: .backwards) else {
+            return multiaddr
+        }
+        return String(multiaddr[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func getDialHintsForRoutePeer(
+        _ routePeerId: String,
+        includeRelayCircuits: Bool = true
+    ) -> [String] {
         let normalizedRoute = routePeerId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isLibp2pPeerId(normalizedRoute) else { return [] }
 
@@ -2911,7 +2969,7 @@ final class MeshRepository {
         return buildDialCandidatesForPeer(
             routePeerId: normalizedRoute,
             rawAddresses: fromLedger,
-            includeRelayCircuits: true
+            includeRelayCircuits: includeRelayCircuits
         )
     }
 
@@ -2966,7 +3024,7 @@ final class MeshRepository {
         }
 
         for peer in aggregates.values {
-            let listeners = peer.routePeerId.map(getDialHintsForRoutePeer(_:)) ?? []
+            let listeners = peer.routePeerId.map { self.getDialHintsForRoutePeer($0) } ?? []
             if let publicKey = peer.publicKey, !publicKey.isEmpty {
                 emitIdentityDiscoveredIfChanged(
                     peerId: peer.canonicalPeerId,
@@ -3233,6 +3291,27 @@ final class MeshRepository {
         ledgerManager.recordFailure(multiaddr: multiaddr)
     }
 
+    /// Persist bootstrap addresses learned from an invite or QR join bundle.
+    /// Seeds remain lower-confidence until an active transport session
+    /// identifies the peer, but they must survive this screen and app launch.
+    @discardableResult
+    func importSeedAddresses(_ multiaddrs: [String]) -> Int {
+        guard let ledgerManager = ledgerManager else {
+            logger.warning("Cannot import ledger seeds before LedgerManager initialization")
+            return 0
+        }
+
+        let seeds = multiaddrs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { SeedLedgerEntry(multiaddr: $0) }
+        guard !seeds.isEmpty else { return 0 }
+
+        let added = Int(ledgerManager.importSeedEntries(entries: seeds))
+        logger.info("Ledger: imported \(added) bootstrap seed(s) from join bundle")
+        return added
+    }
+
     func getDialableAddresses() throws -> [LedgerEntry] {
         guard let ledgerManager = ledgerManager else {
             throw MeshError.notInitialized("LedgerManager not initialized")
@@ -3241,17 +3320,19 @@ final class MeshRepository {
     }
 
     /// Returns bounded, deduplicated bootstrap candidates from the ledger.
-    /// Preferred relays lead the list, followed by any other proven dialable
-    /// addresses. No platform-owned fallback address is injected.
+    /// Preferred relays lead the list, followed by other proven dialable
+    /// addresses and finally invite/QR seeds for cold-start recovery. No
+    /// platform-owned fallback address is injected.
     private func ledgerBootstrapEntries(maxCount: UInt32 = 10) -> [LedgerEntry] {
         guard let ledgerManager else { return [] }
 
         let preferred = ledgerManager.getPreferredRelays(limit: maxCount)
         let dialable = ledgerManager.dialableAddresses()
+        let seeds = ledgerManager.seedAddresses(limit: maxCount)
         var seen = Set<String>()
         var result: [LedgerEntry] = []
 
-        for entry in preferred + dialable {
+        for entry in preferred + dialable + seeds {
             let address = entry.multiaddr.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !address.isEmpty, seen.insert(address).inserted else { continue }
             result.append(entry)
@@ -4204,6 +4285,12 @@ final class MeshRepository {
             rawAddresses: listenAddrs,
             includeRelayCircuits: true
         )
+
+        // Identify confirms that an active transport session exists. If the
+        // peer advertises an address previously imported from QR/invite, make
+        // that exact seed proven so it participates in relay ranking on the
+        // next launch. Relay circuits are routes, not peer listeners.
+        promoteMatchingLedgerSeeds(peerId: trimmedPeerId, listenAddrs: listenAddrs)
 
         var syncPeerIds: [String] = [peerId]
         let isHeadless = agentVersion.contains("/headless/")
@@ -5935,12 +6022,34 @@ final class MeshRepository {
 
     private func isDialableAddress(_ multiaddr: String) -> Bool {
         if multiaddr.contains("/p2p-circuit") { return true }
+        if let ip6 = extractIpv6FromMultiaddr(multiaddr), isSpecialUseIPv6(ip6) {
+            // Do not publish loopback, unspecified, link-local, ULA, or
+            // multicast IPv6 hints. Public IPv6 remains eligible because a
+            // roaming iOS peer may need it for an external hole-punch attempt.
+            return false
+        }
         guard let ip = extractIpv4FromMultiaddr(multiaddr) else { return true }
         if isSpecialUseIPv4(ip) { return false }
         if isPrivateIPv4(ip) {
             return isSameLanAddress(multiaddr)
         }
         return true
+    }
+
+    private func extractIpv6FromMultiaddr(_ multiaddr: String) -> String? {
+        guard let marker = multiaddr.range(of: "/ip6/") else { return nil }
+        let remainder = multiaddr[marker.upperBound...]
+        return remainder.split(separator: "/", maxSplits: 1).first.map(String.init)
+    }
+
+    private func isSpecialUseIPv6(_ ip: String) -> Bool {
+        let normalized = ip.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "::"
+            || normalized == "::1"
+            || normalized.hasPrefix("fc")
+            || normalized.hasPrefix("fd")
+            || normalized.hasPrefix("fe80:")
+            || normalized.hasPrefix("ff")
     }
 
     private func parseIPv4Octets(_ ip: String) -> [Int]? {
@@ -5987,7 +6096,7 @@ final class MeshRepository {
         let dynamicRelays = discoveredPeerMap.filter { $0.value.isRelay && !$0.value.isFull && $0.key != targetPeerId }
         for (relayPeerId, _) in dynamicRelays where isLibp2pPeerId(relayPeerId) {
             // If we have direct addresses for this relay, try using it
-            let directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            let directAddrs = getDialHintsForRoutePeer(relayPeerId, includeRelayCircuits: false)
             for addr in directAddrs {
                 let circuit = "\(addr)/p2p/\(relayPeerId)/p2p-circuit/p2p/\(targetPeerId)"
                 if !relays.contains(circuit) { relays.append(circuit) }

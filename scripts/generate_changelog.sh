@@ -63,10 +63,11 @@ echo "" >> "$CHANGELOG_FILE"
 # Function to extract PR number from commit message
 extract_pr_number() {
     local msg="$1"
+    local pr_pattern='(close[sd]?|fix(es)?|resolve[sd]?) #([0-9]+)'
     # Look for patterns like (#123) or closes #123
     if [[ "$msg" =~ \(#([0-9]+)\) ]]; then
         echo "${BASH_REMATCH[1]}"
-    elif [[ "$msg" =~ (close[sd]?|fix(es)?|resolve[sd]?) #([0-9]+) ]]; then
+    elif [[ "$msg" =~ $pr_pattern ]]; then
         echo "${BASH_REMATCH[3]}"
     fi
 }

@@ -1,60 +1,161 @@
 //! Best-effort Bluetooth adapter discovery via btleplug (desktop CLI only).
 //! Full GATT advertising/scanning and Drift→RPC proxy are follow-on work.
 
-use btleplug::api::Manager as _;
+use btleplug::api::{Central, CentralState, Manager as _};
+use futures_util::FutureExt;
+use std::panic::AssertUnwindSafe;
 
-/// Log whether the local Bluetooth stack exposes at least one adapter.
-/// On Windows, handles adapter not present and permission denied cases gracefully.
-pub async fn probe_and_log() {
+fn classify_adapter_error(operation: &str, error: impl std::fmt::Display) -> BleError {
+    let reason = error.to_string().to_lowercase();
+    if reason.contains("access denied") || reason.contains("permission") {
+        BleError::PermissionDenied
+    } else if reason.contains("not found") || reason.contains("no device") {
+        BleError::NoAdapter
+    } else {
+        BleError::Other(format!("{} failed", operation))
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+async fn new_manager() -> BleResult<btleplug::platform::Manager> {
+    match AssertUnwindSafe(btleplug::platform::Manager::new())
+        .catch_unwind()
+        .await
+    {
+        Ok(Ok(manager)) => Ok(manager),
+        Ok(Err(_)) => Err(BleError::ManagerInitFailed(
+            "btleplug manager initialization failed".to_string(),
+        )),
+        Err(_) => Err(BleError::ManagerInitFailed(
+            "btleplug manager initialization panicked".to_string(),
+        )),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+async fn list_adapters(
+    manager: &btleplug::platform::Manager,
+) -> BleResult<Vec<btleplug::platform::Adapter>> {
+    match AssertUnwindSafe(manager.adapters()).catch_unwind().await {
+        Ok(Ok(adapters)) => Ok(adapters),
+        Ok(Err(error)) => Err(classify_adapter_error(
+            "btleplug adapter enumeration",
+            error,
+        )),
+        Err(_) => Err(BleError::Other(
+            "btleplug adapter enumeration panicked".to_string(),
+        )),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+async fn inspect_adapters(
+    adapters: &[btleplug::platform::Adapter],
+) -> BleResult<Vec<BleAdapterInfo>> {
+    let mut infos = Vec::with_capacity(adapters.len());
+    for adapter in adapters {
+        let state = match AssertUnwindSafe(adapter.adapter_state())
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(state)) => state,
+            Ok(Err(error)) => {
+                return Err(classify_adapter_error(
+                    "btleplug adapter state probe",
+                    error,
+                ));
+            }
+            Err(_) => {
+                return Err(BleError::Other(
+                    "btleplug adapter state probe panicked".to_string(),
+                ));
+            }
+        };
+
+        infos.push(BleAdapterInfo {
+            // btleplug does not expose a stable cross-platform address/name here.
+            name: None,
+            address: None,
+            is_powered: state == CentralState::PoweredOn,
+            // An adapter returned by btleplug implements the BLE Central API. This
+            // does not imply that the adapter can advertise as a peripheral.
+            supports_le: true,
+        });
+    }
+
+    if infos.iter().any(|info| info.is_powered) {
+        Ok(infos)
+    } else {
+        Err(BleError::AdapterNotPowered)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+async fn probe_status() -> BleStatus {
+    let manager = match new_manager().await {
+        Ok(manager) => manager,
+        Err(error) => return BleStatus::Unavailable(error),
+    };
+    let adapters = match list_adapters(&manager).await {
+        Ok(adapters) => adapters,
+        Err(error) => return BleStatus::Unavailable(error),
+    };
+    if adapters.is_empty() {
+        return BleStatus::Unavailable(BleError::NoAdapter);
+    }
+
+    match inspect_adapters(&adapters).await {
+        Ok(infos) => BleStatus::Available(infos),
+        Err(error) => BleStatus::Unavailable(error),
+    }
+}
+
+/// Probe and log the local Bluetooth stack without allowing a btleplug panic to
+/// escape into the CLI task. A visible adapter is not treated as peripheral
+/// advertising support.
+pub async fn probe_and_log() -> BleStatus {
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
-        match btleplug::platform::Manager::new().await {
-            Ok(manager) => {
-                tracing::info!("btleplug: Bluetooth manager created successfully");
-
-                match manager.adapters().await {
-                    Ok(adapters) => {
-                        if adapters.is_empty() {
-                            tracing::warn!(
-                                "btleplug: no Bluetooth adapters found. BLE functionality will be unavailable."
-                            );
-                        } else {
-                            tracing::info!(
-                                "btleplug: acquired Bluetooth manager; {} adapter(s) visible",
-                                adapters.len()
-                            );
-                            for a in adapters.iter().take(3) {
-                                tracing::debug!("btleplug adapter: {:?}", a);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Handle Windows-specific permission denied errors
-                        let err_str = e.to_string().to_lowercase();
-                        if err_str.contains("access denied") || err_str.contains("permission") {
-                            tracing::warn!(
-                                "btleplug: permission denied accessing Bluetooth adapters.
-                                 Check Windows Bluetooth permissions in Settings > Privacy > Bluetooth.
-                                 BLE functionality will be unavailable."
-                            );
-                        } else if err_str.contains("not found") || err_str.contains("no device") {
-                            tracing::warn!(
-                                "btleplug: no Bluetooth adapter found. BLE daemon will operate in fallback mode."
-                            );
-                        } else {
-                            tracing::warn!("btleplug: failed to list adapters: {}", e);
-                        }
-                    }
-                }
+        let status = probe_status().await;
+        match &status {
+            BleStatus::Available(adapters) => {
+                tracing::info!(
+                    route = "ble_probe",
+                    adapter_count = adapters.len(),
+                    terminal_result = "available",
+                    "btleplug BLE adapter probe"
+                );
             }
-            Err(e) => {
-                tracing::warn!("btleplug: failed to create manager: {}", e);
+            BleStatus::Unavailable(error) => {
+                tracing::warn!(
+                    route = "ble_probe",
+                    terminal_result = "unavailable",
+                    error = %error,
+                    "btleplug BLE adapter probe"
+                );
+            }
+            BleStatus::Disabled => {
+                tracing::warn!(
+                    route = "ble_probe",
+                    terminal_result = "disabled",
+                    "btleplug BLE adapter probe"
+                );
             }
         }
+        status
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
-        tracing::debug!("btleplug: BLE probe skipped on this target OS");
+        let status = BleStatus::Unavailable(BleError::Other(
+            "BLE not supported on this platform".to_string(),
+        ));
+        tracing::debug!(
+            route = "ble_probe",
+            terminal_result = "unavailable",
+            error = ?status,
+            "btleplug BLE adapter probe"
+        );
+        status
     }
 }
 
@@ -96,7 +197,8 @@ pub type BleResult<T> = Result<T, BleError>;
 /// BLE daemon status
 #[derive(Debug, Clone, PartialEq)]
 pub enum BleStatus {
-    /// BLE is fully operational
+    /// At least one powered-on btleplug BLE Central adapter was verified.
+    /// This does not imply peripheral advertising support.
     Available(Vec<BleAdapterInfo>),
     /// BLE is unavailable but can be retried
     Unavailable(BleError),
@@ -163,29 +265,20 @@ impl BleDaemon {
     pub async fn initialize(&mut self) -> BleResult<()> {
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         {
-            let manager = match btleplug::platform::Manager::new().await {
-                Ok(m) => m,
-                Err(e) => {
-                    self.status =
-                        BleStatus::Unavailable(BleError::ManagerInitFailed(e.to_string()));
-                    return Err(BleError::ManagerInitFailed(e.to_string()));
+            self.adapters.clear();
+            let manager = match new_manager().await {
+                Ok(manager) => manager,
+                Err(error) => {
+                    self.status = BleStatus::Unavailable(error.clone());
+                    return Err(error);
                 }
             };
 
-            let adapters = match manager.adapters().await {
+            let adapters = match list_adapters(&manager).await {
                 Ok(adapters) => adapters,
-                Err(e) => {
-                    let err_str = e.to_string().to_lowercase();
-                    let ble_error =
-                        if err_str.contains("access denied") || err_str.contains("permission") {
-                            BleError::PermissionDenied
-                        } else if err_str.contains("not found") || err_str.contains("no device") {
-                            BleError::NoAdapter
-                        } else {
-                            BleError::Other(e.to_string())
-                        };
-                    self.status = BleStatus::Unavailable(ble_error.clone());
-                    return Err(ble_error);
+                Err(error) => {
+                    self.status = BleStatus::Unavailable(error.clone());
+                    return Err(error);
                 }
             };
 
@@ -194,8 +287,15 @@ impl BleDaemon {
                 return Err(BleError::NoAdapter);
             }
 
+            let adapter_info = match inspect_adapters(&adapters).await {
+                Ok(info) => info,
+                Err(error) => {
+                    self.status = BleStatus::Unavailable(error.clone());
+                    return Err(error);
+                }
+            };
             self.adapters = adapters;
-            self.status = BleStatus::Available(self.get_adapter_info());
+            self.status = BleStatus::Available(adapter_info);
             Ok(())
         }
 
@@ -208,19 +308,6 @@ impl BleDaemon {
                 "BLE not supported on this platform".to_string(),
             ))
         }
-    }
-
-    /// Get information about all detected adapters.
-    fn get_adapter_info(&self) -> Vec<BleAdapterInfo> {
-        self.adapters
-            .iter()
-            .map(|_| BleAdapterInfo {
-                name: Some("BLE Adapter".to_string()),
-                address: None,
-                is_powered: true,
-                supports_le: true,
-            })
-            .collect()
     }
 
     /// Check if BLE is available and operational.
@@ -243,20 +330,9 @@ impl BleDaemon {
             )));
         }
 
-        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-        {
-            Ok(vec![
-                "Scan result (simulated)".to_string();
-                self.adapters.len()
-            ])
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        {
-            Err(BleError::Other(
-                "BLE scan not supported on this platform".to_string(),
-            ))
-        }
+        Err(BleError::Other(
+            "BLE scan is not implemented by BleDaemon; use the GATT central ingress".to_string(),
+        ))
     }
 
     /// Advertise a service via BLE.
@@ -272,17 +348,10 @@ impl BleDaemon {
             )));
         }
 
-        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-        {
-            Ok(())
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        {
-            Err(BleError::Other(
-                "BLE advertising not supported on this platform".to_string(),
-            ))
-        }
+        Err(BleError::Other(
+            "BLE peripheral advertising requires a native platform GATT API; btleplug does not provide it here"
+                .to_string(),
+        ))
     }
 
     /// Gracefully shutdown the BLE daemon.
@@ -302,17 +371,7 @@ impl Default for BleDaemon {
 pub async fn is_ble_available() -> bool {
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
-        match btleplug::platform::Manager::new().await {
-            Ok(manager) => match manager.adapters().await {
-                Ok(adapters) => !adapters.is_empty(),
-                Err(e) => {
-                    let err_str = e.to_string().to_lowercase();
-                    // Don't fail on permission errors - they're common on Windows
-                    !err_str.contains("not found") && !err_str.contains("no device")
-                }
-            },
-            Err(_) => false,
-        }
+        matches!(probe_status().await, BleStatus::Available(_))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]

@@ -113,7 +113,7 @@ pull_model() {
                         break
                     fi
                 fi
-            done <<"$pull_response"
+            done <<< "$pull_response"
         fi
 
         if [ $attempt -lt $max_attempts ]; then

@@ -16,6 +16,7 @@ import Combine
 ///
 /// Browse both the libp2p service used by Android and the legacy iOS service.
 /// Keeping both avoids regressing iOS-to-iOS discovery while adding Android parity.
+@MainActor
 final class mDNSServiceDiscovery: NSObject {
     private let logger: Logger = Logger(subsystem: "com.scmessenger", category: "mDNS")
     private weak var meshRepository: MeshRepository?
@@ -77,12 +78,17 @@ final class mDNSServiceDiscovery: NSObject {
 
         advertisingGeneration &+= 1
         let generation = advertisingGeneration
-        logger.info("Starting mDNS advertising for \(self.serviceName) on port \(port)")
+        let identity = meshRepository?.getFullIdentityInfo()
+        let advertisedPeerId = identity?.libp2pPeerId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let advertisedServiceName = advertisedPeerId.flatMap { peerId in
+            peerId.isEmpty ? nil : peerId
+        } ?? serviceName
+        logger.info("Starting mDNS advertising for \(advertisedServiceName) on port \(port)")
         let services = serviceTypes.map { serviceType in
             let service = NetService(
                 domain: "local.",
                 type: serviceType,
-                name: serviceName,
+                name: advertisedServiceName,
                 port: port
             )
             service.delegate = self
@@ -98,17 +104,26 @@ final class mDNSServiceDiscovery: NSObject {
                   self.localServices.count == services.count else { return }
 
             if let identity = self.meshRepository?.getFullIdentityInfo(),
-               let peerId = identity.libp2pPeerId,
-               let publicKey = identity.publicKeyHex {
-                let txtRecord: [String: Data] = [
+               let peerId = identity.libp2pPeerId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !peerId.isEmpty {
+                let advertisedHost = self.meshRepository?.getLocalIpAddress() ?? "0.0.0.0"
+                let dnsaddr = "/ip4/\(advertisedHost)/tcp/\(port)/p2p/\(peerId)"
+                var txtRecord: [String: Data] = [
+                    // libp2p's canonical mDNS TXT contract.
+                    "dnsaddr": Data(dnsaddr.utf8),
+                    // Compatibility aliases used by the mobile DNS-SD peers.
+                    "peer-id": Data(peerId.utf8),
+                    "p2p": Data(peerId.utf8),
                     "peer_id": Data(peerId.utf8),
-                    "pubkey": Data((String(publicKey.prefix(16)) + "...").utf8),
                     "device_id": Data((identity.deviceId ?? "").utf8),
                     "version": Data("1.0".utf8),
                     "transport": Data("tcp".utf8)
                 ]
+                if let publicKey = identity.publicKeyHex {
+                    txtRecord["pubkey"] = Data((String(publicKey.prefix(16)) + "...").utf8)
+                }
                 services.forEach { $0.setTXTRecord(NetService.data(fromTXTRecord: txtRecord)) }
-                self.logger.debug("mDNS TXT record set: \(txtRecord.keys.sorted())")
+                self.logger.debug("mDNS TXT record set: \(txtRecord.keys.sorted()) dnsaddr=\(dnsaddr)")
             }
             services.forEach { $0.publish() }
         }
@@ -165,6 +180,31 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
 // MARK: - NetServiceDelegate
 
 extension mDNSServiceDiscovery: NetServiceDelegate {
+    private func resolvedTXTValues(for service: NetService) -> [String: String] {
+        guard let data = service.txtRecordData() else {
+            return [:]
+        }
+        let records = NetService.dictionary(fromTXTRecord: data)
+        return records.reduce(into: [String: String]()) { result, entry in
+            guard let value = String(data: entry.value, encoding: .utf8) else { return }
+            result[entry.key.lowercased()] = value
+        }
+    }
+
+    private func peerId(from txtValues: [String: String]) -> String? {
+        let direct = ["peer-id", "p2p", "peer_id"]
+            .compactMap { txtValues[$0]?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { PeerIdValidator.isLibp2pPeerId($0) }
+        if let direct { return direct }
+
+        guard let dnsaddr = txtValues["dnsaddr"] else { return nil }
+        let components = dnsaddr.split(separator: "/", omittingEmptySubsequences: true)
+        guard let p2pIndex = components.firstIndex(of: "p2p"),
+              components.index(after: p2pIndex) < components.endIndex else { return nil }
+        let candidate = String(components[components.index(after: p2pIndex)])
+        return PeerIdValidator.isLibp2pPeerId(candidate) ? candidate : nil
+    }
+
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let addresses = sender.addresses, !addresses.isEmpty else {
             logger.warning("mDNS service resolved but no addresses: \(sender.name)")
@@ -194,10 +234,26 @@ extension mDNSServiceDiscovery: NetServiceDelegate {
             }
         }
 
-        logger.info("mDNS service resolved: \(sender.name) at \(host):\(port)")
+        let txtValues = resolvedTXTValues(for: sender)
+        let resolvedPeerId = peerId(from: txtValues)
+        logger.info("mDNS service resolved: \(sender.name) at \(host):\(port) peer=\(resolvedPeerId ?? "unknown")")
 
-        // Create a peer ID from the service name (matches Android's device.deviceAddress pattern)
-        let peerId: String = "mdns-\(sender.name)"
+        guard host != "unknown", port > 0 else { return }
+        guard host != "127.0.0.1", host != "::1" else {
+            logger.debug("Ignoring loopback mDNS result for \(sender.name)")
+            return
+        }
+
+        guard let peerId = resolvedPeerId else {
+            logger.warning("Ignoring mDNS result without a valid libp2p peer ID: \(sender.name)")
+            return
+        }
+
+        if let localPeerId = meshRepository?.getFullIdentityInfo()?.libp2pPeerId,
+           PeerIdValidator.isSame(localPeerId, peerId) {
+            logger.debug("Ignoring self mDNS result for \(peerId)")
+            return
+        }
 
         // Notify discovery
         let repo: MeshRepository? = meshRepository
@@ -209,10 +265,8 @@ extension mDNSServiceDiscovery: NetServiceDelegate {
 
         // TCP/mDNS parity: Notify the resolved LAN address so the caller
         // can generate a libp2p multiaddr and dial via SwarmBridge.
-        if host != "unknown" && port > 0 {
-            logger.info("mDNS: LAN peer resolved \(peerId) at \(host):\(port) — notifying for SwarmBridge dial")
-            onLanPeerResolved?(peerId, host, port)
-        }
+        logger.info("mDNS: LAN peer resolved \(peerId) at \(host):\(port) — notifying for pinned SwarmBridge dial")
+        onLanPeerResolved?(peerId, host, port)
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {

@@ -1780,6 +1780,11 @@ open class MeshRepository(
                         val normalizedSenderKey = normalizePublicKey(senderPublicKeyHex)
                         val rawContent = data.toString(Charsets.UTF_8)
                         val decodedPayload = decodeMessageWithIdentityHints(rawContent)
+                        val messageKind = decodedPayload.kind.trim().lowercase()
+                        if (messageKind == "receipt" || isBareDeliveryReceiptPayload(decodedPayload.text)) {
+                            Timber.d("Suppressing delivery receipt from text/UI path: msg=$messageId")
+                            return@launch
+                        }
                         val hintedIdentity = decodedPayload.hints
                         val hintedKey = normalizePublicKey(hintedIdentity?.publicKey)
                         val verifiedHints = if (
@@ -1838,7 +1843,6 @@ open class MeshRepository(
 
                         // Auto-upsert contact: senderPublicKeyHex is guaranteed valid Ed25519 key
                         // (Rust only fires this callback after successful decryption)
-                        val messageKind = decodedPayload.kind.trim().lowercase()
                         val isChatEvent = messageKind == "text" || messageKind.isEmpty()
 
                         val existingContact = try { contactManager?.get(canonicalPeerId) } catch (e: Exception) { null }
@@ -7628,6 +7632,24 @@ open class MeshRepository(
         }
     }
 
+    private fun isBareDeliveryReceiptPayload(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("{")) return false
+        return try {
+            val json = org.json.JSONObject(trimmed)
+            val allowedKeys = setOf("message_id", "status", "timestamp")
+            val keys = json.keys().asSequence().toSet()
+            val messageId = json.optString("message_id", "").trim()
+            val status = json.optString("status", "").trim().lowercase()
+            val timestamp = json.opt("timestamp")
+            keys.isNotEmpty() && keys.all { it in allowedKeys } &&
+                messageId.isNotEmpty() && status in setOf("sent", "delivered", "read", "failed") &&
+                (timestamp is Number || timestamp?.toString()?.toLongOrNull() != null)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun decodeMessageWithIdentityHints(raw: String): DecodedMessagePayload {
         val trimmed = raw.trim()
         if (!trimmed.startsWith("{")) {
@@ -8923,8 +8945,27 @@ open class MeshRepository(
         Timber.i("Bootstrap: network=%s, cellular=%b, priority=%s",
             networkDetector.networkType.value, isCellular, transportPriority)
 
-        // Build address list: primary nodes + WebSocket fallback if cellular
-        val addresses = emptyList<String>()
+        // Build the candidate list from proven ledger relays. Do not hardcode
+        // an endpoint: a fresh install legitimately has no candidates until
+        // invite/QR, LAN discovery, or a successful ledger exchange supplies
+        // one. The previous empty list made every periodic bootstrap pass a
+        // misleading zero-attempt "all-failed" result, including cellular.
+        val addresses = prioritizeAddressesForCurrentNetwork(
+            (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+                .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
+                .distinct()
+        )
+
+        if (addresses.isEmpty()) {
+            Timber.i(
+                "Bootstrap: no proven ledger relay candidates; " +
+                    "network=${networkDetector.networkType.value}, cellular=$isCellular"
+            )
+            nextBootstrapAttemptMs = nowMs + 30_000L
+            return
+        }
+
+        Timber.i("Bootstrap: attempting ${addresses.size} proven ledger relay candidate(s)")
 
         var anySuccess = false
         for (addr in addresses) {
@@ -8974,7 +9015,14 @@ open class MeshRepository(
         if (nowMs - lastRelayBootstrapDialMs < 10_000L) return
         lastRelayBootstrapDialMs = nowMs
 
-        emptyList<String>().forEach { addr ->
+        val addresses = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
+            .distinct()
+        if (addresses.isEmpty()) {
+            Timber.i("Legacy bootstrap: no proven ledger relay candidates")
+        }
+
+        addresses.forEach { addr ->
             if (!shouldAttemptDial(addr)) return@forEach
             repoScope.launch {
                 try {

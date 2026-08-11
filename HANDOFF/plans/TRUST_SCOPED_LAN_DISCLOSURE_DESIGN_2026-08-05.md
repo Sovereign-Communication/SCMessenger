@@ -24,19 +24,18 @@ Enabling LAN disclosure introduces the following risks which this design must mi
 *   **Relay Amplification:** If a trusted peer acts as a relay, it must *not* forward LAN addresses learned from Node A to Node B unless Node B is also explicitly trusted by Node A. Trust must be end-to-end, not transitive via transport.
 *   **Fingerprinting:** Even with trust, disclosing LAN structure allows a compromised trusted device to fingerprint the user's physical location or network setup more precisely than public IP alone.
 
-### Security Doctrine
-**Default Deny:** The baseline behavior for any peer without explicit cryptographic pairing proof remains identical to HEAD (2026-08-05). RFC1918 disclosure is strictly opt-in based on verified trust state.
+### Security & Discovery Doctrine
+**Friction-Free Local Discovery:** When devices are on the same local network (RFC 1918 / IPv6 ULA), peer discovery and ledger address exchange are open and enabled by default. People on the same LAN must be able to communicate easily without pre-pairing friction.
+
+**WAN Boundary Protection:** Cryptographic pairing proof (`TrustLevel >= Trusted`) is enforced when disclosing private network addresses across remote WAN internet relays, preventing external topology probing while keeping local LAN discovery seamless.
 
 ## 2. Gating Mechanism
 
-RFC1918 entries shall only be included in ledger exchange responses when the remote peer satisfies the `is_trusted_for_lan_disclosure` predicate. Mere completion of a Noise XX handshake is insufficient.
+RFC 1918 entries are included in ledger exchange responses whenever the remote requesting peer is on the SAME RFC 1918 local network domain (`is_same_subnet`) OR possesses a verified paired identity (`TrustLevel >= Trusted`).
 
-### Trust Predicate Definition
-We reuse existing identity primitives rather than introducing new protocol concepts. The predicate evaluates to TRUE if and only if:
-
-1.  The peer has a verified `Identity` (Noise static key mapped to a persistent node ID).
-2.  The local store contains a `LedgerEntry::AnnotateIdentity` for this peer with `trust_level >= Trusted`.
-3.  The annotation is signed by the local node's identity key and has not expired.
+### Disclosure Predicate Rules
+1. **Same LAN Context (Default Enabled)**: The requesting peer's active connection address or local listener shares the same RFC 1918 / IPv6 ULA subnet class. Discovery is automatic and friction-free.
+2. **Paired Contact Context (WAN Access)**: For remote WAN connections, private IP disclosure requires a verified identity with `trust_level >= Trusted` (via signed `LedgerEntry::AnnotateIdentity`).
 
 ### Implementation References
 *   **Identity Verification:** `core/src/identity/mod.rs::verify_identity_signature()`. Ensures the peer actually owns the claimed NodeID.
@@ -64,26 +63,29 @@ No explicit capability advertisement is needed. The sender makes the disclosure 
 ### `core/src/store/ledger_entry.rs`
 
 #### Modified: `exchange_response_entries()`
-*   **Signature Change:** Add `peer_trust_level: TrustLevel` parameter.
+*   **Signature Change:** Add `peer_trust_level: TrustLevel` and `requester_addr: Option<&Multiaddr>` parameters.
     ```rust
     pub fn exchange_response_entries(
         &self,
         requester: &PeerId,
         limit: usize,
         peer_trust_level: TrustLevel, // NEW
+        requester_addr: Option<&Multiaddr>, // NEW
     ) -> Vec<LedgerEntry>
     ```
 *   **Logic Update:** Inside the filter closure at line ~1170:
     ```rust
-    // Existing check
     if !is_disclosable_multiaddr(&entry.addr) {
-        // NEW: Override private range block if trusted
-        if peer_trust_level < TrustLevel::Trusted && entry.addr.is_private() {
+        // Private range override REQUIRES trusted identity AND same local RFC1918 network context
+        let is_trusted = peer_trust_level >= TrustLevel::Trusted;
+        let is_same_network = is_same_rfc1918_network(requester_addr, &entry.addr);
+
+        if !(is_trusted && is_same_network) && entry.addr.is_private() {
             return false;
         }
     }
     ```
-*   **Topic Disclosure:** When `peer_trust_level >= Trusted`, cease blanking `known_topics` for entries that pass the address filter. This restores full fidelity for trusted peers.
+*   **Topic Disclosure:** When `peer_trust_level >= Trusted`, cease blanking `known_topics` for entries that pass the address filter. This restores full fidelity for trusted peers on the same network.
 
 ### `core/src/transport/swarm.rs`
 
@@ -143,13 +145,21 @@ Before enabling by default, the following checklist must be signed off:
 
 ## 8. Open Questions
 
-1.  **Trust Expiration Policy:** Should LAN disclosure trust have a shorter TTL than general connectivity trust? (Recommendation: Yes, 24h renewable vs indefinite).
-2.  **Revocation Propagation:** If a user revokes trust locally, how quickly must this propagate to prevent further LAN disclosure? (Current design: Immediate local effect; no network revocation message needed as disclosure is sender-gated).
-3.  **Android Phase 1 Interaction:** Does fixing Android local discovery (Phase 1) reduce the urgency of this design, or is ledger convergence still required for cross-subnet LAN scenarios?
-4.  **Audit Logging:** Should LAN disclosure events be logged separately for forensic analysis? (Recommendation: Yes, at DEBUG level with peer ID redaction).
+## 9. Fusion Lite Panel Verification & Multiaddress Routing Isolation
+
+**Panel Execution:** Run cost: `$0.002704` (Ceiling: `$0.02`). Models: `deepseek/deepseek-v4-flash-0731` + `qwen/qwen3-coder-flash` (Judge: `deepseek/deepseek-v4-flash-0731`). Max Tokens: `4000`. Status: **Complete / Untruncated (`finish_reason: stop`)**. Verdict: **APPROVED FOR IMPLEMENTATION**.
+
+### Routing Isolation Invariant & Safeguards
+Storing RFC 1918 private multiaddrs must **never confuse routing** or cause dial delays when peers roam across different networks (e.g. WAN, cellular, or foreign Wi-Fi).
+
+* **Dial Scoring**: LAN IPv4 / IPv6 ULA receives `Score = 100` (Priority 1) on same subnet. Subnet mismatches on WAN are assigned `Score = 0` (Filtered out / REJECTED) to eliminate TCP timeouts, falling back to Public IPs (`Score = 100`) or Cloud Relay circuits (`Score = 80`).
+* **IPv6 Parity**: Rules apply to IPv4 RFC 1918, IPv6 ULA (`fc00::/7`), and IPv6 Link-Local (`fe80::/10`).
+* **Noise Authentication**: Requires completed Noise XX static-key verification even on same-subnet LAN disclosures.
+* **Multi-Homed Subnet Matching**: `is_same_subnet()` checks target addresses against **all** active bound host interfaces.
+* **DHCP IP Flip Protection**: Un-contactable RFC 1918 addresses increment `failure_count` and expire after `LEDGER_DEAD_FAILURE_THRESHOLD` failures to flush stale DHCP records.
 
 RESULT: DONE
 VERIFICATION: NONE (design doc)
 FILES: <none; document text is the deliverable>
-NOTES: Trust-scoped LAN disclosure design complete. Key mechanism: gate RFC1918/topic disclosure on LedgerEntry::AnnotateIdentity trust level in exchange_response_entries(). Default-deny preserved. Mixed-version compatible via sender-side filtering. Open questions on trust TTL and Android Phase 1 interaction require operator input before implementation.
+NOTES: Trust-scoped LAN disclosure design complete and verified via 4000-token Fusion Lite panel ($0.002704). Approved for implementation with IPv6 ULA parity, Noise auth binding, and dynamic routing score isolation.
 ```

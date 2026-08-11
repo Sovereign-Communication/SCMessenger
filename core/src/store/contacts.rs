@@ -257,6 +257,24 @@ impl ContactManager {
         }
     }
 
+    /// Find a contact by its canonical Ed25519 public-key hex.
+    ///
+    /// Contact records are stored under their libp2p PeerId, while the send
+    /// path deliberately encrypts to the public key. Keeping this lookup
+    /// explicit avoids treating a known contact as an unknown peer merely
+    /// because the caller has the key flavor required for encryption.
+    pub fn get_by_public_key(&self, public_key: &str) -> Result<Option<Contact>, IronCoreError> {
+        let normalized = public_key.trim();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(self
+            .list()?
+            .into_iter()
+            .find(|contact| contact.public_key.eq_ignore_ascii_case(normalized)))
+    }
+
     pub fn remove(&self, peer_id: String) -> Result<(), IronCoreError> {
         if let Some(contact) = self.get(peer_id.clone())? {
             let bundle_key = contact_bundle_key(&contact.public_key);
@@ -745,6 +763,21 @@ mod tests {
                 assert_eq!(resolved.unwrap(), valid_pubkey);
             }
         }
+    }
+
+    #[test]
+    fn lookup_by_public_key_resolves_peer_keyed_contact() {
+        let mgr = make_manager();
+        let public_key =
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string();
+        mgr.add(Contact::new("peer-keyed".to_string(), public_key.clone()))
+            .unwrap();
+
+        let contact = mgr
+            .get_by_public_key(&public_key.to_uppercase())
+            .unwrap()
+            .expect("public-key lookup should find a PeerId-keyed contact");
+        assert_eq!(contact.peer_id, "peer-keyed");
     }
 
     #[test]

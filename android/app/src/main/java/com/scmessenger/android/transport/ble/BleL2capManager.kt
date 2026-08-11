@@ -10,6 +10,9 @@ import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 
+internal const val L2CAP_ACCEPT_INITIAL_BACKOFF_MS = 250L
+internal const val L2CAP_ACCEPT_MAX_BACKOFF_MS = 30_000L
+
 /**
  * L2CAP Connection-Oriented Channel manager for high-throughput BLE.
  *
@@ -30,7 +33,10 @@ class BleL2capManager(
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
 
     // L2CAP server socket (listening for incoming)
+    @Volatile
     private var serverSocket: BluetoothServerSocket? = null
+
+    private val listeningLock = Any()
 
     // Active L2CAP connections
     private val activeConnections = ConcurrentHashMap<String, L2capConnection>()
@@ -45,7 +51,11 @@ class BleL2capManager(
         Thread(r, "l2cap-accept").apply { isDaemon = true }
     }.asCoroutineDispatcher()
 
+    @Volatile
     private var isListening = false
+
+    private var listenJob: Job? = null
+    private var listenGeneration = 0L
 
     /**
      * Check if L2CAP is supported on this device.
@@ -63,45 +73,123 @@ class BleL2capManager(
             return
         }
 
-        if (isListening) {
-            Timber.w("Already listening for L2CAP connections")
-            return
-        }
-
         val adapter = bluetoothManager?.adapter
         if (adapter == null) {
             Timber.e("Bluetooth adapter not available")
             return
         }
 
-        scope.launch(acceptDispatcher) {
-            try {
-                serverSocket = adapter.listenUsingInsecureL2capChannel()
-                isListening = true
+        synchronized(listeningLock) {
+            if (isListening) {
+                Timber.w("Already listening for L2CAP connections")
+                return
+            }
 
-                val psm = serverSocket?.psm ?: 0
-                Timber.i("L2CAP server listening on PSM: $psm")
+            isListening = true
+            val generation = ++listenGeneration
+            listenJob = scope.launch(acceptDispatcher) {
+                runAcceptLoop(adapter, generation)
+            }
+        }
+    }
 
-                // Accept loop
-                while (isListening) {
-                    try {
-                        val socket = serverSocket?.accept()
-                        if (socket != null) {
-                            handleIncomingConnection(socket)
-                        }
-                    } catch (e: Exception) {
-                        if (isListening) {
-                            Timber.e(e, "Error accepting L2CAP connection")
-                        }
+    private suspend fun runAcceptLoop(adapter: BluetoothAdapter, generation: Long) {
+        val recovery = BleL2capAcceptRecoveryPolicy()
+
+        try {
+            while (isListening(generation) && currentCoroutineContext().isActive) {
+                val acceptedSocket = try {
+                    val listeningSocket = ensureServerSocket(adapter, generation)
+                    if (listeningSocket == null) {
+                        // stopListening() won the race while the socket was being
+                        // recreated. The finally block performs the last cleanup.
+                        break
+                    }
+                    listeningSocket.accept()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: SecurityException) {
+                    closeServerSocket(generation)
+                    if (isListening(generation)) {
+                        Timber.e(
+                            "L2CAP listener stopped: Bluetooth permission/security failure " +
+                                "(${describeFailure(e)})"
+                        )
+                    }
+                    break
+                } catch (e: Exception) {
+                    // An accept failure can permanently kill the platform socket.
+                    // Always discard it before retrying so the next attempt creates
+                    // a fresh listener instead of re-entering accept() on a dead one.
+                    closeServerSocket(generation)
+
+                    if (!isListening(generation) || !currentCoroutineContext().isActive) {
+                        break
+                    }
+
+                    val retryDelayMs = recovery.recordFailure()
+
+                    Timber.w(
+                        "L2CAP accept failed; recreating listener in ${retryDelayMs}ms " +
+                            "(consecutive failure ${recovery.failureCount}, " +
+                            "${describeFailure(e)})"
+                    )
+                    delay(retryDelayMs)
+                    continue
+                }
+
+                recovery.recordSuccess()
+                handleIncomingConnection(acceptedSocket)
+            }
+        } finally {
+            closeServerSocket(generation)
+            val currentJob = currentCoroutineContext()[Job]
+            synchronized(listeningLock) {
+                if (listenGeneration == generation) {
+                    isListening = false
+                    if (listenJob == currentJob) {
+                        listenJob = null
                     }
                 }
-            } catch (e: SecurityException) {
-                Timber.e(e, "Security exception starting L2CAP server")
-                isListening = false
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start L2CAP server")
-                isListening = false
             }
+        }
+    }
+
+    private fun isListening(generation: Long): Boolean {
+        return synchronized(listeningLock) {
+            isListening && listenGeneration == generation
+        }
+    }
+
+    private fun ensureServerSocket(
+        adapter: BluetoothAdapter,
+        generation: Long
+    ): BluetoothServerSocket? {
+        synchronized(listeningLock) {
+            if (!isListening || listenGeneration != generation) {
+                return null
+            }
+            serverSocket?.let { return it }
+        }
+
+        val newSocket = adapter.listenUsingInsecureL2capChannel()
+
+        synchronized(listeningLock) {
+            if (!isListening || listenGeneration != generation) {
+                closeQuietly(newSocket)
+                return null
+            }
+
+            // Only one accept coroutine should be active, but retain the guard so
+            // a concurrent stop/start cannot leak a newly-created platform socket.
+            serverSocket?.let {
+                closeQuietly(newSocket)
+                return it
+            }
+
+            serverSocket = newSocket
+            Timber.i("L2CAP server listening on PSM: ${newSocket.psm}")
+            return newSocket
         }
     }
 
@@ -109,19 +197,48 @@ class BleL2capManager(
      * Stop listening for incoming connections.
      */
     fun stopListening() {
-        if (!isListening) {
+        val job: Job?
+        synchronized(listeningLock) {
+            if (!isListening) {
+                return
+            }
+
+            isListening = false
+            job = listenJob
+            listenJob = null
+        }
+
+        closeServerSocket()
+        job?.cancel()
+        Timber.i("L2CAP server stopped")
+    }
+
+    private fun closeServerSocket(expectedGeneration: Long? = null) {
+        val socket = synchronized(listeningLock) {
+            if (expectedGeneration != null && listenGeneration != expectedGeneration) {
+                null
+            } else {
+                serverSocket.also { serverSocket = null }
+            }
+        }
+
+        closeQuietly(socket)
+    }
+
+    private fun closeQuietly(socket: BluetoothServerSocket?) {
+        if (socket == null) {
             return
         }
 
-        isListening = false
-
         try {
-            serverSocket?.close()
-            serverSocket = null
-            Timber.i("L2CAP server stopped")
+            socket.close()
         } catch (e: Exception) {
-            Timber.e(e, "Error stopping L2CAP server")
+            Timber.w("Error closing L2CAP server socket (${describeFailure(e)})")
         }
+    }
+
+    private fun describeFailure(error: Exception): String {
+        return "${error::class.java.simpleName}: ${error.message ?: "no message"}"
     }
 
     /**
@@ -290,5 +407,42 @@ class BleL2capManager(
 
             activeConnections.remove(deviceAddress, this)
         }
+    }
+}
+
+/**
+ * Keeps a failed L2CAP listener from retrying at CPU speed forever.
+ *
+ * A successful accept resets the backoff because a live socket has demonstrated
+ * that the platform can recover. Failed listeners are retried indefinitely with
+ * a bounded delay; stopping permanently would turn a transient Bluetooth stack
+ * recovery into a process-lifetime inbound-delivery outage.
+ */
+internal class BleL2capAcceptRecoveryPolicy(
+    private val initialBackoffMs: Long = L2CAP_ACCEPT_INITIAL_BACKOFF_MS,
+    private val maxBackoffMs: Long = L2CAP_ACCEPT_MAX_BACKOFF_MS
+) {
+    init {
+        require(initialBackoffMs > 0) { "initialBackoffMs must be positive" }
+        require(maxBackoffMs >= initialBackoffMs) {
+            "maxBackoffMs must not be smaller than initialBackoffMs"
+        }
+    }
+
+    var failureCount: Int = 0
+        private set
+
+    fun recordFailure(): Long {
+        failureCount = (failureCount + 1).coerceAtMost(Int.MAX_VALUE)
+
+        var backoffMs = initialBackoffMs
+        repeat((failureCount - 1).coerceAtMost(20)) {
+            backoffMs = minOf(maxBackoffMs, backoffMs * 2)
+        }
+        return backoffMs
+    }
+
+    fun recordSuccess() {
+        failureCount = 0
     }
 }

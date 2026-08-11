@@ -29,7 +29,6 @@ libp2p = { version = "0.56", features = [
   "relay",
   "identify",
   "ping",
-  "upnp",
   "macros",
   "request-response",
   "cbor",
@@ -60,7 +59,7 @@ libcrux-ml-kem = { version = "0.0.10", default-features = false, features = ["ml
 
 # WebSocket client (relay fallback transport)
 # Connect feature enabled for both desktop and Android targets
-tokio-tungstenite = { version = "0.21", features = ["connect"] }
+tokio-tungstenite = { version = "0.24", features = ["connect"] }
 
 # Storage
 sled = "0.34"

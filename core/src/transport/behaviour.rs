@@ -20,8 +20,6 @@ use crate::store::ledger_entry::{LedgerExchangeRequest, LedgerExchangeResponse};
 use libp2p::mdns;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 use libp2p::swarm::behaviour::toggle::Toggle;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-use libp2p::upnp;
 use libp2p::{
     autonat, connection_limits, dcutr, gossipsub, identify, kad, ping, relay,
     request_response::{self, ProtocolSupport},
@@ -34,6 +32,11 @@ use web_time::Duration;
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
+    /// Connection admission must run before stateful child behaviours. The
+    /// derive macro calls `handle_established_*_connection` in field order;
+    /// placing the limit guard first prevents request-response from recording
+    /// a connection that this behaviour later rejects.
+    pub connection_limits: connection_limits::Behaviour,
     /// Circuit Relay v2 client for relay reservations and relayed dials.
     pub relay_client: relay::client::Behaviour,
     /// Circuit Relay v2 server - all nodes act as relays for NAT traversal.
@@ -67,11 +70,6 @@ pub struct IronCoreBehaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     /// Peer identification — advertises relay capability
     pub identify: identify::Behaviour,
-    /// UPnP port mapping
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-    pub upnp: upnp::tokio::Behaviour,
-    /// Connection limits to prevent resource exhaustion
-    pub connection_limits: connection_limits::Behaviour,
 }
 
 /// A libp2p request_response message request sent to a peer
@@ -516,9 +514,6 @@ impl IronCoreBehaviour {
                     peer_id
                 )),
         );
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-        let upnp = upnp::tokio::Behaviour::default();
-
         // Relay server - all nodes act as relays for NAT traversal
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
 
@@ -528,7 +523,12 @@ impl IronCoreBehaviour {
                 .with_max_pending_outgoing(Some(32))
                 .with_max_established_outgoing(Some(128))
                 .with_max_established_incoming(Some(64))
-                .with_max_established_per_peer(Some(4)),
+                // Keep one relay path and one direct/hole-punch path available,
+                // but prevent address churn from opening a third connection to
+                // the same peer. request-response 0.29 assumes a bounded
+                // per-peer connection set and has panicked during six-path
+                // convergence in the Windows soak.
+                .with_max_established_per_peer(Some(2)),
         );
 
         Ok(Self {
@@ -547,8 +547,6 @@ impl IronCoreBehaviour {
             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             mdns,
             identify,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-            upnp,
             connection_limits,
         })
     }

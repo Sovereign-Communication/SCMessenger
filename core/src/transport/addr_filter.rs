@@ -357,11 +357,23 @@ pub fn is_dialable_trusted_local_proxy_parsed(addr: &Multiaddr, dns: DnsPolicy) 
 /// protocol component can never be interpreted two different ways.
 fn check_multiaddr(addr: &Multiaddr, audience: Audience, dns: DnsPolicy) -> bool {
     let mut has_transport = false;
+    let mut has_circuit = false;
 
     for proto in addr.iter() {
+        // After the first relay marker, the remaining components describe the
+        // target peer and are not independently dialed. Still reject a second
+        // marker: libp2p does not support nested relay circuits, and retaining
+        // one in the ledger creates a retry storm against an invalid path.
+        if has_circuit {
+            if matches!(proto, Protocol::P2pCircuit) {
+                return false;
+            }
+            continue;
+        }
+
         match proto {
             // Everything beyond the relay hop belongs to the relayed peer.
-            Protocol::P2pCircuit => return has_transport,
+            Protocol::P2pCircuit => has_circuit = true,
             Protocol::Ip4(ip) => {
                 has_transport = true;
                 if !ipv4_permitted(&ip, audience) {
@@ -445,6 +457,170 @@ pub fn is_disclosable_multiaddr(multiaddr: &str) -> bool {
     }
 }
 
+/// Returns true if a private `multiaddr` may be disclosed to the observed
+/// requester on the same local subnet.
+///
+/// The requester address is required evidence. A local listener list alone is
+/// not sufficient: it describes this node, not the peer receiving the data.
+/// Missing or relayed requester addresses fail closed. We use /24 for private
+/// IPv4 and /64 for ULA IPv6, which is deliberately narrower than the RFC1918
+/// address classes. CGNAT is accepted as a dialable private class elsewhere,
+/// but it is not evidence of local adjacency here because unrelated carrier
+/// subscribers can collide within the same /24.
+pub fn is_disclosable_on_rfc1918_network(
+    multiaddr: &str,
+    requester_addr: Option<&str>,
+    my_addrs: &[String],
+) -> bool {
+    let Ok(addr) = multiaddr.parse::<Multiaddr>() else {
+        return false;
+    };
+
+    if addr
+        .iter()
+        .any(|proto| matches!(proto, Protocol::P2pCircuit))
+    {
+        return false;
+    }
+
+    let Some(requester_addr) = requester_addr else {
+        return false;
+    };
+    let Ok(requester_multiaddr) = requester_addr.parse::<Multiaddr>() else {
+        return false;
+    };
+    // A circuit address identifies the relay hop, not the peer's local
+    // network. Treating that hop as observed requester adjacency would allow
+    // a LAN-resident relay to authorize private-ledger disclosure to a remote
+    // circuit peer.
+    if requester_multiaddr
+        .iter()
+        .any(|proto| matches!(proto, Protocol::P2pCircuit))
+    {
+        return false;
+    }
+    let Some(requester_ip) = first_ip_component(requester_addr) else {
+        return false;
+    };
+    // CGNAT is shared address space, not proof that the requester is on our
+    // local network. It may remain dialable in Local mode, but it must not
+    // authorize private-ledger disclosure.
+    if !is_private_adjacency_ip(&requester_ip) {
+        return false;
+    }
+
+    let Some(entry_ip) = first_ip_component(multiaddr) else {
+        return false;
+    };
+    if !is_private_adjacency_ip(&entry_ip) || !same_private_subnet(&entry_ip, &requester_ip) {
+        return false;
+    }
+
+    // Require concrete listener evidence as well as an observed direct
+    // requester. Wildcard-only listeners, DNS-only listeners, and the startup
+    // window before a concrete listen address is reported carry no usable
+    // local-subnet evidence, so they must fail closed.
+    let concrete_local_ips: Vec<_> = my_addrs
+        .iter()
+        .filter_map(|a| first_ip_component(a))
+        .collect();
+    !concrete_local_ips.is_empty()
+        && concrete_local_ips
+            .iter()
+            .any(|local_ip| same_private_subnet(local_ip, &requester_ip))
+}
+
+fn first_ip_component(multiaddr: &str) -> Option<std::net::IpAddr> {
+    let addr = multiaddr.parse::<Multiaddr>().ok()?;
+    addr.iter().find_map(|proto| match proto {
+        Protocol::Ip4(ip) => Some(std::net::IpAddr::V4(ip)),
+        Protocol::Ip6(ip) => Some(std::net::IpAddr::V6(ip)),
+        _ => None,
+    })
+}
+
+fn is_safe_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_link_local()
+                && !ip.is_multicast()
+                && !ip.is_broadcast()
+                && (ip.is_private() || is_cgnat(ip))
+        }
+        std::net::IpAddr::V6(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_unicast_link_local()
+                && ((ip.segments()[0] & 0xfe00) == 0xfc00
+                    || embedded_ipv4(ip).is_some_and(|v4| {
+                        !v4.is_loopback()
+                            && !v4.is_unspecified()
+                            && !v4.is_link_local()
+                            && !v4.is_multicast()
+                            && !v4.is_broadcast()
+                            && (v4.is_private() || is_cgnat(&v4))
+                    }))
+        }
+    }
+}
+
+/// Returns true only for an address class that can provide local-adjacency
+/// evidence. Unlike [`is_safe_private_ip`], this deliberately excludes CGNAT:
+/// the same carrier /24 can contain unrelated subscribers.
+fn is_private_adjacency_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            let ip_addr = std::net::IpAddr::V4(*ip);
+            is_safe_private_ip(&ip_addr) && ip.is_private()
+        }
+        std::net::IpAddr::V6(ip) => {
+            let ip_addr = std::net::IpAddr::V6(*ip);
+            if !is_safe_private_ip(&ip_addr) {
+                return false;
+            }
+            if (ip.segments()[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
+            embedded_ipv4(ip).is_some_and(|v4| {
+                let ip_addr = std::net::IpAddr::V4(v4);
+                is_safe_private_ip(&ip_addr) && v4.is_private()
+            })
+        }
+    }
+}
+
+fn same_private_subnet(left: &std::net::IpAddr, right: &std::net::IpAddr) -> bool {
+    match (left, right) {
+        (std::net::IpAddr::V4(left), std::net::IpAddr::V4(right)) => {
+            let left = left.octets();
+            let right = right.octets();
+            left[..3] == right[..3]
+        }
+        (std::net::IpAddr::V6(left), std::net::IpAddr::V6(right)) => {
+            if (left.segments()[0] & 0xfe00) != 0xfc00 || (right.segments()[0] & 0xfe00) != 0xfc00 {
+                return false;
+            }
+            left.segments()[..4] == right.segments()[..4]
+        }
+        (std::net::IpAddr::V6(left), std::net::IpAddr::V4(right)) => embedded_ipv4(left)
+            .is_some_and(|left| {
+                same_private_subnet(&std::net::IpAddr::V4(left), &std::net::IpAddr::V4(*right))
+            }),
+        (std::net::IpAddr::V4(left), std::net::IpAddr::V6(right)) => embedded_ipv4(right)
+            .is_some_and(|right| {
+                same_private_subnet(&std::net::IpAddr::V4(*left), &std::net::IpAddr::V4(right))
+            }),
+    }
+}
+
+fn is_cgnat(ip: &Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 100 && (64..=127).contains(&o[1])
+}
+
 /// Returns true iff `addr` may be WRITTEN INTO A LEDGER as an address this node
 /// actually reached.
 ///
@@ -464,14 +640,23 @@ pub fn is_recordable_multiaddr(multiaddr: &str) -> bool {
         return false;
     };
     let mut has_ip_transport = false;
+    let mut has_circuit = false;
     for proto in addr.iter() {
         match proto {
             // Everything past the relay hop belongs to the relayed peer; the
-            // hop itself has already been seen by this point.
-            Protocol::P2pCircuit => return has_ip_transport,
+            // hop itself has already been seen by this point. A second relay
+            // marker is malformed and cannot be dialed by libp2p.
+            Protocol::P2pCircuit => {
+                if has_circuit {
+                    return false;
+                }
+                has_circuit = true;
+            }
             Protocol::Ip4(_) | Protocol::Ip6(_) => has_ip_transport = true,
-            Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => {
-                return false
+            Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_)
+                if !has_circuit =>
+            {
+                return false;
             }
             _ => {}
         }
@@ -893,6 +1078,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nested_relay_circuits() {
+        let nested = "/ip4/203.0.113.9/tcp/443/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN/p2p-circuit/p2p/12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay/p2p-circuit/p2p/12D3KooWJ7t4Qz4VwzYbP4uU6z4aGz2gZ4nM6mX2sJ6j7V8b9c1d";
+        assert!(!is_dialable_multiaddr(nested, LOCAL, REMOTE));
+        assert!(!is_recordable_multiaddr(nested));
+    }
+
+    #[test]
     fn rejects_addresses_with_no_transport_component() {
         // F9: "" parses as Ok(<empty>).
         assert!("".parse::<Multiaddr>().is_ok());
@@ -1230,6 +1422,140 @@ mod tests {
         assert!(!is_dialable_trusted_local_proxy_parsed(
             &"/ip6/::1/tcp/9001".parse::<Multiaddr>().unwrap(),
             REMOTE
+        ));
+    }
+
+    #[test]
+    fn rfc1918_disclosable_when_local_network_matches() {
+        let local_addrs = vec!["/ip4/192.168.1.50/tcp/9001".to_string()];
+        assert!(
+            is_disclosable_on_rfc1918_network(
+                "/ip4/192.168.1.100/tcp/9001",
+                Some("/ip4/192.168.1.20/tcp/9001"),
+                &local_addrs,
+            ),
+            "same /24 should be disclosable"
+        );
+    }
+
+    #[test]
+    fn rfc1918_not_disclosable_when_different_private_class() {
+        let local_addrs = vec!["/ip4/10.0.0.5/tcp/9001".to_string()];
+        assert!(
+            !is_disclosable_on_rfc1918_network(
+                "/ip4/192.168.1.100/tcp/9001",
+                Some("/ip4/192.168.1.20/tcp/9001"),
+                &local_addrs,
+            ),
+            "different RFC1918 class should NOT be disclosable"
+        );
+    }
+
+    #[test]
+    fn public_ipv4_never_disclosable_on_network() {
+        let local_addrs = vec!["/ip4/192.168.1.50/tcp/9001".to_string()];
+        assert!(
+            !is_disclosable_on_rfc1918_network(
+                "/ip4/203.0.113.45/tcp/9001",
+                Some("/ip4/192.168.1.20/tcp/9001"),
+                &local_addrs,
+            ),
+            "public IPv4 must never be disclosed via network check"
+        );
+    }
+
+    #[test]
+    fn rfc1918_disclosure_requires_observed_same_subnet_requester() {
+        let local_addrs = vec!["/ip4/10.0.0.5/tcp/9001".to_string()];
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/10.99.0.42/tcp/9001",
+            Some("/ip4/10.0.0.20/tcp/9001"),
+            &local_addrs,
+        ));
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/10.0.0.42/tcp/9001",
+            Some("/ip4/198.51.100.20/tcp/9001"),
+            &local_addrs,
+        ));
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/10.0.0.42/tcp/9001",
+            None,
+            &local_addrs,
+        ));
+    }
+
+    #[test]
+    fn rfc1918_disclosure_rejects_cgnat_requester_same_subnet_collision() {
+        // Carrier-grade NAT /24s can contain unrelated subscribers. A shared
+        // 100.64/24 is therefore not evidence that the requester is our LAN
+        // neighbour, even when the entry and listener are in that /24.
+        let local_addrs = vec!["/ip4/100.64.0.10/tcp/9001".to_string()];
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/100.64.0.12/tcp/9001",
+            Some("/ip4/100.64.0.11/tcp/9001"),
+            &local_addrs,
+        ));
+    }
+
+    #[test]
+    fn rfc1918_disclosure_rejects_nat64_embedded_cgnat_adjacency() {
+        // The same shared-space rule applies when CGNAT is embedded in an
+        // IPv6 NAT64 address; neither side may authorize private disclosure.
+        let local_addrs = vec!["/ip6/64:ff9b::6440:1a/tcp/9001".to_string()];
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip6/64:ff9b::6440:1c/tcp/9001",
+            Some("/ip6/64:ff9b::6440:1b/tcp/9001"),
+            &local_addrs,
+        ));
+    }
+
+    #[test]
+    fn rfc1918_disclosure_requires_concrete_local_listener_evidence() {
+        // An observed requester and matching entry are insufficient while the
+        // listener list is empty (startup, wildcard-only, or DNS-only state).
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/192.168.1.100/tcp/9001",
+            Some("/ip4/192.168.1.20/tcp/9001"),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn rfc1918_disclosure_rejects_relay_loopback_and_link_local() {
+        let local_addrs = vec!["/ip4/192.168.1.5/tcp/9001".to_string()];
+        for entry in [
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/169.254.1.2/tcp/9001",
+            "/p2p-circuit/p2p/12D3KooWJ7t4Qz4VwzYbP4uU6z4aGz2gZ4nM6mX2sJ6j7V8b9c1d",
+        ] {
+            assert!(
+                !is_disclosable_on_rfc1918_network(
+                    entry,
+                    Some("/ip4/192.168.1.20/tcp/9001"),
+                    &local_addrs,
+                ),
+                "unsafe entry disclosed: {entry}"
+            );
+        }
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/192.168.1.42/tcp/9001",
+            Some("/ip4/127.0.0.1/tcp/9001"),
+            &local_addrs,
+        ));
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/192.168.1.42/tcp/9001",
+            Some("/ip4/192.168.1.50/tcp/443/p2p-circuit"),
+            &local_addrs,
+        ));
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/192.168.1.42/tcp/9001",
+            Some("/p2p-circuit"),
+            &local_addrs,
+        ));
+        assert!(!is_disclosable_on_rfc1918_network(
+            "/ip4/192.168.1.42/tcp/9001",
+            Some("not-a-multiaddr"),
+            &local_addrs,
         ));
     }
 }

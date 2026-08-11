@@ -162,6 +162,59 @@ type WsSenderList = Arc<Mutex<Vec<WsSender>>>;
 
 use warp::Filter;
 
+/// Resolve a message's sender to a canonical Ed25519 public key, or None if
+/// the sender identifier is UNRESOLVABLE.
+///
+/// T3/P4 (identifier-gate follow-up): the pending-requests listing must FAIL
+/// CLOSED on resolution failure. A sender whose identifier cannot be resolved
+/// to a real Ed25519 public key -- via the authenticated envelope key
+/// (`sender_public_key_hex`, the canonical source) or a valid key-valued
+/// `sender_id` (legacy pre-field messages) -- cannot be proven known-or-blocked,
+/// so it must be suppressed from the listing rather than shown as a clean
+/// request. This pure helper centralizes the resolvability decision so it is
+/// unit-testable without a live core.
+fn resolve_sender_public_key(
+    sender_public_key_hex: &Option<String>,
+    sender_id: &str,
+) -> Option<String> {
+    sender_public_key_hex
+        .clone()
+        .filter(|k| scmessenger_core::identity::keys::is_valid_public_key(k))
+        .or_else(|| {
+            scmessenger_core::identity::keys::is_valid_public_key(sender_id)
+                .then(|| sender_id.to_string())
+        })
+}
+
+/// True iff the sender identifier resolves to a valid Ed25519 public key (see
+/// [`resolve_sender_public_key`]).
+fn sender_is_resolvable(sender_public_key_hex: &Option<String>, sender_id: &str) -> bool {
+    resolve_sender_public_key(sender_public_key_hex, sender_id).is_some()
+}
+
+/// Stable request key shared by pending-list and accept lookups.
+/// Authenticated public keys take precedence; legacy identity IDs are a safe
+/// fallback only when they have the expected identity-ID format.
+fn message_request_key(sender_public_key_hex: &Option<String>, sender_id: &str) -> Option<String> {
+    if let Some(key) = sender_public_key_hex
+        .as_deref()
+        .filter(|key| scmessenger_core::identity::keys::is_valid_public_key(key))
+    {
+        return scmessenger_core::identity::keys::identity_id_from_public_key_hex(key);
+    }
+
+    // Older messages used sender_id for the public key. Preserve the same
+    // canonical request key when that legacy field is explicitly key-shaped.
+    if scmessenger_core::identity::keys::is_valid_public_key(sender_id) {
+        return scmessenger_core::identity::keys::identity_id_from_public_key_hex(sender_id);
+    }
+
+    // Without an authenticated envelope key, a legacy public key and a
+    // legacy identity_id are intentionally kept in their wire form. Both are
+    // 64-hex identifiers and cannot be distinguished safely from plaintext.
+    scmessenger_core::identity::keys::is_valid_identity_id(sender_id).then(|| sender_id.to_string())
+}
+
 /// Start the warp HTTP + WebSocket server on `127.0.0.1:<port>`.
 ///
 /// Returns a broadcast sender for pushing server events to connected clients
@@ -746,7 +799,7 @@ pub async fn handle_jsonrpc_request(
         // ── Blocking ──
         ClientIntent::BlockPeer { peer_id, reason } => {
             if let Some(ref core) = ctx.core {
-                match core.block_peer(peer_id, reason, None) {
+                match core.block_peer(peer_id, None, reason) {
                     Ok(()) => {
                         let mut m = Map::new();
                         m.insert("blocked".to_string(), true.into());
@@ -1340,12 +1393,6 @@ pub async fn handle_jsonrpc_request(
         // doesn't make requests vanish before the user acts on them.
         ClientIntent::GetPendingMessageRequests {} => {
             if let Some(ref core) = ctx.core {
-                // Derives the identity_id a public key implies, via core's
-                // single source of truth for that hash. Yields None for
-                // anything that is not a 32-byte hex key, since an identity_id
-                // cannot be reversed back into a public key.
-                use scmessenger_core::identity::keys::identity_id_from_public_key_hex as derived_identity_id;
-
                 let contacts = core.contacts_store_manager().list().unwrap_or_default();
                 // Hold BOTH identifier flavors for every contact: a contact may
                 // be stored keyed by identity_id while an inbound message's
@@ -1356,34 +1403,42 @@ pub async fn handle_jsonrpc_request(
                     contact_peer_ids.insert(c.peer_id);
                     contact_peer_ids.insert(c.public_key);
                 }
-                let blocked_peer_ids: std::collections::HashSet<String> = core
-                    .list_blocked_peers()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|b| b.peer_id)
-                    .collect();
-
                 let inbox_messages = core.peek_received_messages();
                 let mut by_sender: HashMap<String, Vec<&scmessenger_core::store::ReceivedMessage>> =
                     HashMap::new();
                 for msg in &inbox_messages {
-                    // Match on either flavor. The blocked check matters as much
-                    // as the contact check: a peer blocked under one flavor must
-                    // stay blocked when their message arrives under the other.
-                    let alt_id = derived_identity_id(&msg.sender_id);
-                    let is_known = contact_peer_ids.contains(&msg.sender_id)
-                        || alt_id
+                    // T3/P4 (identifier-gate follow-up): FAIL CLOSED on an
+                    // unresolvable sender identifier. A message whose sender
+                    // cannot be resolved to a real Ed25519 public key -- whether
+                    // via the authenticated envelope key (sender_public_key_hex,
+                    // the canonical source) or a valid key-valued sender_id --
+                    // cannot be proven known-or-blocked, so showing it as a clean
+                    // request would be a fail-open listing. Suppress it instead;
+                    // the authoritative drop/hide already happens at core ingress.
+                    let resolvable_public_key =
+                        resolve_sender_public_key(&msg.sender_public_key_hex, &msg.sender_id);
+                    let Some(request_key) =
+                        message_request_key(&msg.sender_public_key_hex, &msg.sender_id)
+                    else {
+                        continue;
+                    };
+                    let is_known = contact_peer_ids.contains(&request_key)
+                        || resolvable_public_key
                             .as_ref()
-                            .is_some_and(|a| contact_peer_ids.contains(a));
-                    let is_blocked = blocked_peer_ids.contains(&msg.sender_id)
-                        || alt_id
-                            .as_ref()
-                            .is_some_and(|a| blocked_peer_ids.contains(a));
+                            .is_some_and(|key| contact_peer_ids.contains(key));
+                    // T4: resolve block status through the core manager's
+                    // single dual-flavor policy rather than maintaining a
+                    // second CLI-side expansion of public key and identity_id.
+                    // A lookup error fails closed so a blocked sender is not
+                    // exposed as a pending request.
+                    let is_blocked = core
+                        .is_peer_blocked(request_key.clone(), None)
+                        .unwrap_or(true);
+                    // Fail closed: if we cannot resolve the sender to a valid
+                    // Ed25519 public key, we cannot say it is unknown-but-valid
+                    // (a legitimate new-requester case); suppress it.
                     if !is_known && !is_blocked {
-                        by_sender
-                            .entry(msg.sender_id.clone())
-                            .or_default()
-                            .push(msg);
+                        by_sender.entry(request_key).or_default().push(msg);
                     }
                 }
 
@@ -1424,16 +1479,25 @@ pub async fn handle_jsonrpc_request(
                 )
             }
         }
-        // Accept = add the sender as a contact, using the Ed25519 public key
+        /// Accept = add the sender as a contact, using the Ed25519 public key
         // captured from their message envelope at receive time (cryptographically
         // verified there) rather than an unauthenticated discovery broadcast.
         ClientIntent::AcceptMessageRequest { request_id } => {
             if let Some(ref core) = ctx.core {
+                // The request_id from the pending list IS the canonical request key
+                // (output of message_request_key). Use it directly to match stored
+                // messages without re-canonicalizing.
+                let canonical_req_id = request_id.clone();
                 let public_key_hex = core
                     .peek_received_messages()
                     .into_iter()
-                    .filter(|m| m.sender_id == request_id)
-                    .filter_map(|m| m.sender_public_key_hex)
+                    .filter(|m| {
+                        message_request_key(&m.sender_public_key_hex, &m.sender_id).as_deref()
+                            == Some(&canonical_req_id)
+                    })
+                    .filter_map(|m| {
+                        resolve_sender_public_key(&m.sender_public_key_hex, &m.sender_id)
+                    })
                     .next_back();
 
                 match public_key_hex {
@@ -1484,8 +1548,27 @@ pub async fn handle_jsonrpc_request(
         // in GetPendingMessageRequests keeps them from reappearing.
         ClientIntent::RejectMessageRequest { request_id } => {
             if let Some(ref core) = ctx.core {
+                // The request_id is the canonical key (identity_id). Find the
+                // corresponding message to get its authenticated public key, so
+                // we block by public key and the dual-flavor write also covers
+                // the identity_id alias.
+                let canonical_req_id = request_id.clone();
+                let public_key_hex = core
+                    .peek_received_messages()
+                    .into_iter()
+                    .filter(|m| {
+                        message_request_key(&m.sender_public_key_hex, &m.sender_id).as_deref()
+                            == Some(&canonical_req_id)
+                    })
+                    .filter_map(|m| m.sender_public_key_hex)
+                    .next_back();
+
+                let block_identifier = public_key_hex
+                    .map(|public_key| format!("pk:{public_key}"))
+                    .unwrap_or_else(|| format!("id:{canonical_req_id}"));
+
                 match core.block_peer(
-                    request_id.clone(),
+                    block_identifier,
                     None,
                     Some("message_request_rejected".to_string()),
                 ) {
@@ -1742,3 +1825,82 @@ pub async fn handle_jsonrpc_request(
 }
 
 // =====================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::{message_request_key, resolve_sender_public_key, sender_is_resolvable};
+
+    /// A valid Ed25519 public key (generated; 64 hex chars).
+    fn valid_key() -> String {
+        // Deterministic: a real generated key is always a valid curve point.
+        let keys = scmessenger_core::identity::IdentityKeys::generate();
+        keys.public_key_hex()
+    }
+
+    #[test]
+    fn resolvable_from_authenticated_envelope_key() {
+        let key = valid_key();
+        assert!(sender_is_resolvable(
+            &Some(key.clone()),
+            "garbage-sender-id"
+        ));
+        assert_eq!(
+            resolve_sender_public_key(&Some(key.clone()), "garbage-sender-id"),
+            Some(key)
+        );
+    }
+
+    #[test]
+    fn resolvable_from_valid_key_valued_sender_id() {
+        let key = valid_key();
+        // No authenticated envelope key (legacy pre-field message) but the
+        // sender_id itself is a valid public key -> resolvable.
+        assert!(sender_is_resolvable(&None, &key));
+        assert_eq!(resolve_sender_public_key(&None, &key), Some(key));
+    }
+
+    #[test]
+    fn unresolvable_when_neither_flavor_is_a_valid_curve_point() {
+        // 0x7f*32 is 64 hex chars but NOT a valid Ed25519 curve point (probed
+        // against ed25519-dalek), and the authenticated envelope key is absent.
+        let bogus = "7f".repeat(32);
+        assert!(!sender_is_resolvable(&None, &bogus));
+        assert_eq!(resolve_sender_public_key(&None, &bogus), None);
+        // A short/garbage sender_id is likewise unresolvable.
+        assert!(!sender_is_resolvable(&None, "not-a-key"));
+        assert_eq!(resolve_sender_public_key(&None, "not-a-key"), None);
+    }
+
+    #[test]
+    fn invalid_envelope_key_does_not_win_over_valid_sender_id() {
+        // An envelope key that is not a valid curve point must not shadow a
+        // valid key-valued sender_id: resolvability falls through to the
+        // sender_id flavor.
+        let key = valid_key();
+        assert!(sender_is_resolvable(&Some("7f".repeat(32)), &key));
+        assert_eq!(
+            resolve_sender_public_key(&Some("7f".repeat(32)), &key),
+            Some(key)
+        );
+    }
+
+    #[test]
+    fn request_key_prefers_authenticated_key_and_falls_back_to_legacy_identity_id() {
+        let key = valid_key();
+        // A legacy identity ID has no authenticated envelope key. Use an
+        // off-curve value here so the test exercises the identity-ID fallback
+        // rather than the separate legacy-public-key compatibility path.
+        let identity_id = "7f".repeat(32);
+
+        assert_eq!(
+            message_request_key(&Some(key.clone()), "legacy-sender-id"),
+            scmessenger_core::identity::keys::identity_id_from_public_key_hex(&key)
+        );
+        assert_eq!(
+            message_request_key(&None, &key),
+            scmessenger_core::identity::keys::identity_id_from_public_key_hex(&key)
+        );
+        assert_eq!(message_request_key(&None, &identity_id), Some(identity_id));
+        assert_eq!(message_request_key(&None, "not-a-key"), None);
+    }
+}

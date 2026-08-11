@@ -32,13 +32,18 @@ pub fn is_valid_identity_id(hex_str: &str) -> bool {
 ///
 /// This is the single source of truth for the public_key -> identity_id
 /// derivation, so callers outside this module never reimplement the hash.
-/// Returns `None` when the input is not a 32-byte hex key: the relation is
-/// one-way, so an identity_id can never be reversed back into a public key.
+/// Returns `None` when the input is not a valid Ed25519 public key: the
+/// relation is one-way, so an identity_id can never be reversed back into a
+/// public key, and hashing an arbitrary 64-hex string (e.g. an identity_id
+/// itself, double-hashing) must not be allowed.
 pub fn identity_id_from_public_key_hex(public_key_hex: &str) -> Option<String> {
-    let bytes = hex::decode(public_key_hex).ok()?;
-    if bytes.len() != 32 {
+    // `is_valid_public_key` checks the 64-hex form AND that the decoded bytes
+    // parse as an Ed25519 curve point, so an identity_id (always 64 hex, but
+    // not a valid curve point) is rejected rather than double-hashed.
+    if !is_valid_public_key(public_key_hex) {
         return None;
     }
+    let bytes = hex::decode(public_key_hex).ok()?;
     Some(hex::encode(blake3::hash(&bytes).as_bytes()))
 }
 
@@ -995,5 +1000,38 @@ mod tests {
         let keys_restored = IdentityKeys::from_bytes(&v3_bytes).unwrap();
         assert_eq!(keys_restored.signing_key.to_bytes(), [1u8; 32]);
         assert!(keys_restored.mldsa_keypair.is_some());
+    }
+
+    #[test]
+    fn identity_id_from_public_key_hex_rejects_non_curve_point_inputs() {
+        // A real generated public key derives an identity_id.
+        let keys = IdentityKeys::generate();
+        let public_hex = keys.public_key_hex();
+        let derived = identity_id_from_public_key_hex(&public_hex);
+        assert!(
+            derived.is_some(),
+            "a valid Ed25519 public key must derive an id"
+        );
+
+        // T2 (identifier-gate follow-up): the derivation must be gated on a
+        // valid Ed25519 curve point, so a public key is accepted but a
+        // non-curve-point 64-hex input (identity_id double-hash vector) is
+        // rejected rather than blindly re-hashed.
+        //
+        // NOTE (documented residual): blake3 output is a uniformly random 32
+        // bytes, and a random compressed Edwards point is on-curve ~50% of the
+        // time, so SOME identity_ids will still parse as valid curve points
+        // and pass this gate. The gate strictly narrows the acceptance set
+        // (before: any 64-hex; after: only real Ed25519 public keys) but is
+        // not a complete identity_id-vs-public_key disambiguator by itself.
+        //
+        // Deterministic assertions only: short input and an explicitly
+        // off-curve 64-hex value (0x7f*32 fails Ed25519 decompression; probed
+        // against ed25519-dalek).
+        assert!(identity_id_from_public_key_hex("abcd").is_none());
+        assert!(
+            identity_id_from_public_key_hex(&"7f".repeat(32)).is_none(),
+            "0x7f*32 is not a valid Ed25519 curve point"
+        );
     }
 }

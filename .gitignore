@@ -357,3 +357,12 @@ docker/cargo-registry-cache/
 docker/cargo-git-cache/
 docker/test-results/
 .claude/alibaba_cloud_config.env
+
+# Hermes shared-worktree agent scratch
+.hermes/
+
+# Inbox bridge output -- contains operator device identity, public/LAN IPs, and
+# routable IPv6 from the message envelope. This repository is PUBLIC; these
+# files must never be committed. See scripts/inbox_bridge.py.
+HANDOFF/todo/INBOX_*.md
+HANDOFF/logs/

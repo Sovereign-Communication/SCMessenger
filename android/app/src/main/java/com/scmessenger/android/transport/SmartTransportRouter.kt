@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * Smart transport selection with 500ms timeout fallback and transport health tracking.
  * Implements parallel transport racing for optimal message delivery latency.
- * 
+ *
  * Mirrors: iOS/SCMessenger/SCMessenger/Transport/SmartTransportRouter.swift
  */
 class SmartTransportRouter {
@@ -98,14 +98,14 @@ class SmartTransportRouter {
 
     // Transport health tracking per peer
     private val transportHealth = ConcurrentHashMap<String, ConcurrentHashMap<TransportType, TransportHealth>>()
-    
+
     // Message deduplication cache
     private val messageDedupCache = ConcurrentHashMap<String, MessageDedupEntry>()
     private val dedupMutex = Mutex()
-    
+
     // Last successful transport per peer (for "previously used/good path")
     private val lastSuccessfulTransport = ConcurrentHashMap<String, TransportType>()
-    
+
     // Mutex for health updates
     private val healthMutex = Mutex()
 
@@ -401,8 +401,13 @@ class SmartTransportRouter {
         Timber.tag(TAG).i("$logCtx Racing ${availableTransports.count()} transports for peer ${peerId.take(8)}")
 
         val result = coroutineScope {
-            val deferreds = availableTransports.map { transportAttempt ->
-                async {
+            // Only a successful attempt can complete the winner. A failed or
+            // no-route candidate therefore cannot overwrite a success that
+            // completed concurrently.
+            val winner = CompletableDeferred<Triple<TransportType, Boolean, Long>?>()
+
+            val jobs = availableTransports.map { transportAttempt ->
+                launch {
                     val transportStart = System.currentTimeMillis()
                     val success = try {
                         transportAttempt.attempt()
@@ -411,24 +416,26 @@ class SmartTransportRouter {
                         false
                     }
                     val latencyMs = System.currentTimeMillis() - transportStart
-                    Triple(transportAttempt.type, success, latencyMs)
+                    if (success) {
+                        winner.complete(Triple(transportAttempt.type, true, latencyMs))
+                    }
                 }
             }
 
-            // Wait for first successful result
-            var firstSuccess: Triple<TransportType, Boolean, Long>? = null
-            for (deferred in deferreds) {
-                val result = deferred.await()
-                if (result.second) {
-                    firstSuccess = result
-                    break
-                }
+            // Complete with null only after every candidate has finished. A
+            // successful candidate always completes winner first.
+            val waitJob = launch {
+                jobs.forEach { it.join() }
+                winner.complete(null)
             }
 
-            // Cancel remaining coroutines
-            deferreds.forEach { it.cancel() }
+            val resolved = winner.await()
 
-            firstSuccess
+            // Stop all candidates before joining the watcher; this also keeps
+            // a slow/no-route candidate from delaying or replacing the winner.
+            jobs.forEach { it.cancelAndJoin() }
+            waitJob.cancelAndJoin()
+            resolved
         }
 
         return if (result != null) {

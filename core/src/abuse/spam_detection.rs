@@ -170,7 +170,7 @@ impl SpamDetectionEngine {
                 for contact in &contacts {
                     if blocked_set.contains(&contact.peer_id) {
                         blocked_by_count += 1;
-                    } else if let Ok(true) = bm.is_blocked(&contact.peer_id, None) {
+                    } else if let Ok(true) = bm.is_blocked_resolved(&contact.peer_id, None) {
                         blocked_by_count += 1;
                     }
                 }

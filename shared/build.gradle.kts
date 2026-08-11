@@ -4,7 +4,7 @@ plugins {
 }
 
 // Kept in lockstep with Cargo.toml by scripts/sync_version.sh.
-version = "0.3.5"
+version = "0.4.0"
 
 kotlin {
     jvm("desktop")

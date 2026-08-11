@@ -1802,6 +1802,13 @@ public protocol IronCoreProtocol: AnyObject, Sendable {
      */
     func getBlockedPeerDevices(peerId: String) throws  -> [String]
 
+    /**
+     * Get the canonical peer ID (identity_id) for an explicitly tagged
+     * identifier. Unprefixed 64-hex values are left unchanged because an
+     * identity_id can be a valid Ed25519 point by chance.
+     */
+    func getCanonicalPeerId(peerId: String)  -> String?
+
     func getDeviceId()  -> String?
 
     func getDiskStats()  -> DiskStats
@@ -2008,7 +2015,12 @@ public protocol IronCoreProtocol: AnyObject, Sendable {
     func prepareOnionMessage(envelopeData: Data, relayPublicKeysJson: String) throws  -> Data
 
     /**
-     * Prepare a delivery receipt envelope for the given message.
+     * Prepare an encrypted delivery receipt envelope ready for send_message.
+     *
+     * The receipt JSON is the encrypted MessageType::Receipt payload; callers
+     * must pass the returned bytes directly to the transport rather than
+     * wrapping or decoding them again. Use encode_receipt for raw receipt
+     * codec access.
      */
     func prepareReceipt(recipientPublicKeyHex: String, messageId: String) throws  -> Data
 
@@ -2753,6 +2765,20 @@ open func getBlockedPeerDevices(peerId: String)throws  -> [String]  {
 })
 }
 
+    /**
+     * Get the canonical peer ID (identity_id) for an explicitly tagged
+     * identifier. Unprefixed 64-hex values are left unchanged because an
+     * identity_id can be a valid Ed25519 point by chance.
+     */
+open func getCanonicalPeerId(peerId: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_scmessenger_core_fn_method_ironcore_get_canonical_peer_id(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(peerId),$0
+    )
+})
+}
+
 open func getDeviceId() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
     uniffi_scmessenger_core_fn_method_ironcore_get_device_id(
@@ -3209,7 +3235,12 @@ open func prepareOnionMessage(envelopeData: Data, relayPublicKeysJson: String)th
 }
 
     /**
-     * Prepare a delivery receipt envelope for the given message.
+     * Prepare an encrypted delivery receipt envelope ready for send_message.
+     *
+     * The receipt JSON is the encrypted MessageType::Receipt payload; callers
+     * must pass the returned bytes directly to the transport rather than
+     * wrapping or decoding them again. Use encode_receipt for raw receipt
+     * codec access.
      */
 open func prepareReceipt(recipientPublicKeyHex: String, messageId: String)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
@@ -11079,6 +11110,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_scmessenger_core_checksum_method_ironcore_get_blocked_peer_devices() != 13718) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_scmessenger_core_checksum_method_ironcore_get_canonical_peer_id() != 2630) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_scmessenger_core_checksum_method_ironcore_get_device_id() != 42390) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -11193,7 +11227,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_scmessenger_core_checksum_method_ironcore_prepare_onion_message() != 3648) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_scmessenger_core_checksum_method_ironcore_prepare_receipt() != 11532) {
+    if (uniffi_scmessenger_core_checksum_method_ironcore_prepare_receipt() != 25228) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ironcore_public_key_hex() != 51424) {
@@ -11220,7 +11254,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_scmessenger_core_checksum_method_ironcore_register_blocked_device() != 50151) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_scmessenger_core_checksum_method_ironcore_relay_jitter_delay() != 48813) {
+    if (uniffi_scmessenger_core_checksum_method_ironcore_relay_jitter_delay() != 50290) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_scmessenger_core_checksum_method_ironcore_resolve_identity() != 64565) {

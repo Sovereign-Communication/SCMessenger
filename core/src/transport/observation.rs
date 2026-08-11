@@ -141,8 +141,9 @@ pub struct ConnectionEndpoint {
 /// Tracks active connections and their endpoints
 #[derive(Debug, Clone)]
 pub struct ConnectionTracker {
-    /// Active connections indexed by peer ID
-    connections: HashMap<PeerId, ConnectionEndpoint>,
+    /// Active connections indexed by peer ID and libp2p connection ID.
+    /// A peer can legitimately have simultaneous direct and relayed paths.
+    connections: HashMap<PeerId, HashMap<String, ConnectionEndpoint>>,
 }
 
 impl Default for ConnectionTracker {
@@ -172,8 +173,8 @@ impl ConnectionTracker {
             .expect("system clock before UNIX_EPOCH")
             .as_secs();
 
-        self.connections.insert(
-            peer_id,
+        self.connections.entry(peer_id).or_default().insert(
+            connection_id.clone(),
             ConnectionEndpoint {
                 peer_id,
                 remote_addr,
@@ -184,19 +185,49 @@ impl ConnectionTracker {
         );
     }
 
-    /// Remove a connection
+    /// Remove every active connection for a peer.
     pub fn remove_connection(&mut self, peer_id: &PeerId) {
         self.connections.remove(peer_id);
     }
 
+    /// Remove one connection while preserving any other active path to the
+    /// same peer.
+    pub fn remove_connection_by_id(&mut self, peer_id: &PeerId, connection_id: &str) {
+        let Some(connections) = self.connections.get_mut(peer_id) else {
+            return;
+        };
+        connections.remove(connection_id);
+        if connections.is_empty() {
+            self.connections.remove(peer_id);
+        }
+    }
+
     /// Get connection info for a peer
     pub fn get_connection(&self, peer_id: &PeerId) -> Option<&ConnectionEndpoint> {
-        self.connections.get(peer_id)
+        self.connections
+            .get(peer_id)
+            .and_then(|connections| connections.values().max_by_key(|conn| conn.established_at))
+    }
+
+    /// Get the endpoint for the exact connection that delivered a
+    /// request-response message. This prevents a stale direct-LAN path from
+    /// authorizing disclosure on a different public or relayed connection.
+    pub fn get_connection_by_id(
+        &self,
+        peer_id: &PeerId,
+        connection_id: &str,
+    ) -> Option<&ConnectionEndpoint> {
+        self.connections
+            .get(peer_id)
+            .and_then(|connections| connections.get(connection_id))
     }
 
     /// Get all active connections
     pub fn all_connections(&self) -> Vec<ConnectionEndpoint> {
-        self.connections.values().cloned().collect()
+        self.connections
+            .values()
+            .flat_map(|connections| connections.values().cloned())
+            .collect()
     }
 
     /// Extract SocketAddr from a Multiaddr (best effort)
@@ -273,5 +304,39 @@ mod tests {
         let addr: Multiaddr = "/ip4/1.2.3.4/tcp/1234".parse().unwrap();
         let socket_addr = ConnectionTracker::extract_socket_addr(&addr);
         assert_eq!(socket_addr, Some("1.2.3.4:1234".parse().unwrap()));
+    }
+
+    #[test]
+    fn tracker_keeps_direct_and_relayed_connections_separate() {
+        let mut tracker = ConnectionTracker::new();
+        let peer = PeerId::random();
+        let direct: Multiaddr = "/ip4/192.168.1.20/tcp/9001".parse().unwrap();
+        let relayed: Multiaddr = "/ip4/203.0.113.20/tcp/9001/p2p-circuit".parse().unwrap();
+        let local: Multiaddr = "/ip4/192.168.1.5/tcp/9001".parse().unwrap();
+
+        tracker.add_connection(peer, direct.clone(), local.clone(), "direct".to_string());
+        tracker.add_connection(peer, relayed.clone(), local, "relay".to_string());
+
+        assert_eq!(tracker.all_connections().len(), 2);
+        assert_eq!(
+            tracker
+                .get_connection_by_id(&peer, "direct")
+                .map(|connection| &connection.remote_addr),
+            Some(&direct)
+        );
+        assert_eq!(
+            tracker
+                .get_connection_by_id(&peer, "relay")
+                .map(|connection| &connection.remote_addr),
+            Some(&relayed)
+        );
+
+        tracker.remove_connection_by_id(&peer, "direct");
+        assert!(tracker.get_connection_by_id(&peer, "direct").is_none());
+        assert!(tracker.get_connection_by_id(&peer, "relay").is_some());
+        assert_eq!(tracker.all_connections().len(), 1);
+
+        tracker.remove_connection(&peer);
+        assert!(tracker.all_connections().is_empty());
     }
 }
