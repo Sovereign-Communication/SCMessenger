@@ -1,0 +1,6805 @@
+{
+  "total_files": 676,
+  "node_allocation": {
+    "Node 1 (Core & FFI Boundary)": {
+      "total_score": 406896,
+      "total_panic_risks": 100,
+      "total_unwired": 0,
+      "file_count": 19,
+      "files": [
+        {
+          "file": "core/src/iron_core.rs",
+          "score": 184321,
+          "unwired": 0,
+          "unwrap_risks": 35,
+          "degree": 92008,
+          "symbols": 473,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Generated/api.swift",
+          "score": 175045,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 87510,
+          "symbols": 490,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/mobile_bridge.rs",
+          "score": 13663,
+          "unwired": 0,
+          "unwrap_risks": 46,
+          "degree": 6635,
+          "symbols": 337,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "cli/src/api.rs",
+          "score": 6926,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 3463,
+          "symbols": 164,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/server.rs",
+          "score": 5661,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2818,
+          "symbols": 112,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "cli/src/main.rs",
+          "score": 5609,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 2788,
+          "symbols": 230,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "cli/src/api_axum.rs",
+          "score": 5244,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2622,
+          "symbols": 82,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/ledger.rs",
+          "score": 2898,
+          "unwired": 0,
+          "unwrap_risks": 8,
+          "degree": 1417,
+          "symbols": 142,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/ble_mesh.rs",
+          "score": 2706,
+          "unwired": 0,
+          "unwrap_risks": 7,
+          "degree": 1325,
+          "symbols": 87,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/config.rs",
+          "score": 2156,
+          "unwired": 0,
+          "unwrap_risks": 2,
+          "degree": 1070,
+          "symbols": 28,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/cli.rs",
+          "score": 661,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 318,
+          "symbols": 128,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "cli/src/ble_windows.rs",
+          "score": 492,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 246,
+          "symbols": 69,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/ble_daemon.rs",
+          "score": 420,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 210,
+          "symbols": 47,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/transport_bridge.rs",
+          "score": 404,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 198,
+          "symbols": 55,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/transport_api.rs",
+          "score": 250,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 125,
+          "symbols": 21,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/bootstrap.rs",
+          "score": 212,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 106,
+          "symbols": 21,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_iron_core_export.py",
+          "score": 128,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 64,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/build.rs",
+          "score": 100,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 50,
+          "symbols": 19,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cli/src/lib.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        }
+      ]
+    },
+    "Node 2 (WAN Transport & Swarm)": {
+      "total_score": 70328,
+      "total_panic_risks": 52,
+      "total_unwired": 0,
+      "file_count": 5,
+      "files": [
+        {
+          "file": "core/src/transport/manager.rs",
+          "score": 28012,
+          "unwired": 0,
+          "unwrap_risks": 7,
+          "degree": 13978,
+          "symbols": 137,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/internet.rs",
+          "score": 17220,
+          "unwired": 0,
+          "unwrap_risks": 19,
+          "degree": 8534,
+          "symbols": 75,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/circuit_breaker.rs",
+          "score": 9164,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4582,
+          "symbols": 50,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/dial_policy.rs",
+          "score": 8462,
+          "unwired": 0,
+          "unwrap_risks": 2,
+          "degree": 4223,
+          "symbols": 55,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/swarm.rs",
+          "score": 7470,
+          "unwired": 0,
+          "unwrap_risks": 24,
+          "degree": 3639,
+          "symbols": 266,
+          "unsafe": 0,
+          "sec_sensitive": false
+        }
+      ]
+    },
+    "Node 3 (Local Mesh Transports)": {
+      "total_score": 51826,
+      "total_panic_risks": 50,
+      "total_unwired": 0,
+      "file_count": 24,
+      "files": [
+        {
+          "file": "core/src/transport/wifi_direct.rs",
+          "score": 13407,
+          "unwired": 0,
+          "unwrap_risks": 2,
+          "degree": 6683,
+          "symbols": 64,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/transport/wifi_aware.rs",
+          "score": 13124,
+          "unwired": 0,
+          "unwrap_risks": 12,
+          "degree": 6514,
+          "symbols": 82,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/escalation.rs",
+          "score": 10076,
+          "unwired": 0,
+          "unwrap_risks": 18,
+          "degree": 4966,
+          "symbols": 65,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/reputation.rs",
+          "score": 9990,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 4991,
+          "symbols": 72,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/ble/l2cap.rs",
+          "score": 1662,
+          "unwired": 0,
+          "unwrap_risks": 14,
+          "degree": 775,
+          "symbols": 87,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/ble/gatt.rs",
+          "score": 1544,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 772,
+          "symbols": 55,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/ble/beacon.rs",
+          "score": 425,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 200,
+          "symbols": 43,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiDirectTransport.kt",
+          "score": 342,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 171,
+          "symbols": 24,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
+          "score": 306,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 153,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleL2capManager.kt",
+          "score": 258,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 129,
+          "symbols": 22,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/ble/scanner.rs",
+          "score": 254,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 127,
+          "symbols": 67,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/addr_filter.rs",
+          "score": 144,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 60,
+          "symbols": 84,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleGattServer.kt",
+          "score": 126,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 63,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleGattClient.kt",
+          "score": 80,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 40,
+          "symbols": 26,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiTransportManager.kt",
+          "score": 64,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 32,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/BLECentralManager.swift",
+          "score": 10,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 5,
+          "symbols": 32,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleAdvertiser.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleBackoffStrategy.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleScanner.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BlePayloadDiagnostics.kt",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleQuotaManager.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/ble/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/BLEL2CAPManager.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/BLEPeripheralManager.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 29,
+          "unsafe": 0,
+          "sec_sensitive": false
+        }
+      ]
+    },
+    "Node 4 (Storage & Relay Custody)": {
+      "total_score": 94020,
+      "total_panic_risks": 428,
+      "total_unwired": 0,
+      "file_count": 31,
+      "files": [
+        {
+          "file": "core/src/store/backend.rs",
+          "score": 16606,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 8303,
+          "symbols": 48,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/wasm_support/storage.rs",
+          "score": 16442,
+          "unwired": 0,
+          "unwrap_risks": 27,
+          "degree": 8113,
+          "symbols": 58,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/server.rs",
+          "score": 10634,
+          "unwired": 0,
+          "unwrap_risks": 5,
+          "degree": 5297,
+          "symbols": 63,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/client.rs",
+          "score": 9998,
+          "unwired": 0,
+          "unwrap_risks": 24,
+          "degree": 4903,
+          "symbols": 95,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/contacts.rs",
+          "score": 6423,
+          "unwired": 0,
+          "unwrap_risks": 56,
+          "degree": 2975,
+          "symbols": 88,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/store/relay_custody.rs",
+          "score": 4792,
+          "unwired": 0,
+          "unwrap_risks": 55,
+          "degree": 2146,
+          "symbols": 184,
+          "unsafe": 2,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/blocked.rs",
+          "score": 4398,
+          "unwired": 0,
+          "unwrap_risks": 130,
+          "degree": 1679,
+          "symbols": 101,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/history.rs",
+          "score": 3758,
+          "unwired": 0,
+          "unwrap_risks": 18,
+          "degree": 1807,
+          "symbols": 57,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/ledger_entry.rs",
+          "score": 3533,
+          "unwired": 0,
+          "unwrap_risks": 16,
+          "degree": 1690,
+          "symbols": 194,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/store/logs.rs",
+          "score": 2966,
+          "unwired": 0,
+          "unwrap_risks": 14,
+          "degree": 1427,
+          "symbols": 42,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/storage.rs",
+          "score": 2736,
+          "unwired": 0,
+          "unwrap_risks": 6,
+          "degree": 1344,
+          "symbols": 38,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/outbox.rs",
+          "score": 2718,
+          "unwired": 0,
+          "unwrap_risks": 38,
+          "degree": 1207,
+          "symbols": 100,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/invite.rs",
+          "score": 1600,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 800,
+          "symbols": 124,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/storage.rs",
+          "score": 1286,
+          "unwired": 0,
+          "unwrap_risks": 16,
+          "degree": 579,
+          "symbols": 62,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/inbox.rs",
+          "score": 1228,
+          "unwired": 0,
+          "unwrap_risks": 9,
+          "degree": 578,
+          "symbols": 72,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/peer_exchange.rs",
+          "score": 1176,
+          "unwired": 0,
+          "unwrap_risks": 10,
+          "degree": 548,
+          "symbols": 64,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/dedup.rs",
+          "score": 992,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 492,
+          "symbols": 34,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/bootstrap.rs",
+          "score": 744,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 368,
+          "symbols": 59,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/protocol.rs",
+          "score": 734,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 367,
+          "symbols": 28,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/delegate_prewarm.rs",
+          "score": 562,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 277,
+          "symbols": 48,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/platform/PlatformStorage.kt",
+          "score": 366,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 183,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/transport_memory.rs",
+          "score": 166,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 83,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/findmy.rs",
+          "score": 110,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 51,
+          "symbols": 40,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/sweeper.rs",
+          "score": 52,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 26,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/StorageWarningBanner.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/StorageManager.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/androidMain/kotlin/com/scmessenger/shared/platform/PlatformStorage.android.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/desktopMain/kotlin/com/scmessenger/shared/platform/PlatformStorage.desktop.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/relay/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/store/tracing_init.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 12,
+          "unsafe": 0,
+          "sec_sensitive": false
+        }
+      ]
+    },
+    "Node 5 (WASM & Platform Adapters)": {
+      "total_score": 398917,
+      "total_panic_risks": 663,
+      "total_unwired": 122,
+      "file_count": 597,
+      "files": [
+        {
+          "file": "scripts/branch_disposition.py",
+          "score": 19708,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 9854,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/ios_extractor.py",
+          "score": 13132,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 6566,
+          "symbols": 41,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/orchestrate_strict.py",
+          "score": 12348,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 6174,
+          "symbols": 57,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/wasm_support/mesh.rs",
+          "score": 10102,
+          "unwired": 0,
+          "unwrap_risks": 17,
+          "degree": 4983,
+          "symbols": 51,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/lib.rs",
+          "score": 9470,
+          "unwired": 0,
+          "unwrap_risks": 23,
+          "degree": 4643,
+          "symbols": 213,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/wasm_support/transport.rs",
+          "score": 9248,
+          "unwired": 0,
+          "unwrap_risks": 11,
+          "degree": 4580,
+          "symbols": 54,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/abuse/auto_block.rs",
+          "score": 6920,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 3456,
+          "symbols": 43,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/inbox_bridge.py",
+          "score": 6752,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 3376,
+          "symbols": 71,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/nat.rs",
+          "score": 6542,
+          "unwired": 0,
+          "unwrap_risks": 5,
+          "degree": 3251,
+          "symbols": 59,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Generated/apiFFI.h",
+          "score": 6315,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 3145,
+          "symbols": 861,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/abuse/spam_detection.rs",
+          "score": 6068,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 3022,
+          "symbols": 61,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/contacts_bridge.rs",
+          "score": 4920,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 2448,
+          "symbols": 64,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ContactManagerFix.swift",
+          "score": 4848,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2424,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/store.rs",
+          "score": 4800,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 2396,
+          "symbols": 72,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/ratchet.rs",
+          "score": 4503,
+          "unwired": 0,
+          "unwrap_risks": 15,
+          "degree": 2179,
+          "symbols": 69,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/watch_handoff_lanes.py",
+          "score": 4360,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2180,
+          "symbols": 26,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/wasm_support/rpc.rs",
+          "score": 3303,
+          "unwired": 0,
+          "unwrap_risks": 6,
+          "degree": 1615,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/drift/sketch.rs",
+          "score": 3030,
+          "unwired": 0,
+          "unwrap_risks": 26,
+          "degree": 1411,
+          "symbols": 47,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/pq/mldsa.rs",
+          "score": 2963,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1469,
+          "symbols": 29,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "AgentSwarmCline/scmessenger_swarm/surgeon_graph.py",
+          "score": 2683,
+          "unwired": 1,
+          "unwrap_risks": 0,
+          "degree": 1334,
+          "symbols": 30,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/mesh_routing.rs",
+          "score": 2350,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1175,
+          "symbols": 101,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/negative_cache.rs",
+          "score": 2346,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1173,
+          "symbols": 54,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/outbox_patched.rs",
+          "score": 2324,
+          "unwired": 0,
+          "unwrap_risks": 6,
+          "degree": 1138,
+          "symbols": 89,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/soak_supervisor.py",
+          "score": 2254,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1127,
+          "symbols": 53,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/sync.rs",
+          "score": 2248,
+          "unwired": 0,
+          "unwrap_risks": 23,
+          "degree": 1032,
+          "symbols": 57,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/transport.rs",
+          "score": 2138,
+          "unwired": 0,
+          "unwrap_risks": 5,
+          "degree": 1049,
+          "symbols": 110,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/ollama_cli_bridge.py",
+          "score": 2118,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1059,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/blocked_bridge.rs",
+          "score": 2090,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1045,
+          "symbols": 24,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/identity/keys.rs",
+          "score": 2017,
+          "unwired": 0,
+          "unwrap_risks": 33,
+          "degree": 864,
+          "symbols": 92,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/fusion_lite.py",
+          "score": 1984,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 992,
+          "symbols": 25,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/lake_route.py",
+          "score": 1952,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 976,
+          "symbols": 24,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/delegate_task.py",
+          "score": 1925,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 950,
+          "symbols": 39,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "tmp/inspect_session.py",
+          "score": 1892,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 946,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/send_android_logs.py",
+          "score": 1842,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 921,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/global.rs",
+          "score": 1778,
+          "unwired": 0,
+          "unwrap_risks": 9,
+          "degree": 853,
+          "symbols": 76,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_swift_generation.py",
+          "score": 1678,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 839,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/relay.rs",
+          "score": 1607,
+          "unwired": 0,
+          "unwrap_risks": 26,
+          "degree": 687,
+          "symbols": 81,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/parse_orchestration_footer.py",
+          "score": 1564,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 782,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/mesh.rs",
+          "score": 1554,
+          "unwired": 0,
+          "unwrap_risks": 10,
+          "degree": 737,
+          "symbols": 77,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/identity/store.rs",
+          "score": 1541,
+          "unwired": 0,
+          "unwrap_risks": 40,
+          "degree": 598,
+          "symbols": 44,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/routing/local.rs",
+          "score": 1532,
+          "unwired": 0,
+          "unwrap_risks": 14,
+          "degree": 710,
+          "symbols": 62,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/verify_swift_violations.py",
+          "score": 1484,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 742,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+          "score": 1419,
+          "unwired": 84,
+          "unwrap_risks": 0,
+          "degree": 67,
+          "symbols": 337,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/crypto/encrypt.rs",
+          "score": 1385,
+          "unwired": 0,
+          "unwrap_risks": 26,
+          "degree": 576,
+          "symbols": 84,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/identity/mod.rs",
+          "score": 1340,
+          "unwired": 0,
+          "unwrap_risks": 39,
+          "degree": 514,
+          "symbols": 57,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_swift_strings.py",
+          "score": 1336,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 668,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/extract_patch.py",
+          "score": 1336,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 668,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_contacts.py",
+          "score": 1332,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 666,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_ios_contacts.py",
+          "score": 1332,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 666,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/clean_emojis.py",
+          "score": 1332,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 666,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/fix_delegate.py",
+          "score": 1332,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 666,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/fix_release_yml.py",
+          "score": 1332,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 666,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/neighborhood.rs",
+          "score": 1324,
+          "unwired": 0,
+          "unwrap_risks": 2,
+          "degree": 654,
+          "symbols": 69,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/envelope.rs",
+          "score": 1249,
+          "unwired": 0,
+          "unwrap_risks": 20,
+          "degree": 532,
+          "symbols": 61,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/routing/engine.rs",
+          "score": 1248,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 620,
+          "symbols": 64,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/optimized_engine.rs",
+          "score": 1242,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 621,
+          "symbols": 71,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_rust_linting.py",
+          "score": 1226,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 613,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/run_dualpass_audit.py",
+          "score": 1121,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 548,
+          "symbols": 22,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "tmp/parse_job_824.py",
+          "score": 1088,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 544,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/detailed_audit.py",
+          "score": 1068,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 534,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/build_lock.py",
+          "score": 1048,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 524,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/session_manager.rs",
+          "score": 1021,
+          "unwired": 0,
+          "unwrap_risks": 10,
+          "degree": 458,
+          "symbols": 60,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/orchestration_contract.py",
+          "score": 978,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 489,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/frame.rs",
+          "score": 972,
+          "unwired": 0,
+          "unwrap_risks": 22,
+          "degree": 398,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/analyze_mesh.py",
+          "score": 972,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 486,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/check_logs.py",
+          "score": 942,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 471,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/notification.rs",
+          "score": 918,
+          "unwired": 0,
+          "unwrap_risks": 8,
+          "degree": 427,
+          "symbols": 63,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/bootstrap.rs",
+          "score": 902,
+          "unwired": 0,
+          "unwrap_risks": 6,
+          "degree": 427,
+          "symbols": 74,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/pq/hybrid.rs",
+          "score": 879,
+          "unwired": 0,
+          "unwrap_risks": 11,
+          "degree": 383,
+          "symbols": 28,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/routing/resume_prefetch.rs",
+          "score": 872,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 424,
+          "symbols": 66,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/relay_health.rs",
+          "score": 840,
+          "unwired": 0,
+          "unwrap_risks": 4,
+          "degree": 404,
+          "symbols": 56,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/rules_check.py",
+          "score": 826,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 413,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/connection_state.rs",
+          "score": 814,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 407,
+          "symbols": 40,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_rust_logs_2144.py",
+          "score": 810,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 405,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_text_4.py",
+          "score": 810,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 405,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_text_5.py",
+          "score": 810,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 405,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_error_details.py",
+          "score": 810,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 405,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_text_6.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_failure_log.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_job.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_418_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_419_error.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_job.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_job_720.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_152_error.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_xcode_failure.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/search_all_failures_1622.py",
+          "score": 808,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 404,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/find_error_text.py",
+          "score": 806,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 403,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_151_text.py",
+          "score": 806,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 403,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_3.py",
+          "score": 806,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 403,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_6.py",
+          "score": 806,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 403,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_8.py",
+          "score": 806,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 403,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/daemon_bridge.rs",
+          "score": 800,
+          "unwired": 0,
+          "unwrap_risks": 16,
+          "degree": 336,
+          "symbols": 76,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/adb_extractor.py",
+          "score": 794,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 397,
+          "symbols": 38,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/count_braces.py",
+          "score": 790,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 395,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/privacy/onion.rs",
+          "score": 763,
+          "unwired": 0,
+          "unwrap_risks": 21,
+          "degree": 285,
+          "symbols": 52,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/observability.rs",
+          "score": 760,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 376,
+          "symbols": 42,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/dump_opencode_session.py",
+          "score": 756,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 378,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/desktop_bridge.rs",
+          "score": 734,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 367,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/observation.rs",
+          "score": 706,
+          "unwired": 0,
+          "unwrap_risks": 8,
+          "degree": 321,
+          "symbols": 51,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/multipath.rs",
+          "score": 702,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 351,
+          "symbols": 25,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/diagnostics.rs",
+          "score": 688,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 340,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_1854_jobs.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_docker_419_error_text.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_docker_rust_step5.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_mobile_152_1882.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_mobile_152_error_text.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_mobile_top_1882.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_top_runs_labels_38.py",
+          "score": 670,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 335,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/apply_outbox_flush.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/fetch_ci_jobs.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_real_steps.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_real_steps_4bb7fb8e.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_real_steps_985b5177.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_real.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_419_final.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_419_status_1990.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_420_jobs.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_420_rust_steps.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_workflow_runs.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ffi_job.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_integration_419_steps.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_2.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_3.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_4.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_5.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_6.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_153_steps_7.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_154_steps.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_154_steps_2.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_154_steps_3.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_154_steps_4.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_154_steps_5.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_38.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_47.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_48.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_49.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_50.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_51.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_macos_failure.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_151_failure.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_152_status_1896.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_152_status_1926.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_153_final_2156.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_153_status_2051.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_154_status_2289.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_docker_annotations.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_mobile_151_annotations.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_top_runs_status_37.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/search_1854.py",
+          "score": 668,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 334,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/find_cf9115d8_docker_run.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/find_job_ids.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/find_runs_for_commit.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/inspect_cf9115d8_labels.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_all_ci_jobs_255040a8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_all_runs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_all_runs_1578.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_151_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps_3.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps_4.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps_5.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_152_steps_6.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_00748cbf.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_07665182.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1091.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1161.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1179.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1185.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1301.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1307.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1375.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1399.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1433.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1451.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1475.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1481.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1499.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_1505.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_255040a8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_4bb7fb8e.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_979.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_985b5177.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_997.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_android_steps_d6806c00.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_c6c30b7b_runs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_jobs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_job_titles.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_985b5177.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_cf9115d8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_jobs_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ci_run_steps_07665182.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_cross_run_cf9115d8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_run.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_run_29897490210.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_run_cf9115d8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_docker_run_cf9115d8_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_github_actions.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_151_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_steps_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_steps_3.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_steps_4.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_152_steps_5.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_1381.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_3.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_4.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_4bb7fb8e.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_4bb7fb8e_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_5.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_6.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_ios_steps_7.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_10.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_11.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_12.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_13.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_14.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_15.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_16.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_17.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_18.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_19.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_20.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_21.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_22.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_23.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_24.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_25.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_26.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_27.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_28.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_29.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_3.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_30.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_31.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_32.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_33.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_34.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_35.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_36.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_37.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_39.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_4.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_40.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_41.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_42.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_43.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_44.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_45.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_46.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_5.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_6.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_7.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_live_runs_9.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_152_final.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_final.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1039.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1147.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1253.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1351.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1421.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_1738.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_2012.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_2229.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_jobs_931.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_runs_1882.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_985b5177.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_cf9115d8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_jobs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_links.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_2.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_4.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_5.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_run_steps_7.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_step_conclusions.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_mobile_workflow_runs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_runs_151_418.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_runs_1578.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_runs_cf9115d8.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_runs_deep.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_run_details.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_top_runs_921.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_top_runs.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/print_top_runs_37.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/search_runs_1518.py",
+          "score": 666,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 333,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/discovery.rs",
+          "score": 659,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 317,
+          "symbols": 41,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/privacy/mod.rs",
+          "score": 648,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 324,
+          "symbols": 45,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/morph_lite.py",
+          "score": 640,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 320,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/adaptive_ttl.rs",
+          "score": 616,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 308,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/main.py",
+          "score": 600,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 300,
+          "symbols": 37,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/inspect_opencode_db.py",
+          "score": 598,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 299,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/orchestration_worktree.py",
+          "score": 582,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 291,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/dispatch_dial.py",
+          "score": 574,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 287,
+          "symbols": 19,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/ci-fixes/continue_gemini.py",
+          "score": 572,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 286,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/parse_run_29870644604.py",
+          "score": 562,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 281,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/message/codec.rs",
+          "score": 553,
+          "unwired": 0,
+          "unwrap_risks": 21,
+          "degree": 180,
+          "symbols": 46,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/update_android_allowlist.py",
+          "score": 512,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 256,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/probe_lane.py",
+          "score": 482,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 241,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/privacy/cover.rs",
+          "score": 448,
+          "unwired": 0,
+          "unwrap_risks": 21,
+          "degree": 140,
+          "symbols": 52,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/probe_qwen38max.py",
+          "score": 440,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 220,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/websocket.rs",
+          "score": 432,
+          "unwired": 0,
+          "unwrap_risks": 8,
+          "degree": 184,
+          "symbols": 32,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/ble.rs",
+          "score": 430,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 215,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/privacy/circuit.rs",
+          "score": 426,
+          "unwired": 0,
+          "unwrap_risks": 12,
+          "degree": 165,
+          "symbols": 61,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/health.rs",
+          "score": 414,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 207,
+          "symbols": 56,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "reference/historical/snapshot_mesh.py",
+          "score": 386,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 193,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/deduce_files.py",
+          "score": 350,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 175,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/orchestrator_guard.py",
+          "score": 346,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 173,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "AgentSwarmCline/scmessenger_swarm/swarm.py",
+          "score": 337,
+          "unwired": 3,
+          "unwrap_risks": 0,
+          "degree": 146,
+          "symbols": 22,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/settings.rs",
+          "score": 322,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 161,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/batch_handoff.py",
+          "score": 320,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 160,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/backup.rs",
+          "score": 313,
+          "unwired": 0,
+          "unwrap_risks": 24,
+          "degree": 48,
+          "symbols": 40,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift",
+          "score": 311,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 143,
+          "symbols": 303,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/cloud_dispatch.py",
+          "score": 310,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 155,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/abuse/reputation.rs",
+          "score": 304,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 152,
+          "symbols": 33,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "mobile/src/lib.rs",
+          "score": 292,
+          "unwired": 0,
+          "unwrap_risks": 6,
+          "degree": 122,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/build_wiring_graph.py",
+          "score": 290,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 145,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/privacy/timing.rs",
+          "score": 272,
+          "unwired": 0,
+          "unwrap_risks": 8,
+          "degree": 104,
+          "symbols": 38,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/dspy/modules.rs",
+          "score": 270,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 135,
+          "symbols": 35,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/worker.rs",
+          "score": 260,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 118,
+          "symbols": 60,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/behaviour.rs",
+          "score": 250,
+          "unwired": 0,
+          "unwrap_risks": 7,
+          "degree": 97,
+          "symbols": 75,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/core_cli_driver.py",
+          "score": 240,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 120,
+          "symbols": 26,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/examples/nat_reflection_demo.rs",
+          "score": 236,
+          "unwired": 0,
+          "unwrap_risks": 4,
+          "degree": 102,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/prepush_check.py",
+          "score": 234,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 117,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/AndroidPlatformBridge.kt",
+          "score": 233,
+          "unwired": 3,
+          "unwrap_risks": 0,
+          "degree": 94,
+          "symbols": 41,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/peer_broadcast.rs",
+          "score": 228,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 114,
+          "symbols": 26,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/reflection.rs",
+          "score": 226,
+          "unwired": 0,
+          "unwrap_risks": 11,
+          "degree": 69,
+          "symbols": 40,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "reference/historical/snapshot_mesh2.py",
+          "score": 224,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 112,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/multiport.rs",
+          "score": 212,
+          "unwired": 0,
+          "unwrap_risks": 3,
+          "degree": 94,
+          "symbols": 25,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/data/TopicManager.kt",
+          "score": 210,
+          "unwired": 8,
+          "unwrap_risks": 0,
+          "degree": 45,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "wasm/src/notification_manager.rs",
+          "score": 210,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 105,
+          "symbols": 54,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/db.py",
+          "score": 206,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 103,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/policy.rs",
+          "score": 206,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 103,
+          "symbols": 60,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_p2_worker.py",
+          "score": 191,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 83,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/dspy/teleprompt.rs",
+          "score": 188,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 90,
+          "symbols": 39,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/summary_opencode.py",
+          "score": 188,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 94,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/privacy/padding.rs",
+          "score": 170,
+          "unwired": 0,
+          "unwrap_risks": 20,
+          "degree": 5,
+          "symbols": 43,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "reference/historical/parse_connections.py",
+          "score": 170,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 85,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/mince_logs.py",
+          "score": 170,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 85,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/run_surgeon.py",
+          "score": 166,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 83,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/MdnsServiceDiscovery.kt",
+          "score": 158,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 79,
+          "symbols": 22,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/SubnetProbe.kt",
+          "score": 158,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 79,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/abstraction.rs",
+          "score": 158,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 79,
+          "symbols": 33,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt",
+          "score": 156,
+          "unwired": 2,
+          "unwrap_risks": 0,
+          "degree": 63,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/generate_wiring_patch_manifest.py",
+          "score": 154,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 77,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/parse_ios_log.py",
+          "score": 150,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 75,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/pq/mod.rs",
+          "score": 147,
+          "unwired": 0,
+          "unwrap_risks": 4,
+          "degree": 45,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/supervisor.py",
+          "score": 146,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 73,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/rate_limit.rs",
+          "score": 132,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 66,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/platform/PlatformNetworking.kt",
+          "score": 130,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 65,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/MeshApplication.kt",
+          "score": 126,
+          "unwired": 2,
+          "unwrap_risks": 0,
+          "degree": 48,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "AgentSwarmCline/scmessenger_swarm/observability.rs",
+          "score": 121,
+          "unwired": 1,
+          "unwrap_risks": 0,
+          "degree": 53,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/data/PreferencesRepository.kt",
+          "score": 120,
+          "unwired": 8,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/timeout_budget.rs",
+          "score": 118,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 59,
+          "symbols": 33,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/handlers/status.py",
+          "score": 116,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 58,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/dspy/signatures.rs",
+          "score": 113,
+          "unwired": 0,
+          "unwrap_risks": 4,
+          "degree": 28,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/fix_hybrid.py",
+          "score": 113,
+          "unwired": 0,
+          "unwrap_risks": 11,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/message/types.rs",
+          "score": 109,
+          "unwired": 0,
+          "unwrap_risks": 4,
+          "degree": 26,
+          "symbols": 34,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "desktop_bridge/src/types.rs",
+          "score": 106,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 53,
+          "symbols": 89,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/network/NetworkDiagnostics.kt",
+          "score": 105,
+          "unwired": 7,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/xdg_paths.rs",
+          "score": 104,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 52,
+          "symbols": 19,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt",
+          "score": 96,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 48,
+          "symbols": 26,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/FileLoggingTree.kt",
+          "score": 96,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 48,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Utils/NotificationLogger.swift",
+          "score": 96,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 48,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/mod.rs",
+          "score": 93,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 34,
+          "symbols": 66,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Services/IosPlatformBridge.swift",
+          "score": 92,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 46,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/build.rs",
+          "score": 72,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 36,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "mobile/build.rs",
+          "score": 72,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 36,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/drift/compress.rs",
+          "score": 70,
+          "unwired": 0,
+          "unwrap_risks": 7,
+          "degree": 7,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "patch/if-watch-full/src/lib.rs",
+          "score": 66,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 33,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/kani_proofs.rs",
+          "score": 59,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 17,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/bin/gen_swift.rs",
+          "score": 52,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 26,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Services/CoreDelegateImpl.swift",
+          "score": 50,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 25,
+          "symbols": 12,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Services/NotificationManager.swift",
+          "score": 50,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 25,
+          "symbols": 25,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "patch/if-watch/src/lib.rs",
+          "score": 46,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 23,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/PeerIdValidator.kt",
+          "score": 44,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 22,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt",
+          "score": 43,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 9,
+          "symbols": 85,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/notification_defaults.rs",
+          "score": 42,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 21,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/p2_06_encrypt.py",
+          "score": 41,
+          "unwired": 0,
+          "unwrap_risks": 2,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/bin/gen_kotlin.rs",
+          "score": 40,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 20,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/crypto/negotiation.rs",
+          "score": 40,
+          "unwired": 0,
+          "unwrap_risks": 5,
+          "degree": 0,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ViewModels/SettingsViewModel.swift",
+          "score": 39,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 7,
+          "symbols": 30,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "desktop_bridge/src/bin/gen_kotlin.rs",
+          "score": 36,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 18,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/analyze_5layer_priorities.py",
+          "score": 33,
+          "unwired": 0,
+          "unwrap_risks": 1,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/ServiceHealthMonitor.kt",
+          "score": 32,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 16,
+          "symbols": 21,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/mDNSServiceDiscovery.swift",
+          "score": 32,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 16,
+          "symbols": 12,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/network/DiagnosticsReporter.kt",
+          "score": 30,
+          "unwired": 2,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Data/TopicManager.swift",
+          "score": 26,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 13,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/SettingsScreen.kt",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/IdentityProgressStage.kt",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "core/src/crypto/mod.rs",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Settings/IdentityBackupSheets.swift",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/dry_run_5node_allocation.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_add_fields.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_cleanup.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_compile_fixes.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_compile_fixes_2.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_compile_fixes_3.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_compile_fixes_4.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_encrypt_v2.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_peer_confirmed.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_scratch.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_sm_hybrid.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_sm_migration.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "scripts/p2_06_strict_fix.py",
+          "score": 25,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": true
+        },
+        {
+          "file": "cloud/orchestrator/handlers/preemption.py",
+          "score": 24,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 12,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/socket_activation.rs",
+          "score": 24,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 12,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/peerid_to_pubkey.py",
+          "score": 24,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 12,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/chat/DeliveryStateSurface.kt",
+          "score": 22,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 11,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/lib.rs",
+          "score": 22,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 11,
+          "symbols": 20,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/worker_manager.py",
+          "score": 20,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 10,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/handlers/sprint.py",
+          "score": 20,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 10,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Services/MeshBackgroundService.swift",
+          "score": 20,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 10,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/classify.py",
+          "score": 20,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 10,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ConversationsViewModel.kt",
+          "score": 18,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 9,
+          "symbols": 23,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/Identicon.kt",
+          "score": 16,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 8,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ViewModels/OnboardingViewModel.swift",
+          "score": 16,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 8,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/di/AppModule.kt",
+          "score": 15,
+          "unwired": 1,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 17,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/model/Contact.kt",
+          "score": 14,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 7,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/message/ephemeral.rs",
+          "score": 14,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 7,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/MultipeerTransport.swift",
+          "score": 12,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 6,
+          "symbols": 22,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ContactsViewModel.kt",
+          "score": 10,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 5,
+          "symbols": 34,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/error.rs",
+          "score": 10,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 5,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_swift_strings_targeted.py",
+          "score": 10,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 5,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ChatViewModel.kt",
+          "score": 8,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4,
+          "symbols": 21,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/BackoffStrategy.kt",
+          "score": 8,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/NotificationHelper.kt",
+          "score": 8,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4,
+          "symbols": 20,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/get_peer_ids.py",
+          "score": 8,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/scan.py",
+          "score": 8,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 4,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ViewModels/ContactsViewModel.swift",
+          "score": 6,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 3,
+          "symbols": 29,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/archive_task.py",
+          "score": 6,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 3,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/MeshEventBus.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 28,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/CircuitBreaker.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 19,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/NetworkFailureMetrics.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/PeerKeyUtils.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/viewmodel/ChatViewModel.kt",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/smart_retry.rs",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 21,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/capability.rs",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/notification.rs",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 14,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ViewModels/ChatViewModel.swift",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Contacts/ContactsListView.swift",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_targets.py",
+          "score": 4,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 2,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/NotificationGuidanceView.swift",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_mdns_worker.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_p1_05_worker.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_p1_11_worker.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_p1_13_docs_worker.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/qwen_p1_13_worker.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/fix_trailing_ws.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/run_fusion.py",
+          "score": 2,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 1,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/hooks/check_no_emoji.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/hooks/preflight_guard.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/audit_models.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/batch_micro_tasks.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/batch_splitter.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/build_repo_index.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/cartographer_optimization.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/context_extractor.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/detailed_mapping_update.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/freshness_gate.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/local_cartographer.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/merge_models.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/micro_agent.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/structural_cartographer.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/sync_pool.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/task_validator.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".claude/scripts/verify_and_fix_repo_map.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": ".codex/hooks/check_no_emoji.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/androidTest/java/com/scmessenger/android/util/AppRestartHelper.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/data/IdentityCreationCoordinator.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/data/IdentityCreationEvent.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/network/NetworkTypeDetector.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/notification/NotificationActionReceiver.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/BootReceiver.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/MeshForegroundService.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 23,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/MeshSyncWorker.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/MeshVpnService.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/service/PerformanceMonitor.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/NetworkDetector.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 19,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/SmartTransportRouter.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 20,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/transport/TransportHealthMonitor.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/MainActivity.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 12,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/chat/MessageBubble.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/chat/MessageInput.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/CopyableText.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/EntropyCanvas.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/ErrorBanner.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/QrCode.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/components/StatusIndicator.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/contacts/AddContactScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/contacts/ContactDetailScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/contacts/VerifySafetyNumberScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/dashboard/PeerListScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/dashboard/TopologyScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/diagnostics/DiagnosticsBundleFormatter.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/dialogs/ApkShareDialog.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/dialogs/NetworkStatusDialog.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/identity/IdentityCreationFlow.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/identity/IdentityProgressDisplay.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/identity/IdentityScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/join/JoinMeshScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/BlockedPeersScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/ChatScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/ContactsScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/ConversationsScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/DashboardScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/DiagnosticsScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/OnboardingScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/screens/RequestsInboxScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/settings/MeshSettingsScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/settings/PowerSettingsScreen.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/theme/Color.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/theme/Theme.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/theme/Type.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/DashboardViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/IdentityViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 15,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MeshServiceViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/RequestsInboxViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/ApkShareManager.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/BackupPassphraseValidator.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/ContactImportParser.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/DeepLinkValidator.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 7,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/Permissions.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/ShareReceiver.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/app/src/main/java/com/scmessenger/android/utils/TimestampUtils.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/androidMain/kotlin/com/scmessenger/shared/platform/PlatformNetworking.android.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/androidMain/kotlin/com/scmessenger/shared/platform/PlatformNotifier.android.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/di/SharedModule.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/model/ServiceState.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/platform/PlatformNotifier.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/viewmodel/AppViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/commonMain/kotlin/com/scmessenger/shared/viewmodel/ContactsViewModel.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/desktopMain/kotlin/com/scmessenger/shared/desktop/ContactList.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/desktopMain/kotlin/com/scmessenger/shared/desktop/Main.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/desktopMain/kotlin/com/scmessenger/shared/platform/PlatformNetworking.desktop.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "android/shared/src/desktopMain/kotlin/com/scmessenger/shared/platform/PlatformNotifier.desktop.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/__init__.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "cloud/orchestrator/handlers/__init__.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/build.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/util.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/abuse/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/dspy/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/message/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/routing/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/transport/routing/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "core/src/wasm_support/mod.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/lib.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 9,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/power.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 12,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "desktop_bridge/src/tray.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Bridging-Header.h",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/ContentView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/SCMessengerApp.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Background/NotificationBackgroundProcessor.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Models/Models.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Services/MeshEventBus.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 6,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/LocalTransportFallback.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/MeshBLEConstants.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Transport/SmartTransportRouter.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 16,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Utils/BackupPassphraseValidator.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Utils/QRCodeGenerator.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 2,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Utils/Theme.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Contacts/VerifySafetyNumberSheet.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 4,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Dashboard/MeshDashboardView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 27,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Navigation/MainTabView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 20,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Onboarding/OnboardingFlow.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 13,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Settings/DiagnosticsView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 10,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Settings/SettingsView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "iOS/SCMessenger/SCMessenger/Views/Topics/JoinMeshView.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 11,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "patch/libp2p-tcp/src/lib.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/fix_contactmanager.swift",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/generate_wiring_burndown.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/list_b1_tasks.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "scripts/query_repograph.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "shared/src/commonMain/kotlin/com/scmessenger/shared/SharedApp.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 1,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "shared/src/desktopMain/kotlin/com/scmessenger/shared/Main.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "shared/src/desktopMain/kotlin/com/scmessenger/shared/Platform.kt",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 0,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/clean_all_modified.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 8,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/fix_trailing_whitespace.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 5,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/ledger_head.rs",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 18,
+          "unsafe": 0,
+          "sec_sensitive": false
+        },
+        {
+          "file": "tmp/strip_all.py",
+          "score": 0,
+          "unwired": 0,
+          "unwrap_risks": 0,
+          "degree": 0,
+          "symbols": 3,
+          "unsafe": 0,
+          "sec_sensitive": false
+        }
+      ]
+    }
+  }
+}

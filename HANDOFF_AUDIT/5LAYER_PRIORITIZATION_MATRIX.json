@@ -1,0 +1,305 @@
+{
+  "total_files_audited": 314,
+  "top_targets": [
+    {
+      "file": "core/src/iron_core.rs",
+      "score": 184321,
+      "unwired": 0,
+      "unwrap_risks": 35,
+      "degree": 92008,
+      "symbols": 473,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "iOS/SCMessenger/SCMessenger/Generated/api.swift",
+      "score": 175045,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 87510,
+      "symbols": 490,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "iOS/SCMessengerCore.xcframework/ios-arm64/Headers/SCMessengerCore.swift",
+      "score": 127338,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 63669,
+      "symbols": 321,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "iOS/SCMessengerCore.xcframework/ios-arm64-simulator/Headers/SCMessengerCore.swift",
+      "score": 127338,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 63669,
+      "symbols": 321,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "SCMessengerCore.xcframework/ios-arm64/Headers/SCMessengerCore.swift",
+      "score": 124150,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 62075,
+      "symbols": 307,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "SCMessengerCore.xcframework/ios-arm64-simulator/Headers/SCMessengerCore.swift",
+      "score": 124150,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 62075,
+      "symbols": 307,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/manager.rs",
+      "score": 28012,
+      "unwired": 0,
+      "unwrap_risks": 7,
+      "degree": 13978,
+      "symbols": 137,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/internet.rs",
+      "score": 17220,
+      "unwired": 0,
+      "unwrap_risks": 19,
+      "degree": 8534,
+      "symbols": 75,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/store/backend.rs",
+      "score": 16606,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 8303,
+      "symbols": 48,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/wasm_support/storage.rs",
+      "score": 16442,
+      "unwired": 0,
+      "unwrap_risks": 27,
+      "degree": 8113,
+      "symbols": 58,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/mobile_bridge.rs",
+      "score": 13663,
+      "unwired": 0,
+      "unwrap_risks": 46,
+      "degree": 6635,
+      "symbols": 337,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "core/src/transport/wifi_direct.rs",
+      "score": 13407,
+      "unwired": 0,
+      "unwrap_risks": 2,
+      "degree": 6683,
+      "symbols": 64,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "core/src/transport/wifi_aware.rs",
+      "score": 13124,
+      "unwired": 0,
+      "unwrap_risks": 12,
+      "degree": 6514,
+      "symbols": 82,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/relay/server.rs",
+      "score": 10634,
+      "unwired": 0,
+      "unwrap_risks": 5,
+      "degree": 5297,
+      "symbols": 63,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/wasm_support/mesh.rs",
+      "score": 10102,
+      "unwired": 0,
+      "unwrap_risks": 17,
+      "degree": 4983,
+      "symbols": 51,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/escalation.rs",
+      "score": 10076,
+      "unwired": 0,
+      "unwrap_risks": 18,
+      "degree": 4966,
+      "symbols": 65,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/relay/client.rs",
+      "score": 9998,
+      "unwired": 0,
+      "unwrap_risks": 24,
+      "degree": 4903,
+      "symbols": 95,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/reputation.rs",
+      "score": 9990,
+      "unwired": 0,
+      "unwrap_risks": 1,
+      "degree": 4991,
+      "symbols": 72,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "wasm/src/lib.rs",
+      "score": 9470,
+      "unwired": 0,
+      "unwrap_risks": 23,
+      "degree": 4643,
+      "symbols": 213,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/wasm_support/transport.rs",
+      "score": 9248,
+      "unwired": 0,
+      "unwrap_risks": 11,
+      "degree": 4580,
+      "symbols": 54,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/circuit_breaker.rs",
+      "score": 9164,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 4582,
+      "symbols": 50,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/dial_policy.rs",
+      "score": 8462,
+      "unwired": 0,
+      "unwrap_risks": 2,
+      "degree": 4223,
+      "symbols": 55,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/swarm.rs",
+      "score": 7470,
+      "unwired": 0,
+      "unwrap_risks": 24,
+      "degree": 3639,
+      "symbols": 266,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "cli/src/api.rs",
+      "score": 6926,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 3463,
+      "symbols": 164,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/abuse/auto_block.rs",
+      "score": 6920,
+      "unwired": 0,
+      "unwrap_risks": 1,
+      "degree": 3456,
+      "symbols": 43,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/transport/nat.rs",
+      "score": 6542,
+      "unwired": 0,
+      "unwrap_risks": 5,
+      "degree": 3251,
+      "symbols": 59,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "core/src/store/contacts.rs",
+      "score": 6423,
+      "unwired": 0,
+      "unwrap_risks": 56,
+      "degree": 2975,
+      "symbols": 88,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "core/src/abuse/spam_detection.rs",
+      "score": 6068,
+      "unwired": 0,
+      "unwrap_risks": 3,
+      "degree": 3022,
+      "symbols": 61,
+      "unsafe": 0,
+      "sec_sensitive": false
+    },
+    {
+      "file": "cli/src/server.rs",
+      "score": 5661,
+      "unwired": 0,
+      "unwrap_risks": 0,
+      "degree": 2818,
+      "symbols": 112,
+      "unsafe": 0,
+      "sec_sensitive": true
+    },
+    {
+      "file": "cli/src/main.rs",
+      "score": 5609,
+      "unwired": 0,
+      "unwrap_risks": 1,
+      "degree": 2788,
+      "symbols": 230,
+      "unsafe": 0,
+      "sec_sensitive": true
+    }
+  ]
+}
