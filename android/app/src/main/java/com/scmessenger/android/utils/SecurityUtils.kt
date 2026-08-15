@@ -45,7 +45,7 @@ object SecurityUtils {
             context,
             ENCRYPTED_PREFS_FILENAME,
             masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SKEY_KEY_GEN_PARAM_SPEC,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
     }

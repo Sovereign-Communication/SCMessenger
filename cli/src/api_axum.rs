@@ -623,9 +623,15 @@ pub async fn start_api_server(ctx: ApiContext) -> Result<()> {
     let ctx = Arc::new(ctx);
     let addr = SocketAddr::from(([127, 0, 0, 1], API_PORT));
 
-    // Create CORS layer
+    // Create CORS layer restricted to localhost / loopback origins to prevent cross-origin attack vectors
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
+            let bytes = origin.as_bytes();
+            bytes.starts_with(b"http://localhost")
+                || bytes.starts_with(b"http://127.0.0.1")
+                || bytes.starts_with(b"https://localhost")
+                || bytes.starts_with(b"https://127.0.0.1")
+        }))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers(Any);
 
