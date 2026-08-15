@@ -11,19 +11,19 @@ You are continuing the SCMessenger Rust Transformation project. **Phase 1 (Async
 ### Project Overview
 
 - **Project**: SCMessenger Rust Transformation
-- **Spec Location**: `.kiro/specs/scmessenger-rust-transformation/`
+- **Spec Location**: `docs/specs/scmessenger-rust-transformation/`
 - **Current Phase**: Phase 3 (Observability)
 - **Previous Phases**: 
-  - Phase 1 (Async Hygiene) - ✅ COMPLETE
-  - Phase 2 (Protocol Hardening) - ✅ COMPLETE
+  - Phase 1 (Async Hygiene) - [OK] COMPLETE
+  - Phase 2 (Protocol Hardening) - [OK] COMPLETE
 
 ### Phase 2 Completion Status
 
-✅ **Schema versioning added**: All sync messages include version field  
-✅ **Cryptographic peer proofs**: blake3-based proofs prevent spoofing  
-✅ **Rate limiting implemented**: SyncRateLimiter prevents sync flooding  
-✅ **All tests passing**: 870+ tests pass, zero regressions  
-✅ **Code formatted**: cargo fmt passes  
+[OK] **Schema versioning added**: All sync messages include version field  
+[OK] **Cryptographic peer proofs**: blake3-based proofs prevent spoofing  
+[OK] **Rate limiting implemented**: SyncRateLimiter prevents sync flooding  
+[OK] **All tests passing**: 870+ tests pass, zero regressions  
+[OK] **Code formatted**: cargo fmt passes  
 
 ---
 
@@ -546,16 +546,16 @@ impl SystemHealth {
 
 Phase 3 is complete when:
 
-- ✅ Metrics collection added to sync operations
-- ✅ Distributed tracing implemented
-- ✅ Health check endpoints created
-- ✅ All tests pass (cargo test)
-- ✅ All crates compile (cargo check)
-- ✅ Clippy passes
-- ✅ Code formatted (cargo fmt)
-- ✅ Metrics are collected correctly
-- ✅ Trace context propagates
-- ✅ Health checks work
+- [OK] Metrics collection added to sync operations
+- [OK] Distributed tracing implemented
+- [OK] Health check endpoints created
+- [OK] All tests pass (cargo test)
+- [OK] All crates compile (cargo check)
+- [OK] Clippy passes
+- [OK] Code formatted (cargo fmt)
+- [OK] Metrics are collected correctly
+- [OK] Trace context propagates
+- [OK] Health checks work
 
 ---
 
@@ -581,7 +581,7 @@ cat core/src/drift/sync.rs
 ### Step 3: Update Task Status
 
 Use the task tracking system to mark tasks as in_progress/completed:
-- Task file: `.kiro/specs/scmessenger-rust-transformation/tasks.md`
+- Task file: `docs/specs/scmessenger-rust-transformation/tasks.md`
 - Update status as you complete each task
 
 ---
@@ -603,11 +603,11 @@ Stop and request human review if:
 ### Current State (Post-Phase 2)
 
 - **Rust version**: 1.95.0
-- **Build status**: ✅ Passing
-- **Test status**: ✅ 870+ tests passing
-- **Schema versioning**: ✅ Implemented
-- **Peer proofs**: ✅ Implemented
-- **Rate limiting**: ✅ Implemented
+- **Build status**: [OK] Passing
+- **Test status**: [OK] 870+ tests passing
+- **Schema versioning**: [OK] Implemented
+- **Peer proofs**: [OK] Implemented
+- **Rate limiting**: [OK] Implemented
 
 ### Phase 3 Focus
 
@@ -635,9 +635,9 @@ Stop and request human review if:
 I'm continuing the SCMessenger Rust Transformation project. Phase 1 (Async Hygiene) and Phase 2 (Protocol Hardening) are complete. Please execute Phase 3: Observability - Metrics, Tracing, Health Checks.
 
 **Context:**
-- Spec location: .kiro/specs/scmessenger-rust-transformation/
-- Phase 1 status: ✅ COMPLETE (locks optimized, HTTP API modernized)
-- Phase 2 status: ✅ COMPLETE (schema versioning, peer proofs, rate limiting)
+- Spec location: docs/specs/scmessenger-rust-transformation/
+- Phase 1 status: [OK] COMPLETE (locks optimized, HTTP API modernized)
+- Phase 2 status: [OK] COMPLETE (schema versioning, peer proofs, rate limiting)
 - Current Rust version: 1.95.0
 - Build status: All tests passing (871 passed, 0 failed)
 
@@ -648,8 +648,8 @@ I'm continuing the SCMessenger Rust Transformation project. Phase 1 (Async Hygie
 4. Verify zero regression
 
 **Instructions:**
-- Read .kiro/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md for detailed instructions
-- Follow tasks in .kiro/specs/scmessenger-rust-transformation/tasks.md (Phase 3 section)
+- Read docs/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md for detailed instructions
+- Follow tasks in docs/specs/scmessenger-rust-transformation/tasks.md (Phase 3 section)
 - Reference HANDOFF/scmessenger_rust_implementation_prompt.md for implementation details
 - Update task status as you progress
 - Maintain zero-regression (all tests must pass)
@@ -659,4 +659,4 @@ Please start with Task 3.1: Add Metrics Collection for Sync Operations.
 
 ---
 
-**Phase 3 Status: ⏳ READY TO START**
+**Phase 3 Status: [PENDING] READY TO START**

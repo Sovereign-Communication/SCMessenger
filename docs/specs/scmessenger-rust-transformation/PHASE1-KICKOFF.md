@@ -9,17 +9,17 @@ You are continuing the SCMessenger Rust Transformation project. **Phase 0 (Safet
 
 ### Project Overview
 - **Project**: SCMessenger Rust Transformation
-- **Spec Location**: `.kiro/specs/scmessenger-rust-transformation/`
+- **Spec Location**: `docs/specs/scmessenger-rust-transformation/`
 - **Current Phase**: Phase 1 (Async Hygiene)
-- **Previous Phase**: Phase 0 (Safety) - ✅ COMPLETE
+- **Previous Phase**: Phase 0 (Safety) - [OK] COMPLETE
 
 ### Phase 0 Completion Status
-✅ **Rust updated**: 1.75.0 → 1.95.0  
-✅ **Production panic vectors eliminated**: 40+ unwraps/expects replaced  
-✅ **Error hierarchy established**: MeshError, TransportError, SerializationError  
-✅ **Helper functions created**: `path_to_string()`, `to_js_value_safe()`  
-✅ **All tests passing**: 908 tests (860 core + 44 cli + 4 mobile)  
-✅ **Build verified**: `cargo check --workspace` passes  
+[OK] **Rust updated**: 1.75.0 → 1.95.0  
+[OK] **Production panic vectors eliminated**: 40+ unwraps/expects replaced  
+[OK] **Error hierarchy established**: MeshError, TransportError, SerializationError  
+[OK] **Helper functions created**: `path_to_string()`, `to_js_value_safe()`  
+[OK] **All tests passing**: 908 tests (860 core + 44 cli + 4 mobile)  
+[OK] **Build verified**: `cargo check --workspace` passes  
 
 ---
 
@@ -38,7 +38,7 @@ You are continuing the SCMessenger Rust Transformation project. **Phase 0 (Safet
 
 ## Phase 1 Tasks
 
-### Task 1.1: Catalog All Lock Usage ⏳
+### Task 1.1: Catalog All Lock Usage [PENDING]
 **Objective**: Identify all synchronization primitives and categorize by context
 
 **Actions**:
@@ -49,15 +49,15 @@ You are continuing the SCMessenger Rust Transformation project. **Phase 0 (Safet
 
 | File | Type | Current | Context | Should Be |
 |------|------|---------|---------|-----------|
-| cli/src/server.rs | tokio::sync::Mutex | ✓ | Async handler | Keep |
-| wasm/src/mesh.rs | parking_lot::RwLock | ✗ | WASM single-threaded | RefCell |
+| cli/src/server.rs | tokio::sync::Mutex | [OK] | Async handler | Keep |
+| wasm/src/mesh.rs | parking_lot::RwLock | [FAIL] | WASM single-threaded | RefCell |
 | cli/src/api.rs | std::sync::Arc | — | Shared state | Keep, verify Send |
 
 **Verification**: Table complete and reviewed
 
 ---
 
-### Task 1.2: Replace WASM Locks with RefCell ⏳
+### Task 1.2: Replace WASM Locks with RefCell [PENDING]
 **Objective**: Replace thread-safe locks with single-threaded RefCell in WASM
 
 **Current Pattern** (verify first):
@@ -112,7 +112,7 @@ impl MeshNode {
 
 ---
 
-### Task 1.3: Standardize CLI Async Locks ⏳
+### Task 1.3: Standardize CLI Async Locks [PENDING]
 **Objective**: Ensure all locks in async contexts use tokio::sync
 
 **Rule**: Any lock held across `.await` MUST be tokio::sync::Mutex or tokio::sync::RwLock
@@ -147,7 +147,7 @@ drop(guard);
 
 ---
 
-### Task 1.4: Migrate from Hyper 0.14 to Axum 0.7 ⏳
+### Task 1.4: Migrate from Hyper 0.14 to Axum 0.7 [PENDING]
 **Objective**: Replace Hyper 0.14 with Axum 0.7 for type-safe routing
 
 **Current Pattern** (verify first):
@@ -232,7 +232,7 @@ async fn send_message(
 
 ---
 
-### Task 1.5: Verify Hyper 0.14 Removal ⏳
+### Task 1.5: Verify Hyper 0.14 Removal [PENDING]
 **Objective**: Confirm Hyper 0.14 completely removed from dependency tree
 
 **Actions**:
@@ -246,7 +246,7 @@ async fn send_message(
 
 ---
 
-### Task 1.6: Phase 1 Verification Gate ⏳
+### Task 1.6: Phase 1 Verification Gate [PENDING]
 **Objective**: Verify all Phase 1 changes maintain zero regression
 
 **Actions**:
@@ -306,17 +306,17 @@ async fn send_message(
 ## Success Criteria
 
 Phase 1 is complete when:
-- ✅ All locks categorized and documented
-- ✅ WASM uses RefCell instead of parking_lot::RwLock
-- ✅ CLI async code uses tokio::sync locks
-- ✅ HTTP API migrated to Axum 0.7
-- ✅ Hyper 0.14 completely removed
-- ✅ All tests pass (cargo test)
-- ✅ All crates compile (cargo check)
-- ✅ Clippy passes
-- ✅ Code formatted (cargo fmt)
-- ✅ API endpoints functional
-- ✅ CORS working
+- [OK] All locks categorized and documented
+- [OK] WASM uses RefCell instead of parking_lot::RwLock
+- [OK] CLI async code uses tokio::sync locks
+- [OK] HTTP API migrated to Axum 0.7
+- [OK] Hyper 0.14 completely removed
+- [OK] All tests pass (cargo test)
+- [OK] All crates compile (cargo check)
+- [OK] Clippy passes
+- [OK] Code formatted (cargo fmt)
+- [OK] API endpoints functional
+- [OK] CORS working
 
 ---
 
@@ -342,7 +342,7 @@ rg "parking_lot" core/src/ cli/src/ wasm/src/
 
 ### Step 3: Update Task Status
 Use the task tracking system to mark tasks as in_progress/completed:
-- Task file: `.kiro/specs/scmessenger-rust-transformation/tasks.md`
+- Task file: `docs/specs/scmessenger-rust-transformation/tasks.md`
 - Update status as you complete each task
 
 ---
@@ -362,10 +362,10 @@ Stop and request human review if:
 
 ### Current State (Post-Phase 0)
 - **Rust version**: 1.95.0
-- **Build status**: ✅ Passing
-- **Test status**: ✅ 908 tests passing
-- **Panic vectors**: ✅ Eliminated from production code
-- **Error hierarchy**: ✅ Established
+- **Build status**: [OK] Passing
+- **Test status**: [OK] 908 tests passing
+- **Panic vectors**: [OK] Eliminated from production code
+- **Error hierarchy**: [OK] Established
 
 ### Phase 1 Focus
 - **Lock hygiene**: Async-aware locks in async contexts
@@ -383,8 +383,8 @@ I'm continuing the SCMessenger Rust Transformation project. Phase 0 (Safety) is 
 Please execute Phase 1: Async Hygiene - Lock Standardization & Runtime Upgrade.
 
 **Context:**
-- Spec location: .kiro/specs/scmessenger-rust-transformation/
-- Phase 0 status: ✅ COMPLETE (panic vectors eliminated, error hierarchy established)
+- Spec location: docs/specs/scmessenger-rust-transformation/
+- Phase 0 status: [OK] COMPLETE (panic vectors eliminated, error hierarchy established)
 - Current Rust version: 1.95.0
 - Build status: All tests passing (908 tests)
 
@@ -396,8 +396,8 @@ Please execute Phase 1: Async Hygiene - Lock Standardization & Runtime Upgrade.
 5. Verify Hyper 0.14 removal
 
 **Instructions:**
-- Read .kiro/specs/scmessenger-rust-transformation/PHASE1-KICKOFF.md for detailed instructions
-- Follow tasks in .kiro/specs/scmessenger-rust-transformation/tasks.md (Phase 1 section)
+- Read docs/specs/scmessenger-rust-transformation/PHASE1-KICKOFF.md for detailed instructions
+- Follow tasks in docs/specs/scmessenger-rust-transformation/tasks.md (Phase 1 section)
 - Reference HANDOFF/scmessenger_rust_implementation_prompt.md for implementation details
 - Update task status as you progress
 - Maintain zero-regression (all tests must pass)
@@ -407,4 +407,4 @@ Please start with Task 1.1: Catalog All Lock Usage.
 
 ---
 
-**Phase 1 Status: ⏳ READY TO START**
+**Phase 1 Status: [PENDING] READY TO START**

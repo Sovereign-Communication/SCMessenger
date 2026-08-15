@@ -9,24 +9,24 @@
 
 ## Completed Work
 
-### Task 1.1: Catalog All Lock Usage ✅ COMPLETE
-- Created comprehensive lock catalog at `.kiro/specs/scmessenger-rust-transformation/phase1-lock-catalog.md`
+### Task 1.1: Catalog All Lock Usage [OK] COMPLETE
+- Created comprehensive lock catalog at `docs/specs/scmessenger-rust-transformation/phase1-lock-catalog.md`
 - Identified 7 WASM files requiring lock replacement
 - Identified CLI crate already using correct tokio::sync locks
 - Identified core crate correctly using parking_lot for sync contexts
 
-### Task 1.2: Replace WASM Locks with RefCell ⏳ IN PROGRESS
+### Task 1.2: Replace WASM Locks with RefCell [PENDING] IN PROGRESS
 
 **Files Completed:**
-1. ✅ wasm/src/lib.rs - Main IronCore struct updated
-2. ✅ wasm/src/daemon_bridge.rs - Already updated
-3. ✅ wasm/src/connection_state.rs - Fully updated
+1. [OK] wasm/src/lib.rs - Main IronCore struct updated
+2. [OK] wasm/src/daemon_bridge.rs - Already updated
+3. [OK] wasm/src/connection_state.rs - Fully updated
 
 **Files Remaining:**
-4. ⏳ wasm/src/transport.rs - Imports updated, struct fields need updating (27+ errors)
-5. ⏳ wasm/src/worker.rs - Not started
-6. ⏳ wasm/src/storage.rs - Not started
-7. ⏳ wasm/src/mesh.rs - Not started
+4. [PENDING] wasm/src/transport.rs - Imports updated, struct fields need updating (27+ errors)
+5. [PENDING] wasm/src/worker.rs - Not started
+6. [PENDING] wasm/src/storage.rs - Not started
+7. [PENDING] wasm/src/mesh.rs - Not started
 
 ---
 

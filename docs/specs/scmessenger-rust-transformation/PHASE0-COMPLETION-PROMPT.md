@@ -17,7 +17,7 @@ CRITICAL: Complete Phase 0 unwrap removal for SCMessenger Rust Transformation pr
 Phase 0 was marked complete but the core objective—eliminating `.unwrap()` calls—was never executed. There are currently ~917 unwrap() calls across 100+ files that must be removed.
 
 **Context:**
-- Spec location: `.kiro/specs/scmessenger-rust-transformation/`
+- Spec location: `docs/specs/scmessenger-rust-transformation/`
 - Current state: 871 tests passing, but ~917 clippy warnings for unwrap usage
 - Clippy config: `.clippy.toml` explicitly disallows unwrap() calls
 - See `PHASE0-UNWRAP-REMEDIATION-NEEDED.md` for detailed analysis

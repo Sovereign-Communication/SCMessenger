@@ -6,27 +6,27 @@ Phase 2 (Protocol Hardening - Sync Auth, Versioning, Rate Limits) has been succe
 
 ## Completed Tasks
 
-### Task 2.1: Schema Versioning ✅
+### Task 2.1: Schema Versioning [OK]
 - Added `SYNC_SCHEMA_VERSION` constant (value: 1)
 - Created `VersionedSyncMessage` wrapper struct
 - Added `peer_proof` and `timestamp` fields to `SyncOffer`
 - Implemented version validation
 - All sync messages now include version information
 
-### Task 2.2: Cryptographic Peer Proofs ✅
+### Task 2.2: Cryptographic Peer Proofs [OK]
 - Implemented `MeshStore::generate_proof()` using blake3
 - Implemented `MeshStore::verify_proof()` 
 - Proofs use deterministic hashing of sorted message IDs
 - Integrated into sync protocol
 
-### Task 2.3: Rate Limiting ✅
+### Task 2.3: Rate Limiting [OK]
 - Created `core/src/drift/rate_limit.rs` module
 - Implemented `SyncRateLimiter` with sliding window approach
 - Tracks sync requests per peer
 - Prevents DoS attacks via sync flooding
 - Includes cleanup to prevent memory growth
 
-### Task 2.4: Verification ✅
+### Task 2.4: Verification [OK]
 - All tests passing: 871 passed, 0 failed, 8 ignored
 - Zero regression maintained
 - Code formatted with `cargo fmt`
@@ -103,15 +103,15 @@ The `.unwrap()` removal was scoped in **Phase 0: Safety - Eliminate Panic Vector
 
 This is a major refactoring that should not be rushed or done piecemeal during other phases.
 
-## Phase 2 Success Criteria - All Met ✅
+## Phase 2 Success Criteria - All Met [OK]
 
-- ✅ Schema versioning added to sync messages
-- ✅ Cryptographic peer proofs implemented
-- ✅ Rate limiting prevents sync flooding
-- ✅ All tests pass (871 passed, 0 failed)
-- ✅ Zero regression maintained
-- ✅ Code formatted
-- ✅ New functionality fully tested (23 new tests)
+- [OK] Schema versioning added to sync messages
+- [OK] Cryptographic peer proofs implemented
+- [OK] Rate limiting prevents sync flooding
+- [OK] All tests pass (871 passed, 0 failed)
+- [OK] Zero regression maintained
+- [OK] Code formatted
+- [OK] New functionality fully tested (23 new tests)
 
 ## Next Steps
 

@@ -2,7 +2,7 @@
 
 **Date Completed:** 2026-05-07  
 **Phase:** Phase 1 - Async Hygiene  
-**Status:** ✅ COMPLETE  
+**Status:** [OK] COMPLETE  
 **Total LoC Changed:** ~1,100 LoC
 
 ---
@@ -15,7 +15,7 @@ Phase 1 successfully eliminated blocking locks in async contexts and migrated th
 
 ## Completed Tasks
 
-### ✅ Task 1.1: Catalog All Lock Usage
+### [OK] Task 1.1: Catalog All Lock Usage
 **Status:** COMPLETE  
 **Output:** phase1-lock-catalog.md
 
@@ -24,7 +24,7 @@ Cataloged all synchronization primitives across the codebase:
 - **CLI crate:** Already using tokio::sync correctly
 - **Core crate:** 20+ files using parking_lot correctly (sync contexts)
 
-### ✅ Task 1.2: Replace WASM Locks with RefCell
+### [OK] Task 1.2: Replace WASM Locks with RefCell
 **Status:** COMPLETE  
 **LoC Changed:** ~700 LoC  
 **Files Modified:** 7 files
@@ -40,9 +40,9 @@ Replaced all Arc<Mutex/RwLock> with Rc<RefCell> in WASM crate:
 
 **Rationale:** WASM is single-threaded, so Rc<RefCell> is correct and zero-overhead.
 
-**Verification:** `cargo check -p scmessenger-wasm` ✅ PASSED
+**Verification:** `cargo check -p scmessenger-wasm` [OK] PASSED
 
-### ✅ Task 1.3: Standardize CLI Async Locks
+### [OK] Task 1.3: Standardize CLI Async Locks
 **Status:** COMPLETE (Verification Only)  
 **LoC Changed:** 0 LoC (already correct)
 
@@ -51,7 +51,7 @@ Verified CLI crate already uses tokio::sync::Mutex correctly:
 - **Result:** No warnings
 - CLI already follows async lock best practices
 
-### ✅ Task 1.4: Migrate Hyper 0.14 → Axum 0.7
+### [OK] Task 1.4: Migrate Hyper 0.14 → Axum 0.7
 **Status:** COMPLETE  
 **LoC Changed:** ~400 LoC  
 **Files Modified:** 2 files
@@ -88,30 +88,30 @@ Migrated HTTP API from Hyper 0.14 to Axum 0.7:
 - GET /api/discovery/peers
 - POST /api/shutdown
 
-**Verification:** `cargo check -p scmessenger-cli` ✅ PASSED
+**Verification:** `cargo check -p scmessenger-cli` [OK] PASSED
 
-### ✅ Task 1.5: Verify Hyper 0.14 Removal
+### [OK] Task 1.5: Verify Hyper 0.14 Removal
 **Status:** COMPLETE
 
 Verified Hyper 0.14 removed from direct dependencies:
 - `cargo tree -p scmessenger-cli | grep hyper`
 - **Result:** 
-  - ✅ Hyper 1.9.0 present (used by Axum and client code)
-  - ✅ Hyper 0.14.32 only in transitive deps (igd-next → libp2p-upnp)
-  - ✅ No direct dependency on Hyper 0.14
+  - [OK] Hyper 1.9.0 present (used by Axum and client code)
+  - [OK] Hyper 0.14.32 only in transitive deps (igd-next → libp2p-upnp)
+  - [OK] No direct dependency on Hyper 0.14
 
 **Note:** Hyper 0.14 in transitive dependencies is acceptable and outside our control.
 
-### ✅ Task 1.6: Phase 1 Verification Gate
+### [OK] Task 1.6: Phase 1 Verification Gate
 **Status:** COMPLETE
 
 All verification checks passed:
 
-1. **Compilation:** `cargo check --workspace` ✅ PASSED
-2. **Linting:** `cargo clippy --workspace` ✅ PASSED (warnings are pre-existing)
-3. **Formatting:** `cargo fmt --check` ✅ PASSED
-4. **API Endpoints:** All 13 endpoints preserved ✅
-5. **CORS:** Configured via tower-http ✅
+1. **Compilation:** `cargo check --workspace` [OK] PASSED
+2. **Linting:** `cargo clippy --workspace` [OK] PASSED (warnings are pre-existing)
+3. **Formatting:** `cargo fmt --check` [OK] PASSED
+4. **API Endpoints:** All 13 endpoints preserved [OK]
+5. **CORS:** Configured via tower-http [OK]
 
 ---
 
@@ -170,13 +170,13 @@ All verification checks passed:
 ```bash
 cargo check --workspace
 ```
-**Result:** ✅ PASSED (48.47s)
+**Result:** [OK] PASSED (48.47s)
 
 ### Linting
 ```bash
 cargo clippy --workspace
 ```
-**Result:** ✅ PASSED (1m 06s)
+**Result:** [OK] PASSED (1m 06s)
 - Warnings are pre-existing from Phase 0 (unwrap usage)
 - No new warnings introduced
 
@@ -184,15 +184,15 @@ cargo clippy --workspace
 ```bash
 cargo fmt --check
 ```
-**Result:** ✅ PASSED
+**Result:** [OK] PASSED
 
 ### Dependency Tree
 ```bash
 cargo tree -p scmessenger-cli | grep hyper
 ```
 **Result:**
-- Hyper 1.9.0 ✅ (direct via Axum)
-- Hyper 0.14.32 ✅ (transitive via libp2p-upnp, acceptable)
+- Hyper 1.9.0 [OK] (direct via Axum)
+- Hyper 0.14.32 [OK] (transitive via libp2p-upnp, acceptable)
 
 ---
 
@@ -229,6 +229,6 @@ Tasks:
 
 ---
 
-**Phase 1 Status: ✅ COMPLETE**
+**Phase 1 Status: [OK] COMPLETE**
 
 **Ready for Phase 2: Protocol Hardening**

@@ -7,9 +7,9 @@ Copy and paste this into a new conversation window to start Phase 3:
 I'm continuing the SCMessenger Rust Transformation project. Phase 1 (Async Hygiene) and Phase 2 (Protocol Hardening) are complete. Please execute Phase 3: Observability - Metrics, Tracing, Health Checks.
 
 **Context:**
-- Spec location: `.kiro/specs/scmessenger-rust-transformation/`
-- Phase 1 status: ✅ COMPLETE (locks optimized, HTTP API modernized)
-- Phase 2 status: ✅ COMPLETE (schema versioning, peer proofs, rate limiting)
+- Spec location: `docs/specs/scmessenger-rust-transformation/`
+- Phase 1 status: [OK] COMPLETE (locks optimized, HTTP API modernized)
+- Phase 2 status: [OK] COMPLETE (schema versioning, peer proofs, rate limiting)
 - Current Rust version: 1.95.0
 - Build status: All tests passing (871 passed, 0 failed, 8 ignored)
 - See `PHASE2-COMPLETION-SUMMARY.md` for Phase 2 details
@@ -21,8 +21,8 @@ I'm continuing the SCMessenger Rust Transformation project. Phase 1 (Async Hygie
 4. Verify zero regression
 
 **Instructions:**
-- Read `.kiro/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md` for detailed instructions
-- Follow tasks in `.kiro/specs/scmessenger-rust-transformation/tasks.md` (Phase 3 section)
+- Read `docs/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md` for detailed instructions
+- Follow tasks in `docs/specs/scmessenger-rust-transformation/tasks.md` (Phase 3 section)
 - Reference `HANDOFF/scmessenger_rust_implementation_prompt.md` for implementation details
 - Update task status as you progress
 - Maintain zero-regression (all tests must pass)
@@ -39,8 +39,8 @@ Please start with Task 3.1: Add Metrics Collection for Sync Operations.
 ## Quick Reference
 
 **Key Files:**
-- `.kiro/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md` - Complete Phase 3 spec
-- `.kiro/specs/scmessenger-rust-transformation/tasks.md` - Task checklist
+- `docs/specs/scmessenger-rust-transformation/PHASE3-KICKOFF.md` - Complete Phase 3 spec
+- `docs/specs/scmessenger-rust-transformation/tasks.md` - Task checklist
 - `core/src/drift/rate_limit.rs` - Reference implementation pattern
 - `core/src/drift/sync.rs` - Sync protocol to instrument
 - `core/src/drift/store.rs` - Store to add health checks
@@ -52,9 +52,9 @@ Please start with Task 3.1: Add Metrics Collection for Sync Operations.
 4. Task 3.4: Phase 3 Verification Gate (~10 LoC)
 
 **Success Criteria:**
-- ✅ Metrics collection added to sync operations
-- ✅ Distributed tracing implemented
-- ✅ Health check endpoints created
-- ✅ All tests pass (cargo test)
-- ✅ All crates compile (cargo check)
-- ✅ Code formatted (cargo fmt)
+- [OK] Metrics collection added to sync operations
+- [OK] Distributed tracing implemented
+- [OK] Health check endpoints created
+- [OK] All tests pass (cargo test)
+- [OK] All crates compile (cargo check)
+- [OK] Code formatted (cargo fmt)

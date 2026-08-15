@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-07  
 **Task:** Migrate HTTP API from Hyper 0.14 to Axum 0.7  
-**Status:** ✅ COMPLETE  
+**Status:** [OK] COMPLETE  
 **Lines Changed:** ~400 LoC
 
 ## Changes Made
@@ -171,16 +171,16 @@ pub async fn start_api_server(ctx: ApiContext) -> Result<()> {
 ```bash
 cargo check -p scmessenger-cli
 ```
-**Result:** ✅ PASSED
+**Result:** [OK] PASSED
 
 ### Dependency Tree Check
 ```bash
 cargo tree -p scmessenger-cli | grep hyper
 ```
 **Result:**
-- ✅ Hyper 1.9.0 present (used by Axum and our client code)
-- ✅ Hyper 0.14.32 only present as transitive dependency through `igd-next` → `libp2p-upnp`
-- ✅ No direct dependency on Hyper 0.14 from CLI crate
+- [OK] Hyper 1.9.0 present (used by Axum and our client code)
+- [OK] Hyper 0.14.32 only present as transitive dependency through `igd-next` → `libp2p-upnp`
+- [OK] No direct dependency on Hyper 0.14 from CLI crate
 
 ## Benefits of Axum 0.7
 
@@ -194,19 +194,19 @@ cargo tree -p scmessenger-cli | grep hyper
 ## API Endpoints Preserved
 
 All 13 original API endpoints maintained:
-- ✅ POST /api/send
-- ✅ POST /api/contacts
-- ✅ GET /api/peers
-- ✅ GET /api/listeners
-- ✅ POST /api/history
-- ✅ GET /api/external-address
-- ✅ GET /api/connection-path-state
-- ✅ GET /api/diagnostics
-- ✅ GET /api/drift-status
-- ✅ GET /api/discovery/status
-- ✅ POST /api/discovery/scan
-- ✅ GET /api/discovery/peers
-- ✅ POST /api/shutdown
+- [OK] POST /api/send
+- [OK] POST /api/contacts
+- [OK] GET /api/peers
+- [OK] GET /api/listeners
+- [OK] POST /api/history
+- [OK] GET /api/external-address
+- [OK] GET /api/connection-path-state
+- [OK] GET /api/diagnostics
+- [OK] GET /api/drift-status
+- [OK] GET /api/discovery/status
+- [OK] POST /api/discovery/scan
+- [OK] GET /api/discovery/peers
+- [OK] POST /api/shutdown
 
 ## Next Steps
 
@@ -221,4 +221,4 @@ All 13 original API endpoints maintained:
 - CORS is now properly configured with tower-http
 - Error handling improved with structured responses
 
-**Task 1.4 Status: ✅ COMPLETE**
+**Task 1.4 Status: [OK] COMPLETE**

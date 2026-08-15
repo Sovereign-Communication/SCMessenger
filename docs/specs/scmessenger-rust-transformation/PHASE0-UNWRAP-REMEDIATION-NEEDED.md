@@ -241,5 +241,5 @@ WASM has special constraints:
 ## References
 
 - `.clippy.toml` - Disallowed methods configuration
-- `.kiro/specs/scmessenger-rust-transformation/tasks.md` - Phase 0 tasks (incomplete)
+- `docs/specs/scmessenger-rust-transformation/tasks.md` - Phase 0 tasks (incomplete)
 - `PHASE2-COMPLETION-SUMMARY.md` - Current clippy status

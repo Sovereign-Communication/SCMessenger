@@ -8,16 +8,16 @@
 
 ## Completed Files
 
-### ✅ wasm/src/lib.rs
+### [OK] wasm/src/lib.rs
 - Imports updated: Added `RefCell` and `Rc`, removed `parking_lot::Mutex`
 - IronCore struct updated: All fields now use `Rc<RefCell<T>>`
 - All `.lock()` calls replaced with `.borrow()` or `.borrow_mut()`
 - Pattern maintained: Clone data out before await points
 
-### ✅ wasm/src/daemon_bridge.rs
+### [OK] wasm/src/daemon_bridge.rs
 - Already updated (no parking_lot usage found)
 
-### ✅ wasm/src/connection_state.rs
+### [OK] wasm/src/connection_state.rs
 - Imports updated: `parking_lot::RwLock` → `std::cell::RefCell`, `Arc` → `Rc`
 - ConnectionManager struct updated: All fields use `Rc<RefCell<T>>`
 - All `.write()` calls replaced with `.borrow_mut()`
@@ -27,7 +27,7 @@
 
 ## Remaining Files
 
-### ⏳ wasm/src/worker.rs
+### [PENDING] wasm/src/worker.rs
 **Current usage:**
 - `use parking_lot::RwLock;`
 - `Arc<RwLock<Vec<PushNotificationPayload>>>`
@@ -42,7 +42,7 @@
 - Replace `.write()` with `.borrow_mut()`
 - Replace `.read()` with `.borrow()`
 
-### ⏳ wasm/src/transport.rs
+### [PENDING] wasm/src/transport.rs
 **Current usage:**
 - `use parking_lot::RwLock;`
 - Multiple `Arc<RwLock<T>>` fields in:
@@ -56,7 +56,7 @@
 - Replace `.write()` with `.borrow_mut()`
 - Replace `.read()` with `.borrow()`
 
-### ⏳ wasm/src/storage.rs
+### [PENDING] wasm/src/storage.rs
 **Current usage:**
 - `use parking_lot::RwLock;`
 - `Arc<RwLock<HashMap<String, StoredMessage>>>`
@@ -69,7 +69,7 @@
 - Replace `.write()` with `.borrow_mut()`
 - Replace `.read()` with `.borrow()`
 
-### ⏳ wasm/src/mesh.rs
+### [PENDING] wasm/src/mesh.rs
 **Current usage:**
 - `use parking_lot::RwLock;`
 - Multiple `Arc<RwLock<T>>` fields in WasmMeshNode

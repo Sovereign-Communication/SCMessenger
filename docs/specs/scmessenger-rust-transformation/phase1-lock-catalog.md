@@ -19,29 +19,29 @@
 | wasm/src/mesh.rs | RwLock | parking_lot::RwLock | WASM single-threaded | Rc<RefCell<T>> | HIGH | state, peers, relay_stats, message_queue, sync_in_progress |
 | wasm/src/connection_state.rs | RwLock | parking_lot::RwLock | WASM single-threaded | Rc<RefCell<T>> | HIGH | Connection state management |
 | **CLI Crate** |
-| cli/src/main.rs | Mutex | tokio::sync::Mutex | Async context | tokio::sync::Mutex | KEEP | ✅ Already correct - outbox, peers, ledger, transport_bridge |
+| cli/src/main.rs | Mutex | tokio::sync::Mutex | Async context | tokio::sync::Mutex | KEEP | [OK] Already correct - outbox, peers, ledger, transport_bridge |
 | **Core Crate** |
-| core/src/contacts_bridge.rs | Mutex | parking_lot::Mutex | Sync context | parking_lot::Mutex | KEEP | ✅ Correct - ContactManager db access |
-| core/src/notification.rs | Mutex | parking_lot::Mutex | Sync context | parking_lot::Mutex | KEEP | ✅ Correct - notification state |
-| core/src/mobile_bridge.rs | Mutex/RwLock | parking_lot::Mutex/RwLock | Sync context | parking_lot::Mutex/RwLock | KEEP | ✅ Correct - mobile service state, GLOBAL_RT |
-| core/src/iron_core.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - IronCore state |
-| core/src/store/storage.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - storage backend |
-| core/src/store/logs.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - log manager |
-| core/src/transport/escalation.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - transport escalation |
-| core/src/transport/internet.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - internet transport |
-| core/src/transport/manager.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - transport manager |
-| core/src/transport/nat.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - NAT traversal |
-| core/src/transport/circuit_breaker.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - circuit breaker state |
-| core/src/transport/reputation.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - reputation tracking |
-| core/src/transport/wifi_aware.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - WiFi Aware transport |
-| core/src/relay/server.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - relay server state |
-| core/src/platform/service.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - platform service |
-| core/src/mobile/service.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - mobile service |
-| core/src/abuse/spam_detection.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - spam detection |
-| core/src/abuse/auto_block.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | ✅ Correct - auto block |
-| core/src/wasm_support/mesh.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | ✅ Correct - WASM support code (not actual WASM) |
-| core/src/wasm_support/transport.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | ✅ Correct - WASM support code (not actual WASM) |
-| core/src/wasm_support/storage.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | ✅ Correct - WASM support code (not actual WASM) |
+| core/src/contacts_bridge.rs | Mutex | parking_lot::Mutex | Sync context | parking_lot::Mutex | KEEP | [OK] Correct - ContactManager db access |
+| core/src/notification.rs | Mutex | parking_lot::Mutex | Sync context | parking_lot::Mutex | KEEP | [OK] Correct - notification state |
+| core/src/mobile_bridge.rs | Mutex/RwLock | parking_lot::Mutex/RwLock | Sync context | parking_lot::Mutex/RwLock | KEEP | [OK] Correct - mobile service state, GLOBAL_RT |
+| core/src/iron_core.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - IronCore state |
+| core/src/store/storage.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - storage backend |
+| core/src/store/logs.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - log manager |
+| core/src/transport/escalation.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - transport escalation |
+| core/src/transport/internet.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - internet transport |
+| core/src/transport/manager.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - transport manager |
+| core/src/transport/nat.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - NAT traversal |
+| core/src/transport/circuit_breaker.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - circuit breaker state |
+| core/src/transport/reputation.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - reputation tracking |
+| core/src/transport/wifi_aware.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - WiFi Aware transport |
+| core/src/relay/server.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - relay server state |
+| core/src/platform/service.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - platform service |
+| core/src/mobile/service.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - mobile service |
+| core/src/abuse/spam_detection.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - spam detection |
+| core/src/abuse/auto_block.rs | RwLock | parking_lot::RwLock | Sync context | parking_lot::RwLock | KEEP | [OK] Correct - auto block |
+| core/src/wasm_support/mesh.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | [OK] Correct - WASM support code (not actual WASM) |
+| core/src/wasm_support/transport.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | [OK] Correct - WASM support code (not actual WASM) |
+| core/src/wasm_support/storage.rs | RwLock | parking_lot::RwLock | WASM support | parking_lot::RwLock | KEEP | [OK] Correct - WASM support code (not actual WASM) |
 
 ---
 
@@ -150,11 +150,11 @@ After WASM lock replacement:
 
 ## Next Steps
 
-1. ✅ Task 1.1: Catalog complete
-2. ⏳ Task 1.2: Replace WASM locks with RefCell
-3. ⏳ Task 1.3: Standardize CLI async locks (already correct, verify only)
-4. ⏳ Task 1.4: Migrate Hyper 0.14 to Axum 0.7
-5. ⏳ Task 1.5: Verify Hyper 0.14 removal
-6. ⏳ Task 1.6: Phase 1 verification gate
+1. [OK] Task 1.1: Catalog complete
+2. [PENDING] Task 1.2: Replace WASM locks with RefCell
+3. [PENDING] Task 1.3: Standardize CLI async locks (already correct, verify only)
+4. [PENDING] Task 1.4: Migrate Hyper 0.14 to Axum 0.7
+5. [PENDING] Task 1.5: Verify Hyper 0.14 removal
+6. [PENDING] Task 1.6: Phase 1 verification gate
 
-**Phase 1.1 Status: ✅ COMPLETE**
+**Phase 1.1 Status: [OK] COMPLETE**

@@ -9,16 +9,16 @@ You are continuing the SCMessenger Rust Transformation project. **Phase 1 (Async
 
 ### Project Overview
 - **Project**: SCMessenger Rust Transformation
-- **Spec Location**: `.kiro/specs/scmessenger-rust-transformation/`
+- **Spec Location**: `docs/specs/scmessenger-rust-transformation/`
 - **Current Phase**: Phase 2 (Protocol Hardening)
-- **Previous Phase**: Phase 1 (Async Hygiene) - ✅ COMPLETE
+- **Previous Phase**: Phase 1 (Async Hygiene) - [OK] COMPLETE
 
 ### Phase 1 Completion Status
-✅ **WASM locks optimized**: Arc<Mutex> → Rc<RefCell> (~700 LoC)  
-✅ **CLI async locks verified**: tokio::sync::Mutex usage correct  
-✅ **HTTP API modernized**: Hyper 0.14 → Axum 0.7 (~400 LoC)  
-✅ **All tests passing**: cargo check/clippy/fmt all pass  
-✅ **Zero regressions**: All 13 API endpoints functional  
+[OK] **WASM locks optimized**: Arc<Mutex> → Rc<RefCell> (~700 LoC)  
+[OK] **CLI async locks verified**: tokio::sync::Mutex usage correct  
+[OK] **HTTP API modernized**: Hyper 0.14 → Axum 0.7 (~400 LoC)  
+[OK] **All tests passing**: cargo check/clippy/fmt all pass  
+[OK] **Zero regressions**: All 13 API endpoints functional  
 
 ---
 
@@ -335,16 +335,16 @@ if !rate_limiter.allow_sync(&peer_id) {
 ## Success Criteria
 
 Phase 2 is complete when:
-- ✅ Schema versioning added to all sync messages
-- ✅ Cryptographic peer proofs implemented
-- ✅ Rate limiting prevents sync flooding
-- ✅ All tests pass (cargo test)
-- ✅ All crates compile (cargo check)
-- ✅ Clippy passes
-- ✅ Code formatted (cargo fmt)
-- ✅ Version mismatch handled correctly
-- ✅ Proof validation works
-- ✅ Rate limiting works
+- [OK] Schema versioning added to all sync messages
+- [OK] Cryptographic peer proofs implemented
+- [OK] Rate limiting prevents sync flooding
+- [OK] All tests pass (cargo test)
+- [OK] All crates compile (cargo check)
+- [OK] Clippy passes
+- [OK] Code formatted (cargo fmt)
+- [OK] Version mismatch handled correctly
+- [OK] Proof validation works
+- [OK] Rate limiting works
 
 ---
 
@@ -367,7 +367,7 @@ rg "version" core/src/drift/
 
 ### Step 3: Update Task Status
 Use the task tracking system to mark tasks as in_progress/completed:
-- Task file: `.kiro/specs/scmessenger-rust-transformation/tasks.md`
+- Task file: `docs/specs/scmessenger-rust-transformation/tasks.md`
 - Update status as you complete each task
 
 ---
@@ -387,11 +387,11 @@ Stop and request human review if:
 
 ### Current State (Post-Phase 1)
 - **Rust version**: 1.95.0
-- **Build status**: ✅ Passing
-- **Test status**: ✅ All tests passing
-- **HTTP API**: ✅ Axum 0.7
-- **WASM locks**: ✅ Rc<RefCell>
-- **CLI locks**: ✅ tokio::sync::Mutex
+- **Build status**: [OK] Passing
+- **Test status**: [OK] All tests passing
+- **HTTP API**: [OK] Axum 0.7
+- **WASM locks**: [OK] Rc<RefCell>
+- **CLI locks**: [OK] tokio::sync::Mutex
 
 ### Phase 2 Focus
 - **Schema versioning**: Enable protocol evolution
@@ -421,8 +421,8 @@ I'm continuing the SCMessenger Rust Transformation project. Phase 1 (Async Hygie
 Please execute Phase 2: Protocol Hardening - Sync Auth, Versioning, Rate Limits.
 
 **Context:**
-- Spec location: .kiro/specs/scmessenger-rust-transformation/
-- Phase 1 status: ✅ COMPLETE (locks optimized, HTTP API modernized)
+- Spec location: docs/specs/scmessenger-rust-transformation/
+- Phase 1 status: [OK] COMPLETE (locks optimized, HTTP API modernized)
 - Current Rust version: 1.95.0
 - Build status: All tests passing
 
@@ -433,8 +433,8 @@ Please execute Phase 2: Protocol Hardening - Sync Auth, Versioning, Rate Limits.
 4. Verify zero regression
 
 **Instructions:**
-- Read .kiro/specs/scmessenger-rust-transformation/PHASE2-KICKOFF.md for detailed instructions
-- Follow tasks in .kiro/specs/scmessenger-rust-transformation/tasks.md (Phase 2 section)
+- Read docs/specs/scmessenger-rust-transformation/PHASE2-KICKOFF.md for detailed instructions
+- Follow tasks in docs/specs/scmessenger-rust-transformation/tasks.md (Phase 2 section)
 - Reference HANDOFF/scmessenger_rust_implementation_prompt.md for implementation details
 - Update task status as you progress
 - Maintain zero-regression (all tests must pass)
@@ -444,4 +444,4 @@ Please start with Task 2.1: Add Schema Versioning to Network Messages.
 
 ---
 
-**Phase 2 Status: ⏳ READY TO START**
+**Phase 2 Status: [PENDING] READY TO START**

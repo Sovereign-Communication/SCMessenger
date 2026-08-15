@@ -218,7 +218,7 @@ without removing the five inheriting member lines fails the manifest load).
    `docs/historical/Gemini_Readiness_Audit.md` and
    `HANDOFF/plans/planfromclaudeforhermes.md`, left as historical artifacts.
    Sweep if you want zero.
-8. `.kiro/specs/repository-production-readiness/design.md` is the internal spec
+8. `docs/specs/repository-production-readiness/design.md` is the internal spec
    that was the original source of the fabricated-email pattern. Its four fake
    addresses were replaced, but the document as a whole has not been reviewed
    for other invented content.

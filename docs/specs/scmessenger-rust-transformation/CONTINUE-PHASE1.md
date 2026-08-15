@@ -4,12 +4,12 @@
 
 **Phase 1 Progress:** 2/6 tasks complete
 
-- ✅ Task 1.1: Catalog All Lock Usage (COMPLETE)
-- ✅ Task 1.2: Replace WASM Locks with RefCell (COMPLETE - ~700 LoC)
-- ⏳ Task 1.3: Standardize CLI Async Locks (VERIFY ONLY - already correct)
-- ⏳ Task 1.4: Migrate Hyper 0.14 → Axum 0.7 (~400 LoC)
-- ⏳ Task 1.5: Verify Hyper 0.14 Removal (VERIFY ONLY)
-- ⏳ Task 1.6: Phase 1 Verification Gate (VERIFY ONLY)
+- [OK] Task 1.1: Catalog All Lock Usage (COMPLETE)
+- [OK] Task 1.2: Replace WASM Locks with RefCell (COMPLETE - ~700 LoC)
+- [PENDING] Task 1.3: Standardize CLI Async Locks (VERIFY ONLY - already correct)
+- [PENDING] Task 1.4: Migrate Hyper 0.14 → Axum 0.7 (~400 LoC)
+- [PENDING] Task 1.5: Verify Hyper 0.14 Removal (VERIFY ONLY)
+- [PENDING] Task 1.6: Phase 1 Verification Gate (VERIFY ONLY)
 
 ---
 
@@ -19,7 +19,7 @@
 Continue Phase 1 of the SCMessenger Rust Transformation.
 
 **Context:**
-- Spec: .kiro/specs/scmessenger-rust-transformation/
+- Spec: docs/specs/scmessenger-rust-transformation/
 - Phase 1: Async Hygiene - Lock Standardization & Runtime Upgrade
 - Tasks 1.1 and 1.2 are COMPLETE
 - Current Rust version: 1.95.0
@@ -71,10 +71,10 @@ Continue Phase 1 of the SCMessenger Rust Transformation.
 - Mark Phase 1 complete
 
 **Reference Files:**
-- .kiro/specs/scmessenger-rust-transformation/tasks.md (Phase 1 section)
-- .kiro/specs/scmessenger-rust-transformation/PHASE1-KICKOFF.md (detailed instructions)
-- .kiro/specs/scmessenger-rust-transformation/phase1-lock-catalog.md (lock analysis)
-- .kiro/specs/scmessenger-rust-transformation/PHASE1-TASK1.2-COMPLETE.md (Task 1.2 summary)
+- docs/specs/scmessenger-rust-transformation/tasks.md (Phase 1 section)
+- docs/specs/scmessenger-rust-transformation/PHASE1-KICKOFF.md (detailed instructions)
+- docs/specs/scmessenger-rust-transformation/phase1-lock-catalog.md (lock analysis)
+- docs/specs/scmessenger-rust-transformation/PHASE1-TASK1.2-COMPLETE.md (Task 1.2 summary)
 - HANDOFF/scmessenger_rust_implementation_prompt.md (Phase 1 implementation details)
 
 **Important:**
