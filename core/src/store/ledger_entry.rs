@@ -261,6 +261,12 @@ pub enum SeedExportAudience {
     LocalMesh,
 }
 
+/// Connection ledger manager.
+///
+/// **Single Manager Contract**: A second manager on the same storage path is UNSUPPORTED.
+/// There is no multi-process or multi-instance safe coordination. Error paths and loads
+/// will not clobber concurrently modified files, but concurrent saves from multiple managers
+/// will overwrite each other.
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Object))]
 pub struct LedgerManager {
     /// `None` means "hold the ledger in memory only, never touch the disk".
@@ -315,22 +321,12 @@ impl LedgerManager {
         }
 
         if ledger_file.exists() {
+            let mut read_data = None;
             if let Ok(metadata) = std::fs::metadata(&ledger_file) {
                 if metadata.len() > 16 * 1024 * 1024 {
                     tracing::warn!(
-                        "ledger file is {} bytes; parsing may exceed bounded-memory targets",
+                        "ledger file is {} bytes; exceeding 16 MiB hard limit",
                         metadata.len()
-                    );
-                }
-            }
-            let data = std::fs::read_to_string(&ledger_file)
-                .map_err(|_| crate::IronCoreError::StorageError)?;
-            let mut entries: Vec<LedgerEntry> = match serde_json::from_str(&data) {
-                Ok(entries) => entries,
-                Err(err) => {
-                    tracing::warn!(
-                        "ledger file corrupted; recovering with empty ledger: {}",
-                        err
                     );
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -347,8 +343,41 @@ impl LedgerManager {
                         nonce
                     );
                     let _ = std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name));
-                    Vec::new()
+                } else {
+                    read_data = Some(std::fs::read_to_string(&ledger_file));
                 }
+            } else {
+                read_data = Some(std::fs::read_to_string(&ledger_file));
+            }
+
+            let mut entries: Vec<LedgerEntry> = match read_data {
+                Some(Ok(data)) => match serde_json::from_str(&data) {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        tracing::warn!(
+                            "ledger file corrupted; recovering with empty ledger: {}",
+                            err
+                        );
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let nonce = SAVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+                        let corrupt_name = format!(
+                            "{}.corrupt-{}.{}",
+                            ledger_file
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("ledger.json"),
+                            timestamp,
+                            nonce
+                        );
+                        let _ = std::fs::rename(&ledger_file, ledger_file.with_file_name(corrupt_name));
+                        Vec::new()
+                    }
+                },
+                Some(Err(_)) => return Err(crate::IronCoreError::StorageError),
+                None => Vec::new(),
             };
             let parsed_len = entries.len();
             entries.retain(|entry| {
@@ -384,11 +413,11 @@ impl LedgerManager {
                 entries.truncate(MAX_LEDGER_ENTRIES);
                 changed = true;
             }
-            *self.entries.lock() = entries;
+
+            let _save_guard = self.save_lock.lock();
+            *self.entries.lock() = entries.clone();
             if changed {
-                let _save_guard = self.save_lock.lock();
-                let snapshot = { self.entries.lock().clone() };
-                if let Err(err) = self.save_with_entries(&snapshot) {
+                if let Err(err) = self.save_with_entries(&entries) {
                     tracing::warn!("ledger shrink persist failed: {}", err);
                 }
             }
@@ -2289,5 +2318,32 @@ mod tests {
         let shared = mgr.exchange_response_entries(10, "requester-peer");
         assert!(shared.iter().any(|e| e.multiaddr == included));
         assert!(!shared.iter().any(|e| e.multiaddr == excluded));
+    }
+
+    #[test]
+    fn multi_manager_unsupported_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        let mgr1 = LedgerManager::new(path.clone());
+        mgr1.record_connection("/ip4/198.51.100.1/tcp/9001".to_string(), peer());
+        mgr1.save().unwrap();
+
+        let mgr2 = LedgerManager::new(path.clone());
+        mgr2.load().unwrap();
+        assert_eq!(mgr2.dialable_addresses().len(), 1);
+
+        mgr2.record_connection("/ip4/198.51.100.2/tcp/9001".to_string(), peer());
+        mgr2.save().unwrap();
+
+        mgr1.record_connection("/ip4/198.51.100.3/tcp/9001".to_string(), peer());
+        mgr1.save().unwrap();
+
+        let mgr3 = LedgerManager::new(path.clone());
+        mgr3.load().unwrap();
+        let addrs = mgr3.dialable_addresses();
+        assert_eq!(addrs.len(), 2);
+        assert!(addrs.iter().any(|e| e.multiaddr.contains("100.3")));
+        assert!(!addrs.iter().any(|e| e.multiaddr.contains("100.2")));
     }
 }
