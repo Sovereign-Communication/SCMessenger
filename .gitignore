@@ -134,6 +134,7 @@ reference/Android-Debug.md
 
 # Additional build artifacts (comprehensive coverage per Requirement 10.1)
 target/
+target_node*/
 build/
 .gradle/
 DerivedData/
