@@ -258,14 +258,13 @@ class MeshForegroundService : Service() {
                 serviceHealthMonitor.startMonitoring()
                 serviceHealthMonitor.updateHeartbeat()
 
+
                 // Wire recordUiTiming for service startup render tracking
                 performanceMonitor.recordUiTiming(
                     operationId = 1,
                     operationName = "mesh_service_start",
                     durationMs = performanceMonitor.getServiceUptimeMs()
                 )
-
-
 
                 Timber.i("Mesh service started successfully - ANR watchdog active")
             } catch (e: Exception) {
@@ -381,8 +380,6 @@ class MeshForegroundService : Service() {
                 title = "Mesh Service Stopped",
                 message = "Mesh network is now inactive"
             )
-
-
 
             // Clean up
             withContext(Dispatchers.Default) {
