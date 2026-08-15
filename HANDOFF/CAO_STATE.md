@@ -1,7 +1,7 @@
 # CAO state - live Apple handoff
 
 Status: Active
-Last updated: 2026-08-15 10:47 HST
+Last updated: 2026-08-15 10:50 HST
 Entry point: `/CAO`. This file is the whole initial project context load.
 
 Everything below names its evidence or re-derivation command. **Re-derive before
@@ -24,9 +24,9 @@ API breaks, technology changes, and material security/privacy choices.
 
 | Work | Source / state | Verified status | Next |
 |---|---|---|---|
-| iOS UniFFI crash | fix commit `fee09225`; Apple branch at `e314fd21`, pushed | Checksum mismatch fixed; binding verifier passed; simulator XCTest 53/53 | Open/manage PR; observe CI; independent patch acceptance |
+| iOS UniFFI crash | fix `fee09225`; CAO command/state `e314fd21`; Prime routing `385f4265`, all pushed | Checksum mismatch fixed; binding verifier passed; simulator XCTest 53/53 | Open/manage PR; observe CI; independent patch acceptance |
 | Free/provider adapters | worktree `tmp/free-api-lanes-20260815`, branch `gpt/free-api-lanes-20260815` from `ef431acc` | Worker patch reviewed; six unit tests, py_compile, rules, docs-sync, JSON parse pass | Independent review; live adapter smoke if justified; commit/push/PR |
-| CAO harness | `.claude/commands/CAO.md`, this state, `.prime/agent/prompts/CAO.md`, and global fallback skill | Exact fresh-process `/CAO` no-tools smoke passed; state/controller/safety routing correct | Keep state current; start a fresh `/CAO` context when winding down |
+| CAO harness | command/state `e314fd21`; deterministic Prime routing `385f4265`; global fallback skill | Exact fresh-process `/CAO` no-tools smoke passed; state/controller/safety routing correct | Start a fresh `/CAO` context; re-derive before resuming critical path |
 | Flash High controller | startup packet under provider worktree `tmp/orchestration/plans/` | First launch stopped for out-of-scope home-directory discovery | One hardened absolute-path retry only |
 | Apple parity program | draft `HANDOFF/gpt/GPT_MAC_CAO_TOKEN_CURB_PARITY_ADOPTION_2026-08-15.md` | Read-only parity audit and initial plan complete | Feed bounded plan to controller; dispatch fresh SCANNER/PLANNER roles |
 
