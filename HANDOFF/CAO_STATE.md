@@ -1,7 +1,7 @@
 # CAO state - live Apple handoff
 
 Status: Active
-Last updated: 2026-08-15 10:35 HST
+Last updated: 2026-08-15 10:47 HST
 Entry point: `/CAO`. This file is the whole initial project context load.
 
 Everything below names its evidence or re-derivation command. **Re-derive before
@@ -24,9 +24,9 @@ API breaks, technology changes, and material security/privacy choices.
 
 | Work | Source / state | Verified status | Next |
 |---|---|---|---|
-| iOS UniFFI crash | `gpt/ios-macos-launch-debug-20260810` at `fee09225`, pushed | Checksum mismatch fixed; binding verifier passed; simulator XCTest 53/53 | Open/manage PR; observe CI; independent patch acceptance |
+| iOS UniFFI crash | fix commit `fee09225`; Apple branch at `e314fd21`, pushed | Checksum mismatch fixed; binding verifier passed; simulator XCTest 53/53 | Open/manage PR; observe CI; independent patch acceptance |
 | Free/provider adapters | worktree `tmp/free-api-lanes-20260815`, branch `gpt/free-api-lanes-20260815` from `ef431acc` | Worker patch reviewed; six unit tests, py_compile, rules, docs-sync, JSON parse pass | Independent review; live adapter smoke if justified; commit/push/PR |
-| CAO harness | global skill `~/.prime/agent/skills/cao/` plus these two project files | Skill/frontmatter and global `/CAO` alias created | Commit/push these files; fresh no-tools command smoke |
+| CAO harness | `.claude/commands/CAO.md`, this state, `.prime/agent/prompts/CAO.md`, and global fallback skill | Exact fresh-process `/CAO` no-tools smoke passed; state/controller/safety routing correct | Keep state current; start a fresh `/CAO` context when winding down |
 | Flash High controller | startup packet under provider worktree `tmp/orchestration/plans/` | First launch stopped for out-of-scope home-directory discovery | One hardened absolute-path retry only |
 | Apple parity program | draft `HANDOFF/gpt/GPT_MAC_CAO_TOKEN_CURB_PARITY_ADOPTION_2026-08-15.md` | Read-only parity audit and initial plan complete | Feed bounded plan to controller; dispatch fresh SCANNER/PLANNER roles |
 
@@ -42,21 +42,19 @@ gh pr list --head gpt/ios-macos-launch-debug-20260810 --state all
 
 ## 3. Critical path
 
-1. Land and smoke-test the `/CAO` command/state without touching unrelated dirty
-   files.
-2. Open the iOS crash-fix PR from `fee09225`; record exact source and CI artifact
+1. Open the iOS crash-fix PR from `fee09225`; record exact source and CI artifact
    anchors separately.
-3. Finish provider-adapter independent review and PR lifecycle from its isolated
+2. Finish provider-adapter independent review and PR lifecycle from its isolated
    branch.
-4. Retry `agy/gemini-3.7-flash-high` once with absolute packet/worktree paths,
+3. Retry `agy/gemini-3.7-flash-high` once with absolute packet/worktree paths,
    `--add-dir`, process-group containment, dynamic resource admission, and early
    drift monitoring.
-5. Accept only tmp-owned controller artifacts, then dispatch exact Apple
+4. Accept only tmp-owned controller artifacts, then dispatch exact Apple
    SCANNER/PLANNER packets before any implementation.
-6. Resolve stale checked-in XCFramework headers/libraries through a canonical
+5. Resolve stale checked-in XCFramework headers/libraries through a canonical
    rebuild plan. The current build script removes the XCFramework directory;
    explicit operator approval is required before that destructive invocation.
-7. Continue authoritative simulator/device gates without claiming APNs,
+6. Continue authoritative simulator/device gates without claiming APNs,
    physical-device, cross-platform, or delivery evidence that was not observed.
 
 ## 4. What was solved this session
@@ -85,6 +83,17 @@ merged by PR #145 at `ef431acc`; protocol/manifest `2.0.0` validates. The
 committed CTO pattern was located at `.claude/commands/CTO.md` and
 `HANDOFF/CTO_STATE.md` (initial command/state commit `abbe9f08`) and is the
 format mirrored here.
+
+**Exact `/CAO` routing verified.** Prime slash aliases are prompt templates;
+skills alone are invoked as `/skill:name`. The tracked template at
+`.prime/agent/prompts/CAO.md` and its project setting force deterministic
+expansion, while `~/.prime/agent/prompts/CAO.md` and the enabled global skill
+provide fallback outside this checkout. A fresh `prime-agent --no-session
+--no-tools` process returned CAO, `HANDOFF/CAO_STATE.md`, and
+`agy/gemini-3.7-flash-high` exactly. Static expansion also asserts the broad
+filesystem stop rule. Evidence: `tmp/cao-enabled-template-smoke-20260815.log`.
+The first cheap model selection was unsupported and two pre-enablement routing
+attempts failed closed; none used tools or modified repository state.
 
 ## 5. Controller and lane policy
 
@@ -174,6 +183,8 @@ execution is not a physical-device result.
 - Provider/model availability never changes semantic authority.
 - Repeated worker failure causes rebrief/re-dispatch/escalation, never a direct
   CAO code fix.
+- Prime exact slash names require enabled prompt templates; a skill description
+  or model-level alias is not deterministic command routing.
 
 ## 10. Graceful handoff checklist
 
