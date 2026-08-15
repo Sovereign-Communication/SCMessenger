@@ -1,0 +1,169 @@
+{
+  "_what_this_is": "A MEASUREMENT SNAPSHOT of delegation capacity, not a ranking. Lanes appear and vanish without notice -- Qwen and DashScope both died between 2026-08-04 and 2026-08-14, and OpenRouter silently retired four :free tiers in the same window. Nothing here is 'primary'. Routing is a selection function over the measured properties below, applied fresh each time. See docs/rules/DELEGATION.md section 'Choosing a lane'.",
+  "_regenerate": "python scripts/lane_probe.py --write",
+  "_probed": "2026-08-15",
+  "_expires": "Treat as stale after 7 days or after any 401/404 from a lane. Re-probe, do not assume.",
+  "_probe_task": "unified-diff codegen from a natural-language spec, max_tokens>=1000, temperature 0",
+
+  "selection_properties": {
+    "tier": "What the task needs: micro (mechanical, <1 file) | scoped (a real diff) | reasoning (design/diagnosis) | long-context (many files at once) | shell (must run commands) | verdict (go/no-go, human-consequential)",
+    "cost_class": "free = no meter running | free-quota = capped pool, spend deliberately | metered = real money or Anthropic quota | expensive = native session",
+    "latency_s": "Measured, not advertised. Dominates for micro work dispatched in bulk.",
+    "context": "Hard ceiling on how much source you can hand it in one shot.",
+    "quota": "Requests and tokens per day. A fast lane with 2400 req/day beats a faster one with 100.",
+    "quirks": "Per-lane traps that make output silently useless. Read before first use."
+  },
+
+  "lanes": [
+    {
+      "id": "cerebras-gemma4-31b", "provider": "cerebras", "model": "gemma-4-31b",
+      "endpoint": "https://api.cerebras.ai/v1/chat/completions",
+      "key_file": "cerebras.env", "key_var": "CEREBRAS_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "context": 65536, "max_completion": 32768, "latency_s": 0.67, "status": "OK",
+      "quota": {"req_min": 5, "req_hour": 150, "req_day": 2400, "tok_min": 30000, "tok_hour": 1000000, "tok_day": 1000000},
+      "quirks": "Preview model. 5 req/min is enforced as ~1 req/sec -- serialise bulk dispatch or you will 429.",
+      "ref": "https://cloud.cerebras.ai/platform/org_t4mfcn8yxnmkj8e62hn8h3vm/limits"
+    },
+    {
+      "id": "groq-llama33-70b", "provider": "groq", "model": "llama-3.3-70b-versatile",
+      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+      "key_file": "groq.env", "key_var": "GROQ_API_KEY",
+      "cost_class": "free", "tiers": ["micro"],
+      "context": 128000, "latency_s": 0.72, "status": "OK",
+      "quirks": "Cloudflare returns error 1010 without an explicit User-Agent. Tight TPM -- never send large files."
+    },
+    {
+      "id": "cerebras-gptoss-120b", "provider": "cerebras", "model": "gpt-oss-120b",
+      "endpoint": "https://api.cerebras.ai/v1/chat/completions",
+      "key_file": "cerebras.env", "key_var": "CEREBRAS_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "context": 65536, "max_completion": 32768, "latency_s": 0.78, "status": "OK",
+      "quota": {"req_min": 5, "req_hour": 150, "req_day": 2400, "tok_min": 30000, "tok_hour": 1000000, "tok_day": 1000000},
+      "quirks": "Production-tier at Cerebras (gemma-4-31b is Preview). Same quota pool as the other Cerebras lanes -- they share, not stack."
+    },
+    {
+      "id": "google-gemini31-flash-lite", "provider": "google", "model": "gemini-3.1-flash-lite",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "key_file": "googleaistudio.env", "key_var": "GOOGLE_AISTUDIO_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "latency_s": 1.0, "status": "OK",
+      "quirks": "OpenAI-compat path is /v1beta/openai/. Do NOT send a `reasoning` field -- Google rejects it."
+    },
+    {
+      "id": "or-free-router", "provider": "openrouter", "model": "openrouter/free",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "key_file": "openrouter.env", "key_var": "OPENROUTER_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "context": 200000, "latency_s": 2.5, "status": "OK",
+      "quirks": "Auto-routes across the free pool; resolved to poolside/laguna-s-2.1 when probed. Insulates you from individual :free tiers being retired -- the router survives what named models do not."
+    },
+    {
+      "id": "or-laguna-xs", "provider": "openrouter", "model": "poolside/laguna-xs-2.1:free",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "key_file": "openrouter.env", "key_var": "OPENROUTER_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "context": 262144, "latency_s": 4.3, "status": "OK",
+      "quirks": "Code-specialised. Needs reasoning.effort=low."
+    },
+    {
+      "id": "or-nemotron-nano-omni", "provider": "openrouter",
+      "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "key_file": "openrouter.env", "key_var": "OPENROUTER_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped"],
+      "context": 256000, "latency_s": 4.7, "status": "OK",
+      "quirks": "Returns content='' without reasoning.effort=low. Measured: 0 chars content / 2919 chars reasoning at baseline."
+    },
+    {
+      "id": "or-dots3-note", "provider": "openrouter", "model": "dots-studio/dots-3-note-preview:free",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "key_file": "openrouter.env", "key_var": "OPENROUTER_API_KEY",
+      "cost_class": "free", "tiers": ["scoped", "long-context"],
+      "context": 512000, "latency_s": 6.3, "status": "OK",
+      "quirks": "512k context at zero cost -- the cheapest way to hand a model many files at once."
+    },
+    {
+      "id": "nim-nemotron-super-120b", "provider": "nvidia", "model": "nvidia/nemotron-3-super-120b-a12b",
+      "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_file": "nvidia.env", "key_var": "NVIDIA_API_KEY",
+      "cost_class": "free", "tiers": ["scoped", "reasoning"],
+      "latency_s": 8.5, "status": "OK",
+      "quirks": "NIM exposes 102 models. Do NOT send a `reasoning` field."
+    },
+    {
+      "id": "nim-deepseek-v4-flash", "provider": "nvidia", "model": "deepseek-ai/deepseek-v4-flash-0731",
+      "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_file": "nvidia.env", "key_var": "NVIDIA_API_KEY",
+      "cost_class": "free", "tiers": ["scoped", "reasoning"],
+      "latency_s": 10.0, "status": "OK",
+      "quirks": "Strong on code. No `reasoning` field."
+    },
+    {
+      "id": "nim-nemotron-ultra-550b", "provider": "nvidia", "model": "nvidia/nemotron-3-ultra-550b-a55b",
+      "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_file": "nvidia.env", "key_var": "NVIDIA_API_KEY",
+      "cost_class": "free", "tiers": ["scoped", "reasoning", "long-context"],
+      "context": 1000000, "latency_s": 12.5, "status": "OK",
+      "quirks": "Heaviest free model reachable (550B, 1M ctx). Direct NIM is ~4x faster than the same model via OpenRouter (12.5s vs 48.2s) and does not need the reasoning knob. Use NIM, not OpenRouter, for this model."
+    },
+    {
+      "id": "google-gemma4-31b-it", "provider": "google", "model": "gemma-4-31b-it",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "key_file": "googleaistudio.env", "key_var": "GOOGLE_AISTUDIO_API_KEY",
+      "cost_class": "free", "tiers": ["scoped"],
+      "latency_s": 11.2, "status": "OK",
+      "quirks": "Most verbose of the free lanes (1023 chars where peers returned ~135) -- good when you want explanation, wasteful when you want a diff."
+    },
+    {
+      "id": "google-gemini3-flash-preview", "provider": "google", "model": "gemini-3-flash-preview",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "key_file": "googleaistudio.env", "key_var": "GOOGLE_AISTUDIO_API_KEY",
+      "cost_class": "free", "tiers": ["scoped", "reasoning"],
+      "latency_s": 19.5, "status": "OK",
+      "quirks": "Preview tier -- 503s under load. Have a fallback."
+    },
+    {
+      "id": "agy-gemini", "provider": "agy", "model": "gemini-3.7-flash",
+      "cost_class": "free-quota", "tiers": ["micro", "scoped", "shell"], "status": "UNPROBED",
+      "quirks": "Shell-capable, so it can verify its own work -- the only free lane that can. MUST pass --add-dir <repo> or it re-discovers the path and bails (this is the 'random timeout'). MUST pin --model with the exact quoted name from `agy models`; shorthand silently substitutes. On timeout use --continue, never re-dispatch fresh."
+    },
+    {
+      "id": "agy-claude", "provider": "agy", "model": "claude-sonnet",
+      "cost_class": "metered", "tiers": ["scoped", "reasoning", "shell"], "status": "UNPROBED",
+      "quirks": "SPENDS ANTHROPIC QUOTA from the same pool as the native session. Only after free lanes have failed on the same task twice with different output contracts."
+    },
+    {
+      "id": "claude-native", "provider": "native", "model": "current-session",
+      "cost_class": "expensive", "tiers": ["verdict"], "status": "OK",
+      "quirks": "Go/no-go on evidence, merge decisions, adversarial crypto review. A worker cannot verify itself, which is the only reason this tier exists."
+    }
+  ],
+
+  "dead": [
+    {"id": "qwenpaid", "code": "HTTP401", "detail": "Incorrect API key provided", "note": "Auth failure, NOT quota. Operator believed it was 0%-until-2026-08-19; the key itself is rejected. Re-issue before assuming quota."},
+    {"id": "dashscope", "code": "HTTP401", "detail": "API-key is blocked", "note": "Blocked by Alibaba, not exhausted. Key was knowingly exposed and never rotated. Dead until re-issued."},
+    {"id": "or-deepseek-chat-v3.1:free", "code": "HTTP404", "note": "OpenRouter retired the free tier; paid-only."},
+    {"id": "or-qwen3-coder:free", "code": "HTTP404", "note": "OpenRouter retired the free tier; paid-only."},
+    {"id": "or-glm-4.5-air:free", "code": "HTTP404", "note": "OpenRouter retired the free tier; paid-only."},
+    {"id": "or-gpt-oss-20b:free", "code": "HTTP404", "detail": "No allowed providers are available"},
+    {"id": "or-lfm-2.5-2.6b:free", "code": "EMPTY", "note": "98s, 5792 reasoning chars, zero content even at effort=low."},
+    {"id": "cerebras-zai-glm-4.7", "code": "EMPTY", "note": "2.24s, zero content. 8k ctx anyway."},
+    {"id": "groq-kimi-k2", "code": "HTTP404", "note": "Not on this Groq account."},
+    {"id": "nim-kimi-k2.6", "code": "HTTP404"},
+    {"id": "nim-codestral-22b", "code": "HTTP404"},
+    {"id": "nim-llama-3.3-70b", "code": "TIMEOUT", "note": "Read timeout at 200s."},
+    {"id": "google-gemini-2.5-flash", "code": "HTTP404", "note": "Retired by Google."},
+    {"id": "google-gemini-3.1-pro-preview", "code": "HTTP429", "note": "Quota exceeded on the free key."},
+    {"id": "google-gemini-flash-latest", "code": "HTTP503", "note": "High demand; retry-able, not dead."}
+  ],
+
+  "traps": [
+    "EMPTY CONTENT IS THE DEFAULT FAILURE MODE OF FREE REASONING MODELS. They spend the whole max_tokens budget on hidden reasoning and return content=''. On OpenRouter send reasoning:{effort:low}; for nemotron-ultra via OpenRouter send reasoning:{exclude:true}. An empty response is not a refusal and not a defect -- retry with the knob before declaring the lane dead.",
+    "NEVER send a `reasoning` field to Google, NVIDIA NIM, Cerebras or Groq -- they reject or ignore it. It is an OpenRouter-only parameter.",
+    "The same model can differ 4x in latency by route: nemotron-3-ultra-550b is 12.5s on NIM direct and 48.2s via OpenRouter. Prefer the provider's own endpoint when both exist.",
+    "Cerebras enforces 5 req/min as roughly 1 req/sec. Serialise bulk dispatch.",
+    "One task file -> one provider. Parallel dispatch of the same task file collides on the output path and one result is silently lost.",
+    "Never read $? after a pipe -- the pipeline status is the last command's, so a piped gate can never fail."
+  ]
+}

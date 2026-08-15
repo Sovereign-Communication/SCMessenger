@@ -1,28 +1,71 @@
 # Delegation & Worker Dispatch SOP
 
 Status: Active
-Last updated: 2026-08-08 (first repo-side capture; previously this knowledge
-existed only in a single agent's private memory store, which delegated workers
-cannot read -- which is why these failures kept recurring)
+Last updated: 2026-08-15 (lane ranking replaced with a selection function after
+the two lanes previously named PRIMARY both went to HTTP 401)
 
 Loaded on demand. Every rule below traces to a measured failure, not a
 precaution.
 
-## Lane priority (economics, measured)
+## Choosing a lane
 
-1. **Qwen via Claude Code CLI** (`launch_claude.ps1`, Alibaba MaaS) -- PRIMARY.
-   Free and shell-capable, so it can run its own verification.
-2. **OpenRouter** (`claude --settings ~/.claude/settings.local.OR.json`, or
-   `scripts/delegate_task.py`) -- secondary.
-3. **DashScope / Qwen direct** -- OpenAI-compatible, ~1M tokens per Qwen model.
-   Key at `~/.config/scmorc/dashscope.env`; helper `tmp/scmorc/qwen.sh`.
-4. **Groq** -- LPU, fast. `delegate_task.py --provider groq`, key at
-   `~/.config/scmorc/groq.env`. Needs a curl User-Agent or Cloudflare returns
-   error 1010. Tight TPM, so micro/validation tasks only.
-5. **ollama / agy** -- MICRO tasks only. A single trivial ollama-claude call
-   once consumed 5.7% of a 5-hour Anthropic window.
+**There is no primary lane.** A ranked list is the wrong shape for this problem:
+between 2026-08-04 and 2026-08-15 the two lanes this document called PRIMARY
+(Qwen CLI, DashScope) both went to 401, and OpenRouter silently retired four
+`:free` tiers. Any list of favourites is wrong within days of being written.
+
+Route by properties instead, re-derived from the live roster each time:
+
+    python scripts/delegate.py --task <file> --tier <tier>
+    python scripts/delegate.py --list-lanes     # current capacity + expiry
+    python scripts/lane_probe.py                # re-measure
+
+`scripts/lanes.json` holds measured latency, context, quota and per-lane quirks
+for every lane, plus a `dead` list with the observed error, so a lane that fails
+is recorded rather than rediscovered. It carries an explicit expiry date.
+
+The selection function, in order of precedence:
+
+1. **Capability.** Can the lane do this at all? A task that must run `gh`,
+   `cargo`, `gradlew` or `adb` cannot go to an HTTP lane at any price.
+   `delegate.py` blocks this before spending a call.
+2. **Context.** Will the prompt fit? Lanes whose window cannot hold it are
+   dropped automatically.
+3. **Cost class.** `free` is auto-selectable. `metered` (agy-claude) and
+   `expensive` (native) are never entered automatically -- escalation to them is
+   always a deliberate act after a free lane has actually failed.
+4. **Measured latency**, last. It only breaks ties among lanes that already
+   qualify. Optimising for it first is how you end up sending a 500-line refactor
+   to a 0.7s micro lane.
+
+Quota headroom beats raw speed for bulk work: a 0.7s lane with a tight TPM
+ceiling is worse than a 2.5s lane with 1M tokens/day if you are dispatching
+fifty tasks.
+
+**Escalate deliberately, and only after diagnosing why the cheap lane failed.**
+Most blocks are defects in the task file, not the lane -- rewrite the spec before
+you buy a bigger model. Order: better task file -> longer-context lane ->
+agy-gemini (free, shell-capable) -> agy-claude (spends Anthropic quota) ->
+native (verdicts only).
+
+Full usage, task-file authoring rules and the escalation protocol live in the
+`delegate` skill (`.claude/skills/delegate/SKILL.md`).
 
 Quota ledger: `docs/QWEN_QUOTA_LEDGER.md` is canonical -- update it there.
+
+## The failure mode that wastes the most time
+
+Free reasoning models spend their entire `max_tokens` budget on hidden reasoning
+and return `content: ""`. Measured: nemotron-nano-9b returned 0 content chars
+against 5,946 reasoning chars. **This is not a refusal and not a dead lane.**
+Send `reasoning: {effort: "low"}` on OpenRouter, or `{exclude: true}` for
+nemotron-ultra. Never send a `reasoning` field to Google, NVIDIA NIM, Cerebras or
+Groq -- they reject it. `delegate.py` handles this per-provider; if you call an
+API directly, you own it.
+
+Related: the same model can differ 4x in latency by route. `nemotron-3-ultra-550b`
+is 12.5s on NVIDIA NIM direct and 48.2s through OpenRouter. When a provider's own
+endpoint exists, prefer it.
 
 ## When to delegate at all
 
