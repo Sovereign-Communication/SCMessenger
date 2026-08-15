@@ -19,8 +19,8 @@
 #else
 #define UNIFFI_SHARED_H
 #define UNIFFI_SHARED_HEADER_V4
-// ⚠️ Attention: If you change this #else block (ending in `#endif // def UNIFFI_SHARED_H`) you *must* ⚠️
-// ⚠️ increment the version suffix in all instances of UNIFFI_SHARED_HEADER_V4 in this file.           ⚠️
+//  Attention: If you change this #else block (ending in `#endif // def UNIFFI_SHARED_H`) you *must*
+//  increment the version suffix in all instances of UNIFFI_SHARED_HEADER_V4 in this file.
 
 typedef struct RustBuffer
 {
@@ -41,8 +41,8 @@ typedef struct RustCallStatus {
     RustBuffer errorBuf;
 } RustCallStatus;
 
-// ⚠️ Attention: If you change this #else block (ending in `#endif // def UNIFFI_SHARED_H`) you *must* ⚠️
-// ⚠️ increment the version suffix in all instances of UNIFFI_SHARED_HEADER_V4 in this file.           ⚠️
+//  Attention: If you change this #else block (ending in `#endif // def UNIFFI_SHARED_H`) you *must*
+//  increment the version suffix in all instances of UNIFFI_SHARED_HEADER_V4 in this file.
 #endif // def UNIFFI_SHARED_H
 #ifndef UNIFFI_FFIDEF_RUST_FUTURE_CONTINUATION_CALLBACK
 #define UNIFFI_FFIDEF_RUST_FUTURE_CONTINUATION_CALLBACK
@@ -946,7 +946,7 @@ RustBuffer uniffi_scmessenger_core_fn_method_ironcore_prepare_onion_message(uint
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_IRONCORE_PREPARE_RECEIPT
 #define UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_IRONCORE_PREPARE_RECEIPT
-RustBuffer uniffi_scmessenger_core_fn_method_ironcore_prepare_receipt(uint64_t ptr, RustBuffer _recipient_public_key_hex, RustBuffer message_id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_scmessenger_core_fn_method_ironcore_prepare_receipt(uint64_t ptr, RustBuffer recipient_public_key_hex, RustBuffer message_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SCMESSENGER_CORE_FN_METHOD_IRONCORE_PUBLIC_KEY_HEX

@@ -1,7 +1,7 @@
 # SCMessenger Current State (Verified Snapshot)
 
 Status: Active
-Last updated: 2026-07-25 (planning unity pass; executive summary refreshed)
+Last updated: 2026-08-15 (iOS UniFFI binding integrity recovery)
 Last verified: **2026-07-21** (Workspace build gates clean on host; re-run gates after
 2026-07-25 transport edits per `HANDOFF/SESSION_HANDOFF_2026-07-25.md`)
 
@@ -48,6 +48,7 @@ in-flight milestone. Long-horizon sequencing remains the two-phase DAG in
 ## 3. Milestone Execution Progress Log
 
 ### v0.4.0 Release Preparation (Current In-Flight Milestone)
+- **iOS UniFFI binding integrity (2026-08-15, Mac lane)**: Regenerated the checked-in Swift/C bindings from current Rust source after XCTest trapped on a stale `prepare_receipt` API checksum (`11532` versus `25228`). The canonical copy, XCFramework staging, and drift-verification paths now remove repository-forbidden Unicode from generated text reproducibly. `scripts/verify_ios_bindings.sh` passed and the iOS Simulator XCTest gate executed 53 tests with zero failures. Evidence is from the authoritative Mac simulator lane based on source commit `a29e53f3` plus this generated/tooling diff; it is not physical-device or delivery evidence.
 - **Planning unity (2026-07-25)**: Doc stack aligned; see `REMAINING_WORK_TRACKING.md` top section.
 - **Simple Install Guides (2026-07-21)**: Created standalone, zero-toolchain pre-built install guides for Android ([SIMPLE_INSTALL_ANDROID.md](SIMPLE_INSTALL_ANDROID.md)) and iOS ([SIMPLE_INSTALL_IOS.md](SIMPLE_INSTALL_IOS.md)) alongside 1-click batch installer ([install-apk.bat](../android/install-apk.bat)).
 - **72-Hour Audit & Orchestration Unification (2026-07-17)**: E-00 ratchet wiring **completed** (ticket in `HANDOFF/done/`). Outbox flush sites 2+3 and DriftFrame custody wrapping completed.

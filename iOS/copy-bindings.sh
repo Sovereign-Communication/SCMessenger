@@ -2,8 +2,11 @@
 # Copy UniFFI Swift bindings to iOS project (canonical path only).
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SANITIZER="$ROOT_DIR/scripts/sanitize_generated_text.py"
+
 # Navigate to project root
-cd "$(dirname "$0")/.."
+cd "$ROOT_DIR"
 
 echo "=== Copying Swift bindings to iOS project ==="
 
@@ -32,20 +35,22 @@ echo "4. Copying files..."
 # canonical names expected by the Xcode project (api.swift, apiFFI.h, apiFFI.modulemap).
 swift_src="target/generated-sources/uniffi/swift"
 if [ -f "$swift_src/SCMessengerCore.swift" ]; then
-  awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$swift_src/SCMessengerCore.swift" > "$canonical_dir/api.swift"
-  awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$swift_src/scmessenger_core.h" > "$canonical_dir/apiFFI.h"
+  python3 "$SANITIZER" < "$swift_src/SCMessengerCore.swift" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/api.swift"
+  python3 "$SANITIZER" < "$swift_src/scmessenger_core.h" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.h"
   sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
     "$swift_src/scmessenger_core.modulemap" |
+    python3 "$SANITIZER" |
     awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.modulemap"
 elif [ -f "$swift_src/api.swift" ]; then
-  awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$swift_src/api.swift" > "$canonical_dir/api.swift"
-  awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$swift_src/apiFFI.h" > "$canonical_dir/apiFFI.h"
+  python3 "$SANITIZER" < "$swift_src/api.swift" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/api.swift"
+  python3 "$SANITIZER" < "$swift_src/apiFFI.h" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.h"
   sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
     "$swift_src/apiFFI.modulemap" |
+    python3 "$SANITIZER" |
     awk '{ sub(/[[:space:]]+$/, ""); print }' > "$canonical_dir/apiFFI.modulemap"
 else
   echo "error: no generated Swift bindings found in $swift_src"

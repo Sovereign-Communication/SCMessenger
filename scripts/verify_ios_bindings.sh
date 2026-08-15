@@ -4,12 +4,16 @@
 
 set -euo pipefail
 
-GENERATED_SWIFT="core/target/generated-sources/uniffi/swift/SCMessengerCore.swift"
-GENERATED_HEADER="core/target/generated-sources/uniffi/swift/scmessenger_core.h"
-GENERATED_MODULEMAP="core/target/generated-sources/uniffi/swift/scmessenger_core.modulemap"
-COMMITTED_SWIFT="iOS/SCMessenger/SCMessenger/Generated/api.swift"
-COMMITTED_HEADER="iOS/SCMessenger/SCMessenger/Generated/apiFFI.h"
-COMMITTED_MODULEMAP="iOS/SCMessenger/SCMessenger/Generated/apiFFI.modulemap"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SANITIZER="$ROOT_DIR/scripts/sanitize_generated_text.py"
+
+GENERATED_SWIFT="$ROOT_DIR/core/target/generated-sources/uniffi/swift/SCMessengerCore.swift"
+GENERATED_HEADER="$ROOT_DIR/core/target/generated-sources/uniffi/swift/scmessenger_core.h"
+GENERATED_MODULEMAP="$ROOT_DIR/core/target/generated-sources/uniffi/swift/scmessenger_core.modulemap"
+COMMITTED_SWIFT="$ROOT_DIR/iOS/SCMessenger/SCMessenger/Generated/api.swift"
+COMMITTED_HEADER="$ROOT_DIR/iOS/SCMessenger/SCMessenger/Generated/apiFFI.h"
+COMMITTED_MODULEMAP="$ROOT_DIR/iOS/SCMessenger/SCMessenger/Generated/apiFFI.modulemap"
 
 echo "Verifying iOS Swift bindings..."
 
@@ -32,12 +36,12 @@ verify_file() {
     local committed="$2"
     local generated="$3"
 
-    # UniFFI can emit trailing spaces on otherwise blank lines. Normalize only
-    # trailing whitespace so cosmetic generator drift cannot hide real API
-    # changes or keep an otherwise current binding set permanently red.
+    # UniFFI can emit trailing spaces on otherwise blank lines. Normalize trailing
+    # whitespace and strip repo-forbidden Unicode code points so cosmetic generator
+    # drift cannot hide real API changes or keep an otherwise current binding set permanently red.
     if ! diff -u \
-        <(awk '{ sub(/[[:space:]]+$/, ""); print }' "$committed") \
-        <(awk '{ sub(/[[:space:]]+$/, ""); print }' "$generated"); then
+        <(python3 "$SANITIZER" < "$committed" | awk '{ sub(/[[:space:]]+$/, ""); print }') \
+        <(python3 "$SANITIZER" < "$generated" | awk '{ sub(/[[:space:]]+$/, ""); print }'); then
         echo "ERROR: Generated $label is out of sync."
         echo "Regenerate with './iOS/copy-bindings.sh' and commit all three binding outputs together."
         return 1
@@ -48,10 +52,12 @@ verify_file "Swift binding" "$COMMITTED_SWIFT" "$GENERATED_SWIFT"
 verify_file "C header" "$COMMITTED_HEADER" "$GENERATED_HEADER"
 
 # The Xcode project deploys the generated C header as apiFFI.h. Compare the
-# module map after applying that one intentional deployment-name transform.
+# module map after applying that one intentional deployment-name transform and sanitization.
 if ! diff -u \
-    <(awk '{ sub(/[[:space:]]+$/, ""); print }' "$COMMITTED_MODULEMAP") \
+    <(python3 "$SANITIZER" < "$COMMITTED_MODULEMAP" |
+        awk '{ sub(/[[:space:]]+$/, ""); print }') \
     <(sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' "$GENERATED_MODULEMAP" |
+        python3 "$SANITIZER" |
         awk '{ sub(/[[:space:]]+$/, ""); print }'); then
     echo "ERROR: Generated module map is out of sync."
     echo "Regenerate with './iOS/copy-bindings.sh' and commit all three binding outputs together."

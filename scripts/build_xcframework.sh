@@ -11,10 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SANITIZER="$ROOT_DIR/scripts/sanitize_generated_text.py"
 
 DEVICE_TARGET="aarch64-apple-ios"
 SIM_TARGET="aarch64-apple-ios-sim"
 BUILD_DIR="$ROOT_DIR/target/xcframework"
+HEADERS_DIR="$BUILD_DIR/headers"
 OUTPUT="$ROOT_DIR/iOS/SCMessengerCore.xcframework"
 
 echo "Building Rust static libraries..."
@@ -37,24 +39,31 @@ mkdir -p "$IOS_GEN_DIR"
 # canonical bindings.  In particular, Xcode deploys apiFFI.h, while UniFFI's
 # raw module map refers to scmessenger_core.h.  A raw copy here causes the
 # subsequent binding verification step to fail in CI.
-awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$SWIFT_GEN_DIR/SCMessengerCore.swift" > "$IOS_GEN_DIR/api.swift"
-awk '{ sub(/[[:space:]]+$/, ""); print }' \
-    "$SWIFT_GEN_DIR/scmessenger_core.h" > "$IOS_GEN_DIR/apiFFI.h"
+python3 "$SANITIZER" < "$SWIFT_GEN_DIR/SCMessengerCore.swift" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$IOS_GEN_DIR/api.swift"
+python3 "$SANITIZER" < "$SWIFT_GEN_DIR/scmessenger_core.h" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$IOS_GEN_DIR/apiFFI.h"
 sed 's/header "scmessenger_core.h"/header "apiFFI.h"/' \
     "$SWIFT_GEN_DIR/scmessenger_core.modulemap" |
+    python3 "$SANITIZER" |
     awk '{ sub(/[[:space:]]+$/, ""); print }' > "$IOS_GEN_DIR/apiFFI.modulemap"
-
 echo "Creating xcframework..."
 
 rm -rf "$OUTPUT"
-mkdir -p "$BUILD_DIR"
+mkdir -p "$HEADERS_DIR"
+
+python3 "$SANITIZER" < "$SWIFT_GEN_DIR/SCMessengerCore.swift" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$HEADERS_DIR/SCMessengerCore.swift"
+python3 "$SANITIZER" < "$SWIFT_GEN_DIR/scmessenger_core.h" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$HEADERS_DIR/scmessenger_core.h"
+python3 "$SANITIZER" < "$SWIFT_GEN_DIR/scmessenger_core.modulemap" |
+    awk '{ sub(/[[:space:]]+$/, ""); print }' > "$HEADERS_DIR/scmessenger_core.modulemap"
 
 xcodebuild -create-xcframework \
     -library "$ROOT_DIR/target/$DEVICE_TARGET/release/libscmessenger_core.a" \
-    -headers "$ROOT_DIR/core/target/generated-sources/uniffi/swift/" \
+    -headers "$HEADERS_DIR" \
     -library "$ROOT_DIR/target/$SIM_TARGET/release/libscmessenger_core.a" \
-    -headers "$ROOT_DIR/core/target/generated-sources/uniffi/swift/" \
+    -headers "$HEADERS_DIR" \
     -output "$OUTPUT"
 
 rm -rf "$BUILD_DIR"
