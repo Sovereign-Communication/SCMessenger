@@ -62,7 +62,7 @@ bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see §6
 |---|---|---|
 | **#169** | tracking | **MERGE THIS FIRST.** Fixes BOTH new D1 blockers — `.kt`/`.kts`/`.md` eol=lf, and rustfmt on a test file #162 landed unformatted. Verified: 1852 → 0 flagged, `cargo fmt --all -- --check` exit 0 |
 | **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Cannot go green until #169 lands |
-| **#165** | tracking | Two transport defects fixed (see §4). 5 green, 1 in progress. **HELD** by the tracking freeze |
+| **#165** | tracking | **ALSO A D1 BLOCKER — not optional.** `macOS Native Tests` fails on #139 (exit 101) because #162's `u32::MAX` panic-safety test hits the `manager.rs:470` underflow this PR fixes. Adversarial review APPROVED, recorded as a comment on the PR |
 | #167 | tracking | Guard no longer fires on read-only `git`. **HELD.** Worth landing — the false positives are real; one fired on the CTO's own command 2026-08-16 |
 | #168 | tracking | Stale-gate tripwire + 90m dispatch timeout floor. 67/67 verified. **HELD.** See §9 |
 | #152 | main | Hygiene whitespace. **Likely redundant** once #139 carries #164 + #169 to main. Re-check, probably close |
@@ -89,8 +89,10 @@ it; it exists so the removal is a recorded decision. See §9.
 0. **#169 green → merge to tracking.** This is now step zero. Without it #139
    fails `Repository Hygiene Checks` AND `Rust Linting`. Merging it restarts
    #139's 29 checks; that cost is unavoidable and already priced in.
-1. **#165 stays HELD** until after the trunk merge — merging it to tracking
-   would restart #139 again for no D1 benefit.
+1. **#165 → tracking, alongside #169.** Merge both before letting #139 re-run,
+   so the trunk merge pays ONE CI cycle rather than two. #165 is a D1 blocker:
+   without it `macOS Native Tests` panics at exit 101. Its AGENTS.md rule 8
+   review is done and recorded on the PR.
 2. **#139 → main.** This is D1 + D5. The repaired `pr_scope.sh` will raise five
    blockers; four are resolved and must be named explicitly rather than silently
    overridden:
