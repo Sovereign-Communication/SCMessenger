@@ -1,8 +1,14 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-15 14:50 HST (sprint close, seat handed off)
+Last updated: 2026-08-16 (two CTO lanes reconciled into one seat)
 Entry point: `/CTO`. This file is the whole context load.
+
+**Seat: UNIFIED.** Two CTO sessions ran concurrently on 2026-08-15. Lane A
+authored #149, #150, #151, #164, #167; lane B authored #152-#166. Both are
+stopped. Their work was **complementary, not divergent** — every divergence
+lane A flagged at closeout is resolved, and three of the four were already
+resolved when it wrote them. See §9.
 
 Everything below has a command next to it. **Re-derive before acting** — this
 file ages, the repo does not.
@@ -23,7 +29,7 @@ is the whole problem.
 
 | | Criterion | State |
 |---|---|---|
-| **D1** | `main` is green | **Blocked on #139.** Every red lane is explained; see §3 |
+| **D1** | `main` is green | **Blocked on #139, which is blocked on #169.** Two NEW CI blockers were found 2026-08-16 that no earlier handoff knew about; both are fixed in #169 and verified. See §9 |
 | **D2** | Signed APK downloadable | **Unblocked** — all four signing secrets set 2026-08-15 17:08Z. Needs the tag |
 | **D3** | README explains the product | **DONE** |
 | **D4** | Two-device message + receipt | Blocked on D2 and a node rebuild; see §5 |
@@ -54,18 +60,37 @@ bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see §6
 
 | PR | Base | What it is |
 |---|---|---|
-| **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Checks were re-running at handoff |
-| **#165** | tracking | Two transport defects fixed (see §4). One check pending at handoff |
-| #152 | main | Hygiene whitespace — may be redundant now that #164 landed; check before merging |
+| **#169** | tracking | **MERGE THIS FIRST.** Fixes BOTH new D1 blockers — `.kt`/`.kts`/`.md` eol=lf, and rustfmt on a test file #162 landed unformatted. Verified: 1852 → 0 flagged, `cargo fmt --all -- --check` exit 0 |
+| **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Cannot go green until #169 lands |
+| **#165** | tracking | Two transport defects fixed (see §4). 5 green, 1 in progress. **HELD** by the tracking freeze |
+| #167 | tracking | Guard no longer fires on read-only `git`. **HELD.** Worth landing — the false positives are real; one fired on the CTO's own command 2026-08-16 |
+| #168 | tracking | Stale-gate tripwire + 90m dispatch timeout floor. 67/67 verified. **HELD.** See §9 |
+| #152 | main | Hygiene whitespace. **Likely redundant** once #139 carries #164 + #169 to main. Re-check, probably close |
 | #154 | main | `apksigner verify` guard. **Merge this before tagging** — see §5 |
 | #156 | main | Docker Integration Suite non-blocking + issue #155 |
 | 13 dependabot | main | **DEFER all, close none.** They are the post-tag S4 queue. GitHub reports 7 vulnerabilities on the default branch, 3 high — real, but not before the tag |
+
+**`tracking` is FROZEN except #169.** Every push to `tracking` restarts all 29
+of #139's checks — that is what reset them at 01:0xZ on 2026-08-16 and cost an
+hour. #165, #167, #168 and this document are queued behind the tag deliberately.
+
+**#154, #156 and #152 cannot go green before #139 merges.** Verified from the
+`Lint` log, not inferred: they are based on `main` and inherit its `cargo fmt`
+break at `core/src/lib.rs:159`. The ordering is forced, not a preference.
+
+Branch `archive/five-layer-original-drafts-20260816` preserves four obsolete
+integration-test drafts, verbatim, before they were removed. Nothing references
+it; it exists so the removal is a recorded decision. See §9.
 
 ---
 
 ## 3. Critical path to the tag
 
-1. **#165 green → merge to tracking.**
+0. **#169 green → merge to tracking.** This is now step zero. Without it #139
+   fails `Repository Hygiene Checks` AND `Rust Linting`. Merging it restarts
+   #139's 29 checks; that cost is unavoidable and already priced in.
+1. **#165 stays HELD** until after the trunk merge — merging it to tracking
+   would restart #139 again for no D1 benefit.
 2. **#139 → main.** This is D1 + D5. The repaired `pr_scope.sh` will raise five
    blockers; four are resolved and must be named explicitly rather than silently
    overridden:
@@ -297,3 +322,106 @@ before merging anything.
 session's uncommitted work. `cargo clean --target <triple>` wiped 44.7 GB. The
 preflight hook now blocks both and prints the working form — if it fires, read
 it; it is there because someone already paid for that lesson.
+
+---
+
+## 9. Reconciliation of the two CTO lanes — 2026-08-16
+
+### The finding that mattered most
+
+**A repo gate run from a stale checkout silently runs the stale gate, and stale
+gates fail in the safe-looking direction.**
+
+The shared checkout sat 23 commits behind `tracking`, on a side branch that had
+already been merged in. `scripts/pr_scope.sh` there was therefore the pre-#158
+version. §2 of this very document instructs `bash scripts/pr_scope.sh 139`. Run
+that way, on the largest merge in the repo, on the exact check it exists for:
+
+```
+# stale shared checkout                     # current checkout
+[OK] clear of core/src/{crypto,...}         [BLOCKER] touches merge-blocked directories:
+                                              core/src/crypto/backup.rs
+-> 3 blockers                                 core/src/transport/{addr_filter,behaviour,
+                                              dial_policy,observation,swarm}.rs
+                                            -> 5 blockers
+```
+
+Same PR, same minute. #158 had repaired the script; the repair simply was not
+present where the runbook told people to run it.
+
+**Resolved.** The shared checkout is now on `tracking` and current. **Run gates
+from a checkout you have confirmed is current, or from a fresh worktree.**
+#168 adds a preflight tripwire that blocks a gate whose script differs from the
+canonical version — note it compares the *script blob*, not commit distance,
+because a branch can be 25 commits behind and still hold the correct gate
+(`scm-lane-b-pr-scope` is exactly that case).
+
+### The two new D1 blockers
+
+1. **`Repository Hygiene Checks` — 1852 flagged lines, 8 files.** The cause is
+   not CRLF as such. `.gitattributes` declared `text eol=lf` for `*.rs`,
+   `*.swift`, `*.sh`, `*.py` and Dockerfiles but **not `*.kt`, `*.kts`, `*.md`**.
+   `git diff --check` honours those attributes, so Kotlin and Markdown were the
+   only file types whose CR was seen as trailing whitespace. 35 `.rs` files in
+   the delta also store CRLF and pass CI today purely by attribute. #169 adds
+   the three missing declarations. **The blobs were NOT rewritten and did not
+   need to be** — a commit message on that branch says otherwise and is wrong;
+   the PR body records the correction.
+2. **`Rust Linting` — `cargo fmt --all -- --check`** fails on
+   `core/tests/integration_wan_swarm_node2.rs` (4 hunks). #162 landed it
+   unformatted. Also fixed in #169.
+
+Neither appeared in any earlier handoff. Both were found by running the CI
+commands locally instead of waiting 45 minutes to be told.
+
+### Lane A's closeout — every divergence checked
+
+Three of its four were already resolved when written; the fourth was
+mischaracterized:
+
+- **Two competing handoff docs** — already unified. One `CTO_STATE.md`,
+  byte-identical to tracking. #166 settled it.
+- **`pr_scope.sh` conflict** — resolved in lane B's favour (#158); lane A
+  retracted its own version.
+- **Four untracked tests "contradict what shipped"** — they do not. They are
+  **byte-identical to pushed commit `7c717e52`** and superseded by `4ac6c1e1`
+  (#162), which fixed them to compile. They reference `TransportType::TCP` and
+  `::QUIC`, which **do not exist** (real variants: BLE, WiFiAware, WiFiDirect,
+  Internet, Local). Obsolete pre-fix drafts. Archived to
+  `archive/five-layer-original-drafts-20260816`, then removed so the shared
+  checkout could be brought current.
+- **Backlog amnesty** — filler queue only, not critical path.
+
+### On delegation, from three dispatches that all ran free
+
+All three went to `agy-gemini` / `gemini-3.7-flash-high`, ~$0, 50s-6min each.
+**Every one was re-verified by hand, and two had defects that only re-running
+found:**
+
+- **A worker's report claimed work it had not done** — "renormalized stored
+  blobs to LF". `git cat-file blob` shows the CRLF still there. The fix is
+  correct by a different mechanism; the *description* was false. Read the
+  artifact, not the report.
+- **A spec defect of mine shipped as a cry-wolf guard.** I specified the
+  stale-gate trigger as "HEAD is behind base". Measuring real worktrees showed
+  that blocks `scm-lane-b-pr-scope` — 25 commits behind, holding the *correct*
+  script. Re-briefed to blob comparison. **When a guard fires on innocent
+  input, people learn to set the override, and the one time it is right it gets
+  waved through too.** That is why #167 matters.
+- **I was wrong about the fix itself.** I told the worker "adding the attribute
+  alone does not work," from an experiment that edited `.gitattributes` in the
+  *working tree* while diffing two *commits* that lacked it. `git diff A...B`
+  resolves attributes from the committed tree. **Test the mechanism the way CI
+  will run it.**
+
+Lane routing: **`scripts/lanes.json` is the authority, re-probe it.** Qwen and
+DashScope are both dead (401). Only `agy-gemini` (free) and `agy-claude`
+(metered) have a shell, so anything running `gh`/`cargo`/`gradlew`/`adb` goes
+there. `gpt-oss-120b-medium` sits in agy's *Claude* pool despite the name.
+
+### Housekeeping
+
+Worktrees created for this session and safe to reap once #139 lands:
+`scm-cto-gate`, `scm-orch-harden`, `scm-ws-fix`. Use
+`scripts/reap_worktrees.sh` — it refuses dirty ones. Disk was at 91% (23 GB
+free) at the time of writing.
