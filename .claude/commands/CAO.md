@@ -57,8 +57,11 @@ unreviewed implementer.
 
 Direct HTTP lanes are workers, not controllers: use verified free Google AI
 Studio, NVIDIA NIM, and Groq by capability and observed quota. Use agy low/medium
-as worker overflow. Cerebras is a fixed USD 5 metered trial and remains disabled
-from automatic routing. Protect the shared Claude/Opus/GPT-OSS pool.
+as worker overflow. GitHub Copilot CLI is a bounded local worker/reviewer only:
+invoke it with exactly `--model auto`, never an explicit model, and grant no
+commit/push authority. Cerebras is a fixed USD 5 metered trial and remains
+disabled from automatic routing. Protect the shared Claude/Opus/GPT-OSS pool
+and preserve operator-reserved native GPT capacity for CAO oversight.
 
 Every substantive investigation, plan, implementation, and review gets a fresh
 manifest role, exact packet, isolated writer when applicable, dynamic resource
