@@ -94,7 +94,10 @@ free lanes first.
   already paid for.
 - agy needs `--dangerously-skip-permissions` for unattended runs.
 
-## scripts/delegate_task.py
+## scripts/delegate_task.py (deprecated)
+
+**DEPRECATED (2026-08-15).** Use `scripts/delegate.py` instead. The measured
+failure modes below still apply to existing callers of `delegate_task.py`:
 
 - **Full-file mode is unsafe past roughly 300-500 lines** -- models silently
   truncate. Compare `wc -l` against the response length; use `--mode diff`

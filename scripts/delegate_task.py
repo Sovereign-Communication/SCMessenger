@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+DEPRECATED (2026-08-15). Use scripts/delegate.py instead.
+delegate.py routes by measured lane properties, retries across lanes, and
+fails closed on unreadable output. This script's provider list still names
+lanes that return HTTP 401 (qwen, dashscope). Kept for existing callers
+only; do not use it for new work. See .claude/skills/delegate/SKILL.md.
+"""
 import argparse
 import urllib.request
 import json
