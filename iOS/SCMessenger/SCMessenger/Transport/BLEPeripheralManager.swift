@@ -43,6 +43,7 @@ final class BLEPeripheralManager: NSObject {
     // Advertising state
     private var isAdvertising = false
     private var isRotationEnabled = true
+    private var isStopping = false
 
     // Reassembly buffers per central
     private var reassemblyBuffers: [UUID: [Int: Data]] = [:]
@@ -75,16 +76,31 @@ final class BLEPeripheralManager: NSObject {
             return
         }
 
+        isStopping = false
         setupService()
         startPrivacyRotation()
     }
 
     func stopAdvertising() {
+        stopAdvertising(removeService: true)
+    }
+
+    private func stopAdvertising(removeService: Bool) {
         logger.info("Stopping BLE advertising")
+        isStopping = true
         peripheralManager.stopAdvertising()
-        peripheralManager.removeAllServices()
+        if removeService {
+            peripheralManager.removeAllServices()
+            meshService = nil
+            messageCharacteristic = nil
+            syncCharacteristic = nil
+            identityCharacteristic = nil
+        }
         rotationTimer?.invalidate()
         rotationTimer = nil
+        reconnectionTimers.values.forEach { $0.invalidate() }
+        reconnectionTimers.removeAll()
+        connectionRetries.removeAll()
         isAdvertising = false
     }
 
@@ -140,11 +156,8 @@ final class BLEPeripheralManager: NSObject {
     @discardableResult
     func sendDataToConnectedCentral(peerId: String, data: Data) -> Bool {
         if !Thread.isMainThread {
-            // Use async to avoid deadlock - result will be best-effort
-            DispatchQueue.main.async { [weak self] in
-                self?.sendDataToConnectedCentral(peerId: peerId, data: data)
-            }
-            return true // Optimistic return for async path
+            logger.warning("sendDataToConnectedCentral called off main queue; refusing optimistic success")
+            return false
         }
         guard let uuid = UUID(uuidString: peerId) else {
             logger.warning("sendDataToConnectedCentral: invalid UUID string \(peerId)")
@@ -281,12 +294,11 @@ final class BLEPeripheralManager: NSObject {
     @discardableResult
     private func sendDataToCentral(_ central: CBCentral, data: Data) -> Bool {
         if !Thread.isMainThread {
-            // Use async to avoid deadlock - result will be best-effort
-            DispatchQueue.main.async { [weak self] in
-                self?.sendDataToCentral(central, data: data)
-            }
-            return true // Optimistic return for async path
+            logger.warning("sendDataToCentral called off main queue; refusing optimistic success")
+            return false
         }
+
+        guard !data.isEmpty else { return false }
         
         // Validate central connection state
         guard validateCentralConnection(central) else {
@@ -346,11 +358,13 @@ final class BLEPeripheralManager: NSObject {
     }
 
     private func fragmentData(_ data: Data, mtu: Int) -> [Data] {
-        let maxChunk = min(512, mtu)
+        guard !data.isEmpty else { return [] }
+        let maxChunk = min(MeshBLEConstants.maxChunkSize, mtu)
         let maxPayload = maxChunk - 4
-        if maxPayload <= 0 { return [data] }
+        if maxPayload <= 0 { return [] }
 
         let totalFragments = Int(ceil(Double(data.count) / Double(maxPayload)))
+        guard totalFragments <= Int(UInt16.max) else { return [] }
         var fragments: [Data] = []
 
         for i in 0..<totalFragments {
@@ -450,8 +464,8 @@ final class BLEPeripheralManager: NSObject {
 
     private func rotateIdentity() {
         logger.info("Rotating identity...")
-        stopAdvertising()
-        isAdvertising = false // Ensure we clear state so beginAdvertising succeeds
+        stopAdvertising(removeService: false)
+        isStopping = false
 
         // Short delay to let hardware settle
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -537,22 +551,36 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
         let totalFrags = Int(data[0]) | (Int(data[1]) << 8)
         let fragIndex = Int(data[2]) | (Int(data[3]) << 8)
+        guard totalFrags > 0, fragIndex < totalFrags else {
+            logger.warning("Invalid BLE fragment header from \(centralId)")
+            reassemblyBuffers.removeValue(forKey: centralId)
+            expectedFragments.removeValue(forKey: centralId)
+            return
+        }
         let payload = data.subdata(in: 4..<data.count)
 
         if fragIndex == 0 {
             // New message starting - clear any stale fragments from previous failed attempts
             reassemblyBuffers[centralId] = [0: payload]
+            expectedFragments[centralId] = totalFrags
             if totalFrags > 1 {
                 appendRepositoryDiagnostic("ble_rx_start total=\(totalFrags) from=\(centralId.uuidString.prefix(8))")
             }
         } else {
+            guard expectedFragments[centralId] == totalFrags else {
+                logger.warning("BLE fragment total changed mid-frame from \(centralId)")
+                reassemblyBuffers.removeValue(forKey: centralId)
+                expectedFragments.removeValue(forKey: centralId)
+                return
+            }
             var buffer = reassemblyBuffers[centralId] ?? [:]
             buffer[fragIndex] = payload
             reassemblyBuffers[centralId] = buffer
         }
 
         let currentCount = reassemblyBuffers[centralId]?.count ?? 0
-        if currentCount == totalFrags {
+        if currentCount == totalFrags,
+           reassemblyBuffers[centralId]?[0] != nil {
             var completeData = Data()
             let buffer = reassemblyBuffers[centralId] ?? [:]
             for i in 0..<totalFrags {
@@ -564,6 +592,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
                 }
             }
             reassemblyBuffers.removeValue(forKey: centralId)
+            expectedFragments.removeValue(forKey: centralId)
 
             logger.info("Reassembled complete \(isSync ? "sync" : "message") (\(completeData.count) bytes) from \(centralId)")
             appendRepositoryDiagnostic(
@@ -600,10 +629,9 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier.uuidString) subscribed to \(characteristic.uuid.shortUUID)")
-        // Ensure we only record subscription for the message sync characteristic (or both)
-        if characteristic.uuid == MeshBLEConstants.messageCharUUID {
-            logger.info("==> ANDROID CENTRAL \(central.identifier.uuidString) IS NOW SUBSCRIBED TO MESSAGE CHAR! This gives us the target to send data back over!")
-        }
+        guard characteristic.uuid == MeshBLEConstants.messageCharUUID else { return }
+        isStopping = false
+        logger.info("Central \(central.identifier.uuidString) subscribed to message characteristic")
         appendRepositoryDiagnostic("ble_peripheral_subscribed central=\(central.identifier)")
         if !subscribedCentrals.contains(where: { $0.identifier == central.identifier }) {
             subscribedCentrals.append(central)
@@ -612,13 +640,16 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier) unsubscribed from \(characteristic.uuid.shortUUID)")
+        guard characteristic.uuid == MeshBLEConstants.messageCharUUID else { return }
         subscribedCentrals.removeAll(where: { $0.identifier == central.identifier })
         pendingNotifications.removeAll(where: { $0.central.identifier == central.identifier })
         
         // Attempt reconnection for unintentional unsubscriptions
         // In a real implementation, you might want to distinguish between
         // intentional and unintentional unsubscriptions
-        attemptReconnection(to: central)
+        if !isStopping {
+            attemptReconnection(to: central)
+        }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {

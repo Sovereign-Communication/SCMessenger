@@ -24,6 +24,7 @@ final class ChatViewModel {
         self.repository = repository
         loadMessages()
         subscribeToNewMessages()
+        subscribeToMessageEvents()
     }
 
     func loadMessages() {
@@ -115,18 +116,39 @@ final class ChatViewModel {
 
     private var reloadDebounceTask: Task<Void, Never>?
 
+    private func scheduleReload() {
+        reloadDebounceTask?.cancel()
+        reloadDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            self?.loadMessages()
+        }
+    }
+
     private func subscribeToNewMessages() {
         repository?.messageUpdates
             .filter { [weak self] message in
                 message.peerId == self?.conversation.peerId
             }
             .sink { [weak self] _ in
-                // Debounce: cancel any pending reload, schedule a new one 80ms out
-                self?.reloadDebounceTask?.cancel()
-                self?.reloadDebounceTask = Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 80_000_000)
-                    guard !Task.isCancelled else { return }
-                    self?.loadMessages()
+                self?.scheduleReload()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func subscribeToMessageEvents() {
+        MeshEventBus.shared.messageEvents
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case .sent, .delivered, .failed:
+                    // The event ID is authoritative and may differ from the
+                    // optimistic UUID used by the chat UI. Reload the current
+                    // conversation so the repository record is reflected.
+                    self.scheduleReload()
+                case .received:
+                    break
                 }
             }
             .store(in: &cancellables)

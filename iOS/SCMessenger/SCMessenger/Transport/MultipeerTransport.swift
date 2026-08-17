@@ -38,6 +38,7 @@ final class MultipeerTransport: NSObject {
 
     // Connection state
     private var connectedPeers: Set<MCPeerID> = []
+    private var peerIdsByDisplayName: [String: String] = [:]
     private var connectingPeerNames: Set<String> = []
     private var isAdvertising: Bool = false
     private var isBrowsing: Bool = false
@@ -89,6 +90,31 @@ final class MultipeerTransport: NSObject {
         let displayName: String = identitySnippetForDisplayName()
         peerID = MCPeerID(displayName: displayName)
         logger.info("Multipeer peer ID: \(displayName)")
+    }
+
+    private func discoveryInfo() -> [String: String]? {
+        guard Thread.isMainThread else { return nil }
+        return MainActor.assumeIsolated {
+            guard let identity = meshRepository?.getFullIdentityInfo(),
+                  let peerId = identity.libp2pPeerId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !peerId.isEmpty else {
+                return nil
+            }
+
+            var info: [String: String] = ["peer_id": peerId, "version": "1.0"]
+            if let publicKey = identity.publicKeyHex?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !publicKey.isEmpty {
+                info["public_key"] = publicKey
+            }
+            return info
+        }
+    }
+
+    private func correlatedRoutePeerId(for peer: MCPeerID) -> String? {
+        guard let peerId = peerIdsByDisplayName[peer.displayName] else { return nil }
+        let normalizedPeerId = PeerIdValidator.normalize(peerId)
+        guard PeerIdValidator.isLibp2pPeerId(normalizedPeerId) else { return nil }
+        return normalizedPeerId
     }
 
     private func setupSession() {
@@ -210,7 +236,7 @@ final class MultipeerTransport: NSObject {
 
         advertiser = MCNearbyServiceAdvertiser(
             peer: peerID,
-            discoveryInfo: nil,
+            discoveryInfo: discoveryInfo(),
             serviceType: serviceType
         )
         advertiser?.delegate = self
@@ -257,7 +283,9 @@ final class MultipeerTransport: NSObject {
     }
 
     func sendData(toPeerId peerId: String, data: Data) throws {
-        guard let connectedPeer = connectedPeers.first(where: { $0.displayName == peerId }) else {
+        guard let connectedPeer = connectedPeers.first(where: {
+            $0.displayName == peerId || peerIdsByDisplayName[$0.displayName] == peerId
+        }) else {
             logger.debug("Peer \(peerId) is not connected on Multipeer")
             throw MultipeerError.notConnected
         }
@@ -295,7 +323,9 @@ final class MultipeerTransport: NSObject {
     }
 
     func hasConnection(_ peerId: String) -> Bool {
-        connectedPeers.contains(where: { $0.displayName == peerId })
+        connectedPeers.contains(where: {
+            $0.displayName == peerId || peerIdsByDisplayName[$0.displayName] == peerId
+        })
     }
 
     func diagnosticsSnapshot() -> DiagnosticsSnapshot {
@@ -345,7 +375,7 @@ extension MultipeerTransport: MCSessionDelegate {
         }
     }
 
-    func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+    private func handleSessionState(peerID: MCPeerID, state: MCSessionState) {
         logger.info("Peer \(peerID.displayName) state changed: \(state.rawValue)")
         let peerName: String = peerID.displayName
 
@@ -357,8 +387,14 @@ extension MultipeerTransport: MCSessionDelegate {
             appendRepositoryDiagnostic("multipeer_connected id=\(peerID.displayName)")
             // Clear any pending reconnect counter — peer is healthy again
             reconnectAttempts.removeValue(forKey: peerID.displayName)
-            DispatchQueue.main.async {
-                MeshEventBus.shared.peerEvents.send(.connected(peerId: peerID.displayName))
+            if let routePeerId = correlatedRoutePeerId(for: peerID) {
+                let repo = meshRepository
+                Task { @MainActor in
+                    repo?.handleTransportPeerDiscovered(peerId: routePeerId)
+                }
+                MeshEventBus.shared.peerEvents.send(.connected(peerId: routePeerId))
+            } else {
+                logger.warning("Multipeer peer \(peerName) connected without a valid libp2p peer_id correlation")
             }
 
         case .connecting:
@@ -377,8 +413,10 @@ extension MultipeerTransport: MCSessionDelegate {
             }
             clearInviteTracking(for: peerName)
             appendRepositoryDiagnostic("multipeer_disconnected id=\(peerID.displayName)")
-            DispatchQueue.main.async {
-                MeshEventBus.shared.peerEvents.send(.disconnected(peerId: peerID.displayName))
+            if let routePeerId = correlatedRoutePeerId(for: peerID) {
+                MeshEventBus.shared.peerEvents.send(.disconnected(peerId: routePeerId))
+            } else {
+                logger.debug("Multipeer peer \(peerName) disconnected without a valid libp2p peer_id correlation")
             }
             // Attempt to re-establish the connection with exponential backoff
             scheduleReconnect(for: peerID)
@@ -388,10 +426,27 @@ extension MultipeerTransport: MCSessionDelegate {
         }
     }
 
+    func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        guard !Thread.isMainThread else {
+            handleSessionState(peerID: peerID, state: state)
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.handleSessionState(peerID: peerID, state: state)
+        }
+    }
+
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         logger.debug("Received \(data.count) bytes from \(peerID.displayName)")
         DispatchQueue.main.async { [weak self] in
-            self?.meshRepository?.onMultipeerDataReceived(peerId: peerID.displayName, data: data)
+            guard let self else { return }
+            guard let routePeerId = self.correlatedRoutePeerId(for: peerID) else {
+                self.logger.warning("Dropping Multipeer data from \(peerID.displayName) without a valid libp2p peer_id correlation")
+                return
+            }
+            Task { @MainActor [weak self] in
+                self?.meshRepository?.onMultipeerDataReceived(peerId: routePeerId, data: data)
+            }
         }
     }
 }
@@ -423,19 +478,46 @@ extension MultipeerTransport: MCNearbyServiceAdvertiserDelegate {
 // MARK: - MCNearbyServiceBrowserDelegate
 
 extension MultipeerTransport: MCNearbyServiceBrowserDelegate {
-    func browser(
-        _ browser: MCNearbyServiceBrowser,
+    private func handleFoundPeer(
         foundPeer peerID: MCPeerID,
         withDiscoveryInfo info: [String: String]?
     ) {
         logger.info("Found peer: \(peerID.displayName)")
 
+        if let advertisedPeerId = info?["peer_id"] {
+            let normalizedPeerId = PeerIdValidator.normalize(advertisedPeerId)
+            if PeerIdValidator.isLibp2pPeerId(normalizedPeerId) {
+                peerIdsByDisplayName[peerID.displayName] = normalizedPeerId
+                let repo = meshRepository
+                Task { @MainActor in
+                    repo?.handleTransportPeerDiscovered(peerId: normalizedPeerId)
+                }
+                MeshEventBus.shared.peerEvents.send(.discovered(peerId: normalizedPeerId))
+            } else {
+                peerIdsByDisplayName.removeValue(forKey: peerID.displayName)
+                logger.warning("Multipeer peer \(peerID.displayName) did not advertise a valid libp2p peer_id")
+            }
+        } else {
+            peerIdsByDisplayName.removeValue(forKey: peerID.displayName)
+            logger.warning("Multipeer peer \(peerID.displayName) did not advertise a valid libp2p peer_id")
+        }
+
         // Auto-invite with debounce/in-flight guardrails to prevent invitation storms.
         invitePeerIfAllowed(peerID, source: "discovery")
         appendRepositoryDiagnostic("multipeer_discovered id=\(peerID.displayName)")
+    }
 
-        DispatchQueue.main.async {
-            MeshEventBus.shared.peerEvents.send(.discovered(peerId: peerID.displayName))
+    func browser(
+        _ browser: MCNearbyServiceBrowser,
+        foundPeer peerID: MCPeerID,
+        withDiscoveryInfo info: [String: String]?
+    ) {
+        guard !Thread.isMainThread else {
+            handleFoundPeer(foundPeer: peerID, withDiscoveryInfo: info)
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.handleFoundPeer(foundPeer: peerID, withDiscoveryInfo: info)
         }
     }
 

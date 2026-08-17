@@ -1,0 +1,11 @@
+{
+  "attempt": 1,
+  "elapsed_sec": 0.5,
+  "error": "request did not complete",
+  "heartbeat_at": "2026-08-11T05:19:09Z",
+  "mode": "batch",
+  "phase": "request_failed",
+  "scope": "high_friction",
+  "status": 0,
+  "units": 2
+}

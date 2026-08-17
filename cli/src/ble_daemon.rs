@@ -1,7 +1,13 @@
-//! Best-effort Bluetooth adapter discovery via btleplug (desktop CLI only).
-//! Full GATT advertising/scanning and Drift→RPC proxy are follow-on work.
+//! Bluetooth central capability and scan lifecycle for the desktop CLI.
 
-use btleplug::api::Manager as _;
+use btleplug::api::{
+    Central, CentralEvent, CentralState, Manager as _, Peripheral as _, ScanFilter,
+};
+use std::collections::HashSet;
+use uuid::Uuid;
+
+/// SCMessenger's primary BLE GATT service (DF01).
+const GATT_SERVICE_UUID: u128 = 0x0000_DF01_0000_1000_8000_0080_5F9B_34FB;
 
 /// Log whether the local Bluetooth stack exposes at least one adapter.
 /// On Windows, handles adapter not present and permission denied cases gracefully.
@@ -71,6 +77,8 @@ pub enum BleError {
     ManagerInitFailed(String),
     /// Operation timed out
     Timeout,
+    /// The requested BLE role or operation is not exposed by this backend.
+    Unsupported(String),
     /// Generic BLE error
     Other(String),
 }
@@ -83,6 +91,7 @@ impl std::fmt::Display for BleError {
             BleError::AdapterNotPowered => write!(f, "Bluetooth adapter not powered on"),
             BleError::ManagerInitFailed(e) => write!(f, "Failed to initialize BLE manager: {}", e),
             BleError::Timeout => write!(f, "BLE operation timed out"),
+            BleError::Unsupported(e) => write!(f, "BLE capability unsupported: {}", e),
             BleError::Other(e) => write!(f, "BLE error: {}", e),
         }
     }
@@ -133,9 +142,7 @@ impl Default for BleConfig {
     }
 }
 
-/// BLE daemon for Windows CLI with graceful error handling.
-/// Not yet constructed/wired outside this module - Windows BLE integration
-/// is still pending compared to Android's BLE transport.
+/// BLE daemon for the desktop CLI with graceful error handling.
 #[allow(dead_code)]
 pub struct BleDaemon {
     config: BleConfig,
@@ -195,7 +202,12 @@ impl BleDaemon {
             }
 
             self.adapters = adapters;
-            self.status = BleStatus::Available(self.get_adapter_info());
+            let adapter_info = self.get_adapter_info().await;
+            if !adapter_info.iter().any(|adapter| adapter.is_powered) {
+                self.status = BleStatus::Unavailable(BleError::AdapterNotPowered);
+                return Err(BleError::AdapterNotPowered);
+            }
+            self.status = BleStatus::Available(adapter_info);
             Ok(())
         }
 
@@ -211,16 +223,22 @@ impl BleDaemon {
     }
 
     /// Get information about all detected adapters.
-    fn get_adapter_info(&self) -> Vec<BleAdapterInfo> {
-        self.adapters
-            .iter()
-            .map(|_| BleAdapterInfo {
-                name: Some("BLE Adapter".to_string()),
+    async fn get_adapter_info(&self) -> Vec<BleAdapterInfo> {
+        let mut info = Vec::with_capacity(self.adapters.len());
+        for adapter in &self.adapters {
+            let state = adapter
+                .adapter_state()
+                .await
+                .unwrap_or(CentralState::Unknown);
+            let name = adapter.adapter_info().await.ok();
+            info.push(BleAdapterInfo {
+                name,
                 address: None,
-                is_powered: true,
-                supports_le: true,
-            })
-            .collect()
+                is_powered: state == CentralState::PoweredOn,
+                supports_le: state == CentralState::PoweredOn,
+            });
+        }
+        info
     }
 
     /// Check if BLE is available and operational.
@@ -233,9 +251,9 @@ impl BleDaemon {
         &self.status
     }
 
-    /// Scan for BLE advertisements.
-    /// Handles the case where the BLE adapter is not present or permission is denied.
-    pub async fn scan_for_advertisements(&mut self, _duration_ms: u64) -> BleResult<Vec<String>> {
+    /// Scan for real SCMessenger BLE advertisements for the requested duration.
+    /// Returned values are the platform's peripheral addresses, not fabricated entries.
+    pub async fn scan_for_advertisements(&mut self, duration_ms: u64) -> BleResult<Vec<String>> {
         if !self.is_available() {
             return Err(BleError::Other(format!(
                 "BLE not available: {:?}",
@@ -245,10 +263,74 @@ impl BleDaemon {
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         {
-            Ok(vec![
-                "Scan result (simulated)".to_string();
-                self.adapters.len()
-            ])
+            let service = Uuid::from_u128(GATT_SERVICE_UUID);
+            let adapter = self.adapters.first().ok_or(BleError::NoAdapter)?;
+            let mut events = adapter
+                .events()
+                .await
+                .map_err(|e| BleError::Other(format!("BLE events unavailable: {}", e)))?;
+
+            adapter
+                .start_scan(ScanFilter {
+                    services: vec![service],
+                })
+                .await
+                .map_err(|e| BleError::Other(format!("BLE scan start failed: {}", e)))?;
+
+            let mut found = HashSet::new();
+            let scan = async {
+                while let Some(event) = futures_util::StreamExt::next(&mut events).await {
+                    let (id, event_matches) = match event {
+                        CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => {
+                            (id, false)
+                        }
+                        CentralEvent::ServicesAdvertisement { id, services } => {
+                            (id, services.contains(&service))
+                        }
+                        CentralEvent::ServiceDataAdvertisement { id, service_data } => {
+                            (id, service_data.contains_key(&service))
+                        }
+                        CentralEvent::ManufacturerDataAdvertisement { .. }
+                        | CentralEvent::DeviceConnected(_)
+                        | CentralEvent::DeviceDisconnected(_)
+                        | CentralEvent::StateUpdate(_) => continue,
+                    };
+
+                    let peripheral = match adapter.peripheral(&id).await {
+                        Ok(peripheral) => peripheral,
+                        Err(e) => {
+                            tracing::debug!("BLE peripheral lookup failed during scan: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let is_scm = event_matches
+                        || peripheral
+                            .properties()
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|properties| {
+                                properties.services.contains(&service)
+                                    || properties.service_data.contains_key(&service)
+                            })
+                            .unwrap_or(false);
+                    if is_scm {
+                        found.insert(peripheral.address().to_string());
+                    }
+                }
+            };
+
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(duration_ms), scan).await;
+
+            adapter
+                .stop_scan()
+                .await
+                .map_err(|e| BleError::Other(format!("BLE scan stop failed: {}", e)))?;
+
+            let mut results: Vec<_> = found.into_iter().collect();
+            results.sort_unstable();
+            Ok(results)
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
@@ -259,30 +341,15 @@ impl BleDaemon {
         }
     }
 
-    /// Advertise a service via BLE.
-    /// On Windows, this handles:
-    /// - Adapter not present (returns error)
-    /// - Permission denied (returns graceful error)
-    /// - Bluetooth disabled (returns graceful error)
+    /// Report the peripheral-role capability honestly.
+    ///
+    /// btleplug exposes the desktop central API used above, not a portable local
+    /// GATT server. Windows uses the separate native WinRT path in `ble_windows`;
+    /// macOS must not claim that advertising has started.
     pub async fn advertise_service(&mut self, _service_uuid: &str, _data: &[u8]) -> BleResult<()> {
-        if !self.is_available() {
-            return Err(BleError::Other(format!(
-                "BLE not available: {:?}",
-                self.status()
-            )));
-        }
-
-        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-        {
-            Ok(())
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        {
-            Err(BleError::Other(
-                "BLE advertising not supported on this platform".to_string(),
-            ))
-        }
+        Err(BleError::Unsupported(
+            "btleplug does not provide desktop peripheral GATT advertising; use the native Windows path where available".to_string(),
+        ))
     }
 
     /// Gracefully shutdown the BLE daemon.
@@ -304,11 +371,19 @@ pub async fn is_ble_available() -> bool {
     {
         match btleplug::platform::Manager::new().await {
             Ok(manager) => match manager.adapters().await {
-                Ok(adapters) => !adapters.is_empty(),
+                Ok(adapters) => {
+                    let mut powered_on = false;
+                    for adapter in adapters {
+                        if matches!(adapter.adapter_state().await, Ok(CentralState::PoweredOn)) {
+                            powered_on = true;
+                            break;
+                        }
+                    }
+                    powered_on
+                }
                 Err(e) => {
-                    let err_str = e.to_string().to_lowercase();
-                    // Don't fail on permission errors - they're common on Windows
-                    !err_str.contains("not found") && !err_str.contains("no device")
+                    tracing::debug!("btleplug adapter availability check failed: {}", e);
+                    false
                 }
             },
             Err(_) => false,

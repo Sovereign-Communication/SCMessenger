@@ -23,6 +23,8 @@ struct ContactsListView: View {
     @State private var editingContact: Contact? = nil
     @State private var editNickname: String = ""
     @State private var contactToVerify: Contact? = nil
+    @State private var contactToBlock: Contact? = nil
+    @State private var actionError: String?
 
     var body: some View {
         List {
@@ -76,6 +78,12 @@ struct ContactsListView: View {
                             pendingDeleteDisplayName = conversationDisplayName(for: contact)
                         } label: {
                             Label("Delete", systemImage: "trash")
+                        }
+
+                        Button(role: .destructive) {
+                            contactToBlock = contact
+                        } label: {
+                            Label("Block Contact", systemImage: "hand.raised.fill")
                         }
                     }
                 }
@@ -155,8 +163,13 @@ struct ContactsListView: View {
             actions: {
                 Button("Delete", role: .destructive) {
                     guard let peerId = pendingDeletePeerId else { return }
-                    try? viewModel?.removeContact(peerId: peerId)
-                    viewModel?.loadContacts()
+                    do {
+                        try viewModel?.removeContact(peerId: peerId)
+                        viewModel?.loadContacts()
+                        actionError = nil
+                    } catch {
+                        actionError = "Failed to delete contact: \(error.localizedDescription)"
+                    }
                     pendingDeletePeerId = nil
                 }
                 Button("Cancel", role: .cancel) {
@@ -178,8 +191,13 @@ struct ContactsListView: View {
                 Button("Save") {
                     guard let contact = editingContact else { return }
                     let trimmed = editNickname.trimmingCharacters(in: .whitespacesAndNewlines)
-                    try? viewModel?.setLocalNickname(peerId: contact.peerId, nickname: trimmed.isEmpty ? nil : trimmed)
-                    viewModel?.loadContacts()
+                    do {
+                        try viewModel?.setLocalNickname(peerId: contact.peerId, nickname: trimmed.isEmpty ? nil : trimmed)
+                        viewModel?.loadContacts()
+                        actionError = nil
+                    } catch {
+                        actionError = "Failed to save nickname: \(error.localizedDescription)"
+                    }
                     editingContact = nil
                 }
                 Button("Cancel", role: .cancel) {
@@ -206,6 +224,45 @@ struct ContactsListView: View {
                 VerifySafetyNumberSheet(peerId: peerId, viewModel: viewModel)
             }
         }
+        .confirmationDialog(
+            "Block Contact?",
+            isPresented: Binding(
+                get: { contactToBlock != nil },
+                set: { if !$0 { contactToBlock = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Block", role: .destructive) {
+                guard let contact = contactToBlock else { return }
+                do {
+                    try repository.blockPeer(peerId: contact.peerId, reason: "blocked_from_contacts")
+                    actionError = nil
+                } catch {
+                    actionError = "Failed to block contact: \(error.localizedDescription)"
+                }
+                contactToBlock = nil
+            }
+            Button("Cancel", role: .cancel) {
+                contactToBlock = nil
+            }
+        } message: {
+            if let contact = contactToBlock {
+                Text("Messages from \(conversationDisplayName(for: contact)) will be blocked. You can unblock them from Settings.")
+            }
+        }
+        .alert(
+            "Contact Action Failed",
+            isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) { actionError = nil }
+            },
+            message: {
+                Text(actionError ?? "Unknown contact action error")
+            }
+        )
     }
 
     private func quickConnect(_ peer: NearbyPeer) {

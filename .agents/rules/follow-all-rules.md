@@ -11,7 +11,7 @@ This document serves as the **Single Source of Truth** for all development opera
 ##  1. Banned & Forbidden Behaviors (P0 - Non-Negotiable)
 
 *   **Only Lines of Code (LOC) Estimates**: Never use time-based estimates, durations, or any other estimation format. Use LOC magnitudes instead (e.g., *“~50 LOC change”*).
-*   **No Shell Commands for File Editing**: Never use shell/terminal commands (such as `echo`, `cat`, `sed`, `awk`, etc.) to write or edit file contents. Always use native file edit APIs/tools.
+*   **No Shell Commands for File Editing** (except prime-agent): Never use shell/terminal commands (such as `echo`, `cat`, `sed`, `awk`, etc.) to write or edit file contents. Always use native file edit APIs/tools.
 *   **No Local/System Temp Paths**: Never use system `/tmp`, `/var/tmp`, or `/dev/shm` directories. All scripts and operations must use repo-local `tmp/` paths (such as `tmp/session_logs/`, `tmp/work_files/`, `tmp/audit_reports/`).
 *   **No Committed Build Artifacts**: Never commit log files, process IDs, or device captures to Git. Verify there are no committed artifacts with: `git ls-files "*.log" "*.pid" "*.logcat"`.
 *   **No Hardcoded Paths or IDs**: Hardcoding absolute system paths, home directory shortcuts (`~`), or device UDIDs/serials in scripts or configurations is strictly forbidden. Use relative paths derived from script location and dynamic device detection.

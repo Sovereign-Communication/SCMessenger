@@ -422,6 +422,28 @@ final class SettingsViewModel {
         return repository?.getNatStatus() ?? "unknown"
     }
 
+    // MARK: - Blocked Contacts
+
+    var blockedPeers: [BlockedIdentity] = []
+
+    func loadBlockedPeers() {
+        do {
+            blockedPeers = try repository?.listBlockedPeers() ?? []
+            error = nil
+        } catch {
+            self.error = "Failed to load blocked contacts: \(error.localizedDescription)"
+        }
+    }
+
+    func unblockPeer(peerId: String) {
+        do {
+            try repository?.unblockPeer(peerId: peerId)
+            loadBlockedPeers()
+        } catch {
+            self.error = "Failed to unblock contact: \(error.localizedDescription)"
+        }
+    }
+
     func exportDiagnostics() -> String {
         return repository?.exportDiagnostics() ?? "{}"
     }

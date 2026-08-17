@@ -75,6 +75,14 @@ struct SettingsView: View {
                     MeshSettingsView()
                 }
 
+                NavigationLink("Join Mesh Topic") {
+                    JoinMeshView()
+                }
+
+                NavigationLink("Blocked Contacts") {
+                    BlockedContactsView()
+                }
+
                 NavigationLink("Privacy Settings") {
                     PrivacySettingsView()
                 }
@@ -386,6 +394,65 @@ struct SettingsView: View {
             } catch {
                 identitySetupError = "Failed to create identity: \(error.localizedDescription)"
             }
+        }
+    }
+}
+
+@MainActor
+struct BlockedContactsView: View {
+    @Environment(MeshRepository.self) private var repository
+    @State private var viewModel: SettingsViewModel?
+
+    var body: some View {
+        List {
+            if let error = viewModel?.error {
+                Section {
+                    Text(error)
+                        .font(Theme.bodySmall)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            if let blockedPeers = viewModel?.blockedPeers, blockedPeers.isEmpty {
+                ContentUnavailableView(
+                    "No Blocked Contacts",
+                    systemImage: "hand.raised",
+                    description: Text("Contacts you block will appear here.")
+                )
+            } else {
+                ForEach(viewModel?.blockedPeers ?? [], id: \.peerId) { blocked in
+                    HStack(spacing: Theme.spacingMedium) {
+                        Image(systemName: "hand.raised.fill")
+                            .foregroundStyle(.red)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(repository.displayNameForPeer(peerId: blocked.peerId))
+                                .font(Theme.titleMedium)
+                            Text(blocked.peerId.prefix(16))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(Theme.onSurfaceVariant)
+                            if let reason = blocked.reason, !reason.isEmpty {
+                                Text(reason)
+                                    .font(Theme.bodySmall)
+                                    .foregroundStyle(Theme.onSurfaceVariant)
+                            }
+                        }
+                        Spacer()
+                        Button("Unblock") {
+                            viewModel?.unblockPeer(peerId: blocked.peerId)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle("Blocked Contacts")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if viewModel == nil {
+                viewModel = SettingsViewModel(repository: repository)
+            }
+            viewModel?.loadBlockedPeers()
         }
     }
 }

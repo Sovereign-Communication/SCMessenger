@@ -12,6 +12,7 @@ use btleplug::api::{
 use btleplug::platform::{Manager, Peripheral};
 use futures_util::StreamExt;
 use scmessenger_core::drift::frame::{DriftFrame, FrameType};
+use scmessenger_core::transport::ble::{GattFragmentHeader, GattReassembler};
 use scmessenger_core::wasm_support::rpc::{notif_message_received, MessageReceivedParams};
 use scmessenger_core::IronCore;
 use std::collections::HashMap;
@@ -41,6 +42,10 @@ use crate::server::{UiEvent, UiOutbound};
 
 /// SCM GATT primary service UUID (must match `core/src/transport/ble/gatt.rs`).
 const GATT_SERVICE_UUID: u128 = 0x0000_DF01_0000_1000_8000_0080_5F9B_34FB;
+const MAX_CONNECT_ATTEMPTS: u32 = 3;
+const CONNECT_BACKOFF_MS: u64 = 250;
+const MAX_TRACKED_FAILURES: u32 = 6;
+const MAX_INBOUND_FRAGMENTS: u16 = 1024;
 
 static ACTIVE_PEERS: OnceLock<std::sync::Mutex<HashMap<String, TrackingPeripheral>>> =
     OnceLock::new();
@@ -130,18 +135,111 @@ impl Drop for PeerRegistryGuard {
     }
 }
 
+async fn connect_with_backoff(peripheral: &Peripheral, addr: &str) -> Result<(), String> {
+    for attempt in 0..MAX_CONNECT_ATTEMPTS {
+        let is_connected = match peripheral.is_connected().await {
+            Ok(connected) => connected,
+            Err(e) => {
+                tracing::debug!("BLE connection state unavailable for {}: {}", addr, e);
+                false
+            }
+        };
+        if is_connected {
+            return Ok(());
+        }
+
+        match peripheral.connect().await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt + 1 < MAX_CONNECT_ATTEMPTS => {
+                let delay_ms = CONNECT_BACKOFF_MS << attempt;
+                tracing::debug!(
+                    "BLE connect attempt {}/{} failed for {}: {}; retrying in {}ms",
+                    attempt + 1,
+                    MAX_CONNECT_ATTEMPTS,
+                    addr,
+                    e,
+                    delay_ms
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "BLE connect failed for {} after {} attempts: {}",
+                    addr, MAX_CONNECT_ATTEMPTS, e
+                ));
+            }
+        }
+    }
+
+    Err(format!(
+        "BLE connect failed for {} after {} attempts",
+        addr, MAX_CONNECT_ATTEMPTS
+    ))
+}
+
+#[derive(Default)]
+struct IngressReassembly {
+    total_fragments: Option<u16>,
+    fragments: HashMap<u16, Vec<u8>>,
+}
+
+impl IngressReassembly {
+    /// Accept one DF03 GATT fragment and return a complete message when all
+    /// fragments for this connection have arrived.
+    fn push(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+        let header = GattFragmentHeader::from_bytes(data).ok()?;
+        if header.total_fragments > MAX_INBOUND_FRAGMENTS {
+            self.total_fragments = None;
+            self.fragments.clear();
+            tracing::warn!(
+                "BLE DF03 fragment count {} exceeds the inbound limit {}",
+                header.total_fragments,
+                MAX_INBOUND_FRAGMENTS
+            );
+            return None;
+        }
+        if self.total_fragments != Some(header.total_fragments) || header.fragment_index == 0 {
+            self.total_fragments = Some(header.total_fragments);
+            self.fragments.clear();
+        }
+        self.fragments.insert(header.fragment_index, data.to_vec());
+
+        let total = header.total_fragments as usize;
+        if self.fragments.len() != total {
+            return None;
+        }
+
+        let ordered = (0..header.total_fragments)
+            .map(|index| self.fragments.get(&index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        let message = GattReassembler::reassemble(&ordered).ok()?;
+        self.total_fragments = None;
+        self.fragments.clear();
+        Some(message)
+    }
+}
+
 async fn subscribe_ingress_for_peripheral(
     peripheral: Peripheral,
     core: Arc<IronCore>,
     ui_tx: tokio::sync::broadcast::Sender<UiOutbound>,
 ) {
     let addr = peripheral.address().to_string();
-    if let Err(e) = peripheral.connect().await {
+    if let Err(e) = connect_with_backoff(&peripheral, &addr).await {
         tracing::debug!("BLE connect skipped/failed for {}: {}", addr, e);
         return;
     }
     if let Err(e) = peripheral.discover_services().await {
         tracing::warn!("BLE discover_services failed for {}: {}", addr, e);
+        let _ = peripheral.disconnect().await;
+        return;
+    }
+    if !peripheral
+        .services()
+        .iter()
+        .any(|service| service.uuid == scm_service_uuid())
+    {
+        tracing::debug!("BLE SCM service {} missing on {}", scm_service_uuid(), addr);
         let _ = peripheral.disconnect().await;
         return;
     }
@@ -157,14 +255,22 @@ async fn subscribe_ingress_for_peripheral(
     let id_char = peripheral
         .characteristics()
         .iter()
-        .find(|c| c.uuid == identity_uuid && c.properties.contains(CharPropFlags::READ))
+        .find(|c| {
+            c.service_uuid == scm_service_uuid()
+                && c.uuid == identity_uuid
+                && c.properties.contains(CharPropFlags::READ)
+        })
         .cloned();
 
     if let Some(id_c) = id_char {
         match peripheral.read(&id_c).await {
             Ok(bytes) => {
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    if let Some(peer_id) = val.get("peer_id").and_then(|v| v.as_str()) {
+                    let peer_id = val
+                        .get("peer_id")
+                        .or_else(|| val.get("libp2p_peer_id"))
+                        .and_then(|v| v.as_str());
+                    if let Some(peer_id) = peer_id {
                         if let Ok(parsed_peer_id) = peer_id.parse::<libp2p::PeerId>() {
                             let peer_id_str = parsed_peer_id.to_string();
                             let mut map = get_active_peers()
@@ -206,7 +312,11 @@ async fn subscribe_ingress_for_peripheral(
     let ch = peripheral
         .characteristics()
         .iter()
-        .find(|c| c.uuid == notify_uuid && c.properties.contains(CharPropFlags::NOTIFY))
+        .find(|c| {
+            c.service_uuid == scm_service_uuid()
+                && c.uuid == notify_uuid
+                && c.properties.contains(CharPropFlags::NOTIFY)
+        })
         .cloned();
     let Some(ch) = ch else {
         tracing::debug!("BLE no notify char {:} on {}", notify_uuid, addr);
@@ -231,8 +341,22 @@ async fn subscribe_ingress_for_peripheral(
         }
     };
 
+    let mut reassembly = IngressReassembly::default();
     while let Some(note) = stream.next().await {
-        if let Some(params) = decode_ble_payload_for_ui(core.as_ref(), &note.value) {
+        if note.uuid != notify_uuid {
+            continue;
+        }
+        let payload = if GattFragmentHeader::from_bytes(&note.value).is_ok() {
+            match reassembly.push(&note.value) {
+                Some(payload) => payload,
+                None => continue,
+            }
+        } else {
+            // Keep compatibility with peers that send one complete envelope
+            // in a single notification instead of using GATT fragmentation.
+            note.value
+        };
+        if let Some(params) = decode_ble_payload_for_ui(core.as_ref(), &payload) {
             push_message_to_ui(&ui_tx, params);
         }
     }
@@ -240,17 +364,6 @@ async fn subscribe_ingress_for_peripheral(
 
 /// Send a SCMessenger message envelope over BLE to the registered peripheral
 pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        if crate::ble_windows::get_message_characteristic().is_some() {
-            if let Err(e) = crate::ble_windows::send_windows_ble_notification(data).await {
-                tracing::debug!("Windows BLE: outgoing notification failed: {:?}", e);
-            } else {
-                return Ok(());
-            }
-        }
-    }
-
     let peripheral = {
         let guard = get_active_peers()
             .lock()
@@ -259,15 +372,37 @@ pub async fn send_ble_message(recipient_peer_id: &str, data: &[u8]) -> Result<()
     };
 
     let Some(TrackingPeripheral::Real(peripheral)) = peripheral else {
+        #[cfg(target_os = "windows")]
+        {
+            return Err(format!(
+                "Windows BLE recipient-specific send unsupported for peer {}: no exact logical recipient/session is registered",
+                recipient_peer_id
+            ));
+        }
+        #[cfg(not(target_os = "windows"))]
         return Err("Peer not connected over BLE".to_string());
     };
+
+    connect_with_backoff(&peripheral, recipient_peer_id).await?;
+    peripheral
+        .discover_services()
+        .await
+        .map_err(|e| format!("GATT service discovery failed: {}", e))?;
+    if !peripheral
+        .services()
+        .iter()
+        .any(|service| service.uuid == scm_service_uuid())
+    {
+        return Err("SCM GATT service not found on peer".to_string());
+    }
 
     let msg_char_uuid = scm_notify_uuid(); // 0xDF03
     let ch = peripheral
         .characteristics()
         .iter()
         .find(|c| {
-            c.uuid == msg_char_uuid
+            c.service_uuid == scm_service_uuid()
+                && c.uuid == msg_char_uuid
                 && (c.properties.contains(CharPropFlags::WRITE)
                     || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE))
         })
@@ -344,6 +479,13 @@ pub async fn run_ble_central_ingress(
         };
 
         let svc = scm_service_uuid();
+        let mut events = match adapter.events().await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("BLE events() failed: {}", e);
+                return;
+            }
+        };
         // Windows/WinRT: the adapter object is often not ready to scan for a
         // brief window right after Manager::new()/adapters() returns (the
         // underlying BluetoothLEAdvertisementWatcher hasn't finished
@@ -353,7 +495,12 @@ pub async fn run_ble_central_ingress(
         const SCAN_START_RETRIES: u32 = 5;
         let mut scan_started = false;
         for attempt in 0..SCAN_START_RETRIES {
-            match adapter.start_scan(ScanFilter::default()).await {
+            match adapter
+                .start_scan(ScanFilter {
+                    services: vec![svc],
+                })
+                .await
+            {
                 Ok(()) => {
                     scan_started = true;
                     break;
@@ -382,18 +529,7 @@ pub async fn run_ble_central_ingress(
         if !scan_started {
             return;
         }
-        tracing::info!(
-            "BLE scan active (wide open, manually filtering to SCM service {})",
-            svc
-        );
-
-        let mut events = match adapter.events().await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("BLE events() failed: {}", e);
-                return;
-            }
-        };
+        tracing::info!("BLE scan active, filtered to SCM service {}", svc);
 
         // Track peripherals with backoff state to prevent spin-looping on unreachable devices
         struct PeripheralState {
@@ -418,7 +554,7 @@ pub async fn run_ble_central_ingress(
             };
 
             // Throttle processing per device with exponential backoff
-            let id_key = format!("{:?}", id);
+            let id_key = id.to_string();
             {
                 let mut guard = tracked.lock().await;
                 // Bound memory against unbounded growth under BLE MAC rotation:
@@ -521,7 +657,7 @@ pub async fn run_ble_central_ingress(
                         state.failures = 0;
                         state.cooldown_until = None;
                     } else {
-                        state.failures += 1;
+                        state.failures = state.failures.saturating_add(1).min(MAX_TRACKED_FAILURES);
                         // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s cap
                         let backoff_secs = (1u64 << state.failures.min(6)).min(60);
                         state.cooldown_until = Some(
@@ -568,17 +704,11 @@ pub async fn run_ble_peripheral_advertising(
     {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
+            let _ = (core, ui_tx);
             tracing::warn!(
-                "BLE: peripheral advertising for service {:x} is not implemented on this platform \
-                 (known limitation, not a bug — see tasks/T1.8/progress.md). This CLI still discovers \
-                 and connects to BLE peripherals normally (mobile/native peers); it just cannot itself \
-                 be discovered by another desktop CLI over BLE.",
+                "BLE capability unsupported: btleplug provides no desktop peripheral GATT server for service {:x}; advertising is not active. The CLI remains a GATT central for mobile/native peers.",
                 GATT_SERVICE_UUID
             );
-
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            }
         }
     }
 }

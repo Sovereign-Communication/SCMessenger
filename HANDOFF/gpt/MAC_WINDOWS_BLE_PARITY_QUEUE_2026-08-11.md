@@ -1,6 +1,6 @@
 # macOS/Windows BLE parity queue
 
-**Status:** queued for the next Windows-lane wake; no timer or scheduled task.
+**Status:** in progress now; Windows-lane wake is reserved for independent validation and consensus, with no timer or scheduled task.
 **Scope:** PR #139 integration branch `tracking/pre-v040-tag-work`.
 
 ## Current evidence
@@ -23,7 +23,7 @@
   can be overwritten by a no-route candidate. These must be closed before a
   five-node BLE claim.
 
-## Wake-driven work queue
+## Active execution queue
 
 ### macOS lane
 
@@ -42,7 +42,7 @@
    index/count, peer suffix, route, and terminal result. Do not log payloads,
    full peer IDs, or full IP/MAC identifiers.
 
-### Windows lane (execute when the lane wakes)
+### Windows lane (prepare now; validate when the lane wakes)
 
 1. Confirm adapter/permission/service state and invoke the existing WinRT GATT
    peripheral on the exact PR head. Keep btleplug for central discovery, and
@@ -83,9 +83,10 @@ receiver-backed evidence is repeated on one frozen commit.
 
 ## Handoff rule
 
-When the Windows SCM lane wakes, it should acknowledge this file by message and
-PR comment, select disjoint implementation owners, and return the first
-sanitized adapter/transport evidence before changing the shared integration
-branch. The Mac lane will independently validate the Windows result; Windows
+The Mac lane is dispatching and preparing the disjoint Windows-parity work now.
+When the Windows SCM lane wakes, it must acknowledge this file by message and
+PR comment, validate the prepared changes on the exact integration head, and
+return the first sanitized adapter/transport evidence before changing shared
+state. The Mac lane will independently validate the Windows result; Windows
 must independently validate the Mac result. Agreement is required before the
 BLE portion of PR #139 is called complete.

@@ -28,6 +28,13 @@ final class NotificationManager: NSObject {
         static let directMessageRequest: String = "DIRECT_MESSAGE_REQUEST"
     }
 
+    private enum Action {
+        static let reply: String = "REPLY_ACTION"
+        static let markRead: String = "MARK_READ_ACTION"
+        static let acceptRequest: String = "ACCEPT_REQUEST_ACTION"
+        static let rejectRequest: String = "REJECT_REQUEST_ACTION"
+    }
+
     private enum UserInfoKey {
         static let messageId: String = "messageId"
         static let senderPeerId: String = "senderPeerId"
@@ -198,7 +205,7 @@ final class NotificationManager: NSObject {
 
     func setupNotificationCategories() {
         let replyAction: UNTextInputNotificationAction = UNTextInputNotificationAction(
-            identifier: "REPLY_ACTION",
+            identifier: Action.reply,
             title: "Reply",
             options: [],
             textInputButtonTitle: "Send",
@@ -206,9 +213,21 @@ final class NotificationManager: NSObject {
         )
 
         let markReadAction: UNNotificationAction = UNNotificationAction(
-            identifier: "MARK_READ_ACTION",
+            identifier: Action.markRead,
             title: "Mark as Read",
             options: []
+        )
+
+        let acceptRequestAction: UNNotificationAction = UNNotificationAction(
+            identifier: Action.acceptRequest,
+            title: "Accept",
+            options: []
+        )
+
+        let rejectRequestAction: UNNotificationAction = UNNotificationAction(
+            identifier: Action.rejectRequest,
+            title: "Reject & Block",
+            options: [.destructive]
         )
 
         let messageCategory: UNNotificationCategory = UNNotificationCategory(
@@ -220,7 +239,7 @@ final class NotificationManager: NSObject {
 
         let requestCategory: UNNotificationCategory = UNNotificationCategory(
             identifier: Category.directMessageRequest,
-            actions: [markReadAction],
+            actions: [acceptRequestAction, rejectRequestAction, markReadAction],
             intentIdentifiers: [],
             options: []
         )
@@ -246,13 +265,19 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
         let userInfo: [AnyHashable: Any] = response.notification.request.content.userInfo
 
         switch response.actionIdentifier {
-        case "REPLY_ACTION":
+        case Action.reply:
             if let textResponse = response as? UNTextInputNotificationResponse {
                 handleReply(text: textResponse.userText, userInfo: userInfo)
             }
 
-        case "MARK_READ_ACTION":
+        case Action.markRead:
             handleMarkAsRead(userInfo: userInfo)
+
+        case Action.acceptRequest:
+            handleAcceptRequest(userInfo: userInfo)
+
+        case Action.rejectRequest:
+            handleRejectRequest(userInfo: userInfo)
 
         case UNNotificationDefaultActionIdentifier:
             handleNotificationTap(userInfo: userInfo)
@@ -264,11 +289,13 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
 
     private func handleReply(text: String, userInfo: [AnyHashable: Any]) {
         guard let peerId = userInfo[UserInfoKey.senderPeerId] as? String else { return }
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
         let messageId: String? = userInfo[UserInfoKey.messageId] as? String
         logger.info("Quick reply to \(peerId): \(text)")
         Task { @MainActor [weak self] in
             do {
-                try await self?.repository?.sendMessage(peerId: peerId, content: text)
+                try await self?.repository?.sendMessage(peerId: peerId, content: trimmedText)
                 self?.markMessageRead(messageId: messageId)
             } catch {
                 self?.logger.error("Quick reply failed: \(error.localizedDescription)")
@@ -282,6 +309,39 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
             logger.info("Mark as read: \(messageId)")
         }
         markMessageRead(messageId: messageId)
+    }
+
+    private func handleAcceptRequest(userInfo: [AnyHashable: Any]) {
+        guard let peerId = userInfo[UserInfoKey.senderPeerId] as? String else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let repository = self.repository else { return }
+            do {
+                try repository.acceptMessageRequest(peerId: peerId)
+                self.markMessageRead(messageId: userInfo[UserInfoKey.messageId] as? String)
+            } catch {
+                self.logger.error("Accepting message request failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func handleRejectRequest(userInfo: [AnyHashable: Any]) {
+        guard let peerId = userInfo[UserInfoKey.senderPeerId] as? String else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let repository = self.repository else { return }
+            do {
+                // MeshRepository has no standalone reject API. The explicit
+                // notification action therefore uses the existing destructive
+                // block-and-delete operation and names that consequence.
+                try repository.blockAndDeletePeer(
+                    peerId: peerId,
+                    reason: "message_request_rejected"
+                )
+                try repository.removeContact(peerId: peerId)
+                self.markMessageRead(messageId: userInfo[UserInfoKey.messageId] as? String)
+            } catch {
+                self.logger.error("Rejecting message request failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func handleNotificationTap(userInfo: [AnyHashable: Any]) {

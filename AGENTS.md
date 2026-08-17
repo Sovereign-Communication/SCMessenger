@@ -19,7 +19,7 @@ human operator may do that.
 
 There are NO standalone relays in SCMessenger. Only NODES exist, and EVERY
 node relays -- store-and-forward custody is a behavior all nodes perform,
-not a role. The AWS instance at 100.56.248.69 is a CLOUD NODE: a full node
+not a role. The AWS instance is a CLOUD NODE: a full node
 that also relays, exactly as every other node does. Discovery is LEDGER
 SHARING between nodes (invite/QR-seeded, gossip-propagated); bootstrap
 address lists are a deprecated transitional mechanism being replaced by
@@ -116,7 +116,7 @@ this project verifies on Windows + a physical Pixel only. Therefore:
   authoring, mechanical refactors with clear acceptance criteria, pre-dispatch
   validation sweeps. See "Remote-eligible lane" in `HANDOFF/todo/_QUEUE.md`.
 
-### FOREIGN WORKER (Gemini via Antigravity/`agy`, Gemini CLI, others)
+### FOREIGN/DELEGATED WORKER (Gemini via Antigravity/`agy`, Gemini CLI, others - unless directly used as /orchestrator)
 Dispatched and verified by an orchestrator on the Windows host. Rules:
 - Do NOT run `cargo`/`gradlew` (Windows build serialization — the orchestrator
   is the single writer for all build verification).

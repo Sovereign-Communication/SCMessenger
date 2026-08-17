@@ -10,13 +10,38 @@ STATE_DIR=".claude/state"
 
 mkdir -p "$LOG_DIR" "$STATE_DIR"
 
-# Load configuration with jq
+# Load configuration (kept as a source-compatible helper for callers).
 load_config() {
     if [ -f "$CONFIG_DIR/orchestration_config.json" ]; then
-        "./scripts/jq_wrapper.sh" -c . "$CONFIG_DIR/orchestration_config.json" 2>/dev/null || echo "{}"
+        cat "$CONFIG_DIR/orchestration_config.json"
     else
         echo "{}"
     fi
+}
+
+config_value() {
+    local key="$1"
+    local default="$2"
+    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        echo "$default"
+        return 0
+    fi
+    "$PYTHON_BIN" - "$CONFIG_DIR/orchestration_config.json" "$key" "$default" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, key, default = sys.argv[1:]
+try:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    for part in key.split("."):
+        value = value[part]
+    if isinstance(value, (dict, list)) or value is None:
+        raise ValueError
+    print(value)
+except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+    print(default)
+PY
 }
 
 # System monitoring functions (Windows compatible)
@@ -48,7 +73,43 @@ get_disk_usage() {
 
 get_agent_count() {
     # Count running claude.exe processes for Windows
-    tasklist 2>/dev/null | grep -c "claude.exe" || echo "0"
+    local count
+    count=$(tasklist 2>/dev/null | grep -c "claude.exe" 2>/dev/null || true)
+    echo "${count:-0}"
+}
+
+# Host-aware admission is the source of truth for local worker/build launches.
+# Keep this daemon's legacy CPU/memory percentage checks as an additional
+# signal, never as a substitute for reservations and process-tree accounting.
+RESOURCE_ADMISSION_SCRIPT="${RESOURCE_ADMISSION_SCRIPT:-scripts/resource_admission.py}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+fi
+
+resource_admission_snapshot() {
+    [ -f "$RESOURCE_ADMISSION_SCRIPT" ] || return 1
+    "$PYTHON_BIN" "$RESOURCE_ADMISSION_SCRIPT" snapshot
+}
+
+resource_admission_allows_worker() {
+    local snapshot
+    snapshot=$(resource_admission_snapshot) || return 1
+    "$PYTHON_BIN" -c 'import json, sys
+try:
+    state = json.load(sys.stdin)
+    host = state["host"]
+    admission = state["admission"]
+    active = state.get("workers", [])
+    if len(active) >= int(admission.get("max_workers", 3)):
+        raise SystemExit(1)
+    if float(state["available_after_reservations_mib"]) < float(admission.get("headroom_mib", 2048)):
+        raise SystemExit(1)
+    if float(host["available_mib"]) <= 0 or float(host["total_mib"]) <= 0:
+        raise SystemExit(1)
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0)' <<< "$snapshot"
 }
 
 # Resource-based scaling decisions
@@ -57,14 +118,17 @@ should_scale_up() {
     local mem_usage="$2"
     local current_agents="$3"
 
-    local config=$(load_config)
-    # Extract thresholds with defaults
-    local cpu_threshold=$(echo "$config" | "./scripts/jq_wrapper.sh" -r '.resource_management.cpu_threshold // 80')
-    local mem_threshold=$(echo "$config" | "./scripts/jq_wrapper.sh" -r '.resource_management.memory_threshold // 85')
-    local max_agents=$(echo "$config" | "./scripts/jq_wrapper.sh" -r '.resource_management.max_agents // 3')
+    # Extract thresholds with safe cross-platform defaults.
+    local cpu_threshold=$(config_value "resource_management.cpu_threshold" "80")
+    local mem_threshold=$(config_value "resource_management.memory_threshold" "85")
+    local max_agents=$(config_value "resource_management.max_agents" "3")
 
     if [ "$current_agents" -ge "$max_agents" ]; then
         return 1  # Already at max
+    fi
+
+    if ! resource_admission_allows_worker; then
+        return 1  # Shared task reservation/host headroom gate is closed
     fi
 
     if [ "$cpu_usage" -lt "$cpu_threshold" ] && [ "$mem_usage" -lt "$mem_threshold" ]; then
@@ -79,11 +143,10 @@ should_scale_down() {
     local mem_usage="$2"
     local current_agents="$3"
 
-    local config=$(load_config)
-    # Extract thresholds with defaults
-    local cpu_threshold=$(echo "$config" | "./scripts/jq_wrapper.sh" -r '.resource_management.cpu_threshold // 80')
-    local mem_threshold=$(echo "$config" | "./scripts/jq_wrapper.sh" -r '.resource_management.memory_threshold // 85')
-    local min_agents=$(echo "$config" | grep -o '"min_agents"\([^,]*\)' | grep -o '[0-9]\+' || echo "1")
+    # Extract thresholds with safe cross-platform defaults.
+    local cpu_threshold=$(config_value "resource_management.cpu_threshold" "80")
+    local mem_threshold=$(config_value "resource_management.memory_threshold" "85")
+    local min_agents=$(config_value "resource_management.min_agents" "1")
 
     if [ "$current_agents" -le "$min_agents" ]; then
         return 1  # Already at min
@@ -137,10 +200,9 @@ can_start_agent() {
     local agent_type="$1"
     local current_agents="$2"
 
-    local config=$(load_config)
-    # Extract agent limits with defaults
-    local max_concurrent=$(echo "$config" | grep -o '"max_concurrent"\([^,]*\)' | grep -o '[0-9]\+' || echo "3")
-    local max_per_type=$(echo "$config" | grep -o "\"max_per_type.$agent_type\"\([^,]*\)" | grep -o '[0-9]\+' || echo "1")
+    # Extract agent limits with safe cross-platform defaults.
+    local max_concurrent=$(config_value "agents.max_concurrent" "3")
+    local max_per_type=$(config_value "agents.max_per_type.${agent_type}" "1")
 
     # Count current agents of this type
     local current_of_type=0
@@ -153,7 +215,7 @@ can_start_agent() {
         fi
     done
 
-    if [ "$current_agents" -lt "$max_concurrent" ] && [ "$current_of_type" -lt "$max_per_type" ]; then
+    if [ "$current_agents" -lt "$max_concurrent" ] && [ "$current_of_type" -lt "$max_per_type" ] && resource_admission_allows_worker; then
         return 0
     fi
 
@@ -170,9 +232,13 @@ manage_resources() {
         local mem_usage=$(get_memory_usage)
         local disk_usage=$(get_disk_usage)
         local agent_count=$(get_agent_count)
+        local admission_state="BLOCKED"
+        if resource_admission_allows_worker; then
+            admission_state="AVAILABLE"
+        fi
 
         # Log current state
-        echo "Resource State: CPU=${cpu_usage}%, MEM=${mem_usage}%, DISK=${disk_usage}KB, AGENTS=${agent_count}"
+        echo "Resource State: CPU=${cpu_usage}%, MEM=${mem_usage}%, DISK=${disk_usage}KB, AGENTS=${agent_count}, ADMISSION=${admission_state}"
 
         # Make scaling decisions
         if should_scale_up "$cpu_usage" "$mem_usage" "$agent_count"; then
@@ -186,8 +252,7 @@ manage_resources() {
         fi
 
         # Check disk usage
-        local config=$(load_config)
-        local disk_limit=$(echo "$config" | grep -o '"disk_usage_limit_mb"\([^,]*\)' | grep -o '[0-9]\+' || echo "100")
+        local disk_limit=$(config_value "monitoring.disk_usage_limit_mb" "100")
         disk_limit=$((disk_limit * 1024))  # Convert MB to KB
 
         if [ "$disk_usage" -gt "$disk_limit" ]; then
@@ -209,16 +274,29 @@ case "${1:-}" in
         echo "Memory Usage: $(get_memory_usage)%"
         echo "Disk Usage: $(get_disk_usage)KB"
         echo "Active Agents: $(get_agent_count)"
+        if resource_admission_allows_worker; then
+            echo "Worker Admission: AVAILABLE"
+        else
+            echo "Worker Admission: BLOCKED"
+        fi
+        resource_admission_snapshot || true
         ;;
     "--prioritize")
         prioritize_tasks
+        ;;
+    "--admission")
+        resource_admission_snapshot
         ;;
     "--check-scale")
         cpu=$(get_cpu_usage)
         mem=$(get_memory_usage)
         agents=$(get_agent_count)
 
-        echo "Current: CPU=${cpu}%, MEM=${mem}%, AGENTS=${agents}"
+        admission="BLOCKED"
+        if resource_admission_allows_worker; then
+            admission="AVAILABLE"
+        fi
+        echo "Current: CPU=${cpu}%, MEM=${mem}%, AGENTS=${agents}, ADMISSION=${admission}"
 
         if should_scale_up "$cpu" "$mem" "$agents"; then
             echo "Decision: SCALE UP"
@@ -229,9 +307,10 @@ case "${1:-}" in
         fi
         ;;
     *)
-        echo "Usage: $0 [--start|--status|--prioritize|--check-scale]"
+        echo "Usage: $0 [--start|--status|--admission|--prioritize|--check-scale]"
         echo "  --start        Start resource management daemon"
-        echo "  --status       Show current resource usage"
+        echo "  --status       Show current resource usage and admission snapshot"
+        echo "  --admission    Show shared task reservation and host telemetry"
         echo "  --prioritize   Show prioritized task list"
         echo "  --check-scale  Check scaling decisions"
         exit 1
