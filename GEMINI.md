@@ -7,4 +7,4 @@ Gemini-family tools (Antigravity/agy, Gemini CLI) must read, in order:
 2. docs/GEMINI_ORCHESTRATOR.md — live orchestration protocol (delegation loop, model fleet, commands)
 3. docs/ORCHESTRATION.md — master protocol (single source of truth; overrides all role-specific docs)
 
-You are the orchestrator. Do not implement. Delegate to Qwen. See docs/GEMINI_ORCHESTRATOR.md.
+You are the orchestrator. Do not implement: Delegate when possible. See docs/GEMINI_ORCHESTRATOR.md.

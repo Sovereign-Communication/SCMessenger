@@ -842,6 +842,11 @@ final class MeshRepository {
 
             serviceState = .running
             statusEvents.send(.serviceStateChanged(.running))
+            // The Rust routing engine keeps a resume-prefetch snapshot.  The
+            // initial foreground start is the first lifecycle transition it
+            // can observe in this repository, so publish it explicitly.
+            ironCore?.onAppResume()
+            appendDiagnostic("core_lifecycle foreground=started")
 
             if swarmTransportStarted {
                 Task { [weak self] in
@@ -1049,8 +1054,23 @@ final class MeshRepository {
         serviceState = .stopping
         statusEvents.send(.serviceStateChanged(.stopping))
 
+        storageMaintenanceTask?.cancel()
+        storageMaintenanceTask = nil
+        pendingContactBackupTask?.cancel()
+        pendingContactBackupTask = nil
+
+        // Clear callback targets before releasing the Rust handles.  The
+        // delegate is held by UniFFI and the platform bridge may still receive
+        // late transport notifications while the service is stopping.
+        ironCore?.setDelegate(delegate: nil)
+        meshService?.setDelegate(delegate: nil)
+        meshService?.setPlatformBridge(bridge: nil)
         meshService?.stop()
         swarmBridge = nil
+        meshService = nil
+        ironCore = nil
+        coreDelegateImpl = nil
+        platformBridge = nil
         pendingOutboxRetryTask?.cancel()
         pendingOutboxRetryTask = nil
         coverTrafficTask?.cancel()
@@ -1074,6 +1094,7 @@ final class MeshRepository {
         stopBleTransport()
         multipeerTransport?.disconnect()
         multipeerTransport = nil
+        serviceStats = nil
 
         logVerbose("[OK] Mesh service stopped")
         logDiagnostic("service_stop success")
@@ -2902,6 +2923,13 @@ final class MeshRepository {
     }
 
     func getDialHintsForRoutePeer(_ routePeerId: String) -> [String] {
+        return buildDialHintsForRoutePeer(routePeerId, includeRelayCircuits: true)
+    }
+
+    private func buildDialHintsForRoutePeer(
+        _ routePeerId: String,
+        includeRelayCircuits: Bool
+    ) -> [String] {
         let normalizedRoute = routePeerId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isLibp2pPeerId(normalizedRoute) else { return [] }
 
@@ -2911,7 +2939,7 @@ final class MeshRepository {
         return buildDialCandidatesForPeer(
             routePeerId: normalizedRoute,
             rawAddresses: fromLedger,
-            includeRelayCircuits: true
+            includeRelayCircuits: includeRelayCircuits
         )
     }
 
@@ -3347,6 +3375,7 @@ final class MeshRepository {
 
     private func exportDiagnosticsInternal() -> String {
         let multipeerStats = multipeerTransport?.diagnosticsSnapshot()
+        let connectionStats = meshService?.getAllConnectionStats() ?? [:]
         if let diagnostics = meshService?.exportDiagnostics(),
            !diagnostics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let data = diagnostics.data(using: .utf8),
@@ -3359,6 +3388,9 @@ final class MeshRepository {
                 }
                 object["relay_backoff_until_ms"] = Int(relayBackoffUntil.timeIntervalSince1970 * 1000)
                 object["strict_ble_only_validation"] = strictBleOnlyValidation
+                if !connectionStats.isEmpty {
+                    object["connection_stats"] = connectionStats
+                }
                 if let multipeerStats {
                     object["multipeer_connected_peers"] = multipeerStats.connectedPeers
                     object["multipeer_connecting_peers"] = multipeerStats.connectingPeers
@@ -3392,6 +3424,7 @@ final class MeshRepository {
             "relay_recent_events_60s": relayRecentEventTimes.count,
             "relay_backoff_until_ms": Int(relayBackoffUntil.timeIntervalSince1970 * 1000),
             "strict_ble_only_validation": strictBleOnlyValidation,
+            "connection_stats": connectionStats,
             "generated_at_ms": Int(Date().timeIntervalSince1970 * 1000)
         ]
         if let multipeerStats {
@@ -3928,6 +3961,8 @@ final class MeshRepository {
 
     func onEnteringBackground() {
         logger.info("Repository: entering background")
+        ironCore?.onAppBackground()
+        appendDiagnostic("core_lifecycle backgrounded")
         pauseMeshService()
         do {
             try saveLedger()
@@ -3939,6 +3974,9 @@ final class MeshRepository {
     func onEnteringForeground() {
         logger.info("Repository: entering foreground")
         resumeMeshService()
+        ironCore?.onAppResume()
+        appendDiagnostic("core_lifecycle foregrounded")
+        dispatchFlushPendingOutbox(reason: "app_foreground")
         updateStats()
     }
 
@@ -4309,6 +4347,24 @@ final class MeshRepository {
         meshService?.onDataReceived(peerId: peerId, data: data)
     }
 
+    @discardableResult
+    func sendMultipeerPacket(peerId: String, data: Data) -> Bool {
+        guard let multipeerTransport else {
+            logger.warning("sendMultipeerPacket: transport unavailable for \(peerId)")
+            appendDiagnostic("multipeer_send_failed peer=\(peerId) reason=transport_unavailable")
+            return false
+        }
+
+        do {
+            try multipeerTransport.sendData(toPeerId: peerId, data: data)
+            return true
+        } catch {
+            logger.warning("sendMultipeerPacket failed for \(peerId): \(error.localizedDescription)")
+            appendDiagnostic("multipeer_send_failed peer=\(peerId) reason=\(error.localizedDescription)")
+            return false
+        }
+    }
+
     func onBleDataReceived(peerId: String, data: Data) {
         logger.debug("BLE data from \(peerId): \(data.count) bytes")
         // Forward to MeshService
@@ -4351,6 +4407,22 @@ final class MeshRepository {
         }
         if !accepted {
             logger.warning("sendBlePacket: no BLE transport accepted payload for requested \(peerId)")
+        }
+    }
+
+    @discardableResult
+    func sendMultipeerPacket(peerId: String, data: Data) -> Bool {
+        guard let multipeerTransport else {
+            logger.warning("sendMultipeerPacket: Multipeer transport unavailable for \(peerId)")
+            return false
+        }
+
+        do {
+            try multipeerTransport.sendData(toPeerId: peerId, data: data)
+            return true
+        } catch {
+            logger.warning("sendMultipeerPacket failed for \(peerId): \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -5987,7 +6059,13 @@ final class MeshRepository {
         let dynamicRelays = discoveredPeerMap.filter { $0.value.isRelay && !$0.value.isFull && $0.key != targetPeerId }
         for (relayPeerId, _) in dynamicRelays where isLibp2pPeerId(relayPeerId) {
             // If we have direct addresses for this relay, try using it
-            let directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            // Relay discovery needs direct transport addresses only. Asking for
+            // relay circuits here re-enters relayCircuitAddresses through
+            // buildDialCandidatesForPeer and can recurse across dynamic relays.
+            let directAddrs = buildDialHintsForRoutePeer(
+                relayPeerId,
+                includeRelayCircuits: false
+            )
             for addr in directAddrs {
                 let circuit = "\(addr)/p2p/\(relayPeerId)/p2p-circuit/p2p/\(targetPeerId)"
                 if !relays.contains(circuit) { relays.append(circuit) }

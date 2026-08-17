@@ -1,12 +1,13 @@
 {
   "version": "1.0.0",
-  "last_updated": "2026-04-20T01:45:00Z",
+  "last_updated": "2026-08-14T21:55:00Z",
   "monitoring": {
     "check_interval": 30,
     "max_log_files": 30,
     "log_retention_days": 7,
     "disk_usage_limit_mb": 100,
-    "memory_limit_mb": 2048
+    "memory_limit_mb": 2048,
+    "minimum_headroom_mb": 2048
   },
   "agents": {
     "max_concurrent": 3,
@@ -25,7 +26,15 @@
     "cpu_threshold": 80,
     "memory_threshold": 85,
     "min_agents": 1,
-    "max_agents": 3
+    "max_agents": 3,
+    "admission": {
+      "state_file": "tmp/lakes/active_workers.json",
+      "default_buffer_percent": 10,
+      "minimum_headroom_mb": 2048,
+      "max_worker_reservation_percent": 75,
+      "allow_operator_exceptions": true,
+      "per_worker_rss_ceiling_mb": null
+    }
   },
   "error_handling": {
     "circuit_breaker": {

@@ -130,12 +130,30 @@ final class mDNSServiceDiscovery: NSObject {
         stopBrowsing()
         stopAdvertising()
     }
+
+    private func advertisedPeerId(for service: NetService) -> String? {
+        guard let txtData = service.txtRecordData() else { return nil }
+        let txt = NetService.dictionary(fromTXTRecord: txtData)
+        guard let peerIdData = txt["peer_id"],
+              let peerId = String(data: peerIdData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !peerId.isEmpty else {
+            return nil
+        }
+        return peerId
+    }
 }
 
 // MARK: - NetServiceBrowserDelegate
 
 extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.netServiceBrowser(browser, didFind: service, moreComing: moreComing)
+            }
+            return
+        }
         let serviceKey: String = "\(service.name):\(service.type)"
         logger.info("mDNS service found: \(service.name) type: \(service.type)")
 
@@ -146,6 +164,12 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.netServiceBrowser(browser, didRemove: service, moreComing: moreComing)
+            }
+            return
+        }
         let serviceKey: String = "\(service.name):\(service.type)"
         logger.info("mDNS service removed: \(service.name)")
         discoveredServices.removeValue(forKey: serviceKey)
@@ -166,6 +190,12 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
 
 extension mDNSServiceDiscovery: NetServiceDelegate {
     func netServiceDidResolveAddress(_ sender: NetService) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.netServiceDidResolveAddress(sender)
+            }
+            return
+        }
         guard let addresses = sender.addresses, !addresses.isEmpty else {
             logger.warning("mDNS service resolved but no addresses: \(sender.name)")
             return
@@ -196,14 +226,15 @@ extension mDNSServiceDiscovery: NetServiceDelegate {
 
         logger.info("mDNS service resolved: \(sender.name) at \(host):\(port)")
 
-        // Create a peer ID from the service name (matches Android's device.deviceAddress pattern)
-        let peerId: String = "mdns-\(sender.name)"
+        guard let peerId = advertisedPeerId(for: sender) else {
+            logger.warning("mDNS service \(sender.name) resolved without an advertised peer_id; ignoring uncorrelatable service")
+            return
+        }
 
         // Notify discovery
         let repo: MeshRepository? = meshRepository
-        DispatchQueue.main.async {
+        Task { @MainActor in
             repo?.handleTransportPeerDiscovered(peerId: peerId)
-            // Also send to event bus for UI
             MeshEventBus.shared.peerEvents.send(.discovered(peerId: peerId))
         }
 
@@ -217,5 +248,10 @@ extension mDNSServiceDiscovery: NetServiceDelegate {
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         logger.error("mDNS service failed to resolve: \(sender.name)")
+    }
+
+    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
+        logger.error("mDNS service failed to publish: \(sender.name) \(errorDict)")
+        isAdvertising = false
     }
 }

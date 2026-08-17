@@ -1,7 +1,7 @@
 # Delegation & Worker Dispatch SOP
 
 Status: Active
-Last updated: 2026-08-08 (first repo-side capture; previously this knowledge
+Last updated: 2026-08-14 (dynamic local resource admission added; previously this knowledge
 existed only in a single agent's private memory store, which delegated workers
 cannot read -- which is why these failures kept recurring)
 
@@ -33,6 +33,23 @@ reserve Claude-native capacity for verdicts and judgment calls.
 
 Do not run Fable-tier subagent or workflow fan-outs. Haiku/Sonnet workers only,
 free lanes first.
+
+## Dynamic local resource admission
+
+Local direct workers and build lanes use task-sized host-memory reservations, not
+a fixed per-worker RSS ceiling. Before launch, estimate the worker plus all
+descendants, add a 10% default margin, and reserve through
+`scripts/resource_admission.py` in the shared `tmp/lakes/active_workers.json`
+registry. Admit only when fresh host telemetry shows that the reservation fits
+alongside every active reservation, the 2 GiB headroom floor, and the global
+worker budget. Bind and sample the full process tree, then release only after
+cleanup. An explicit authenticated human or terminal-operator directive may
+approve an exception worker for any stated purpose, but it cannot bypass
+availability, headroom, monitoring, serialized builds, or safety gates. Remote
+API-lake calls remain quota-tracked separately unless they launch local
+processes. Unknown telemetry is a blocked admission, never a guess.
+`scripts/resource_manager.sh --admission` exposes the same snapshot; its legacy
+CPU/percentage checks are advisory and cannot bypass this gate.
 
 ## agy
 

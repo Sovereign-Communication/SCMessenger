@@ -1,12 +1,13 @@
 # SCMessenger Orchestration Protocol
 
-Status: Active. Last updated: 2026-08-03 (Section 2.2 loop and Section 3
-worker contract revised to route through `dispatch_dial.py` /
-`parse_orchestration_footer.py` / `batch_handoff.py` / `build_lock.py`;
-every rule below is unchanged in substance, only the mechanism for
-prompt construction, response parsing, and state moves changed -- full
+Status: Active. Last updated: 2026-08-14. Section 2.2 and Section 3 still
+route dispatch, parsing, handoff, and build serialization through
+`dispatch_dial.py` / `parse_orchestration_footer.py` / `batch_handoff.py` /
+`build_lock.py`; Section 3.1 adds task-sized dynamic resource admission.
+The existing dispatch rules remain unchanged in substance; the resource
+policy now records active reservations and uses fresh host telemetry -- full
 audit, what was tested, and every edge case considered:
-`HANDOFF/ORCHESTRATION_TOKEN_STRATEGY.md`).
+`HANDOFF/ORCHESTRATION_TOKEN_STRATEGY.md`.
 
 This is the single canonical reference for orchestration. There is now ONE
 orchestrator command -- `/orchestrate` (`.claude/commands/orchestrate.md`) -- and
@@ -199,7 +200,11 @@ still applies unchanged; only the mechanism changed. Follow it in order.
    `path:Lstart-Lend` syntax when the target is a narrow slice of a large
    file), acceptance criteria, and the exact build-gate command. Include
    the Worker Contract header (Section 3) -- step 6 depends on the footer
-   format being present, don't skip it.
+   format being present, don't skip it. For a local direct worker or build
+   lane, include the task kind, peak estimate, safety margin, reservation ID,
+   and operator approval (if any) after obtaining the reservation from
+   `scripts/resource_admission.py`; remote API-lake calls use quota accounting
+   unless they launch local descendants.
 5. **DISPATCH** (canonical, any model): `scripts/delegate_task.py --task <file>
    --provider <dial's lake> --model <dial's model> --files <targets, scoped
    if applicable> --apply --verify "<gate>" --mode diff --max-rounds
@@ -289,6 +294,69 @@ Workers NEVER: run builds (`cargo`, `gradlew`), commit, push, or move HANDOFF
 files. The orchestrator owns ALL of those operations.
 
 ---
+
+## 3.1 Dynamic Worker Resource Admission
+
+The former fixed 384 MiB per-worker RSS ceiling is retired. Resource limits are
+now task-sized and host-aware. A small read-only task should receive a small
+reservation; a build or other approved heavy task may receive the memory its
+measured process family requires.
+
+Before every local direct-worker or build-lane launch, the orchestrator MUST:
+
+1. Read the shared active-work registry at `tmp/lakes/active_workers.json` and
+   reconcile completed/dead entries. The registry is shared across Prime
+   sessions and terminal lanes; a local in-memory list is not sufficient.
+2. Obtain fresh host telemetry: total physical RAM, currently available RAM,
+   swap/memory-pressure state where the platform exposes it, and the worker's
+   current process-tree baseline.
+3. Estimate the peak RSS of the worker plus every descendant process for the
+   exact task. Add the packet's safety margin (10% by default, or a larger
+   margin when telemetry is uncertain) to obtain the requested reservation.
+4. Admit the task only when the requested reservation plus every active
+   reservation fits the current available RAM, the configured global utilization
+   budget, and mandatory system headroom. Unknown or stale telemetry is
+   `BLOCKED_RESOURCE_TELEMETRY`, not permission to guess.
+5. Reserve before launch, bind the launched PID/process group, sample the full
+   descendant tree during execution, update the observed peak, and release the
+   reservation on completion or stop. A stopped worker's descendants must be
+   confirmed gone before its reservation is released.
+
+The canonical helper is:
+
+```text
+python3 scripts/resource_admission.py snapshot
+python3 scripts/resource_admission.py reserve --task-id <id> --kind small|analysis|build --estimate-mib <peak> [--operator-approved --approval-note <text>]
+python3 scripts/resource_admission.py bind --task-id <id> --pid <pid>
+python3 scripts/resource_admission.py sample --task-id <id>
+python3 scripts/resource_admission.py release --task-id <id>
+```
+
+`scripts/resource_manager.sh --admission` and `--status` expose the same
+registry/telemetry snapshot; its legacy CPU and percentage checks are advisory
+and cannot admit a worker without this gate.
+
+`resource_admission.py` uses a 10% task margin, a 2 GiB minimum host-headroom
+floor, and a 75% total worker-reservation budget by default. It also refuses a
+fourth active local reservation. These are host safety bounds, not a per-worker
+cap; they may be made stricter by the operator or platform telemetry, never
+silently weaker. The one-build-at-a-time rule and `build_lock.py` remain
+mandatory regardless of available RAM.
+
+An explicit, authenticated human or terminal-operator directive may approve an
+exception worker for any stated purpose. The approval removes the former
+per-worker 384 MiB ceiling, but it does NOT bypass resource admission, active
+reservation accounting, process-tree monitoring, host headroom, build
+serialization, security gates, provenance separation, or the PR139 HARD
+NO-GO. Record the approval, purpose, estimate, margin, reservation, and exact
+operator wording in the dispatch packet and evidence report.
+
+The three-direct-worker concurrency limit remains. Remote API-lake calls are
+quota-tracked in `tmp/lakes/ledger.jsonl`; they are not treated as local RSS
+workers unless they launch local descendant processes. Any dispatch that cannot
+obtain a reservation remains queued with the measured required and available
+values. Never start an unregistered worker or build and infer availability from
+worker count alone.
 
 ## 4. Security Gates (mandatory -- no exceptions)
 

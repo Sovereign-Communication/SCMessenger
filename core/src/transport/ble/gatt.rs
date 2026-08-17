@@ -9,21 +9,48 @@ use thiserror::Error;
 /// Maximum GATT characteristic write size (protocol limitation)
 pub const MAX_CHARACTERISTIC_SIZE: usize = 512;
 
+/// SCMessenger primary GATT service UUID (short form).
+///
+/// This is the DF01 service shared by the iOS, Android, and CLI BLE
+/// implementations. It is also the service UUID used by the BLE beacon.
+pub const GATT_SERVICE_UUID: u16 = 0xDF01;
+
 /// Default maximum outstanding writes before backpressure
 pub const DEFAULT_MAX_OUTSTANDING_WRITES: usize = 10;
 
 /// GATT characteristic types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GattCharacteristic {
-    /// Write characteristic for sending data
+    /// Existing serialized name for the DF02 identity characteristic.
     Write,
-    /// Notify characteristic for receiving data
+    /// Existing serialized name for the DF03 message characteristic.
     Notify,
-    /// Status characteristic for connection state
+    /// Existing serialized name for the DF04 sync characteristic.
     Status,
 }
 
 impl GattCharacteristic {
+    /// Canonical source-level name for the DF02 identity characteristic.
+    ///
+    /// This is an associated constant rather than a new enum variant so the
+    /// serialized names of the existing variants remain unchanged.
+    #[allow(non_upper_case_globals)]
+    pub const Identity: Self = Self::Write;
+
+    /// Canonical source-level name for the DF03 message characteristic.
+    ///
+    /// This is an associated constant rather than a new enum variant so the
+    /// serialized names of the existing variants remain unchanged.
+    #[allow(non_upper_case_globals)]
+    pub const Message: Self = Self::Notify;
+
+    /// Canonical source-level name for the DF04 sync characteristic.
+    ///
+    /// This is an associated constant rather than a new enum variant so the
+    /// serialized names of the existing variants remain unchanged.
+    #[allow(non_upper_case_globals)]
+    pub const Sync: Self = Self::Status;
+
     /// Get characteristic UUID (short form)
     pub fn uuid(&self) -> u16 {
         match self {
@@ -278,9 +305,13 @@ mod tests {
 
     #[test]
     fn test_gatt_characteristic_uuids() {
+        assert_eq!(GATT_SERVICE_UUID, 0xDF01);
+        assert_eq!(GattCharacteristic::Identity.uuid(), 0xDF02);
         assert_eq!(GattCharacteristic::Write.uuid(), 0xDF02);
         assert_eq!(GattCharacteristic::Notify.uuid(), 0xDF03);
         assert_eq!(GattCharacteristic::Status.uuid(), 0xDF04);
+        assert_eq!(GattCharacteristic::Message.uuid(), 0xDF03);
+        assert_eq!(GattCharacteristic::Sync.uuid(), 0xDF04);
     }
 
     #[test]

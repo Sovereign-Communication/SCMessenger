@@ -16,7 +16,6 @@ struct JoinMeshView: View {
 
     @State private var topicManager: TopicManager?
     @State private var topicName: String = ""
-    @State private var autoSubscribe: Bool = true
     @State private var error: String?
     @State private var showingQrScanner: Bool = false
 
@@ -35,7 +34,6 @@ struct JoinMeshView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
-                    Toggle("Auto-subscribe to messages", isOn: $autoSubscribe)
                 }
 
                 Section("Join via QR") {

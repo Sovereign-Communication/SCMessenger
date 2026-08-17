@@ -32,7 +32,10 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             if identityInitialized {
                 NavigationStack(path: $messagesPath) {
-                    ConversationListView(onOpenRequestsInbox: openRequestsInbox)
+                    ConversationListView(
+                        onOpenRequestsInbox: openRequestsInbox,
+                        onStartConversation: openContacts
+                    )
                         .navigationDestination(for: MessagesRoute.self) { route in
                             switch route {
                             case .conversation(let conversation):
@@ -131,6 +134,10 @@ struct MainTabView: View {
         selectedTab = .messages
         messagesPath = [.requestsInbox]
     }
+
+    private func openContacts() {
+        selectedTab = .contacts
+    }
 }
 
 @MainActor
@@ -142,6 +149,7 @@ struct ConversationListView: View {
     @State private var showingDeleteConfirmation: Bool = false
     private let logger: Logger = Logger(subsystem: "com.scmessenger", category: "ConversationList")
     let onOpenRequestsInbox: () -> Void
+    let onStartConversation: () -> Void
 
     var body: some View {
         List {
@@ -185,9 +193,10 @@ struct ConversationListView: View {
         .navigationTitle("Messages")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {}) {
+                Button(action: onStartConversation) {
                     Image(systemName: "square.and.pencil")
                 }
+                .accessibilityLabel("Start a new conversation")
             }
         }
         .task {
@@ -338,7 +347,7 @@ struct RequestsInboxView: View {
                         ConversationRow(conversation: request.conversation)
                     }
                     .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button("Accept") {
                             do {
                                 try repository.acceptMessageRequest(peerId: request.peerId)
@@ -349,6 +358,21 @@ struct RequestsInboxView: View {
                             }
                         }
                         .tint(.green)
+
+                        Button("Reject & Block", role: .destructive) {
+                            do {
+                                try repository.blockAndDeletePeer(
+                                    peerId: request.peerId,
+                                    reason: "message_request_rejected"
+                                )
+                                try repository.removeContact(peerId: request.peerId)
+                                NotificationManager.shared.markConversationRead(conversationId: request.peerId)
+                                error = nil
+                                loadRequests()
+                            } catch {
+                                self.error = "Failed to reject request: \(error.localizedDescription)"
+                            }
+                        }
                     }
                 }
             }
@@ -510,14 +534,29 @@ struct ChatView: View {
     }
 }
 
-/// Zero-Status Architecture: displays only message content (text)
-/// and sender-assigned timestamp (`senderTimestamp`, the time the message was saved
-/// to local storage for sending). No delivery status indicators.
+/// Displays message content, sender-assigned timestamp, and the repository's
+/// current delivery/outbox presentation for sent messages.
 struct MessageBubble: View {
+    @Environment(MeshRepository.self) private var repository
     let message: MessageRecord
 
     private var isSent: Bool {
         message.direction == .sent
+    }
+
+    private var deliveryState: MeshRepository.DeliveryStatePresentation? {
+        guard isSent else { return nil }
+        return repository.deliveryStatePresentation(for: message)
+    }
+
+    private var deliveryIcon: String {
+        switch deliveryState?.label {
+        case "stored": return "archivebox"
+        case "forwarding": return "arrow.triangle.2.circlepath"
+        case "delivered": return "checkmark.circle.fill"
+        case "rejected": return "exclamationmark.octagon"
+        default: return "clock"
+        }
     }
 
     var body: some View {
@@ -533,6 +572,13 @@ struct MessageBubble: View {
                 Text(formatMessageDate(msgDate))
                     .font(Theme.labelSmall)
                     .foregroundStyle(isSent ? Theme.onPrimaryContainer.opacity(0.8) : Theme.onSurface.opacity(0.8))
+
+                if let deliveryState {
+                    Label(deliveryState.label.capitalized, systemImage: deliveryIcon)
+                        .font(Theme.labelSmall)
+                        .foregroundStyle(isSent ? Theme.onPrimaryContainer.opacity(0.8) : Theme.onSurfaceVariant)
+                        .accessibilityLabel("Delivery status: \(deliveryState.label). \(deliveryState.detail)")
+                }
             }
             .padding(Theme.spacingMedium)
             .background(isSent ? Theme.primaryContainer : Theme.surfaceVariant)

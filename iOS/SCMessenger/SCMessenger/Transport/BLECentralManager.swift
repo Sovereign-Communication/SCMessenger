@@ -40,9 +40,16 @@ final class BLECentralManager: NSObject {
     // Write queue (mirrors Android BleGattClient pattern - CRITICAL)
     private var writeInProgress: [UUID: Bool] = [:]
     private var pendingWrites: [UUID: [Data]] = [:]
+    private var inFlightWrites: [UUID: Data] = [:]
+    private var writeRetryCounts: [UUID: Int] = [:]
+    private let maxWriteAttempts = 3
+    private let maxWriteWithoutResponseBurst = 16
 
     // Reassembly buffers per peripheral
     private var reassemblyBuffers: [UUID: [Int: Data]] = [:]
+    private var expectedFragments: [UUID: Int] = [:]
+    private let maxReassemblyFragments = 1024
+    private let maxReassemblyBytes = 1_048_576
 
     // Characteristics cache (names match Android BleGattServer)
     private var messageCharacteristics: [UUID: CBCharacteristic] = [:] // Write: central → peripheral
@@ -58,6 +65,7 @@ final class BLECentralManager: NSObject {
     private var reconnectionTimers: [UUID: Timer] = [:]
     private let maxReconnectionAttempts: Int = 3
     private let reconnectionDelay: TimeInterval = 2.0
+    private var intentionalDisconnects: Set<UUID> = []
 
     init(meshRepository: MeshRepository) {
         self.meshRepository = meshRepository
@@ -113,6 +121,10 @@ final class BLECentralManager: NSObject {
 
     @discardableResult
     func sendData(to peripheralId: UUID, data: Data) -> Bool {
+        guard !data.isEmpty else {
+            logger.warning("Cannot send empty BLE frame to \(peripheralId)")
+            return false
+        }
         guard let peripheral = connectedPeripherals[peripheralId] else {
             if let discovered = discoveredPeripherals[peripheralId] {
                 logger.warning("Cannot send: peripheral \(peripheralId) not connected, reconnecting")
@@ -130,14 +142,24 @@ final class BLECentralManager: NSObject {
             return false
         }
         
-        guard messageCharacteristics[peripheralId] != nil else {
+        guard let messageCharacteristic = messageCharacteristics[peripheralId],
+              messageCharacteristic.properties.contains(.write) ||
+                messageCharacteristic.properties.contains(.writeWithoutResponse) else {
             logger.warning("Cannot send: Message characteristic missing for \(peripheralId), rediscovering")
             peripheral.discoverServices([MeshBLEConstants.serviceUUID])
             return false
         }
 
         let mtu = peripheral.maximumWriteValueLength(for: .withResponse)
+        guard mtu > 4 else {
+            logger.warning("Cannot send: negotiated BLE write MTU \(mtu) is too small for framing")
+            return false
+        }
         let fragments = fragmentData(data, mtu: mtu)
+        guard !fragments.isEmpty else {
+            logger.warning("Cannot fragment BLE frame for \(peripheralId)")
+            return false
+        }
 
         appendRepositoryDiagnostic(
             "ble_central_tx_start fragments=\(fragments.count) bytes=\(data.count) " +
@@ -184,13 +206,13 @@ final class BLECentralManager: NSObject {
         connectionRetries[peripheralId] = retryCount
         
         if retryCount > maxReconnectionAttempts {
-            logger.warning("Max reconnection attempts (\\(maxReconnectionAttempts)) reached for \\(peripheralId), giving up")
+            logger.warning("Max reconnection attempts (\(self.maxReconnectionAttempts)) reached for \(peripheralId), giving up")
             connectionRetries.removeValue(forKey: peripheralId)
             return
         }
         
-        logger.info("Attempting reconnection \\(retryCount)/\\(maxReconnectionAttempts) to \\(peripheralId)")
-        appendRepositoryDiagnostic("ble_central_reconnect_attempt attempt=\\$retryCount id=\\$peripheralId")
+        logger.info("Attempting reconnection \(retryCount)/\(self.maxReconnectionAttempts) to \(peripheralId)")
+        appendRepositoryDiagnostic("ble_central_reconnect_attempt attempt=\(retryCount) id=\(peripheralId)")
         
         // Attempt immediate connection
         centralManager.connect(peripheral, options: nil)
@@ -215,7 +237,7 @@ final class BLECentralManager: NSObject {
             if self.connectedPeripherals[peripheralId] == nil {
                 let currentRetryCount = self.connectionRetries[peripheralId] ?? 0
                 if currentRetryCount <= self.maxReconnectionAttempts {
-                    self.logger.info("Reconnection retry \\(currentRetryCount) for \\(peripheralId)")
+                    self.logger.info("Reconnection retry \(currentRetryCount) for \(peripheralId)")
                     self.centralManager.connect(peripheral, options: nil)
                     self.scheduleReconnectionRetry(for: peripheral) // Schedule next retry if needed
                 }
@@ -245,23 +267,58 @@ final class BLECentralManager: NSObject {
     }
 
     private func enqueueFragment(_ fragment: Data, for peripheralId: UUID) {
-        guard let peripheral = connectedPeripherals[peripheralId],
+        guard connectedPeripherals[peripheralId] != nil,
+              messageCharacteristics[peripheralId] != nil else { return }
+
+        pendingWrites[peripheralId, default: []].append(fragment)
+        drainWriteQueue(for: peripheralId)
+    }
+
+    private func drainWriteQueue(for peripheralId: UUID) {
+        guard writeInProgress[peripheralId] != true,
+              let peripheral = connectedPeripherals[peripheralId],
               let characteristic = messageCharacteristics[peripheralId] else { return }
 
-        if writeInProgress[peripheralId] == true {
-            pendingWrites[peripheralId, default: []].append(fragment)
-        } else {
+        if characteristic.properties.contains(.write) {
+            guard let fragment = pendingWrites[peripheralId]?.first else { return }
+            pendingWrites[peripheralId]?.removeFirst()
             writeInProgress[peripheralId] = true
+            inFlightWrites[peripheralId] = fragment
             peripheral.writeValue(fragment, for: characteristic, type: .withResponse)
+        } else if characteristic.properties.contains(.writeWithoutResponse) {
+            var sentCount = 0
+            while sentCount < maxWriteWithoutResponseBurst,
+                  pendingWrites[peripheralId]?.isEmpty == false {
+                guard peripheral.canSendWriteWithoutResponse else {
+                    return
+                }
+                guard let fragment = pendingWrites[peripheralId]?.first else { return }
+                pendingWrites[peripheralId]?.removeFirst()
+                peripheral.writeValue(fragment, for: characteristic, type: .withoutResponse)
+                sentCount += 1
+            }
+
+            guard pendingWrites[peripheralId]?.isEmpty == false else { return }
+            guard peripheral.canSendWriteWithoutResponse else { return }
+            DispatchQueue.main.async { [weak self, weak peripheral] in
+                guard let self, let peripheral,
+                      peripheral.state == .connected,
+                      peripheral.canSendWriteWithoutResponse else { return }
+                self.drainWriteQueue(for: peripheralId)
+            }
+        } else {
+            pendingWrites[peripheralId]?.removeAll()
         }
     }
 
     private func fragmentData(_ data: Data, mtu: Int) -> [Data] {
-        let maxChunk = min(512, mtu)
+        guard !data.isEmpty else { return [] }
+        let maxChunk = min(MeshBLEConstants.maxChunkSize, mtu)
         let maxPayload = maxChunk - 4
-        if maxPayload <= 0 { return [data] }
+        if maxPayload <= 0 { return [] }
 
         let totalFragments = Int(ceil(Double(data.count) / Double(maxPayload)))
+        guard totalFragments <= Int(UInt16.max) else { return [] }
         var fragments: [Data] = []
 
         for i in 0..<totalFragments {
@@ -341,12 +398,22 @@ final class BLECentralManager: NSObject {
 
     private func disconnectAll() {
         for peripheral in connectedPeripherals.values {
+            intentionalDisconnects.insert(peripheral.identifier)
             centralManager.cancelPeripheralConnection(peripheral)
         }
+        reconnectionTimers.values.forEach { $0.invalidate() }
+        reconnectionTimers.removeAll()
+        connectionRetries.removeAll()
         connectedPeripherals.removeAll()
         messageCharacteristics.removeAll()
         syncCharacteristics.removeAll()
         messageNotifyAttempts.removeAll()
+        writeInProgress.removeAll()
+        pendingWrites.removeAll()
+        inFlightWrites.removeAll()
+        writeRetryCounts.removeAll()
+        reassemblyBuffers.removeAll()
+        expectedFragments.removeAll()
     }
 
     private func cleanupPeerCache() {
@@ -390,6 +457,8 @@ extension BLECentralManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         logger.info("Connected to \(peripheral.identifier)")
         appendRepositoryDiagnostic("ble_central_connected id=\(peripheral.identifier)")
+        intentionalDisconnects.remove(peripheral.identifier)
+        cleanupReconnectionState(for: peripheral.identifier)
         connectedPeripherals[peripheral.identifier] = peripheral
         // Request maximum write size (negotiate higher MTU) before discovering services.
         // iOS will use this hint when negotiating the connection's ATT MTU.
@@ -400,33 +469,34 @@ extension BLECentralManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         logger.error("Failed to connect to \(peripheral.identifier): \(error?.localizedDescription ?? "unknown")")
         appendRepositoryDiagnostic("ble_central_connect_fail id=\(peripheral.identifier) err=\(error?.localizedDescription ?? "none")")
+        if intentionalDisconnects.remove(peripheral.identifier) == nil {
+            attemptReconnection(to: peripheral)
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         logger.info("Disconnected from \(peripheral.identifier)")
         appendRepositoryDiagnostic("ble_central_disconnected id=\(peripheral.identifier) err=\(error?.localizedDescription ?? "none")")
+        let wasIntentional = intentionalDisconnects.remove(peripheral.identifier) != nil
         connectedPeripherals.removeValue(forKey: peripheral.identifier)
         messageCharacteristics.removeValue(forKey: peripheral.identifier)
         syncCharacteristics.removeValue(forKey: peripheral.identifier)
         messageNotifyAttempts.removeValue(forKey: peripheral.identifier)
         writeInProgress.removeValue(forKey: peripheral.identifier)
         pendingWrites.removeValue(forKey: peripheral.identifier)
+        inFlightWrites.removeValue(forKey: peripheral.identifier)
+        writeRetryCounts.removeValue(forKey: peripheral.identifier)
         reassemblyBuffers.removeValue(forKey: peripheral.identifier)
+        expectedFragments.removeValue(forKey: peripheral.identifier)
         // Clear the peer cache entry so the peer is immediately eligible for
         // re-discovery and reconnection on the next scan result — without this,
         // the 5-second dedup window prevents reconnecting after a brief drop.
         peerCache.removeValue(forKey: peripheral.identifier)
         
         // Attempt automatic reconnection unless it was intentional disconnection
-        if error != nil || !wasIntentionalDisconnect(peripheral: peripheral) {
+        if !wasIntentional {
             attemptReconnection(to: peripheral)
         }
-    }
-    
-    private func wasIntentionalDisconnect(peripheral: CBPeripheral) -> Bool {
-        // In a real implementation, you would track intentional disconnections
-        // For now, we'll assume all disconnections with errors are unintentional
-        return false
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
@@ -436,6 +506,7 @@ extension BLECentralManager: CBCentralManagerDelegate {
             for peripheral in peripherals {
                 peripheral.delegate = self
                 connectedPeripherals[peripheral.identifier] = peripheral
+                peripheral.discoverServices([MeshBLEConstants.serviceUUID])
             }
         }
     }
@@ -553,8 +624,10 @@ extension BLECentralManager: CBPeripheralDelegate {
         for delayNs: UInt64 in [900_000_000, 2_200_000_000] {
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: delayNs)
-                guard let self, self.connectedPeripherals[peripheralId] != nil else { return }
-                peripheral.readValue(for: characteristic)
+                await MainActor.run {
+                    guard self?.connectedPeripherals[peripheralId] != nil else { return }
+                    peripheral.readValue(for: characteristic)
+                }
             }
         }
     }
@@ -585,27 +658,56 @@ extension BLECentralManager: CBPeripheralDelegate {
             // Message or sync data — handle reassembly
             if data.count < 4 {
                 logger.warning("Received tiny BLE packet (<4 bytes) from \(peripheral.identifier)")
+                clearReassembly(for: peripheral.identifier)
                 return
             }
 
             let totalFrags = Int(data[0]) | (Int(data[1]) << 8)
             let fragIndex = Int(data[2]) | (Int(data[3]) << 8)
+            guard totalFrags > 0,
+                  totalFrags <= maxReassemblyFragments,
+                  fragIndex < totalFrags else {
+                logger.warning("Invalid BLE fragment header from \(peripheral.identifier)")
+                clearReassembly(for: peripheral.identifier)
+                return
+            }
             let payload = data.subdata(in: 4..<data.count)
+            guard payload.count <= maxReassemblyBytes else {
+                logger.warning("BLE fragment exceeds reassembly byte limit from \(peripheral.identifier)")
+                clearReassembly(for: peripheral.identifier)
+                return
+            }
 
             let peripheralID = peripheral.identifier
             if fragIndex == 0 {
+                // A new first fragment supersedes any stale incomplete message.
+                clearReassembly(for: peripheralID)
                 reassemblyBuffers[peripheralID] = [0: payload]
+                expectedFragments[peripheralID] = totalFrags
                 if totalFrags > 1 {
                     appendRepositoryDiagnostic("ble_central_rx_start total=\(totalFrags) from=\(peripheralID.uuidString.prefix(8))")
                 }
             } else {
+                guard expectedFragments[peripheralID] == totalFrags,
+                      reassemblyBuffers[peripheralID] != nil else {
+                    logger.warning("BLE fragment total changed or frame missing from \(peripheralID)")
+                    clearReassembly(for: peripheralID)
+                    return
+                }
                 var buffer = reassemblyBuffers[peripheralID] ?? [:]
                 buffer[fragIndex] = payload
+                let bufferedBytes = buffer.values.reduce(0) { $0 + $1.count }
+                guard bufferedBytes <= maxReassemblyBytes else {
+                    logger.warning("BLE reassembly exceeds byte limit from \(peripheralID)")
+                    clearReassembly(for: peripheralID)
+                    return
+                }
                 reassemblyBuffers[peripheralID] = buffer
             }
 
             let currentCount = reassemblyBuffers[peripheralID]?.count ?? 0
-            if currentCount == totalFrags {
+            if currentCount == totalFrags,
+               reassemblyBuffers[peripheralID]?[0] != nil {
                 var completeData = Data()
                 let buffer = reassemblyBuffers[peripheralID] ?? [:]
                 for i in 0..<totalFrags {
@@ -616,7 +718,7 @@ extension BLECentralManager: CBPeripheralDelegate {
                         return
                     }
                 }
-                reassemblyBuffers.removeValue(forKey: peripheralID)
+                clearReassembly(for: peripheralID)
 
                 logger.info("Reassembled complete message (\(completeData.count) bytes) from \(peripheralID)")
                 appendRepositoryDiagnostic(
@@ -630,28 +732,53 @@ extension BLECentralManager: CBPeripheralDelegate {
         }
     }
 
+    private func clearReassembly(for peripheralId: UUID) {
+        reassemblyBuffers.removeValue(forKey: peripheralId)
+        expectedFragments.removeValue(forKey: peripheralId)
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        let peripheralId = peripheral.identifier
         if let error = error {
-            logger.error("Write error for \(peripheral.identifier): \(error.localizedDescription)")
-            appendRepositoryDiagnostic("ble_central_write_fail id=\(peripheral.identifier) err=\(error.localizedDescription)")
+            logger.error("Write error for \(peripheralId): \(error.localizedDescription)")
+            appendRepositoryDiagnostic("ble_central_write_fail id=\(peripheralId) err=\(error.localizedDescription)")
             // Clear current write state to allow retry/next
-            writeInProgress[peripheral.identifier] = false
+            writeInProgress[peripheralId] = false
+            if let failedFragment = inFlightWrites.removeValue(forKey: peripheralId) {
+                let attempt = (writeRetryCounts[peripheralId] ?? 0) + 1
+                writeRetryCounts[peripheralId] = attempt
+                if attempt <= maxWriteAttempts {
+                    pendingWrites[peripheralId, default: []].insert(failedFragment, at: 0)
+                    let delay = min(4.0, 0.25 * pow(2.0, Double(attempt - 1)))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        self?.drainWriteQueue(for: peripheralId)
+                    }
+                } else {
+                    writeRetryCounts.removeValue(forKey: peripheralId)
+                    logger.error("Dropping BLE fragment after \(self.maxWriteAttempts) attempts for \(peripheralId)")
+                }
+            }
+            if peripheral.state != .connected {
+                attemptReconnection(to: peripheral)
+            }
             return
         }
 
         // Dequeue next write
-        let peripheralId = peripheral.identifier
         appendRepositoryDiagnostic("ble_central_write_ok id=\(peripheralId.uuidString.prefix(8))")
         writeInProgress[peripheralId] = false
-        if let next = pendingWrites[peripheralId]?.first {
-            pendingWrites[peripheralId]?.removeFirst()
-            enqueueFragment(next, for: peripheralId)
-        }
+        inFlightWrites.removeValue(forKey: peripheralId)
+        writeRetryCounts.removeValue(forKey: peripheralId)
+        drainWriteQueue(for: peripheralId)
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        drainWriteQueue(for: peripheral.identifier)
     }
 
     func validateConnection(to peripheralId: UUID) -> Bool {
         guard let peripheral = connectedPeripherals[peripheralId] else {
-            logger.warning("BLE connection validation failed: peripheral not found for id=\\(peripheralId)")
+            logger.warning("BLE connection validation failed: peripheral not found for id=\(peripheralId)")
             return false
         }
 
@@ -668,58 +795,30 @@ extension BLECentralManager: CBPeripheralDelegate {
             return false
         }
 
-        // Attempt to read a characteristic to validate the connection
-        do {
-            let readSuccess = try readCharacteristic(peripheral, characteristic: messageChar)
-            if !readSuccess {
-                logger.warning("BLE connection validation failed: characteristic read failed")
-                return false
-            }
-            
-            logger.debug("BLE connection validation successful for \\(peripheralId)")
-            return true
-        } catch {
-            logger.error("BLE connection validation failed: \\(error.localizedDescription)")
-            return false
-        }
-    }
-
-    private func readCharacteristic(_ peripheral: CBPeripheral, characteristic: CBCharacteristic) throws -> Bool {
-        // Create a semaphore to wait for the read to complete
-        let semaphore: DispatchSemaphore = DispatchSemaphore(value: 0)
-        var readSuccess: Bool = false
-        var readError: Error? = nil
-
-        // Set up a temporary callback
-        let originalDelegate = peripheral.delegate
-        
-        // This is a simplified approach - in a real implementation, you'd want to
-        // use a more robust mechanism for handling async callbacks
-        DispatchQueue.main.async {
-            peripheral.readValue(for: characteristic)
-        }
-
-        // Wait for the read to complete (with timeout)
-        let timeoutResult = semaphore.wait(timeout: .now() + .seconds(5))
-        
-        if timeoutResult == .timedOut {
-            logger.warning("Characteristic read timed out")
+        guard (messageChar.properties.contains(.write) ||
+               messageChar.properties.contains(.writeWithoutResponse)),
+              messageChar.properties.contains(.notify) ||
+                messageChar.properties.contains(.indicate),
+              syncChar.properties.contains(.read) ||
+                syncChar.properties.contains(.write) else {
+            logger.warning("BLE connection validation failed: characteristic capabilities incomplete")
             return false
         }
 
-        return readSuccess
+        logger.debug("BLE connection validation successful for \(peripheralId)")
+        return true
     }
     
     // MARK: - Enhanced Error Handling
     
     private func handleBleError(_ error: Error?, operation: String, peripheralId: UUID? = nil) {
-        var errorMessage: String = "BLE error in \\(operation)"
+        var errorMessage: String = "BLE error in \(operation)"
         if let peripheralId = peripheralId {
-            errorMessage += " for peripheral \\(peripheralId)"
+            errorMessage += " for peripheral \(peripheralId)"
         }
         
         if let error = error {
-            errorMessage += ": \\(error.localizedDescription)"
+            errorMessage += ": \(error.localizedDescription)"
             
             // Handle specific BLE error codes
             let nsError = error as NSError
@@ -745,7 +844,7 @@ extension BLECentralManager: CBPeripheralDelegate {
                 // This is expected during cleanup
                 
             default:
-                errorMessage += " (Code: \\(nsError.code))"
+                errorMessage += " (Code: \(nsError.code))"
                 
                 // For unknown errors, attempt reconnection if it's a connection-related operation
                 if operation.contains("connect") || operation.contains("send") {
@@ -759,16 +858,16 @@ extension BLECentralManager: CBPeripheralDelegate {
         }
         
         logger.error("Error: {\(errorMessage)}")
-        appendRepositoryDiagnostic("ble_error operation=\\$operation error=\\$errorMessage")
+        appendRepositoryDiagnostic("ble_error operation=\(operation) error=\(errorMessage)")
     }
     
     private func logBleWarning(_ message: String, operation: String, peripheralId: UUID? = nil) {
-        var fullMessage: String = "BLE warning in \\(operation): \\(message)"
+        var fullMessage: String = "BLE warning in \(operation): \(message)"
         if let peripheralId = peripheralId {
-            fullMessage += " (peripheral: \\(peripheralId))"
+            fullMessage += " (peripheral: \(peripheralId))"
         }
         
         logger.warning("Warning: {\(fullMessage)}")
-        appendRepositoryDiagnostic("ble_warning operation=\\$operation message=\\$message")
+        appendRepositoryDiagnostic("ble_warning operation=\(operation) message=\(message)")
     }
 }

@@ -244,6 +244,14 @@ final class SmartTransportRouter {
         tryCore: @escaping (String) async -> Bool
     ) async -> TransportDeliveryResult {
         let startTime: Date = Date()
+        let validRoutePeerCandidates = routePeerCandidates
+            .map { PeerIdValidator.normalize($0) }
+            .filter { PeerIdValidator.isLibp2pPeerId($0) }
+            .reduce(into: [String]()) { result, candidate in
+                if !result.contains(candidate) {
+                    result.append(candidate)
+                }
+            }
         
         // Determine available transports
         var availableTransports: [(type: TransportType, target: String, attempt: () async -> Bool)] = []
@@ -260,7 +268,7 @@ final class SmartTransportRouter {
             availableTransports.append((.tcpMdns, tcpMdnsTarget, { await tryTcpMdns(tcpMdnsTarget) }))
         }
         
-        if let internetTarget = routePeerCandidates.first?.trimmingCharacters(in: .whitespacesAndNewlines), !internetTarget.isEmpty {
+        if let internetTarget = validRoutePeerCandidates.first {
             availableTransports.append((.internet, internetTarget, { await tryCore(internetTarget) }))
         }
         
