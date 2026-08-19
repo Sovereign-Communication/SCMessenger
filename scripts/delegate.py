@@ -58,6 +58,11 @@ def call(lane, prompt, max_tokens, timeout):
     knob = reasoning_knob(lane)
     if knob is not None:
         body["reasoning"] = knob
+    # Per-lane extra body params merged verbatim (e.g. z.ai/GLM "thinking" toggle,
+    # which must be disabled on hybrid-reasoning models to avoid the empty-content trap).
+    extra = lane.get("body_extra")
+    if isinstance(extra, dict):
+        body.update(extra)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {key}",

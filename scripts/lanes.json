@@ -16,6 +16,33 @@
 
   "lanes": [
     {
+      "id": "zai-glm47-flash", "provider": "zai", "model": "glm-4.7-flash",
+      "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
+      "key_file": "zai.env", "key_var": "ZAI_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped", "reasoning", "long-context"],
+      "context": 128000, "status": "OK",
+      "body_extra": {"thinking": {"type": "disabled"}},
+      "quirks": "z.ai GLM hybrid-reasoning; thinking DISABLED via body_extra to avoid empty-content trap. OpenAI-compatible /api/paas/v4. Probed 2026-08-16: FREE & working, strongest free coder here. glm-4.6 is PAID (err 1113)."
+    },
+    {
+      "id": "zai-glm45-flash", "provider": "zai", "model": "glm-4.5-flash",
+      "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
+      "key_file": "zai.env", "key_var": "ZAI_API_KEY",
+      "cost_class": "free", "tiers": ["micro", "scoped", "reasoning", "long-context"],
+      "context": 128000, "status": "OK",
+      "body_extra": {"thinking": {"type": "disabled"}},
+      "quirks": "z.ai GLM-4.5-flash; thinking DISABLED via body_extra. Probed 2026-08-16: FREE & working. Fallback to zai-glm47-flash."
+    },
+    {
+      "id": "zai-glm47-flash-think", "provider": "zai", "model": "glm-4.7-flash",
+      "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
+      "key_file": "zai.env", "key_var": "ZAI_API_KEY",
+      "cost_class": "free", "tiers": ["reasoning", "scoped", "long-context"],
+      "context": 128000, "status": "OK",
+      "body_extra": {"thinking": {"type": "enabled"}},
+      "quirks": "GLM-4.7 flash, THINKING ENABLED. Reasoning goes to a separate reasoning_content field; the answer is in content (delegate reads content, so reasoning is auto-discarded). BUT reasoning_tokens (~1500-8000) count against max_tokens -- ALWAYS pass --max-tokens>=12000 or content returns empty (the trap). Use for HARD exploit reasoning; use zai-glm47-flash (no-think) for mechanical enumeration."
+    },
+    {
       "id": "cerebras-gemma4-31b", "provider": "cerebras", "model": "gemma-4-31b",
       "endpoint": "https://api.cerebras.ai/v1/chat/completions",
       "key_file": "cerebras.env", "key_var": "CEREBRAS_API_KEY",
