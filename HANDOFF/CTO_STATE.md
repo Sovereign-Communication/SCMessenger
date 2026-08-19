@@ -1,8 +1,15 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-15 14:50 HST (sprint close, seat handed off)
+Last updated: 2026-08-16 (merge train advanced; see the banner below)
 Entry point: `/CTO`. This file is the whole context load.
+
+> **2026-08-16 — READ `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md` FIRST.**
+> #167, #168, #169 and #165 are **merged to tracking**. The lane picture in §3
+> below **inverted** since it was written: `Mobile`/KSP UniFFI is now GREEN and
+> `Test` went RED on two transport tests. The dispatch plan carries the
+> re-derived table, the verified merge mechanics, and the routing plan.
+> Sections §1, §4, §5, §6, §7 and §8 of this file remain accurate.
 
 Everything below has a command next to it. **Re-derive before acting** — this
 file ages, the repo does not.
@@ -54,18 +61,28 @@ bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see §6
 
 | PR | Base | What it is |
 |---|---|---|
-| **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Checks were re-running at handoff |
-| **#165** | tracking | Two transport defects fixed (see §4). One check pending at handoff |
-| #152 | main | Hygiene whitespace — may be redundant now that #164 landed; check before merging |
+| **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Checks re-triggered 2026-08-16 after the four merges below |
+| #152 | main | Hygiene whitespace. **CONFLICTS with tracking** and is probably obsolete after #164/#169. Verify after #139; do not close blind |
 | #154 | main | `apksigner verify` guard. **Merge this before tagging** — see §5 |
 | #156 | main | Docker Integration Suite non-blocking + issue #155 |
+| #170 | main | Free-lane orchestration tooling. Its red `Lint` is `core/src/lib.rs:159` **inherited from main** — it self-clears when #139 lands |
 | 13 dependabot | main | **DEFER all, close none.** They are the post-tag S4 queue. GitHub reports 7 vulnerabilities on the default branch, 3 high — real, but not before the tag |
+
+**Merged to tracking 2026-08-16 (4):** #167 dispatch-guard false positives; #168
+stale-checkout gate + dispatch timeout floor; #169 `.gitattributes` eol=lf +
+whitespace/rustfmt (clears `Lint`, `Rust Linting`, `Repository Hygiene`); #165
+transport saturating latency score + zero-duration bandwidth bypass (clears
+`Test` ×3 and `macOS Native Tests`). #165 carried a full adversarial APPROVE,
+zero findings, `CRYPTO_TOUCHED: NO`.
 
 ---
 
 ## 3. Critical path to the tag
 
-1. **#165 green → merge to tracking.**
+1. ~~**#165 green → merge to tracking.**~~ **DONE 2026-08-16**, together with
+   #167, #168 and #169. All four fixes verified present on `tracking`:
+   `manager.rs:470` now reads `100u64.saturating_sub(...)`, and `.gitattributes`
+   declares `*.kt`/`*.kts`/`*.md` as `eol=lf`. #139's checks re-triggered.
 2. **#139 → main.** This is D1 + D5. The repaired `pr_scope.sh` will raise five
    blockers; four are resolved and must be named explicitly rather than silently
    overridden:
@@ -87,6 +104,11 @@ bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see §6
 6. Rebuild the AWS node to the tagged SHA, then run D4 (§5).
 
 ### Why every red lane on `main` is red
+
+> **Superseded 2026-08-16.** This table described the state on 2026-08-15 and has
+> since inverted — `Mobile`/KSP is GREEN and `Test` went RED. The current table,
+> re-derived from the logs, is §3 of
+> `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md`. Kept here for history.
 
 Verified from the literal CI logs, not inferred:
 

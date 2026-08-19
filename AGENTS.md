@@ -136,6 +136,36 @@ the same relay behavior.
     A "yes, merge it" from the operator is permission to act, not evidence
     that no reason exists. Finding the reason is still your job.
 
+15. NO SILENT TRUNCATION. VISIBILITY FAILS OPEN; THE VERDICT FAILS CLOSED.
+
+    Rule 13 says describe only what you have read. This is the other half:
+    a tool must never quietly decide you have read enough. Any tool, report,
+    or summary that enumerates evidence — files, commits, checks, findings,
+    peers — prints ALL of it. No `head -N`, no `[:6]`, no "and 12 more",
+    no API-default page size accepted as the total.
+
+    Express reduced confidence by printing MORE, never less: a `[WARNING]`
+    beside the number, where the number came from, and a tripwire when a
+    value lands exactly on a known API cap (100 is not a count, it is a
+    ceiling). Truncating data and blocking an action are opposite moves —
+    only the second is safe.
+
+    Prefer the authoritative local source over a remote API that paginates.
+    For anything about a branch, git IS authoritative: `git rev-list --count`,
+    `git diff --name-only`, `git merge-tree`. An API is a fallback, and a
+    fallback must announce itself in the output.
+
+    This has now cost the project twice in the same script.
+    `scripts/pr_scope.sh` printed `[OK] clear of core/src/{crypto,transport}`
+    while six gated files sat past the API's 100-file cap, and later reported
+    PR #139 as "100 commits" where git counts 204. It also piped the
+    merge-blocked file list through `head -8` — hiding gated files inside the
+    one check built to reveal them.
+
+    Hard caps are not safety. An agent acting on truncated data is not
+    cautious, it is uninformed, and it does not know it. Limits belong on
+    what you DO, never on what you can SEE.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)

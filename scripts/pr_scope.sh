@@ -36,6 +36,25 @@
 # reported in output), and fail closed if the API returns exactly 100 files
 # (truncation tripwire).
 #
+# 2026-08-16 -- NO SILENT TRUNCATION, ANYWHERE.
+# The 2026-08-15 repair fixed the file list and left four other caps in place.
+# All four hid data inside a script whose only job is to show it:
+#   - commit count came from `gh pr view --json commits`, capped at 100. PR #139
+#     printed "100 commits"; git counts 193. Wrong by 48%.
+#   - the merge-blocked file list was piped through `head -8`, hiding gated
+#     crypto/transport files past the eighth -- in the check that exists to
+#     surface them.
+#   - failing check names were sliced to [:6], running ones to [:4].
+# All removed. git is authoritative for both files and commits; the API is a
+# loudly-announced fallback only.
+#
+# The governing rule, now AGENTS.md rule 15: VISIBILITY FAILS OPEN, THE VERDICT
+# FAILS CLOSED. Reduced confidence is expressed by printing MORE -- a [WARNING]
+# beside the number, its provenance, a tripwire when a value sits exactly on a
+# known API cap -- never by showing less. Anything that cannot be determined
+# becomes a [BLOCKER]. Truncating data and blocking a merge are opposite moves;
+# only the second one is safe.
+#
 #   scripts/pr_scope.sh 150
 #
 # Exit 0 = no blockers found. Exit 1 = at least one blocker. Read-only.
@@ -61,29 +80,58 @@ HEAD_REF=$(echo "$J" | python3 -c 'import json,sys;print(json.load(sys.stdin)["h
 BLOCKERS=0
 note() { echo "  [BLOCKER] $*"; BLOCKERS=$((BLOCKERS+1)); }
 ok()   { echo "  [OK]      $*"; }
+# warn() surfaces a caveat WITHOUT blocking. It exists so that reduced
+# confidence never has to be expressed by hiding data. Visibility fails OPEN
+# (always print everything, flag what is uncertain); the verdict fails CLOSED
+# (anything undetermined becomes a [BLOCKER] via note()).
+warn() { echo "  [WARNING] $*"; }
 
 # Derive file list from git (reliable, no 100-file API pagination limit).
 # Fall back to GitHub API only if git fetch/diff fails.
 FILE_SOURCE="git"
 FILES_LIST=""
 API_FILES_COUNT=0
+BASE_REV=""
+HEAD_REV=""
 
 if git fetch origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" >/dev/null 2>&1 && \
    git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1 && \
    git rev-parse --verify "origin/${HEAD_REF}" >/dev/null 2>&1; then
-  FILES_LIST=$(git diff --name-only "origin/${BASE_REF}...origin/${HEAD_REF}" 2>/dev/null)
+  BASE_REV="origin/${BASE_REF}"; HEAD_REV="origin/${HEAD_REF}"
 elif git fetch origin "${BASE_REF}" "${HEAD_REF}" >/dev/null 2>&1 && \
      git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1 && \
      git rev-parse --verify "origin/${HEAD_REF}" >/dev/null 2>&1; then
-  FILES_LIST=$(git diff --name-only "origin/${BASE_REF}...origin/${HEAD_REF}" 2>/dev/null)
+  BASE_REV="origin/${BASE_REF}"; HEAD_REV="origin/${HEAD_REF}"
 elif git fetch origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "+refs/pull/${PR}/head:refs/remotes/origin/pr/${PR}" >/dev/null 2>&1 && \
      git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1 && \
      git rev-parse --verify "origin/pr/${PR}" >/dev/null 2>&1; then
-  FILES_LIST=$(git diff --name-only "origin/${BASE_REF}...origin/pr/${PR}" 2>/dev/null)
+  BASE_REV="origin/${BASE_REF}"; HEAD_REV="origin/pr/${PR}"
+fi
+
+if [ -n "$BASE_REV" ]; then
+  FILES_LIST=$(git diff --name-only "${BASE_REV}...${HEAD_REV}" 2>/dev/null)
 else
   FILE_SOURCE="api"
   FILES_LIST=$(echo "$J" | python3 -c 'import json,sys;print("\n".join(f["path"] for f in json.load(sys.stdin)["files"]))')
   API_FILES_COUNT=$(echo "$J" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["files"]))')
+fi
+
+# Commit count. git is AUTHORITATIVE. `gh pr view --json commits` silently caps
+# at 100: on 2026-08-16 it reported PR #139 as "100 commits" where
+# `git rev-list --count origin/main..origin/tracking/pre-v040-tag-work` = 193.
+# Same API-cap class as the file-list bug above, in a different field. The
+# blocker still fired, so this hid scope rather than admitting a bad merge --
+# but a number that is wrong by 48% is not evidence, and rule 13 asks for
+# evidence. No cap, no sampling: count them all, and say where the number
+# came from.
+COMMIT_SOURCE="git"
+COMMITS=""
+if [ -n "$BASE_REV" ]; then
+  COMMITS=$(git rev-list --count "${BASE_REV}..${HEAD_REV}" 2>/dev/null)
+fi
+if [ -z "$COMMITS" ]; then
+  COMMIT_SOURCE="api"
+  COMMITS=$(echo "$J" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["commits"]))')
 fi
 
 TOTAL_FILES=$(python3 -c '
@@ -103,9 +151,12 @@ import json, sys
 d = json.load(sys.stdin)
 print("  state       : %s  mergeable=%s  %s" % (d["state"], d["mergeable"], d["mergeStateStatus"]))
 print("  base <- head: %s <- %s" % (d["baseRefName"], d["headRefName"]))
-print("  size        : +%d/-%d across %d files, %d commits" % (
-    d["additions"], d["deletions"], '"$TOTAL_FILES"', len(d["commits"])))
+print("  size        : +%d/-%d across %d files, %s commits" % (
+    d["additions"], d["deletions"], '"$TOTAL_FILES"', "'"$COMMITS"'"))
 '
+# Rule 13: every number above must say where it came from, so a reader can
+# tell a measurement from an assumption without re-running the script.
+echo "  provenance  : files=${FILE_SOURCE}  commits=${COMMIT_SOURCE}  (git = authoritative, api = capped at 100)"
 echo
 echo "-- reasons not to merge --"
 
@@ -118,7 +169,13 @@ if [ "$FILE_SOURCE" = "api" ]; then
 fi
 
 # 1. Scope: a PR far larger than its title suggests is usually mis-based.
-COMMITS=$(echo "$J" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["commits"]))')
+if [ "$COMMIT_SOURCE" = "api" ]; then
+  warn "commit count came from the GitHub API, which caps at 100 -- the true"
+  warn "  count may be higher. Authoritative: git rev-list --count <base>..<head>"
+  if [ "$COMMITS" -eq 100 ]; then
+    note "TRUNCATION TRIPWIRE: API reported exactly 100 commits -- assume truncated"
+  fi
+fi
 if [ "$COMMITS" -gt 20 ]; then
   note "$COMMITS commits. Is this branch based on the branch you are merging INTO?"
   note "  Check: git log --oneline <base>..<head> | wc -l"
@@ -136,8 +193,13 @@ print("\n".join(hits))
 ' <<< "$FILES_LIST")
 
 if [ -n "$GATED" ]; then
-  note "touches merge-blocked directories (AGENTS.md rule 8):"
-  echo "$GATED" | head -8 | sed 's/^/              /'
+  GATED_N=$(printf '%s\n' "$GATED" | grep -c .)
+  # Print EVERY gated file. This list was previously piped through `head -8`,
+  # which silently hid merge-blocked files past the eighth -- inside the exact
+  # check whose entire purpose is to make them visible. A reviewer cannot sign
+  # off on files a tool declined to show them. No cap, ever.
+  note "touches merge-blocked directories (AGENTS.md rule 8) -- $GATED_N file(s):"
+  printf '%s\n' "$GATED" | sed 's/^/              /'
   note "  requires a crypto-security-auditor verdict before merge"
 else
   if [ "$FILE_SOURCE" = "api" ] && [ "$API_FILES_COUNT" -eq 100 ]; then
@@ -172,9 +234,11 @@ except Exception as e:
 failed = [c["name"] for c in d if c.get("state") == "FAILURE"]
 busy = [c["name"] for c in d if c.get("state") in ("IN_PROGRESS", "QUEUED", "PENDING")]
 if failed:
-    print("FAILED %s" % ", ".join(failed[:6]))
+    # No [:6] / [:4] slicing. A truncated failure list sends you to fix the
+    # lanes you can see while the ones past the cap stay red and unnamed.
+    print("FAILED %s" % ", ".join(failed))
 elif busy:
-    print("BUSY %d %s" % (len(busy), ", ".join(busy[:4])))
+    print("BUSY %d %s" % (len(busy), ", ".join(busy)))
 elif not d:
     print("ERROR no checks reported")
 else:
