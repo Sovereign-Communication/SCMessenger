@@ -195,3 +195,56 @@ per the merge-block rule; this validation does not substitute for it.
 3. Six-P0 disposition -- tag-blocking
 4. Wire `check_wiring.py` into CI -- before tag, so this class cannot recur
 5. Everything else in the gate output -- S4
+
+---
+
+## Correction -- 2026-08-19: JoinMeshScreen is NOT D4-blocking
+
+**The CEO's earlier D4-blocking flag on `JoinMeshScreen` was wrong. Withdrawn.**
+
+Operator clarification (2026-08-19): **QR app-sharing is the sharing path, not
+the pairing path.** It streams the APK to a target device to install -- an
+Android-only feature. **Identity QR is the pairing path**, and pairing is
+intertwined with ledger sharing, which should be present by default in the
+shared build.
+
+Re-verified against the tree on that basis:
+
+| Capability | Component | State |
+|---|---|---|
+| Show my identity QR | `IdentityScreen` | **Reachable** -- `MeshApp.kt:319`, renders `QrCodeImage` |
+| Scan an identity QR | `AddContactScreen`, `ContactsScreen`, `OnboardingScreen` | **All three reachable** in `MeshApp` |
+| Ledger seeding / sharing | `uniffi.api.LedgerManager` | **Wired** -- `MeshRepository.kt:292` holds it, instantiated at `:915`, with `getPreferredRelays()` / `dialableAddresses()` |
+| Join-bundle flow (bootstrap peers + topics + identity in one payload) | `JoinMeshScreen` | **Dead** -- absent from `MeshApp` entirely |
+
+**Conclusion: identity-QR pairing works end to end, and ledger seeding is wired.
+D4 is not blocked by either.** `JoinMeshScreen` is a separate, unreferenced
+join-bundle flow. It is **S4 cleanup, not tag-blocking.**
+
+**How the CEO got it wrong, recorded so the method improves:** the first pass
+grepped for `LedgerExchange` and `shareLedger` and found nothing in Kotlin, then
+treated absence-of-those-symbols as absence-of-the-feature. The real API is
+`uniffi.api.LedgerManager`. A dead screen containing the words "identity
+exchange" was read as *the* pairing path without checking whether other live
+screens already covered it.
+
+This is the CTO's own §8 standing lesson landing on the CEO: **the repo is
+consistently more coherent than its directory listing suggests.** A grep that
+returns nothing proves the symbol is absent, never that the capability is. Name
+the capability, then find every symbol that could implement it.
+
+**Unchanged and still tag-blocking:**
+1. Three manifest registrations -- MeshVpnService, BootReceiver, ShareReceiver.
+   Re-verified 2026-08-19: still missing, manifest still 106 lines against 158.
+   Note `ShareReceiver` is part of the **APK-sharing** path the operator
+   describes, so that feature is dead at runtime until it is declared.
+2. Six-P0 disposition, `POST_TAG_QUEUE.md` §2.
+
+**Product requirement captured, not expanded into tag scope:** ledger sharing
+present by default in the shared build. The plumbing exists; whether it is
+*enabled by default in the shipped APK* is a configuration question the CEO has
+not verified and is not asserting. CTO to confirm during the D2 signed-build
+work. If it is off by default, that is a config fix, not a feature build.
+
+The CTO's existing post-tag deferrals of `LedgerExchange` hardening (CTO_STATE
+§145-147) stand and are not reopened by this.
