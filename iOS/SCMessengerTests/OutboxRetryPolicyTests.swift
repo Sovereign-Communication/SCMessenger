@@ -297,44 +297,57 @@ final class OutboxRetryPolicyTests: XCTestCase {
         XCTAssertEqual(item.retryDeferredUntilEpochSec, 1005 + 300 + jitter)
     }
 
-    // T4: Suspended flush cannot overwrite retry, enqueue, receipt removal, or promotion
+    // T4: Concurrent live flush contends with external mutators (enqueue, manual retry, receipt removal, promotion) without data loss or corruption
     func testSuspendedFlushCannotOverwriteRetryEnqueueReceiptRemovalOrPromotion() async throws {
         let driver = MockPersistenceDriver()
         let repo = createTestRepository()
         repo.outboxPersistenceDriver = driver
-        var currentClock: UInt64 = 1000
+        let currentClock: UInt64 = 1000
         repo.nowEpochSecProvider = { currentClock }
 
         let e1 = makeSampleEnvelope(queueId: "q1", historyRecordId: "msg1", nextAttemptAtEpochSec: 1000)
         let e2 = makeSampleEnvelope(queueId: "q2", historyRecordId: "msg2", nextAttemptAtEpochSec: 2000, retryDeferredUntilEpochSec: 2000)
-        try repo.savePendingOutboxChecked([e1, e2])
+        let e4 = makeSampleEnvelope(queueId: "q4", historyRecordId: "msg4", peerId: "peer_promo", nextAttemptAtEpochSec: 2000, retryDeferredUntilEpochSec: 2000)
+        try repo.savePendingOutboxChecked([e1, e2, e4])
 
-        var continuation: CheckedContinuation<(acked: Bool, routePeerId: String?, terminalFailureCode: String?), Never>?
+        // Live asynchronous transport simulation with non-zero async duration
         repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
-            await withCheckedContinuation { cont in
-                continuation = cont
+            try? await Task.sleep(nanoseconds: 2_000_000) // 2ms async delay
+            return (acked: false, routePeerId: nil, terminalFailureCode: nil)
+        }
+
+        let flushTask = Task { @MainActor in
+            await repo.flushPendingOutbox(reason: "concurrent_live_test")
+        }
+
+        // Concurrent mutator task group contending with the live flush loop
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // 1. Enqueue e3
+            group.addTask { @MainActor in
+                try repo.enqueuePendingOutbound(
+                    historyRecordId: "msg3",
+                    peerId: "peer3",
+                    routePeerId: nil,
+                    addresses: [],
+                    envelopeData: Data([9])
+                )
             }
+            // 2. Manual retry on e2
+            group.addTask { @MainActor in
+                _ = try await repo.retryFailedMessage(messageId: "msg2")
+            }
+            // 3. Receipt removal of e1
+            group.addTask { @MainActor in
+                repo.removePendingOutbound(historyRecordId: "msg1")
+            }
+            // 4. Opportunity promotion for peer_promo (e4)
+            group.addTask { @MainActor in
+                repo.promotePendingOutboundForPeer(peerId: "peer_promo")
+            }
+
+            try await group.waitForAll()
         }
 
-        let flushTask = Task {
-            await repo.flushPendingOutbox(reason: "suspended_test")
-        }
-
-        // Wait until transport is suspended
-        while continuation == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-
-        // Interleave mutations during active attempt:
-        // 1. Enqueue e3
-        try repo.enqueuePendingOutbound(historyRecordId: "msg3", peerId: "peer3", routePeerId: nil, addresses: [], envelopeData: Data([9]))
-        // 2. Manual retry on e2
-        _ = try await repo.retryFailedMessage(messageId: "msg2")
-        // 3. Receipt removal of e1
-        repo.removePendingOutbound(historyRecordId: "msg1")
-
-        // Resume suspended attempt with transient failure
-        continuation?.resume(returning: (acked: false, routePeerId: nil, terminalFailureCode: nil))
         await flushTask.value
 
         let finalQueue = repo.loadPendingOutbox()
@@ -343,6 +356,9 @@ final class OutboxRetryPolicyTests: XCTestCase {
         let item2 = finalQueue.first { $0.historyRecordId == "msg2" }
         XCTAssertNotNil(item2)
         XCTAssertEqual(item2?.mutationGeneration, 1, "Manual retry mutation on msg2 must be preserved")
+        let item4 = finalQueue.first { $0.historyRecordId == "msg4" }
+        XCTAssertNotNil(item4)
+        XCTAssertEqual(item4?.mutationGeneration, 1, "Opportunity promotion on msg4 must be preserved")
     }
 
     // T5: Same-item in-flight promotion preserves transient, ACK, terminal, and receipt truth
@@ -362,7 +378,7 @@ final class OutboxRetryPolicyTests: XCTestCase {
                 await withCheckedContinuation { cont in continuation = cont }
             }
 
-            let flushTask = Task { await repo.flushPendingOutbox(reason: "test_t5_transient") }
+            let flushTask = Task { @MainActor in await repo.flushPendingOutbox(reason: "test_t5_transient") }
             while continuation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
 
             // Promote same item during in-flight attempt
@@ -391,7 +407,7 @@ final class OutboxRetryPolicyTests: XCTestCase {
                 await withCheckedContinuation { cont in continuation = cont }
             }
 
-            let flushTask = Task { await repo.flushPendingOutbox(reason: "test_t5_ack") }
+            let flushTask = Task { @MainActor in await repo.flushPendingOutbox(reason: "test_t5_ack") }
             while continuation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
 
             repo.promotePendingOutboundForPeer(peerId: e1.peerId)
@@ -418,7 +434,7 @@ final class OutboxRetryPolicyTests: XCTestCase {
                 await withCheckedContinuation { cont in continuation = cont }
             }
 
-            let flushTask = Task { await repo.flushPendingOutbox(reason: "test_t5_terminal") }
+            let flushTask = Task { @MainActor in await repo.flushPendingOutbox(reason: "test_t5_terminal") }
             while continuation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
 
             repo.promotePendingOutboundForPeer(peerId: e1.peerId)
@@ -428,6 +444,33 @@ final class OutboxRetryPolicyTests: XCTestCase {
             let queue = repo.loadPendingOutbox()
             XCTAssertEqual(queue.count, 1)
             XCTAssertEqual(queue[0].terminalFailureCode, "identity_device_mismatch", "Terminal failure must commit even if generation advanced")
+        }
+
+        // (d) Receipt / Removal: removed during attempt is never resurrected by return result
+        do {
+            let driver = MockPersistenceDriver()
+            let repo = createTestRepository()
+            repo.outboxPersistenceDriver = driver
+            repo.nowEpochSecProvider = { 1000 }
+
+            let e1 = makeSampleEnvelope(queueId: "q1", historyRecordId: "msg1", nextAttemptAtEpochSec: 1000, mutationGeneration: 0)
+            try repo.savePendingOutboxChecked([e1])
+
+            var continuation: CheckedContinuation<(acked: Bool, routePeerId: String?, terminalFailureCode: String?), Never>?
+            repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
+                await withCheckedContinuation { cont in continuation = cont }
+            }
+
+            let flushTask = Task { @MainActor in await repo.flushPendingOutbox(reason: "test_t5_receipt") }
+            while continuation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+
+            // Incoming receipt removes the message while transport is in flight
+            repo.removePendingOutbound(historyRecordId: "msg1")
+            continuation?.resume(returning: (acked: true, routePeerId: "route_peer", terminalFailureCode: nil))
+            await flushTask.value
+
+            let queue = repo.loadPendingOutbox()
+            XCTAssertTrue(queue.isEmpty, "Receipt-removed entry must never be resurrected by completed transport attempt")
         }
     }
 
@@ -629,28 +672,99 @@ final class OutboxRetryPolicyTests: XCTestCase {
         }
     }
 
-    // T14: Send message history failure prevents enqueue and transport
+    // T14: Send message history failure prevents enqueue and transport (all 4 cases)
     func testSendMessageHistoryFailurePreventsEnqueueAndTransport() async {
-        let repo = createTestRepository()
-        let historyDriver = MockPersistenceDriver()
-        historyDriver.shouldFailWrite = true
-        repo.pendingHistoryPersistenceDriver = historyDriver
-
-        var transportCalled = false
-        repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
-            transportCalled = true
-            return (acked: true, routePeerId: nil, terminalFailureCode: nil)
-        }
-
+        // (a) PendingHistoryStore write failure -> throws, zero envelopes, no transport
         do {
-            try await repo.sendMessage(peerId: "peer_fail_hist", content: "hello")
-            XCTFail("sendMessage must throw when history write fails")
-        } catch {
-            // Expected
+            let repo = createTestRepository()
+            let historyDriver = MockPersistenceDriver()
+            historyDriver.shouldFailWrite = true
+            repo.pendingHistoryPersistenceDriver = historyDriver
+
+            var transportCalled = false
+            repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
+                transportCalled = true
+                return (acked: true, routePeerId: nil, terminalFailureCode: nil)
+            }
+
+            do {
+                try await repo.sendMessage(peerId: "peer_fail_hist", content: "hello")
+                XCTFail("sendMessage must throw when PendingHistoryStore write fails")
+            } catch {
+                // Expected
+            }
+
+            XCTAssertFalse(transportCalled, "Transport must NEVER be called if PendingHistoryStore write fails")
+            XCTAssertTrue(repo.loadPendingOutbox().isEmpty, "Outbox enqueue must NEVER happen if PendingHistoryStore write fails")
         }
 
-        XCTAssertFalse(transportCalled, "Transport must NEVER be called if history write fails")
-        XCTAssertTrue(repo.loadPendingOutbox().isEmpty, "Outbox enqueue must NEVER happen if history write fails")
+        // (b) Custom history write failure (e.g. FFI add failure) -> throws, zero envelopes, no transport
+        do {
+            let repo = createTestRepository()
+            repo.historyWriteClosure = { _, _ in
+                throw MeshRepository.MeshOperationError.historyError("Injected FFI add failure")
+            }
+
+            var transportCalled = false
+            repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
+                transportCalled = true
+                return (acked: true, routePeerId: nil, terminalFailureCode: nil)
+            }
+
+            do {
+                try await repo.sendMessage(peerId: "peer_fail_ffi", content: "hello")
+                XCTFail("sendMessage must throw when FFI add fails")
+            } catch {
+                // Expected
+            }
+
+            XCTAssertFalse(transportCalled, "Transport must NEVER be called if FFI add fails")
+            XCTAssertTrue(repo.loadPendingOutbox().isEmpty, "Outbox enqueue must NEVER happen if FFI add fails")
+        }
+
+        // (c) HistoryManager nil -> throws notInitialized before write/enqueue/transport
+        do {
+            let repo = createTestRepository()
+            var transportCalled = false
+            repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
+                transportCalled = true
+                return (acked: true, routePeerId: nil, terminalFailureCode: nil)
+            }
+
+            do {
+                try await repo.sendMessage(peerId: "peer_no_hm", content: "hello")
+                XCTFail("sendMessage must throw when HistoryManager is nil")
+            } catch {
+                // Expected
+            }
+
+            XCTAssertFalse(transportCalled, "Transport must NEVER be called if HistoryManager is nil")
+            XCTAssertTrue(repo.loadPendingOutbox().isEmpty, "Outbox enqueue must NEVER happen if HistoryManager is nil")
+        }
+
+        // (d) Strict sequence ordering: failure at contact validation throws before history write
+        do {
+            let repo = createTestRepository()
+            var historyWriteCalled = false
+            var transportCalled = false
+
+            repo.historyWriteClosure = { _, _ in
+                historyWriteCalled = true
+            }
+            repo.transportAttemptClosure = { _, _, _, _, _, _, _, _, _, _ in
+                transportCalled = true
+                return (acked: true, routePeerId: nil, terminalFailureCode: nil)
+            }
+
+            do {
+                try await repo.sendMessage(peerId: "peer_order_test", content: "hello")
+            } catch {
+                // Throws contact not found prior to history write and transport
+            }
+
+            XCTAssertFalse(historyWriteCalled, "History write must NOT be called if validation fails")
+            XCTAssertFalse(transportCalled, "Transport must NOT be called if validation fails")
+        }
     }
 
     // T15: Large queue bounded write and latency gate
@@ -793,11 +907,17 @@ final class OutboxRetryPolicyTests: XCTestCase {
         repo.pendingHistoryPersistenceDriver = driver
         repo.nowEpochSecProvider = { 1000 }
 
+        // (a) Record in authority
         let rec1 = MessageRecord(id: "msg_reconcile_1", direction: .sent, peerId: "p1", content: "m1", timestamp: 1000, senderTimestamp: 1000, delivered: false, status: .queued, hidden: false)
         try repo.recordPendingHistory(record: rec1)
 
         let loaded = try repo.loadPendingHistory()
         XCTAssertEqual(loaded.count, 1)
         XCTAssertEqual(loaded[0].record.id, "msg_reconcile_1")
+
+        // (b) Reconcile without historyManager retains authority entry
+        let outcome = await repo.reconcilePendingHistory()
+        XCTAssertEqual(outcome.retainedCount, 0) // No historyManager -> returns early 0
+        XCTAssertEqual(try repo.loadPendingHistory().count, 1, "Authority record retained when historyManager absent")
     }
 }

@@ -3487,33 +3487,65 @@ final class MeshRepository {
         URL(fileURLWithPath: storagePath).appendingPathComponent("pending_history.json")
     }
 
+    // MARK: - App-Owned Crash-Durable Authorities
+
+    @MainActor
+    final class PendingHistoryStore {
+        private let driver: PersistenceByteDriver
+        private let nowEpochSecProvider: () -> UInt64
+
+        init(driver: PersistenceByteDriver, nowEpochSecProvider: @escaping () -> UInt64) {
+            self.driver = driver
+            self.nowEpochSecProvider = nowEpochSecProvider
+        }
+
+        func load() throws -> [PendingHistoryEntry] {
+            guard let data = try driver.read(), !data.isEmpty else {
+                return []
+            }
+            do {
+                return try JSONDecoder().decode([PendingHistoryEntry].self, from: data)
+            } catch {
+                throw MeshOperationError.queueCorrupt("Failed to decode pending history: \(error.localizedDescription)")
+            }
+        }
+
+        func save(_ entries: [PendingHistoryEntry]) throws {
+            let data = try JSONEncoder().encode(entries)
+            try driver.write(data: data)
+        }
+
+        func record(record: MessageRecord) throws {
+            var entries = try load()
+            let now = nowEpochSecProvider()
+            let payload = PendingHistoryRecordPayload(from: record)
+            let newEntry = PendingHistoryEntry(record: payload, recordedAtEpochSec: now)
+            if let index = entries.firstIndex(where: { $0.record.id == record.id }) {
+                entries[index] = newEntry
+            } else {
+                entries.append(newEntry)
+            }
+            try save(entries)
+        }
+    }
+
+    var pendingHistoryStore: PendingHistoryStore {
+        PendingHistoryStore(
+            driver: effectivePendingHistoryDriver,
+            nowEpochSecProvider: { [weak self] in self?.nowEpochSecProvider() ?? 0 }
+        )
+    }
+
     func loadPendingHistory() throws -> [PendingHistoryEntry] {
-        guard let data = try effectivePendingHistoryDriver.read(), !data.isEmpty else {
-            return []
-        }
-        do {
-            return try JSONDecoder().decode([PendingHistoryEntry].self, from: data)
-        } catch {
-            throw MeshOperationError.queueCorrupt("Failed to decode pending history: \(error.localizedDescription)")
-        }
+        try pendingHistoryStore.load()
     }
 
     func savePendingHistory(_ entries: [PendingHistoryEntry]) throws {
-        let data = try JSONEncoder().encode(entries)
-        try effectivePendingHistoryDriver.write(data: data)
+        try pendingHistoryStore.save(entries)
     }
 
     func recordPendingHistory(record: MessageRecord) throws {
-        var entries = try loadPendingHistory()
-        let now = nowEpochSecProvider()
-        let payload = PendingHistoryRecordPayload(from: record)
-        let newEntry = PendingHistoryEntry(record: payload, recordedAtEpochSec: now)
-        if let index = entries.firstIndex(where: { $0.record.id == record.id }) {
-            entries[index] = newEntry
-        } else {
-            entries.append(newEntry)
-        }
-        try savePendingHistory(entries)
+        try pendingHistoryStore.record(record: record)
     }
 
     @discardableResult
@@ -3597,37 +3629,71 @@ final class MeshRepository {
         URL(fileURLWithPath: storagePath).appendingPathComponent("request_markers.json")
     }
 
+    @MainActor
+    final class RequestMarkerStore {
+        private let driver: PersistenceByteDriver
+        private let nowEpochSecProvider: () -> UInt64
+
+        init(driver: PersistenceByteDriver, nowEpochSecProvider: @escaping () -> UInt64) {
+            self.driver = driver
+            self.nowEpochSecProvider = nowEpochSecProvider
+        }
+
+        func load() throws -> [RequestMarkerEntry] {
+            guard let data = try driver.read(), !data.isEmpty else {
+                return []
+            }
+            do {
+                return try JSONDecoder().decode([RequestMarkerEntry].self, from: data)
+            } catch {
+                throw MeshOperationError.queueCorrupt("Failed to decode request markers: \(error.localizedDescription)")
+            }
+        }
+
+        func save(_ entries: [RequestMarkerEntry]) throws {
+            let data = try JSONEncoder().encode(entries)
+            try driver.write(data: data)
+        }
+
+        func recordCleared(peerId: String) throws {
+            var entries = try load()
+            let now = nowEpochSecProvider()
+            let newEntry = RequestMarkerEntry(peerId: peerId, clearedAtEpochSec: now)
+            if let index = entries.firstIndex(where: { $0.peerId == peerId }) {
+                entries[index] = newEntry
+            } else {
+                entries.append(newEntry)
+            }
+            try save(entries)
+        }
+
+        func isCleared(peerId: String) -> Bool {
+            guard let entries = try? load() else { return false }
+            return entries.contains { $0.peerId == peerId }
+        }
+    }
+
+    var requestMarkerStore: RequestMarkerStore {
+        RequestMarkerStore(
+            driver: effectiveRequestMarkerDriver,
+            nowEpochSecProvider: { [weak self] in self?.nowEpochSecProvider() ?? 0 }
+        )
+    }
+
     func loadRequestMarkers() throws -> [RequestMarkerEntry] {
-        guard let data = try effectiveRequestMarkerDriver.read(), !data.isEmpty else {
-            return []
-        }
-        do {
-            return try JSONDecoder().decode([RequestMarkerEntry].self, from: data)
-        } catch {
-            throw MeshOperationError.queueCorrupt("Failed to decode request markers: \(error.localizedDescription)")
-        }
+        try requestMarkerStore.load()
     }
 
     func saveRequestMarkers(_ entries: [RequestMarkerEntry]) throws {
-        let data = try JSONEncoder().encode(entries)
-        try effectiveRequestMarkerDriver.write(data: data)
+        try requestMarkerStore.save(entries)
     }
 
     func recordRequestMarkerCleared(peerId: String) throws {
-        var entries = try loadRequestMarkers()
-        let now = nowEpochSecProvider()
-        let newEntry = RequestMarkerEntry(peerId: peerId, clearedAtEpochSec: now)
-        if let index = entries.firstIndex(where: { $0.peerId == peerId }) {
-            entries[index] = newEntry
-        } else {
-            entries.append(newEntry)
-        }
-        try saveRequestMarkers(entries)
+        try requestMarkerStore.recordCleared(peerId: peerId)
     }
 
     func isRequestMarkerCleared(peerId: String) -> Bool {
-        guard let entries = try? loadRequestMarkers() else { return false }
-        return entries.contains { $0.peerId == peerId }
+        requestMarkerStore.isCleared(peerId: peerId)
     }
 
     func isNotificationRequestPending(notes: String?) -> Bool {
@@ -3920,6 +3986,9 @@ final class MeshRepository {
         return meshService?.getNatStatus() ?? "unknown"
     }
 
+    /// Truthful presentation mapping for message delivery states.
+    /// BLK-8 / IOS-V050-2 dependency: deliveryStatePresentation provides truth-aligned presentation state for message bubbles;
+    /// UI rendering wiring belongs exclusively to IOS-V050-2 per plan section 6.4.
     func deliveryStatePresentation(for message: MessageRecord, nowEpochSec: UInt64 = UInt64(Date().timeIntervalSince1970)) -> DeliveryStatePresentation {
         if message.delivered {
             return DeliveryStatePresentation(
@@ -4338,6 +4407,9 @@ final class MeshRepository {
         NotificationManager.shared.markConversationRead(conversationId: peerId)
     }
 
+    /// Reject an incoming message request.
+    /// BLK-8 / IOS-V050-2 dependency: rejectMessageRequest is the repository-level implementation of request rejection;
+    /// UI wiring (swipe action / reject button) belongs exclusively to IOS-V050-2 per plan section 6.4.
     func rejectMessageRequest(peerId: String) throws {
         let isBlocked = try isPeerBlocked(peerId: peerId)
         if !isBlocked {
@@ -5483,7 +5555,7 @@ final class MeshRepository {
 
     private func startPendingOutboxRetryLoop() {
         guard pendingOutboxRetryTask == nil else { return }
-        pendingOutboxRetryTask = Task { [weak self] in
+        pendingOutboxRetryTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 // Proactively ensure we stay connected to relays
                 await self?.primeRelayBootstrapConnections()
@@ -6223,11 +6295,11 @@ final class MeshRepository {
             retryDeferredUntilEpochSec: nil
         )
 
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             current.removeAll { $0.historyRecordId == historyRecordId }
             current.append(newEnvelope)
             workingOutboxQueue = current
-            workingOutboxDirty = true
+            // Plan 4.1: ONE interrupt bulk write at earliest safe boundary to guarantee I7 durable before transport
             try savePendingOutboxChecked(current)
             workingOutboxDirty = false
         } else {
@@ -6244,7 +6316,7 @@ final class MeshRepository {
 
     private func dispatchFlushPendingOutbox(reason: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(retryThrottleMs)) { [weak self] in
-            Task { [weak self] in
+            Task { @MainActor [weak self] in
                 await self?.flushPendingOutbox(reason: reason)
             }
         }
@@ -6525,16 +6597,12 @@ final class MeshRepository {
 
     func removePendingOutbound(historyRecordId: String) {
         guard !historyRecordId.isEmpty else { return }
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             let countBefore = current.count
             current.removeAll { $0.historyRecordId == historyRecordId }
             if current.count != countBefore {
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                if !outboxFlushInFlight {
-                    try? savePendingOutboxChecked(current)
-                    workingOutboxDirty = false
-                }
             }
         } else {
             do {
@@ -6551,13 +6619,11 @@ final class MeshRepository {
     }
 
     private func commitTerminalToOutbox(historyRecordId: String, terminalCode: String) {
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
                 current[index].terminalFailureCode = terminalCode
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                try? savePendingOutboxChecked(current)
-                workingOutboxDirty = false
             }
         } else {
             do {
@@ -6574,15 +6640,13 @@ final class MeshRepository {
 
     private func commitAckToOutbox(historyRecordId: String, routePeerId: String?) {
         let now = nowEpochSecProvider()
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
                 current[index].ackedWithoutReceiptCount = 1
                 current[index].nextAttemptAtEpochSec = now + receiptAwaitSeconds
                 if let routePeerId { current[index] = current[index].withRoute(routePeerId, []) }
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                try? savePendingOutboxChecked(current)
-                workingOutboxDirty = false
             }
         } else {
             do {
@@ -6601,15 +6665,13 @@ final class MeshRepository {
 
     private func commitTransientToOutbox(historyRecordId: String, routePeerId: String?) {
         let now = nowEpochSecProvider()
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
                 current[index].attemptCount = 1
                 current[index].nextAttemptAtEpochSec = now + 2
                 if let routePeerId { current[index] = current[index].withRoute(routePeerId, []) }
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                try? savePendingOutboxChecked(current)
-                workingOutboxDirty = false
             }
         } else {
             do {
@@ -6653,12 +6715,10 @@ final class MeshRepository {
             return true
         }
 
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             if mutate(queue: &current) {
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                try savePendingOutboxChecked(current)
-                workingOutboxDirty = false
                 changed = true
             }
         } else {
@@ -6723,14 +6783,10 @@ final class MeshRepository {
             return didChange
         }
 
-        if var current = workingOutboxQueue {
+        if outboxFlushInFlight, var current = workingOutboxQueue {
             if mutate(queue: &current) {
                 workingOutboxQueue = current
                 workingOutboxDirty = true
-                if !outboxFlushInFlight {
-                    try? savePendingOutboxChecked(current)
-                    workingOutboxDirty = false
-                }
             }
         } else {
             do {
