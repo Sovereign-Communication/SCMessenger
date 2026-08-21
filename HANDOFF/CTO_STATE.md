@@ -1,28 +1,28 @@
-﻿# CTO state â€” live handoff
+# CTO state — live handoff
 
 Status: Active
 Last updated: 2026-08-16 (merge train advanced; see the banner below)
 Entry point: `/CTO`. This file is the whole context load.
 
-> **2026-08-16 â€” READ `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md` FIRST.**
-> #167, #168, #169 and #165 are **merged to tracking**. The lane picture in Â§3
+> **2026-08-16 — READ `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md` FIRST.**
+> #167, #168, #169 and #165 are **merged to tracking**. The lane picture in §3
 > below **inverted** since it was written: `Mobile`/KSP UniFFI is now GREEN and
 > `Test` went RED on two transport tests. The dispatch plan carries the
 > re-derived table, the verified merge mechanics, and the routing plan.
-> Sections Â§1, Â§4, Â§5, Â§6, Â§7 and Â§8 of this file remain accurate.
+> Sections §1, §4, §5, §6, §7 and §8 of this file remain accurate.
 
-## 0. STANDING RULE â€” keep this file current
+## 0. STANDING RULE — keep this file current
 
 **Update this file at the END of every session, and immediately on any
 important change.** Operator directive, 2026-08-16, standing.
 
 "Important" means: a merge or close, a gate result, a decision made or reversed,
 a blocker found or cleared, a claim in here proven wrong. Do not batch these to
-the end â€” a session that dies mid-run leaves the next one reading fiction.
+the end — a session that dies mid-run leaves the next one reading fiction.
 
 When a section here is overtaken by events, **mark it superseded and say what
 replaced it. Do not delete it.** The history of a wrong call is how the next
-session avoids re-making it; every Â§8 lesson exists because someone deleted the
+session avoids re-making it; every §8 lesson exists because someone deleted the
 context instead of the conclusion.
 
 ## 0a. HANDOFF -- 2026-08-19. Read this first, then sections 0b/0c.
@@ -165,22 +165,22 @@ Delegate through Antigravity. `"agy"` IS the Antigravity CLI. Tiering:
 ### 7. Still true, do not soften
 Two nodes on one LAN STILL cannot message each other until #180 merges. #180 is the fix and it is NOT merged. No v0.4.0 tag exists. The in-app message to the operator is still queued, never delivered.
 
-## 0b. OPERATOR APPROVAL GATE â€” standing, 2026-08-16
+## 0b. OPERATOR APPROVAL GATE — standing, 2026-08-16
 
-### Who may merge â€” role-bound, not negotiable
+### Who may merge — role-bound, not negotiable
 
 | Role | May merge? |
 |---|---|
-| **CTO** (this seat) | **YES** â€” under the confidence test below. Merging is a CTO decision |
+| **CTO** (this seat) | **YES** — under the confidence test below. Merging is a CTO decision |
 | ORCHESTRATOR / CONTROLLER | **NO.** Coordinates, dispatches, integrates verified output. Never merges |
-| Worker lanes â€” SCANNER, IMPLEMENTER, VALIDATOR, agy, any HTTP lane | **NEVER.** They open PRs and report. A worker holding merge rights defeats every gate above it |
+| Worker lanes — SCANNER, IMPLEMENTER, VALIDATOR, agy, any HTTP lane | **NEVER.** They open PRs and report. A worker holding merge rights defeats every gate above it |
 | OPERATOR | Always, and overrides this table |
 
 A worker asking the CTO to merge is a dispatch event, not permission. A green
 gate is not approval either: `pr_scope.sh` exiting 0 means no reason was
 *found*.
 
-### The confidence test â€” deterministic, run it in order
+### The confidence test — deterministic, run it in order
 
 Before any **irrevocable or potentially destructive** action:
 
@@ -199,7 +199,7 @@ Before any **irrevocable or potentially destructive** action:
 "I think it's fine" is below 100%. "The worker said so" is below 100%. "It
 passed CI" alone is below 100% when a review artifact is also required.
 
-### Blast radius â€” only as big as it needs to be
+### Blast radius — only as big as it needs to be
 
 **Keep the blast radius only as big as it needs to be, within the constraints
 currently available.**
@@ -207,12 +207,12 @@ currently available.**
 Both halves bind. Minimise scope, sequence so a failure is small and
 attributable, prefer several small merges to one large one, and never inflate a
 change already in flight with unrelated work. But minimise **within what is
-actually achievable now** â€” #139 is 204 commits because `tracking` is the
+actually achievable now** — #139 is 204 commits because `tracking` is the
 long-lived integration branch and collapsing that is not available today. The
 rule asks for the smallest radius reachable, not an impossible one.
 
 Worked example, 2026-08-16: #174 (required for D1) merged alone, while #171 and
-#173 â€” tooling with no bearing on D1 â€” were held until after the trunk merge.
+#173 — tooling with no bearing on D1 — were held until after the trunk merge.
 Batching them would have saved two ~50 minute CI cycles and inflated the largest
 PR in the repo. Wall clock was the cheaper thing to spend.
 
@@ -223,7 +223,7 @@ directive, standing, refined 2026-08-16.
 
 The operator's reasoning, which is the rule: *opening a PR "isn't destructive,
 and really only helps to safely preserve data, as it offers a place to track the
-changes."* Gating work-preservation strands work in worktrees â€” which is how
+changes."* Gating work-preservation strands work in worktrees — which is how
 this repo has lost things. We are moving to **small, frequent PRs**; a
 200-commit PR is what made per-merge buyoff necessary, and that is going away.
 
@@ -241,7 +241,7 @@ this repo has lost things. We are moving to **small, frequent PRs**; a
 Investigation is not a change. Verification is not a change. Preserving work in
 a tracked place is not a change. **Destroying, discarding, or releasing is.**
 
-Two calls the CTO made by inference rather than instruction â€” correct them if
+Two calls the CTO made by inference rather than instruction — correct them if
 wrong: **closing** a PR is treated as gated (it discards rather than preserves,
 even though it is reopenable), and **IMPLEMENTER dispatch is free when
 isolated**, because an isolated writer produces a branch and a PR, which is
@@ -255,7 +255,7 @@ Present the evidence, state the recommendation, then wait. A green gate is not
 approval; `pr_scope.sh` exiting 0 means no reason was *found*, not that the
 operator said yes.
 
-## 0c. The verification loop â€” keep this shape
+## 0c. The verification loop — keep this shape
 
 This is the loop that caught a CRITICAL-adjacent defect on 2026-08-16 after the
 CTO had already talked himself into "it looks fixed". Do not shorten it.
@@ -271,7 +271,7 @@ CTO had already talked himself into "it looks fixed". Do not shorten it.
    to falsify*, in those words: "If you merely agree with it, this review has no
    value." A packet that asks for confirmation gets confirmation.
 3. **Spot-check what comes back.** A delegated verification is still a claim.
-   Verify the load-bearing assertion with your own command â€” not the whole
+   Verify the load-bearing assertion with your own command — not the whole
    report, just the one thing the verdict rests on.
 4. **Expect corrections in both directions.** On 2026-08-16 workers corrected
    the CTO twice (the #164/#169 renormalization claim; W1), and the CTO
@@ -281,33 +281,33 @@ CTO had already talked himself into "it looks fixed". Do not shorten it.
 5. **Prefer UNCERTAIN to a clean answer.** Tell workers so explicitly. This gate
    already produced one false "[OK] clear" while six gated files were invisible.
 6. **Artifacts, not chat.** Verdicts go to `docs/security/` or the PR. A review
-   that exists only in a session transcript did not happen â€” and untracked work
+   that exists only in a session transcript did not happen — and untracked work
    in this shared checkout has been destroyed before, so commit it.
 
 7. **A REPEAT MISTAKE IS A PROCESS DEFECT, NOT A MEMORY LAPSE.** Operator
    directive, standing 2026-08-16. The second occurrence of any mistake stops
    being about the mistake and becomes about the process that failed to catch
-   it. When one happens: run an RCA, then **change the mechanism** â€” do not
+   it. When one happens: run an RCA, then **change the mechanism** — do not
    write a better reminder.
 
    **The governing finding: a lesson stored as prose gets re-learned; a lesson
    stored as a gate does not.**
 
    Evidence, from this repo. Rule 14 has an executable form (`pr_scope.sh`) and
-   has held. Rule 13 has none. The trailing-whitespace lesson had none â€” it sat
-   in Â§8 as prose, the CTO **quoted it earlier the same day**, and then committed
+   has held. Rule 13 has none. The trailing-whitespace lesson had none — it sat
+   in §8 as prose, the CTO **quoted it earlier the same day**, and then committed
    a worker-produced artifact verbatim and turned `Repository Hygiene` red on the
    trunk merge for the second time, in the same lane, on the same PR (#174).
    Re-reading was never going to be the fix.
 
    So the RCA question is never "why did I forget?" It is **"what gate was
    missing, and can I build it?"** If a gate genuinely cannot exist, say so
-   explicitly and accept the residual risk in writing â€” that is a decision, not
+   explicitly and accept the residual risk in writing — that is a decision, not
    an oversight.
 
    Corollary for delegation: **worker-produced files are not exempt from the
    repo's gates.** Worker *code* gets compiled and reviewed; worker *artifacts*
-   â€” markdown, reports, docs â€” were being committed on sight. Run
+   — markdown, reports, docs — were being committed on sight. Run
    `git diff --cached --check` (and the emoji check) against anything a worker
    generated, before committing it.
 
@@ -316,17 +316,17 @@ shared checkout; deconflict builds (`tasklist` for cargo/gradle/java) before any
 dispatch that builds; a distinct log-dir per concurrent `agy_run.sh` or two runs
 on the same model and SHA silently overwrite each other; `--add-dir` and an
 exact `--model` always; 30m+ timeouts, and a transient `error_message` mid-run
-is not a failure â€” check whether it recovered before re-dispatching.
+is not a failure — check whether it recovered before re-dispatching.
 
 ### Seat status
 
 **2026-08-16: this is the ONLY live CTO session.** The other sessions listed by
-`mcp__ccd_session_mgmt__list_sessions` as `isRunning: true` â€” "Cto resume v040",
-"Scm cto 1000 hst" â€” are **stale processes, not active seats** (operator
-confirmed). The Â§8 "one CTO seat" caution stands for the future, but it is
+`mcp__ccd_session_mgmt__list_sessions` as `isRunning: true` — "Cto resume v040",
+"Scm cto 1000 hst" — are **stale processes, not active seats** (operator
+confirmed). The §8 "one CTO seat" caution stands for the future, but it is
 resolved for now: no need to re-establish the seat before merging.
 
-### Session log â€” 2026-08-16
+### Session log — 2026-08-16
 
 | Change | Evidence |
 |---|---|
@@ -336,27 +336,27 @@ resolved for now: no need to re-establish the seat before merging.
 | **#171 opened, HELD** | `pr_scope.sh` no-truncation + AGENTS.md rule 15. Independently validated (`CTO-171-VALIDATE`): APPROVE, R3 fails-closed verified. Held until #139 lands so it does not restart the trunk merge's CI |
 | AGENTS.md **rule 15** added | No renumbering: all existing citations (rules 1,2,5,8,9,11,12,13,14) still resolve. Coherence audit dispatched as `CTO-AGENTS15-COHERENCE` |
 | CEO escalation sent | README honest-first framing; dependency-deferral trigger |
-| **The #139 crypto gate was found NOT satisfied** | Last recorded verdict was BLOCK. See the correction banner on Â§4 |
+| **The #139 crypto gate was found NOT satisfied** | Last recorded verdict was BLOCK. See the correction banner on §4 |
 | **W1 found still live**, refuting the CTO's own reading | `CTO-139-CRYPTO-REVERIFY` -> `docs/security/PR139_REVERIFY_2026-08-16.md`. F1 FIXED, everything else CLEAN, W1 NOT FIXED |
 | **W1 fixed** -> PR #172 | `forget_peer` removed with both call sites (native `:5397`, WASM `:7736`). Independently validated: `docs/security/W1_FIX_VALIDATION_2026-08-16.md` -- APPROVE_WITH_FINDINGS, W1 CLOSED, REGRESSION RISK NONE |
 | W1 fix gates pass | target test 1 passed/0 failed; `cargo test --workspace --no-run` **CARGO_EXIT=0**, zero errors |
 | **19 GB reclaimed** | 76 PDB files in `.scm-shared-target/debug/deps` held 19 GB of 27 GB. Disk 100% -> 92% |
 | Operator approved the merge sequence | #172 -> tracking, then #139 -> main. Stop before branch protection and the tag |
 
-### Open findings â€” not yet fixed, safe to dispatch
+### Open findings — not yet fixed, safe to dispatch
 
 1. **Preflight guard false positive.** It blocks read-only commands whose *file
-   path* merely contains `agy` â€” no dispatch involved. #167 fixed this class for
+   path* merely contains `agy` — no dispatch involved. #167 fixed this class for
    git commands; still open for others. Do NOT reach for
    `SCM_SKIP_DISPATCH_CHECK=1` to read a log; use Read/Grep instead.
 2. **`agy_run.sh` log collision.** `RAW="$LOGDIR/agy_${MODEL}_${STAMP}.jsonl"` is
    model + HEAD SHA, so two concurrent dispatches on the same model write the
    same file. Pass a distinct 4th arg (log-dir) per dispatch. Same class as the
    known `delegate_task.py` collision.
-3. **145 `.md` files pending renormalization** â€” see Â§9 of the dispatch plan.
+3. **145 `.md` files pending renormalization** — see §9 of the dispatch plan.
    Held; collides with #139, which touches 91 `.md` files.
 
-4. **Rule 15 propagation backlog â€” the REAL list.** `CTO-AGENTS15-COHERENCE`
+4. **Rule 15 propagation backlog — the REAL list.** `CTO-AGENTS15-COHERENCE`
    returned "270 occurrences across 74 files". **That number is wrong; do not
    dispatch against it.** It pattern-matched `head`/`tail`/`[:N]`
    indiscriminately and counted argv unpacking (`sys.argv[1:4]`), display
@@ -440,7 +440,7 @@ resolved for now: no need to re-establish the seat before merging.
    not ask an agy worker to run a cold full build: have it make the change and
    commit, then run the compile gate separately.
 
-Everything below has a command next to it. **Re-derive before acting** â€” this
+Everything below has a command next to it. **Re-derive before acting** — this
 file ages, the repo does not.
 
 ---
@@ -459,10 +459,10 @@ is the whole problem.
 
 | | Criterion | State |
 |---|---|---|
-| **D1** | `main` is green | **Blocked on #139.** Every red lane is explained; see Â§3 |
-| **D2** | Signed APK downloadable | **Unblocked** â€” all four signing secrets set 2026-08-15 17:08Z. Needs the tag |
+| **D1** | `main` is green | **Blocked on #139.** Every red lane is explained; see §3 |
+| **D2** | Signed APK downloadable | **Unblocked** — all four signing secrets set 2026-08-15 17:08Z. Needs the tag |
 | **D3** | README explains the product | **DONE** |
-| **D4** | Two-device message + receipt | Blocked on D2 and a node rebuild; see Â§5 |
+| **D4** | Two-device message + receipt | Blocked on D2 and a node rebuild; see §5 |
 | **D5** | No long-lived integration branch | **Blocked on #139** (merging it satisfies this) |
 
 ---
@@ -471,11 +471,11 @@ is the whole problem.
 
 **Merged to `tracking` this sprint (11):** #149 UniFFI build fix + 7 restored
 Android sources + orchestration tooling; #150 lane routing; #153 backlog amnesty
-87â†’8; #157 circuit-relay transport prefix; #158 pr_scope truncation fix; #159 D4
+87→8; #157 circuit-relay transport prefix; #158 pr_scope truncation fix; #159 D4
 runbook; #160 release notes; #161 dead-IP retirement; #162 five-layer integration
 suites; #163 shared cargo cache docs; #164 hygiene; #146 Android durable delivery.
 
-**Closed:** #147, with proof â€” `git log --oneline 7538e4e9 --not origin/tracking`
+**Closed:** #147, with proof — `git log --oneline 7538e4e9 --not origin/tracking`
 returned zero commits. It was a branch cut from `tracking` but aimed at `main`,
 so GitHub rendered the whole tracking-vs-main delta as its own 102-file diff.
 **Read the ancestry, not the diff stat.**
@@ -485,67 +485,67 @@ so GitHub rendered the whole tracking-vs-main delta as its own 102-file diff.
 ```
 gh pr list --limit 20
 gh pr checks 139 ; gh pr checks 165
-bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see Â§6
+bash scripts/pr_scope.sh 139        # the REPAIRED gate -- see §6
 ```
 
 | PR | Base | What it is |
 |---|---|---|
-| **#139** | main â† tracking | **THE TRUNK MERGE. D1 + D5 together.** Checks re-triggered 2026-08-16 after the four merges below |
+| **#139** | main ← tracking | **THE TRUNK MERGE. D1 + D5 together.** Checks re-triggered 2026-08-16 after the four merges below |
 | #152 | main | Hygiene whitespace. **CONFLICTS with tracking** and is probably obsolete after #164/#169. Verify after #139; do not close blind |
-| #154 | main | `apksigner verify` guard. **Merge this before tagging** â€” see Â§5 |
+| #154 | main | `apksigner verify` guard. **Merge this before tagging** — see §5 |
 | #156 | main | Docker Integration Suite non-blocking + issue #155 |
-| #170 | main | Free-lane orchestration tooling. Its red `Lint` is `core/src/lib.rs:159` **inherited from main** â€” it self-clears when #139 lands |
-| 13 dependabot | main | **DEFER all, close none.** They are the post-tag S4 queue. GitHub reports 7 vulnerabilities on the default branch, 3 high â€” real, but not before the tag |
+| #170 | main | Free-lane orchestration tooling. Its red `Lint` is `core/src/lib.rs:159` **inherited from main** — it self-clears when #139 lands |
+| 13 dependabot | main | **DEFER all, close none.** They are the post-tag S4 queue. GitHub reports 7 vulnerabilities on the default branch, 3 high — real, but not before the tag |
 
 **Merged to tracking 2026-08-16 (4):** #167 dispatch-guard false positives; #168
 stale-checkout gate + dispatch timeout floor; #169 `.gitattributes` eol=lf +
 whitespace/rustfmt (clears `Lint`, `Rust Linting`, `Repository Hygiene`); #165
 transport saturating latency score + zero-duration bandwidth bypass (clears
-`Test` Ã—3 and `macOS Native Tests`). #165 carried a full adversarial APPROVE,
+`Test` ×3 and `macOS Native Tests`). #165 carried a full adversarial APPROVE,
 zero findings, `CRYPTO_TOUCHED: NO`.
 
 ---
 
 ## 3. Critical path to the tag
 
-1. ~~**#165 green â†’ merge to tracking.**~~ **DONE 2026-08-16**, together with
+1. ~~**#165 green → merge to tracking.**~~ **DONE 2026-08-16**, together with
    #167, #168 and #169. All four fixes verified present on `tracking`:
    `manager.rs:470` now reads `100u64.saturating_sub(...)`, and `.gitattributes`
    declares `*.kt`/`*.kts`/`*.md` as `eol=lf`. #139's checks re-triggered.
-2. **#139 â†’ main.** This is D1 + D5. The repaired `pr_scope.sh` will raise five
+2. **#139 → main.** This is D1 + D5. The repaired `pr_scope.sh` will raise five
    blockers; four are resolved and must be named explicitly rather than silently
    overridden:
-   - *"100 commits, is this based on the branch you are merging into?"* â€”
+   - *"100 commits, is this based on the branch you are merging into?"* —
      intentional here. `tracking` IS the long-lived integration branch, and
      merging it is precisely what D5 asks for.
-   - *"touches merge-blocked directories"* â€” true, six files. **The
-     crypto-security-auditor verdict exists** (Â§4). Its one HIGH finding is fixed
+   - *"touches merge-blocked directories"* — true, six files. **The
+     crypto-security-auditor verdict exists** (§4). Its one HIGH finding is fixed
      by #157, which is merged into tracking, so #139 now carries the fix.
-   - *"checks still running"* â€” must actually be green. Do not merge on a
+   - *"checks still running"* — must actually be green. Do not merge on a
      pending check.
-   - *"no conflicts"* â€” clean.
+   - *"no conflicts"* — clean.
 3. `bash scripts/apply_branch_protection.sh --apply` (operator approved;
-   `enforce_admins` true, **0** required approvals â€” raising it to 1 locks a
+   `enforce_admins` true, **0** required approvals — raising it to 1 locks a
    single-operator repo out, GitHub forbids self-approval). **Do NOT list
-   `Docker Integration Suite` as a required check** â€” see Â§6.
+   `Docker Integration Suite` as a required check** — see §6.
 4. **Merge #154**, then tag `v0.4.0-alpha.1`.
-5. Verify the published APK is genuinely release-signed (Â§5). **D2 + D3.**
-6. Rebuild the AWS node to the tagged SHA, then run D4 (Â§5).
+5. Verify the published APK is genuinely release-signed (§5). **D2 + D3.**
+6. Rebuild the AWS node to the tagged SHA, then run D4 (§5).
 
 ### Why every red lane on `main` is red
 
 > **Superseded 2026-08-16.** This table described the state on 2026-08-15 and has
-> since inverted â€” `Mobile`/KSP is GREEN and `Test` went RED. The current table,
-> re-derived from the logs, is Â§3 of
+> since inverted — `Mobile`/KSP is GREEN and `Test` went RED. The current table,
+> re-derived from the logs, is §3 of
 > `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md`. Kept here for history.
 
 Verified from the literal CI logs, not inferred:
 
 | Lane | Real cause | Fix |
 |---|---|---|
-| `CI` | its only failing job was `Lint` â†’ `cargo fmt` on `core/src/lib.rs:159` | #139 |
+| `CI` | its only failing job was `Lint` → `cargo fmt` on `core/src/lib.rs:159` | #139 |
 | `Lint` | the same single fmt diff | #139 |
-| `Mobile` | KSP `error.NonExistentClass` â€” the UniFFI bug | #139 (carries #149) |
+| `Mobile` | KSP `error.NonExistentClass` — the UniFFI bug | #139 (carries #149) |
 | `Repository Hygiene` | trailing whitespace | #164 (merged) |
 | `Docker Integration Suite` | UniFFI metadata stripping in the container | #156, non-blocking |
 
@@ -554,7 +554,7 @@ all PASSED on `main`. The lane was red on one formatting diff.
 
 ---
 
-## 4. Security review of #139 â€” verdict on record
+## 4. Security review of #139 — verdict on record
 
 > **CORRECTED 2026-08-16. THIS SECTION WAS WRONG ABOUT THE GATE.**
 >
@@ -564,16 +564,16 @@ all PASSED on `main`. The lane was red on one formatting diff.
 >
 > | Artifact | Commit | Verdict |
 > |---|---|---|
-> | `PR139_ADVERSARIAL_REVIEW_2026-08-08.md` | `6cb7033a` | **BLOCK** â€” F1 CRITICAL (RFC1918 ledger disclosure gate never checked the requester; internal subnet map + peer-id-to-private-address binding to any unauthenticated remote) plus F2â€“F5 HIGH |
-> | `PR139_REMEDIATION_2026-08-08.md` | â€” | remediation claimed |
-> | `PR139_REVIEW_15dbcde0_2026-08-09.md` | `15dbcde0` | **BLOCK** â€” supersedes the first for that range; everything else clean; new **W1**: failover re-exchange is an unrated outbound amplifier |
+> | `PR139_ADVERSARIAL_REVIEW_2026-08-08.md` | `6cb7033a` | **BLOCK** — F1 CRITICAL (RFC1918 ledger disclosure gate never checked the requester; internal subnet map + peer-id-to-private-address binding to any unauthenticated remote) plus F2–F5 HIGH |
+> | `PR139_REMEDIATION_2026-08-08.md` | — | remediation claimed |
+> | `PR139_REVIEW_15dbcde0_2026-08-09.md` | `15dbcde0` | **BLOCK** — supersedes the first for that range; everything else clean; new **W1**: failover re-exchange is an unrated outbound amplifier |
 >
 > **The last recorded verdict on this PR is BLOCK, and no artifact clears W1.**
 > The section below never mentions F1 or W1 at all. Whoever wrote it was
-> describing a different, later review of a narrower diff â€” the Â§8 lesson
+> describing a different, later review of a narrower diff — the §8 lesson
 > ("your own past statements are claims") applied to this file itself.
 >
-> CTO code reading on 2026-08-16 indicates both are fixed at the current head â€”
+> CTO code reading on 2026-08-16 indicates both are fixed at the current head —
 > W1 gated behind `allow_failover_reexchange` on native (`swarm.rs:5343`) and
 > WASM (`:7708`) with tests at `:8764-8768`; F1 now requires the requester's
 > observed address, fails closed on `None`, rejects `P2pCircuit` on both sides,
@@ -592,31 +592,31 @@ observation/swarm` under `core/src/transport/`; +1,645/-154).
 
 **Verdict: NEEDS FIXES.** No CRITICAL hole; X25519 and XChaCha20-Poly1305
 untouched. Nothing was found that admits, dials, or discloses to a peer that
-should be rejected â€” the diff actually *tightens* several gaps (stale-connection
+should be rejected — the diff actually *tightens* several gaps (stale-connection
 disclosure, fail-open block checks, nested relay circuits).
 
-- **HIGH â€” `dial_policy.rs` `build_relay_addresses`. FIXED by #157 (merged).**
+- **HIGH — `dial_policy.rs` `build_relay_addresses`. FIXED by #157 (merged).**
   The loop set `has_ip`/`has_port` for the Ip4/Ip6 and Tcp/Udp match arms but
   never pushed those components, so circuit-relay addresses lost their transport
   prefix entirely. libp2p's relay transport requires a concrete address and fails
   with `MissingRelayAddr` before any I/O, at debug log level only. Relay NAT
   traversal was broken mesh-wide, in the same change set that removed UPnP.
-- **LOW** â€” blocked-peer status is a distinguishable oracle: Registration and
+- **LOW** — blocked-peer status is a distinguishable oracle: Registration and
   Relay answer with an explicit `"blocked"` error while AddressReflection and
   LedgerExchange stay silent. Post-tag.
-- **LOW/INFO** â€” `mdns_dial_attempted` is unbounded under LAN mDNS spoofing.
+- **LOW/INFO** — `mdns_dial_attempted` is unbounded under LAN mDNS spoofing.
   Requires L2 adjacency. Post-tag.
-- **INFO** â€” backup salt moved `OsRng` â†’ `rand::random()`. Cryptographically
+- **INFO** — backup salt moved `OsRng` → `rand::random()`. Cryptographically
   equivalent; no action.
 
 **Two further defects, found by the integration suites in #162, fixed in #165:**
 
-- `transport/manager.rs` â€” `std::cmp::max(0, 100 - latency_ms as u64)`. The
+- `transport/manager.rs` — `std::cmp::max(0, 100 - latency_ms as u64)`. The
   subtraction evaluates first and u64 has nothing below zero, so any link over
   100 ms panicked in debug and **wrapped to near `u64::MAX` in release, inverting
   transport selection so the worst path scored highest.** Every cellular/WAN link
   is over 100 ms, and D4 is a cross-network test.
-- `transport/internet.rs` â€” timestamps are whole seconds, so a relay in the same
+- `transport/internet.rs` — timestamps are whole seconds, so a relay in the same
   second as registration gave `conn_duration == 0` and the `if conn_duration > 0`
   guard skipped the bandwidth limit entirely.
 
@@ -624,27 +624,27 @@ Both were **pre-existing** (present on `main`, untouched by #139).
 
 ---
 
-## 5. D2 and D4 â€” what is actually required
+## 5. D2 and D4 — what is actually required
 
-### D2 â€” signing is unblocked, but not proven
+### D2 — signing is unblocked, but not proven
 
 All four secrets are set (verified by name only; no agent has ever seen a value):
 `SCMESSENGER_KEYSTORE_BASE64`, `_KEYSTORE_PASSWORD`, `_KEY_ALIAS`, `_KEY_PASSWORD`.
 
 **Secrets existing is not proof signing works.** The base64 went through a
 PowerShell pipe, and `release.yml`'s signed steps are conditional on
-`HAS_KEYSTORE` â€” a malformed secret still yields a green job and a **debug-signed
+`HAS_KEYSTORE` — a malformed secret still yields a green job and a **debug-signed
 APK**. Merge **#154** before tagging; it adds `apksigner verify --print-certs` and
 fails the job on an unsigned or debug-signed artifact. If tagging first, check by
-hand â€” `CN=Android Debug` means it did not sign.
+hand — `CN=Android Debug` means it did not sign.
 
 The keystore lives at `%USERPROFILE%\kiee\` on the operator's machine. Never in
 the repo, never read/copied/printed by any agent, permanently operator-only.
 
-### D4 â€” Pixel 6a â†” the AWS node
+### D4 — Pixel 6a ↔ the AWS node
 
-Operator decision: D4 runs **Android â†” the AWS node**. There are no "relays" in
-this architecture â€” every node relays â€” so this is node-to-node and
+Operator decision: D4 runs **Android ↔ the AWS node**. There are no "relays" in
+this architecture — every node relays — so this is node-to-node and
 **cross-platform**, which is *stronger* evidence than two Android handsets.
 
 Verified live 2026-08-15 via the EC2 API as `user/scmessenger-relay-orchestrator`:
@@ -658,18 +658,18 @@ curl http://54.226.67.101:9876/health   -> {"status":"healthy"}  (256 ms)
   `Permission denied`; **`ssh ec2-user@` works**. At least 8 repo docs still say
   `ubuntu@` and every one of them fails.
 - **`HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md` is the canonical address pointer
-  and it is correct.** The IP is dynamic â€” the account holds zero Elastic IPs and
+  and it is correct.** The IP is dynamic — the account holds zero Elastic IPs and
   `ec2:AllocateAddress` is an **explicit deny** in `SCMessengerRelayFreeTierOnly`.
   Do not try to route around that; it is a deliberate cost guardrail, and the
   product does not need a stable address (v0.4.0 removed hardcoded bootstrap
   addresses; discovery is invite/QR ledger seeding).
-- **The node runs code from a closed branch** â€” `/version` reports `9f54b107` on
+- **The node runs code from a closed branch** — `/version` reports `9f54b107` on
   `gpt/pr139-receipt-filter-20260811` (PR #147, closed). It must be rebuilt.
 - **NEVER build on the t3.micro.** A previous attempt ran 16 hours and OOMed.
   Pull the CI-prebuilt image.
 - **Ordering is forced:** `docker-publish.yml` only fires on push to `main`,
-  publishing `sha-<7char>`. So **#139 â†’ main â†’ CI publishes the image â†’ rebuild
-  node â†’ run D4.** There is no way to prove D4 before the trunk merge.
+  publishing `sha-<7char>`. So **#139 → main → CI publishes the image → rebuild
+  node → run D4.** There is no way to prove D4 before the trunk merge.
 - Runbook: `HANDOFF/D4_NODE_REBUILD_RUNBOOK.md` (merged, #159). Identity baseline
   to prove a rebuild did not orphan the ledger:
   `libp2p_peer_id 12D3KooWKMUXfjvWeodBUJbSwBuRXBU3d6XSbP1AJXL9WhaS3yKy`.
@@ -684,7 +684,7 @@ transport ACKs, not UI counters, not BLE local acceptance.
 | Script | Purpose |
 |---|---|
 | `scripts/pr_scope.sh` | executable "unless there's a reason not to?"; **fails closed** |
-| `scripts/triage_lane.sh` | first moves on a red lane â€” history before hypothesis |
+| `scripts/triage_lane.sh` | first moves on a red lane — history before hypothesis |
 | `scripts/agy_run.sh` | dispatch with per-step progress + stall detection |
 | `scripts/reap_worktrees.sh` | reap abandoned worktrees; refuses DIRTY ones |
 | `scripts/clean_target.sh` | scoped artifact reclamation; never calls `cargo clean` |
@@ -694,14 +694,14 @@ transport ACKs, not UI counters, not BLE local acceptance.
 its file list from `gh pr view --json files`, which caps at **100 files**. #139
 changes 253. The first 100 held none of the merge-blocked paths, so it printed
 `[OK] clear of core/src/{crypto,transport,routing,privacy}` while six gated files
-were invisible â€” on the largest PR in the repo, on the exact check it exists for.
+were invisible — on the largest PR in the repo, on the exact check it exists for.
 It now derives from `git diff --name-only origin/<base>...origin/<head>`,
 announces loudly if it ever falls back to the API, and fails closed when the API
 returns exactly 100 files. **Any PR reporting exactly 100 changed files should be
 assumed truncated.**
 
 **Docker Integration Suite is non-blocking (#156)** via `continue-on-error: true`
-on the single failing step â€” narrowly scoped, so other Docker breakage still
+on the single failing step — narrowly scoped, so other Docker breakage still
 fails the job. It therefore reports green while that step is broken. **D1 is to be
 evaluated with this lane explicitly excluded**, and it must NOT be listed as a
 required check in branch protection. Issue #155 tracks the real fix.
@@ -715,24 +715,24 @@ export CARGO_TARGET_DIR=C:/Users/SCM/Documents/GitHub/.scm-shared-target
 export CARGO_INCREMENTAL=0
 ```
 
-Concurrent builds then block on the cargo lock â€” which enforces the existing
+Concurrent builds then block on the cargo lock — which enforces the existing
 "never two build tools at once" rule rather than fighting it. Documented in
 `docs/rules/BUILD_AND_CI.md`. Disk was 4.2 GB free at worst, 34 GB after cleanup.
 
 ---
 
-## 7. OPEN â€” do not guess
+## 7. OPEN — do not guess
 
 1. **Was `ebf5411b`'s deletion of 7 Android sources intentional?** Restored on
    #149 on the CTO's read that APK sharing is active work. If it was a deliberate
    strip-down, revert the restore. Note the Josh fork independently deleted the
    *tests* for two of them, preserved on `josh-fork/local-worktree-state-2026-08-15`.
-2. **Josh single-transport build** â€” operator ruled it is NOT the v0.4.0 default;
+2. **Josh single-transport build** — operator ruled it is NOT the v0.4.0 default;
    ships as **v0.3.9** if at all. The transport quarantine described in an earlier
    session summary is **not implemented**; `d0e3258a` is 4 files, +23/-5.
-3. **README framing** â€” the CEO was asked to bless the honest-first tone before
+3. **README framing** — the CEO was asked to bless the honest-first tone before
    the tag. No reply as of handoff.
-4. **Dependency debt** â€” 7 vulnerabilities on the default branch, 3 high. Deferred
+4. **Dependency debt** — 7 vulnerabilities on the default branch, 3 high. Deferred
    to post-tag S4, which is right for shipping but should not stay deferred long
    on a security product.
 
@@ -766,7 +766,7 @@ anything you commit, even when you are only preserving someone else's content.
 **Dispatch budgets: 90 minutes, not 45.** Three "capability failures" on this
 project were too-short timeouts. A task ending in `cargo test --workspace` needs
 90m; the relay-ladder fix died at 36 minutes mid-compile with the work complete
-but unpushed. Its worktree survived, so nothing was lost â€” check the worktree
+but unpushed. Its worktree survived, so nothing was lost — check the worktree
 before re-dispatching.
 
 **One CTO seat.** Two sessions ran concurrently on 2026-08-15 and both were
@@ -776,5 +776,5 @@ before merging anything.
 
 **Destructive history:** `git checkout <ref> -- .` destroyed four files of another
 session's uncommitted work. `cargo clean --target <triple>` wiped 44.7 GB. The
-preflight hook now blocks both and prints the working form â€” if it fires, read
+preflight hook now blocks both and prints the working form — if it fires, read
 it; it is there because someone already paid for that lesson.
