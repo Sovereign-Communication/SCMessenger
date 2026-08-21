@@ -1,0 +1,1 @@
+{"version":1,"generator":"Qwen-Coder","files":{".github/workflows/ci.yml":{"aiChars":1320,"humanChars":0,"percent":100,"surface":"cli"}},"summary":{"aiPercent":100,"aiChars":1320,"humanChars":0,"totalFilesTouched":1,"surfaces":["cli"]},"surfaceBreakdown":{"cli":{"aiChars":1320,"percent":100}},"excludedGenerated":[],"excludedGeneratedCount":0,"promptCount":1}
