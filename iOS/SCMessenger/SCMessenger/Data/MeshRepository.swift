@@ -201,8 +201,7 @@ final class MeshRepository {
     private let relayDialDebounceInterval: TimeInterval = 10
     static let initialReceiptAwaitSeconds: UInt64 = 60
     private let receiptAwaitSeconds: UInt64 = MeshRepository.initialReceiptAwaitSeconds
-    private let pendingOutboxMaxAttempts: UInt32 = 12
-    private let pendingOutboxMaxAgeSeconds: UInt64 = 7 * 24 * 60 * 60
+    static let pendingOutboxBurstThreshold: UInt32 = 12
     private var historySyncSentPeers: [String: Date] = [:]
     private let historySyncCooldown: TimeInterval = 60
     private var identitySyncSentPeers: Set<String> = []
@@ -213,17 +212,6 @@ final class MeshRepository {
     private var notificationAppInForeground = true
     private var notificationActiveConversationId: String?
 
-    static func shouldStopAckedWithoutReceiptRetries(
-        ackedWithoutReceiptCount: UInt32,
-        createdAtEpochSec: UInt64,
-        nowEpochSec: UInt64,
-        maxAgeSeconds: UInt64
-    ) -> Bool {
-        ackedWithoutReceiptCount > 0 &&
-            nowEpochSec >= createdAtEpochSec &&
-            nowEpochSec - createdAtEpochSec >= maxAgeSeconds
-    }
-
     static func receiptRetryDelaySeconds(ackedWithoutReceiptCount: UInt32) -> UInt64 {
         if ackedWithoutReceiptCount <= 3 {
             return initialReceiptAwaitSeconds
@@ -232,6 +220,225 @@ final class MeshRepository {
             return 30
         }
         return 120
+    }
+
+    static func deterministicJitter(for queueId: String) -> UInt64 {
+        var hash: UInt64 = 14695981039346656037
+        for byte in queueId.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return hash % 30
+    }
+
+    // MARK: - Persistence Drivers & Errors
+
+    protocol PersistenceByteDriver: AnyObject {
+        func read() throws -> Data?
+        func write(data: Data) throws
+    }
+
+    final class FilePersistenceByteDriver: PersistenceByteDriver {
+        let fileURL: URL
+
+        init(fileURL: URL) {
+            self.fileURL = fileURL
+        }
+
+        func read() throws -> Data? {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return nil
+            }
+            return try Data(contentsOf: fileURL)
+        }
+
+        func write(data: Data) throws {
+            let directory = fileURL.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            let tempURL = directory.appendingPathComponent(".\(fileURL.lastPathComponent).tmp.\(UUID().uuidString)")
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+            guard let handle = FileHandle(forWritingAtPath: tempURL.path) else {
+                throw MeshOperationError.storageError("Failed to open temp file for write: \(tempURL.path)")
+            }
+            do {
+                try handle.write(contentsOf: data)
+                let fd = handle.fileDescriptor
+                #if os(iOS) || os(macOS) || os(tvOS) || os(watchOS)
+                if fcntl(fd, F_FULLFSYNC) == -1 {
+                    if fsync(fd) == -1 {
+                        throw MeshOperationError.storageError("fsync failed for \(tempURL.path)")
+                    }
+                }
+                #else
+                if fsync(fd) == -1 {
+                    throw MeshOperationError.storageError("fsync failed for \(tempURL.path)")
+                }
+                #endif
+                try handle.close()
+            } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: tempURL)
+                throw error
+            }
+
+            #if os(iOS) || os(macOS) || os(tvOS) || os(watchOS)
+            if rename(tempURL.path, fileURL.path) != 0 {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw MeshOperationError.storageError("Atomic rename failed from \(tempURL.path) to \(fileURL.path): \(errno)")
+            }
+            #else
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
+            } else {
+                try FileManager.default.moveItem(at: tempURL, to: fileURL)
+            }
+            #endif
+        }
+    }
+
+    final class InMemoryPersistenceByteDriver: PersistenceByteDriver {
+        var data: Data?
+        var writeCount: Int = 0
+        var readCount: Int = 0
+        var shouldFailWrite: Bool = false
+        var shouldFailRead: Bool = false
+        var writeError: Error? = nil
+        var readError: Error? = nil
+
+        init(data: Data? = nil) {
+            self.data = data
+        }
+
+        func read() throws -> Data? {
+            readCount += 1
+            if shouldFailRead {
+                throw readError ?? MeshOperationError.storageError("Injected read failure")
+            }
+            return data
+        }
+
+        func write(data: Data) throws {
+            writeCount += 1
+            if shouldFailWrite {
+                throw writeError ?? MeshOperationError.storageError("Injected write failure")
+            }
+            self.data = data
+        }
+    }
+
+    enum MeshOperationError: LocalizedError, Equatable {
+        case storageError(String)
+        case moderationError(String)
+        case requestLifecycleError(String)
+        case historyError(String)
+        case queueCorrupt(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .storageError(let message):
+                return "Storage Error: \(message)"
+            case .moderationError(let message):
+                return "Moderation Error: \(message)"
+            case .requestLifecycleError(let message):
+                return "Request Error: \(message)"
+            case .historyError(let message):
+                return "History Error: \(message)"
+            case .queueCorrupt(let message):
+                return "Queue Corrupt: \(message)"
+            }
+        }
+    }
+
+    enum RequestsLoadState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    struct HistoryReconciliationOutcome: Equatable {
+        let reconciledCount: Int
+        let prunedCount: Int
+        let retainedCount: Int
+    }
+
+    enum DeliveryState: String, Equatable {
+        case queued
+        case stored
+        case forwarding
+        case sent
+        case delivered
+        case failedRetryable
+        case rejectedNonretryable
+    }
+
+    struct DeliveryStatePresentation: Equatable {
+        let state: DeliveryState
+        let label: String
+        let detail: String
+    }
+
+    struct PendingHistoryRecordPayload: Codable, Equatable {
+        let id: String
+        let direction: String
+        let peerId: String
+        let content: String
+        let timestamp: UInt64
+        let senderTimestamp: UInt64
+        let delivered: Bool
+        let status: String
+        let hidden: Bool
+
+        init(from record: MessageRecord) {
+            self.id = record.id
+            self.direction = record.direction == .sent ? "sent" : "received"
+            self.peerId = record.peerId
+            self.content = record.content
+            self.timestamp = record.timestamp
+            self.senderTimestamp = record.senderTimestamp
+            self.delivered = record.delivered
+            switch record.status {
+            case .queued: self.status = "queued"
+            case .inCustody: self.status = "inCustody"
+            case .sent: self.status = "sent"
+            case .delivered: self.status = "delivered"
+            }
+            self.hidden = record.hidden
+        }
+
+        func toMessageRecord() -> MessageRecord {
+            let dir: MessageDirection = direction == "received" ? .received : .sent
+            let st: MessageStatus
+            switch status {
+            case "inCustody": st = .inCustody
+            case "sent": st = .sent
+            case "delivered": st = .delivered
+            default: st = .queued
+            }
+            return MessageRecord(
+                id: id,
+                direction: dir,
+                peerId: peerId,
+                content: content,
+                timestamp: timestamp,
+                senderTimestamp: senderTimestamp,
+                delivered: delivered,
+                status: st,
+                hidden: hidden
+            )
+        }
+    }
+
+    struct PendingHistoryEntry: Codable, Equatable {
+        let record: PendingHistoryRecordPayload
+        let recordedAtEpochSec: UInt64
+    }
+
+    struct RequestMarkerEntry: Codable, Equatable {
+        let peerId: String
+        let clearedAtEpochSec: UInt64
     }
 
     // TCP/mDNS transport parity: Track peers discovered on LAN via libp2p mDNS.
@@ -273,7 +480,7 @@ final class MeshRepository {
         let nickname: String?
     }
 
-    private struct PendingOutboundEnvelope: Codable {
+    struct PendingOutboundEnvelope: Codable, Equatable {
         let queueId: String
         let historyRecordId: String
         let peerId: String
@@ -281,18 +488,119 @@ final class MeshRepository {
         let addresses: [String]
         let envelopeBase64: String
         let createdAtEpochSec: UInt64
-        let attemptCount: UInt32
-        let nextAttemptAtEpochSec: UInt64
+        var attemptCount: UInt32
+        var nextAttemptAtEpochSec: UInt64
         let strictBleOnlyMode: Bool?
         let recipientIdentityId: String?
         let intendedDeviceId: String?
-        let terminalFailureCode: String?
+        var terminalFailureCode: String?
         var ackedWithoutReceiptCount: UInt32? = nil
-    }
+        var mutationGeneration: UInt64? = 0
+        var retryDeferredUntilEpochSec: UInt64? = nil
 
-    struct DeliveryStatePresentation {
-        let label: String
-        let detail: String
+        enum CodingKeys: String, CodingKey {
+            case queueId, historyRecordId, peerId, routePeerId, addresses, envelopeBase64
+            case createdAtEpochSec, attemptCount, nextAttemptAtEpochSec, strictBleOnlyMode
+            case recipientIdentityId, intendedDeviceId, terminalFailureCode, ackedWithoutReceiptCount
+            case mutationGeneration, retryDeferredUntilEpochSec
+        }
+
+        init(
+            queueId: String,
+            historyRecordId: String,
+            peerId: String,
+            routePeerId: String?,
+            addresses: [String],
+            envelopeBase64: String,
+            createdAtEpochSec: UInt64,
+            attemptCount: UInt32,
+            nextAttemptAtEpochSec: UInt64,
+            strictBleOnlyMode: Bool? = nil,
+            recipientIdentityId: String? = nil,
+            intendedDeviceId: String? = nil,
+            terminalFailureCode: String? = nil,
+            ackedWithoutReceiptCount: UInt32? = nil,
+            mutationGeneration: UInt64? = 0,
+            retryDeferredUntilEpochSec: UInt64? = nil
+        ) {
+            self.queueId = queueId
+            self.historyRecordId = historyRecordId
+            self.peerId = peerId
+            self.routePeerId = routePeerId
+            self.addresses = addresses
+            self.envelopeBase64 = envelopeBase64
+            self.createdAtEpochSec = createdAtEpochSec
+            self.attemptCount = attemptCount
+            self.nextAttemptAtEpochSec = nextAttemptAtEpochSec
+            self.strictBleOnlyMode = strictBleOnlyMode
+            self.recipientIdentityId = recipientIdentityId
+            self.intendedDeviceId = intendedDeviceId
+            self.terminalFailureCode = terminalFailureCode
+            self.ackedWithoutReceiptCount = ackedWithoutReceiptCount
+            self.mutationGeneration = mutationGeneration ?? 0
+            self.retryDeferredUntilEpochSec = retryDeferredUntilEpochSec
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            queueId = try container.decode(String.self, forKey: .queueId)
+            historyRecordId = try container.decode(String.self, forKey: .historyRecordId)
+            peerId = try container.decode(String.self, forKey: .peerId)
+            routePeerId = try container.decodeIfPresent(String.self, forKey: .routePeerId)
+            addresses = try container.decodeIfPresent([String].self, forKey: .addresses) ?? []
+            envelopeBase64 = try container.decode(String.self, forKey: .envelopeBase64)
+            createdAtEpochSec = try container.decode(UInt64.self, forKey: .createdAtEpochSec)
+            attemptCount = try container.decode(UInt32.self, forKey: .attemptCount)
+            nextAttemptAtEpochSec = try container.decode(UInt64.self, forKey: .nextAttemptAtEpochSec)
+            strictBleOnlyMode = try container.decodeIfPresent(Bool.self, forKey: .strictBleOnlyMode)
+            recipientIdentityId = try container.decodeIfPresent(String.self, forKey: .recipientIdentityId)
+            intendedDeviceId = try container.decodeIfPresent(String.self, forKey: .intendedDeviceId)
+            terminalFailureCode = try container.decodeIfPresent(String.self, forKey: .terminalFailureCode)
+            ackedWithoutReceiptCount = try container.decodeIfPresent(UInt32.self, forKey: .ackedWithoutReceiptCount)
+            mutationGeneration = try container.decodeIfPresent(UInt64.self, forKey: .mutationGeneration) ?? 0
+            retryDeferredUntilEpochSec = try container.decodeIfPresent(UInt64.self, forKey: .retryDeferredUntilEpochSec)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(queueId, forKey: .queueId)
+            try container.encode(historyRecordId, forKey: .historyRecordId)
+            try container.encode(peerId, forKey: .peerId)
+            try container.encodeIfPresent(routePeerId, forKey: .routePeerId)
+            try container.encode(addresses, forKey: .addresses)
+            try container.encode(envelopeBase64, forKey: .envelopeBase64)
+            try container.encode(createdAtEpochSec, forKey: .createdAtEpochSec)
+            try container.encode(attemptCount, forKey: .attemptCount)
+            try container.encode(nextAttemptAtEpochSec, forKey: .nextAttemptAtEpochSec)
+            try container.encodeIfPresent(strictBleOnlyMode, forKey: .strictBleOnlyMode)
+            try container.encodeIfPresent(recipientIdentityId, forKey: .recipientIdentityId)
+            try container.encodeIfPresent(intendedDeviceId, forKey: .intendedDeviceId)
+            try container.encodeIfPresent(terminalFailureCode, forKey: .terminalFailureCode)
+            try container.encodeIfPresent(ackedWithoutReceiptCount, forKey: .ackedWithoutReceiptCount)
+            try container.encodeIfPresent(mutationGeneration, forKey: .mutationGeneration)
+            try container.encodeIfPresent(retryDeferredUntilEpochSec, forKey: .retryDeferredUntilEpochSec)
+        }
+
+        func withRoute(_ newRoute: String?, _ newAddresses: [String]) -> PendingOutboundEnvelope {
+            PendingOutboundEnvelope(
+                queueId: queueId,
+                historyRecordId: historyRecordId,
+                peerId: peerId,
+                routePeerId: newRoute ?? routePeerId,
+                addresses: newAddresses.isEmpty ? addresses : newAddresses,
+                envelopeBase64: envelopeBase64,
+                createdAtEpochSec: createdAtEpochSec,
+                attemptCount: attemptCount,
+                nextAttemptAtEpochSec: nextAttemptAtEpochSec,
+                strictBleOnlyMode: strictBleOnlyMode,
+                recipientIdentityId: recipientIdentityId,
+                intendedDeviceId: intendedDeviceId,
+                terminalFailureCode: terminalFailureCode,
+                ackedWithoutReceiptCount: ackedWithoutReceiptCount,
+                mutationGeneration: mutationGeneration,
+                retryDeferredUntilEpochSec: retryDeferredUntilEpochSec
+            )
+        }
     }
 
     private struct MessageIdentityHints {
@@ -467,6 +775,22 @@ final class MeshRepository {
 
     let peerEvents = PassthroughSubject<PeerEvent, Never>()
     let statusEvents = PassthroughSubject<StatusEvent, Never>()
+    let operationErrors = PassthroughSubject<MeshOperationError, Never>()
+
+    var requestsLoadState: RequestsLoadState = .idle
+    var requestSuppressionPeerIds: Set<String> = []
+
+    // MARK: - Deterministic Test Seams
+    var outboxPersistenceDriver: PersistenceByteDriver?
+    var requestMarkerPersistenceDriver: PersistenceByteDriver?
+    var pendingHistoryPersistenceDriver: PersistenceByteDriver?
+    var nowEpochSecProvider: () -> UInt64 = { UInt64(Date().timeIntervalSince1970) }
+    var uuidProvider: () -> String = { UUID().uuidString }
+    var routeAvailabilityProvider: ((String) -> Bool)? = nil
+    var transportAttemptClosure: ((_ routePeerCandidates: [String], _ addresses: [String], _ envelopeData: Data, _ multipeerPeerId: String?, _ blePeerId: String?, _ traceMessageId: String, _ attemptContext: String, _ strictBleOnlyOverride: Bool, _ recipientIdentityId: String?, _ intendedDeviceId: String?) async -> DeliveryAttemptResult)? = nil
+    var historyWriteClosure: ((_ record: MessageRecord, _ historyManager: HistoryManager) async throws -> Void)? = nil
+    var quarantinedQueueIds: Set<String> = []
+    var lastHistoryReconciliationOutcome: HistoryReconciliationOutcome? = nil
 
     enum PeerEvent {
         case discovered(peerId: String)
@@ -644,6 +968,11 @@ final class MeshRepository {
 
             // Pre-load data where applicable
             try? ledgerManager?.load()
+
+            Task { @MainActor [weak self] in
+                await self?.reconcilePendingHistory()
+                self?.reconcileRequestMarkers()
+            }
 
             logDiagnostic("repo_managers_init_success")
             logVerbose("[OK] All managers initialized successfully")
@@ -867,10 +1196,12 @@ final class MeshRepository {
             }
             Task { @MainActor [weak self] in
                 await self?.applyPowerAdjustments(reason: "service_started")
+                await self?.reconcilePendingHistory()
+                self?.reconcileRequestMarkers()
+                self?.startPendingOutboxRetryLoop()
+                self?.startCoverTrafficLoopIfEnabled()
+                await self?.flushPendingOutbox(reason: "service_started")
             }
-            startPendingOutboxRetryLoop()
-            startCoverTrafficLoopIfEnabled()
-            Task { await flushPendingOutbox(reason: "service_started") }
 
             // On reinstall with existing Keychain identity: broadcast aggressively so
             // known peers can re-send their identity info and we can rebuild contacts.
@@ -1682,73 +2013,117 @@ final class MeshRepository {
         }
         let envelopeData = Data(prepared.envelopeData)
 
-        // Record in history FIRST so it's persisted even if bridge fails
+        // 3. HistoryManager availability check
+        guard let historyManager = historyManager else {
+            throw MeshError.notInitialized("HistoryManager not initialized")
+        }
+
+        let now = nowEpochSecProvider()
         let messageRecord = MessageRecord(
             id: messageId,
             direction: .sent,
             peerId: peerId,
             content: content,
-            timestamp: UInt64(Date().timeIntervalSince1970),
-            senderTimestamp: UInt64(Date().timeIntervalSince1970),
+            timestamp: now,
+            senderTimestamp: now,
             delivered: false,
             status: .queued,
             hidden: false
         )
-        try? historyManager?.add(record: messageRecord)
-        historyManager?.flush()
+
+        // 4. PendingHistoryStore authority write -> throwing FFI HistoryManager.add -> best effort flush
+        if let customHistoryWrite = historyWriteClosure {
+            try await customHistoryWrite(messageRecord, historyManager)
+        } else {
+            do {
+                try recordPendingHistory(record: messageRecord)
+            } catch {
+                operationErrors.send(.storageError("Failed to record pending history: \(error.localizedDescription)"))
+                throw MeshOperationError.storageError("PendingHistoryStore write failed: \(error.localizedDescription)")
+            }
+            do {
+                try historyManager.add(record: messageRecord)
+            } catch {
+                operationErrors.send(.historyError("Failed to add message record to history manager: \(error.localizedDescription)"))
+                throw error
+            }
+            historyManager.flush()
+        }
 
         // Notify UI (Unified flow for sent messages)
         messageUpdates.send(messageRecord)
         logDiagnostic("delivery_state msg=\(messageId) state=pending detail=message_prepared_local_history_written")
-        let delivery = await attemptDirectSwarmDelivery(
-            routePeerCandidates: routePeerCandidates,
-            addresses: routing.listeners,
-            envelopeData: envelopeData,
-            multipeerPeerId: multipeerPeerId,
-            blePeerId: routing.blePeerId,
-            traceMessageId: messageId,
-            attemptContext: "initial_send",
-            strictBleOnlyOverride: strictBleOnlyValidation,
-            recipientIdentityId: trimmedKey,
-            intendedDeviceId: contact?.lastKnownDeviceId
-        )
-        let selectedRoutePeerId = delivery.routePeerId ?? preferredRoutePeerId
 
-        if isMessageDeliveredLocally(messageId) {
-            removePendingOutbound(historyRecordId: messageId)
-            appendDiagnostic("delivery_state msg=\(messageId) state=delivered detail=delivery_receipt_arrived_before_enqueue")
-        } else if let terminalFailureCode = delivery.terminalFailureCode {
-            enqueuePendingOutbound(
+        // 5. Durable outbox enqueue (throwing) BEFORE transport attempt
+        do {
+            try enqueuePendingOutbound(
                 historyRecordId: messageId,
                 peerId: peerId,
-                routePeerId: selectedRoutePeerId,
+                routePeerId: preferredRoutePeerId,
                 addresses: routing.listeners,
                 envelopeData: envelopeData,
-                initialAttemptCount: 1,
+                initialAttemptCount: 0,
                 initialDelaySec: 0,
-                strictBleOnlyMode: strictBleOnlyValidation,
-                recipientIdentityId: trimmedKey,
-                intendedDeviceId: contact?.lastKnownDeviceId,
-                terminalFailureCode: terminalFailureCode
-            )
-            appendDiagnostic("delivery_state msg=\(messageId) state=rejected detail=terminal_failure_code=\(terminalFailureCode)")
-            throw MeshError.invalidInput(terminalIdentityFailureMessage(terminalFailureCode))
-        } else {
-            enqueuePendingOutbound(
-                historyRecordId: messageId,
-                peerId: peerId,
-                routePeerId: selectedRoutePeerId,
-                addresses: routing.listeners,
-                envelopeData: envelopeData,
-                initialAttemptCount: 1,
-                initialDelaySec: delivery.acked ? receiptAwaitSeconds : 0,
                 strictBleOnlyMode: strictBleOnlyValidation,
                 recipientIdentityId: trimmedKey,
                 intendedDeviceId: contact?.lastKnownDeviceId
             )
+        } catch {
+            operationErrors.send(.storageError("Failed to enqueue pending outbound: \(error.localizedDescription)"))
+            throw MeshOperationError.storageError("Outbox enqueue failed: \(error.localizedDescription)")
         }
 
-        clearNotificationRequestPending(peerId: peerId)
+        // 6. First transport attempt
+        let delivery: DeliveryAttemptResult
+        if let transportClosure = transportAttemptClosure {
+            delivery = await transportClosure(
+                routePeerCandidates,
+                routing.listeners,
+                envelopeData,
+                multipeerPeerId,
+                routing.blePeerId,
+                messageId,
+                "initial_send",
+                strictBleOnlyValidation,
+                trimmedKey,
+                contact?.lastKnownDeviceId
+            )
+        } else {
+            delivery = await attemptDirectSwarmDelivery(
+                routePeerCandidates: routePeerCandidates,
+                addresses: routing.listeners,
+                envelopeData: envelopeData,
+                multipeerPeerId: multipeerPeerId,
+                blePeerId: routing.blePeerId,
+                traceMessageId: messageId,
+                attemptContext: "initial_send",
+                strictBleOnlyOverride: strictBleOnlyValidation,
+                recipientIdentityId: trimmedKey,
+                intendedDeviceId: contact?.lastKnownDeviceId
+            )
+        }
+        let selectedRoutePeerId = delivery.routePeerId ?? preferredRoutePeerId
+
+        // 7. Result commit through lattice merge
+        if isMessageDeliveredLocally(messageId) {
+            removePendingOutbound(historyRecordId: messageId)
+            appendDiagnostic("delivery_state msg=\(messageId) state=delivered detail=delivery_receipt_arrived_before_enqueue")
+        } else if let terminalFailureCode = delivery.terminalFailureCode {
+            commitTerminalToOutbox(historyRecordId: messageId, terminalCode: terminalFailureCode)
+            appendDiagnostic("delivery_state msg=\(messageId) state=rejected detail=terminal_failure_code=\(terminalFailureCode)")
+            throw MeshError.invalidInput(terminalIdentityFailureMessage(terminalFailureCode))
+        } else if delivery.acked {
+            commitAckToOutbox(historyRecordId: messageId, routePeerId: selectedRoutePeerId)
+        } else {
+            commitTransientToOutbox(historyRecordId: messageId, routePeerId: selectedRoutePeerId)
+        }
+
+        // 8. Incidental marker cleanup
+        do {
+            try clearNotificationRequestPending(peerId: peerId)
+        } catch {
+            operationErrors.send(.requestLifecycleError("Failed to clear notification request marker: \(error.localizedDescription)"))
+        }
         NotificationManager.shared.markConversationRead(conversationId: peerId)
     }
 
@@ -3104,7 +3479,158 @@ final class MeshRepository {
         )
     }
 
-    private func isNotificationRequestPending(notes: String?) -> Bool {
+    private var effectivePendingHistoryDriver: PersistenceByteDriver {
+        pendingHistoryPersistenceDriver ?? FilePersistenceByteDriver(fileURL: pendingHistoryURL)
+    }
+
+    private var pendingHistoryURL: URL {
+        URL(fileURLWithPath: storagePath).appendingPathComponent("pending_history.json")
+    }
+
+    func loadPendingHistory() throws -> [PendingHistoryEntry] {
+        guard let data = try effectivePendingHistoryDriver.read(), !data.isEmpty else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([PendingHistoryEntry].self, from: data)
+        } catch {
+            throw MeshOperationError.queueCorrupt("Failed to decode pending history: \(error.localizedDescription)")
+        }
+    }
+
+    func savePendingHistory(_ entries: [PendingHistoryEntry]) throws {
+        let data = try JSONEncoder().encode(entries)
+        try effectivePendingHistoryDriver.write(data: data)
+    }
+
+    func recordPendingHistory(record: MessageRecord) throws {
+        var entries = try loadPendingHistory()
+        let now = nowEpochSecProvider()
+        let payload = PendingHistoryRecordPayload(from: record)
+        let newEntry = PendingHistoryEntry(record: payload, recordedAtEpochSec: now)
+        if let index = entries.firstIndex(where: { $0.record.id == record.id }) {
+            entries[index] = newEntry
+        } else {
+            entries.append(newEntry)
+        }
+        try savePendingHistory(entries)
+    }
+
+    @discardableResult
+    func reconcilePendingHistory() async -> HistoryReconciliationOutcome {
+        guard let historyManager else {
+            let outcome = HistoryReconciliationOutcome(reconciledCount: 0, prunedCount: 0, retainedCount: 0)
+            self.lastHistoryReconciliationOutcome = outcome
+            return outcome
+        }
+        let entries: [PendingHistoryEntry]
+        do {
+            entries = try loadPendingHistory()
+        } catch {
+            operationErrors.send(.historyError("Failed to load pending history for reconciliation: \(error.localizedDescription)"))
+            let outcome = HistoryReconciliationOutcome(reconciledCount: 0, prunedCount: 0, retainedCount: 0)
+            self.lastHistoryReconciliationOutcome = outcome
+            return outcome
+        }
+        if entries.isEmpty {
+            let outcome = HistoryReconciliationOutcome(reconciledCount: 0, prunedCount: 0, retainedCount: 0)
+            self.lastHistoryReconciliationOutcome = outcome
+            return outcome
+        }
+
+        var retainedEntries: [PendingHistoryEntry] = []
+        var reconciledCount = 0
+        var prunedCount = 0
+        var readdedAny = false
+
+        for entry in entries {
+            let msgId = entry.record.id
+            var existing: MessageRecord? = nil
+            var lookupFailed = false
+            do {
+                existing = try historyManager.get(id: msgId)
+            } catch {
+                lookupFailed = true
+            }
+
+            if !lookupFailed, existing != nil {
+                // Present in sled DB after reopen -> prune from authority
+                prunedCount += 1
+            } else {
+                // Absent from sled DB or get failed -> replay add
+                do {
+                    try historyManager.add(record: entry.record.toMessageRecord())
+                    reconciledCount += 1
+                    readdedAny = true
+                    retainedEntries.append(entry)
+                } catch {
+                    retainedEntries.append(entry)
+                    operationErrors.send(.historyError("Failed to reconcile message \(msgId) into history: \(error.localizedDescription)"))
+                }
+            }
+        }
+
+        if readdedAny {
+            historyManager.flush()
+        }
+
+        do {
+            try savePendingHistory(retainedEntries)
+        } catch {
+            operationErrors.send(.storageError("Failed to save reconciled pending history: \(error.localizedDescription)"))
+        }
+
+        let outcome = HistoryReconciliationOutcome(
+            reconciledCount: reconciledCount,
+            prunedCount: prunedCount,
+            retainedCount: retainedEntries.count
+        )
+        self.lastHistoryReconciliationOutcome = outcome
+        return outcome
+    }
+
+    private var effectiveRequestMarkerDriver: PersistenceByteDriver {
+        requestMarkerPersistenceDriver ?? FilePersistenceByteDriver(fileURL: requestMarkersURL)
+    }
+
+    private var requestMarkersURL: URL {
+        URL(fileURLWithPath: storagePath).appendingPathComponent("request_markers.json")
+    }
+
+    func loadRequestMarkers() throws -> [RequestMarkerEntry] {
+        guard let data = try effectiveRequestMarkerDriver.read(), !data.isEmpty else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([RequestMarkerEntry].self, from: data)
+        } catch {
+            throw MeshOperationError.queueCorrupt("Failed to decode request markers: \(error.localizedDescription)")
+        }
+    }
+
+    func saveRequestMarkers(_ entries: [RequestMarkerEntry]) throws {
+        let data = try JSONEncoder().encode(entries)
+        try effectiveRequestMarkerDriver.write(data: data)
+    }
+
+    func recordRequestMarkerCleared(peerId: String) throws {
+        var entries = try loadRequestMarkers()
+        let now = nowEpochSecProvider()
+        let newEntry = RequestMarkerEntry(peerId: peerId, clearedAtEpochSec: now)
+        if let index = entries.firstIndex(where: { $0.peerId == peerId }) {
+            entries[index] = newEntry
+        } else {
+            entries.append(newEntry)
+        }
+        try saveRequestMarkers(entries)
+    }
+
+    func isRequestMarkerCleared(peerId: String) -> Bool {
+        guard let entries = try? loadRequestMarkers() else { return false }
+        return entries.contains { $0.peerId == peerId }
+    }
+
+    func isNotificationRequestPending(notes: String?) -> Bool {
         guard let notes else { return false }
         return notes
             .split(whereSeparator: { $0 == ";" || $0 == "\n" })
@@ -3112,27 +3638,53 @@ final class MeshRepository {
             .contains { $0 == "\(NotificationNoteKey.requestPending):true" }
     }
 
-    private func clearNotificationRequestPending(peerId: String) {
-        guard let existingContact = try? contactManager?.get(peerId: peerId),
-              isNotificationRequestPending(notes: existingContact.notes) else {
+    func clearNotificationRequestPending(peerId: String) throws {
+        guard let contactManager else {
+            throw MeshError.notInitialized("ContactManager not initialized")
+        }
+        let existingContact = try? contactManager.get(peerId: peerId)
+        let markerPresent = existingContact != nil && isNotificationRequestPending(notes: existingContact?.notes)
+        let alreadyClearedInStore = isRequestMarkerCleared(peerId: peerId)
+
+        if !markerPresent && alreadyClearedInStore {
             return
         }
 
-        let updated = Contact(
-            peerId: existingContact.peerId,
-            nickname: existingContact.nickname,
-            localNickname: existingContact.localNickname,
-            publicKey: existingContact.publicKey,
-            addedAt: existingContact.addedAt,
-            lastSeen: existingContact.lastSeen,
-            notes: removeRoutingHint(notes: existingContact.notes, key: NotificationNoteKey.requestPending),
-            lastKnownDeviceId: existingContact.lastKnownDeviceId,
-            verifiedAt: existingContact.verifiedAt,
-            isTombstone: existingContact.isTombstone
-        )
-        try? contactManager?.add(contact: updated)
-        contactManager?.flush()
-        checkpointContactPersistence(reason: "notification_contact_updated")
+        // 1. Write clear-record durably FIRST
+        try recordRequestMarkerCleared(peerId: peerId)
+
+        // 2. Remove marker from contact notes and add to contactManager
+        if let existingContact, markerPresent {
+            let updated = Contact(
+                peerId: existingContact.peerId,
+                nickname: existingContact.nickname,
+                localNickname: existingContact.localNickname,
+                publicKey: existingContact.publicKey,
+                addedAt: existingContact.addedAt,
+                lastSeen: existingContact.lastSeen,
+                notes: removeRoutingHint(notes: existingContact.notes, key: NotificationNoteKey.requestPending),
+                lastKnownDeviceId: existingContact.lastKnownDeviceId,
+                verifiedAt: existingContact.verifiedAt,
+                isTombstone: existingContact.isTombstone
+            )
+            try contactManager.add(contact: updated)
+            contactManager.flush()
+            checkpointContactPersistence(reason: "notification_contact_updated")
+        }
+    }
+
+    func reconcileRequestMarkers() {
+        guard let contactManager else { return }
+        do {
+            let contacts = try contactManager.list()
+            for contact in contacts {
+                if isNotificationRequestPending(notes: contact.notes) && isRequestMarkerCleared(peerId: contact.peerId) {
+                    try clearNotificationRequestPending(peerId: contact.peerId)
+                }
+            }
+        } catch {
+            operationErrors.send(.requestLifecycleError("Failed to reconcile request markers: \(error.localizedDescription)"))
+        }
     }
 
     private func displayNameForContact(_ contact: Contact?, fallbackPeerId: String) -> String {
@@ -3369,6 +3921,14 @@ final class MeshRepository {
     }
 
     func deliveryStatePresentation(for message: MessageRecord, nowEpochSec: UInt64 = UInt64(Date().timeIntervalSince1970)) -> DeliveryStatePresentation {
+        if message.delivered {
+            return DeliveryStatePresentation(
+                state: .delivered,
+                label: "delivered",
+                detail: "Delivery receipt confirmed by the recipient node."
+            )
+        }
+
         if let pending = loadPendingOutbox().first(where: { $0.historyRecordId == message.id }) {
             if let terminalFailureCode = pending.terminalFailureCode {
                 let detail: String
@@ -3377,35 +3937,52 @@ final class MeshRepository {
                     detail = "Rejected because this identity moved to another device. Refresh the contact before retrying."
                 case "identity_abandoned":
                     detail = "Rejected because the contact abandoned this identity. Re-verify the contact before sending again."
+                case "corrupt_envelope":
+                    detail = "Rejected because the local outbound envelope is corrupt."
                 default:
                     detail = "Rejected because the recipient identity is no longer valid."
                 }
                 return DeliveryStatePresentation(
+                    state: .rejectedNonretryable,
                     label: "rejected",
                     detail: detail
                 )
             }
+
+            if let retryDeferred = pending.retryDeferredUntilEpochSec, retryDeferred > nowEpochSec {
+                return DeliveryStatePresentation(
+                    state: .failedRetryable,
+                    label: "failedRetryable",
+                    detail: "Delivery paused by backoff; will retry automatically on next opportunity."
+                )
+            }
+
+            if (pending.ackedWithoutReceiptCount ?? 0) > 0 {
+                return DeliveryStatePresentation(
+                    state: .sent,
+                    label: "sent",
+                    detail: "Delivered to mesh node, awaiting recipient receipt."
+                )
+            }
+
             if pending.nextAttemptAtEpochSec <= nowEpochSec {
                 return DeliveryStatePresentation(
+                    state: .forwarding,
                     label: "forwarding",
                     detail: "Actively retrying through direct or relay paths."
                 )
             }
+
             return DeliveryStatePresentation(
+                state: .stored,
                 label: "stored",
                 detail: "Stored for retry while the recipient is offline or unreachable."
             )
         }
 
-        if message.delivered {
-            return DeliveryStatePresentation(
-                label: "delivered",
-                detail: "Delivery receipt confirmed by the recipient node."
-            )
-        }
-
         return DeliveryStatePresentation(
-            label: "pending",
+            state: .queued,
+            label: "queued",
             detail: "Queued locally. First route attempt is still in progress."
         )
     }
@@ -3656,22 +4233,52 @@ final class MeshRepository {
         return try historyManager.conversation(peerId: peerId, limit: limit)
     }
 
-    func getMessageRequests(limit: UInt32 = 100) -> [MessageRequestThread] {
-        let contacts = (try? contactManager?.list()) ?? []
-        let pendingContacts = contacts.filter { isNotificationRequestPending(notes: $0.notes) }
+    func loadMessageRequestThreads(limit: UInt32 = 100) throws -> [MessageRequestThread] {
+        guard let contactManager else {
+            throw MeshError.notInitialized("ContactManager not initialized")
+        }
+        guard let ironCore else {
+            throw MeshError.notInitialized("IronCore not initialized")
+        }
+        let contacts = try contactManager.list()
+        let pendingContacts = contacts.filter {
+            isNotificationRequestPending(notes: $0.notes) && !isRequestMarkerCleared(peerId: $0.peerId)
+        }
 
-        return pendingContacts.compactMap { contact in
+        var threads: [MessageRequestThread] = []
+        for contact in pendingContacts {
+            let isBlocked = try ironCore.isPeerBlocked(peerId: contact.peerId, deviceId: nil)
+            if isBlocked { continue }
             let messages = (try? historyManager?.conversation(peerId: contact.peerId, limit: limit)) ?? []
             let lastMessage = messages.max(by: compareMessageRecency(_:_:))
-            return MessageRequestThread(
-                peerId: contact.peerId,
-                displayName: displayNameForContact(contact, fallbackPeerId: contact.peerId),
-                previewText: lastMessage?.content,
-                lastMessageTime: lastMessage.map { Date(timeIntervalSince1970: Double(effectiveTimestamp(for: $0))) },
-                unreadCount: Int(messages.filter { $0.direction == .received }.count)
+            threads.append(
+                MessageRequestThread(
+                    peerId: contact.peerId,
+                    displayName: displayNameForContact(contact, fallbackPeerId: contact.peerId),
+                    previewText: lastMessage?.content,
+                    lastMessageTime: lastMessage.map { Date(timeIntervalSince1970: Double(effectiveTimestamp(for: $0))) },
+                    unreadCount: Int(messages.filter { $0.direction == .received }.count)
+                )
             )
         }
-        .sorted { ($0.lastMessageTime ?? .distantPast) > ($1.lastMessageTime ?? .distantPast) }
+        return threads.sorted { ($0.lastMessageTime ?? .distantPast) > ($1.lastMessageTime ?? .distantPast) }
+    }
+
+    func getMessageRequests(limit: UInt32 = 100) -> [MessageRequestThread] {
+        do {
+            let threads = try loadMessageRequestThreads(limit: limit)
+            requestsLoadState = .loaded
+            requestSuppressionPeerIds = []
+            return threads
+        } catch {
+            requestsLoadState = .failed(error.localizedDescription)
+            operationErrors.send(.moderationError(error.localizedDescription))
+            let contacts = (try? contactManager?.list()) ?? []
+            requestSuppressionPeerIds = Set(
+                contacts.filter { isNotificationRequestPending(notes: $0.notes) }.map { $0.peerId }
+            )
+            return []
+        }
     }
 
     func getRecentMessages(peerIdFilter: String? = nil, limit: UInt32 = 50) throws -> [MessageRecord] {
@@ -3727,7 +4334,16 @@ final class MeshRepository {
     }
 
     func acceptMessageRequest(peerId: String) throws {
-        clearNotificationRequestPending(peerId: peerId)
+        try clearNotificationRequestPending(peerId: peerId)
+        NotificationManager.shared.markConversationRead(conversationId: peerId)
+    }
+
+    func rejectMessageRequest(peerId: String) throws {
+        let isBlocked = try isPeerBlocked(peerId: peerId)
+        if !isBlocked {
+            try blockPeer(peerId: peerId, reason: "request_rejected")
+        }
+        try clearNotificationRequestPending(peerId: peerId)
         NotificationManager.shared.markConversationRead(conversationId: peerId)
     }
 
@@ -3779,6 +4395,7 @@ final class MeshRepository {
             throw MeshError.notInitialized("IronCore not initialized")
         }
         try ironCore.unblockPeer(peerId: peerId, deviceId: nil)
+        reconcileRequestMarkers()
         logger.info("[OK] Unblocked peer: \(peerId)")
     }
 
@@ -5524,7 +6141,51 @@ final class MeshRepository {
         return false
     }
 
-    private func enqueuePendingOutbound(
+    private var workingOutboxQueue: [PendingOutboundEnvelope]? = nil
+    private var workingOutboxDirty = false
+    private var outboxFlushInFlight = false
+    private var outboxFlushCoalescedRequest = false
+    private var inFlightQueueIds: Set<String> = []
+    private let retryThrottleMs: Int = 2000
+
+    private var effectiveOutboxDriver: PersistenceByteDriver {
+        outboxPersistenceDriver ?? FilePersistenceByteDriver(fileURL: pendingOutboxURL)
+    }
+
+    func loadPendingOutbox() -> [PendingOutboundEnvelope] {
+        do {
+            return try loadPendingOutboxChecked()
+        } catch {
+            logger.warning("Failed to parse pending outbox: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func loadPendingOutboxChecked() throws -> [PendingOutboundEnvelope] {
+        guard let data = try effectiveOutboxDriver.read(), !data.isEmpty else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([PendingOutboundEnvelope].self, from: data)
+        } catch {
+            throw MeshOperationError.queueCorrupt("Failed to decode pending outbox: \(error.localizedDescription)")
+        }
+    }
+
+    func savePendingOutboxChecked(_ queue: [PendingOutboundEnvelope]) throws {
+        let data = try JSONEncoder().encode(queue)
+        try effectiveOutboxDriver.write(data: data)
+    }
+
+    func savePendingOutbox(_ queue: [PendingOutboundEnvelope]) {
+        do {
+            try savePendingOutboxChecked(queue)
+        } catch {
+            logger.warning("Failed to persist pending outbox: \(error.localizedDescription)")
+        }
+    }
+
+    func enqueuePendingOutbound(
         historyRecordId: String,
         peerId: String,
         routePeerId: String?,
@@ -5536,38 +6197,50 @@ final class MeshRepository {
         recipientIdentityId: String? = nil,
         intendedDeviceId: String? = nil,
         terminalFailureCode: String? = nil
-    ) {
+    ) throws {
         if isMessageDeliveredLocally(historyRecordId) {
             appendDiagnostic("delivery_state msg=\(historyRecordId) state=delivered detail=skip_enqueue_already_delivered")
             return
         }
-        let now = UInt64(Date().timeIntervalSince1970)
-        var queue = loadPendingOutbox().filter { $0.historyRecordId != historyRecordId }
-        queue.append(
-            PendingOutboundEnvelope(
-                queueId: UUID().uuidString,
-                historyRecordId: historyRecordId,
-                peerId: peerId,
-                routePeerId: routePeerId,
-                addresses: addresses,
-                envelopeBase64: envelopeData.base64EncodedString(),
-                createdAtEpochSec: now,
-                attemptCount: initialAttemptCount,
-                nextAttemptAtEpochSec: now + initialDelaySec,
-                strictBleOnlyMode: strictBleOnlyMode,
-                recipientIdentityId: recipientIdentityId,
-                intendedDeviceId: intendedDeviceId,
-                terminalFailureCode: terminalFailureCode
-            )
+        let now = nowEpochSecProvider()
+        let queueId = uuidProvider()
+        let newEnvelope = PendingOutboundEnvelope(
+            queueId: queueId,
+            historyRecordId: historyRecordId,
+            peerId: peerId,
+            routePeerId: routePeerId,
+            addresses: addresses,
+            envelopeBase64: envelopeData.base64EncodedString(),
+            createdAtEpochSec: now,
+            attemptCount: initialAttemptCount,
+            nextAttemptAtEpochSec: now + initialDelaySec,
+            strictBleOnlyMode: strictBleOnlyMode,
+            recipientIdentityId: recipientIdentityId,
+            intendedDeviceId: intendedDeviceId,
+            terminalFailureCode: terminalFailureCode,
+            ackedWithoutReceiptCount: nil,
+            mutationGeneration: 0,
+            retryDeferredUntilEpochSec: nil
         )
-        savePendingOutbox(queue)
+
+        if var current = workingOutboxQueue {
+            current.removeAll { $0.historyRecordId == historyRecordId }
+            current.append(newEnvelope)
+            workingOutboxQueue = current
+            workingOutboxDirty = true
+            try savePendingOutboxChecked(current)
+            workingOutboxDirty = false
+        } else {
+            var queue = try loadPendingOutboxChecked()
+            queue.removeAll { $0.historyRecordId == historyRecordId }
+            queue.append(newEnvelope)
+            try savePendingOutboxChecked(queue)
+        }
+
         let initialState = initialDelaySec > 0 ? "stored" : "forwarding"
         appendDiagnostic("delivery_state msg=\(historyRecordId) state=\(initialState) detail=enqueued attempt=\(initialAttemptCount) next_attempt_delay_sec=\(initialDelaySec)")
         dispatchFlushPendingOutbox(reason: "enqueue")
     }
-
-    private var outboxFlushInFlight = false
-    private let retryThrottleMs: Int = 2000
 
     private func dispatchFlushPendingOutbox(reason: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(retryThrottleMs)) { [weak self] in
@@ -5577,225 +6250,433 @@ final class MeshRepository {
         }
     }
 
-    private func flushPendingOutbox(reason: String) async {
-        guard !outboxFlushInFlight else { return }
+    private func hasPlausibleRoute(for item: PendingOutboundEnvelope) -> Bool {
+        if let provider = routeAvailabilityProvider {
+            return provider(item.peerId)
+        }
+        let contact = try? contactManager?.get(peerId: item.peerId)
+        let candidates = buildRoutePeerCandidates(
+            peerId: item.peerId,
+            cachedRoutePeerId: item.routePeerId,
+            notes: contact?.notes,
+            recipientPublicKey: contact?.publicKey
+        )
+        return !candidates.isEmpty || !(item.addresses.isEmpty)
+    }
+
+    func flushPendingOutbox(reason: String) async {
+        guard !outboxFlushInFlight else {
+            outboxFlushCoalescedRequest = true
+            return
+        }
         outboxFlushInFlight = true
-        defer { outboxFlushInFlight = false }
+        defer {
+            outboxFlushInFlight = false
+        }
 
-        // Ensure relay backbone is reachable whenever we check outbox
-        await primeRelayBootstrapConnections()
+        repeat {
+            outboxFlushCoalescedRequest = false
 
-        let now = UInt64(Date().timeIntervalSince1970)
-        let queue = loadPendingOutbox()
-        if queue.isEmpty { return }
+            // Ensure relay backbone is reachable whenever we check outbox
+            await primeRelayBootstrapConnections()
 
-        var nextQueue: [PendingOutboundEnvelope] = []
-        nextQueue.reserveCapacity(queue.count)
+            let now = nowEpochSecProvider()
+            let initialQueue: [PendingOutboundEnvelope]
+            do {
+                initialQueue = try loadPendingOutboxChecked()
+            } catch {
+                operationErrors.send(.queueCorrupt(error.localizedDescription))
+                return
+            }
 
-        for item in queue {
-            // Yield between items to prevent CPU starvation (IOS-PERF-001).
-            // Without this, a large outbox under retry load can spike CPU to
-            // 99% and trigger the iOS watchdog kill.
-            await Task.yield()
+            if initialQueue.isEmpty {
+                workingOutboxQueue = []
+                workingOutboxDirty = false
+                return
+            }
 
-            let ackedWithoutReceiptCount = item.ackedWithoutReceiptCount ?? 0
-            if Self.shouldStopAckedWithoutReceiptRetries(
-                ackedWithoutReceiptCount: ackedWithoutReceiptCount,
-                createdAtEpochSec: item.createdAtEpochSec,
-                nowEpochSec: now,
-                maxAgeSeconds: pendingOutboxMaxAgeSeconds
-            ) {
-                appendDiagnostic(
-                    "delivery_state msg=\(item.historyRecordId) state=delivered_unconfirmed detail=stopped_pending_outbox reason=max_age_exceeded_acked_without_receipt acked_without_receipt=\(ackedWithoutReceiptCount)"
+            var workingQueue = initialQueue
+            workingOutboxQueue = workingQueue
+            workingOutboxDirty = false
+
+            // Identify due items
+            var dueQueueIds: [String] = []
+            for i in 0..<workingQueue.count {
+                let item = workingQueue[i]
+                if item.terminalFailureCode != nil {
+                    continue
+                }
+                if quarantinedQueueIds.contains(item.queueId) {
+                    continue
+                }
+
+                // Check defer expiration
+                if let deferredUntil = item.retryDeferredUntilEpochSec {
+                    if deferredUntil <= now {
+                        let hasRoute = hasPlausibleRoute(for: item)
+                        if hasRoute {
+                            // Reset burst defer and start new burst
+                            var updated = item
+                            updated.retryDeferredUntilEpochSec = nil
+                            updated.attemptCount = 0
+                            updated.nextAttemptAtEpochSec = now
+                            workingQueue[i] = updated
+                            workingOutboxDirty = true
+                            dueQueueIds.append(item.queueId)
+                        } else {
+                            // Advance defer window without consuming attempt
+                            let jitter = Self.deterministicJitter(for: item.queueId)
+                            let nextDefer = now + 300 + jitter
+                            var updated = item
+                            updated.retryDeferredUntilEpochSec = nextDefer
+                            updated.nextAttemptAtEpochSec = nextDefer
+                            workingQueue[i] = updated
+                            workingOutboxDirty = true
+                        }
+                    }
+                    continue
+                }
+
+                if item.nextAttemptAtEpochSec <= now {
+                    dueQueueIds.append(item.queueId)
+                }
+            }
+
+            workingOutboxQueue = workingQueue
+
+            for dueId in dueQueueIds {
+                await Task.yield()
+
+                guard var currentWorking = workingOutboxQueue,
+                      let itemIndex = currentWorking.firstIndex(where: { $0.queueId == dueId }) else {
+                    continue
+                }
+                let item = currentWorking[itemIndex]
+
+                // Check if delivered locally (R1 removal)
+                if isMessageDeliveredLocally(item.historyRecordId) {
+                    currentWorking.remove(at: itemIndex)
+                    workingOutboxQueue = currentWorking
+                    workingOutboxDirty = true
+                    continue
+                }
+
+                // Validate envelope base64
+                guard let envelopeData = Data(base64Encoded: item.envelopeBase64) else {
+                    // Base64 is corrupt: retain with terminal failure code (R2), NEVER drop!
+                    var updated = item
+                    updated.terminalFailureCode = "corrupt_envelope"
+                    currentWorking[itemIndex] = updated
+                    workingOutboxQueue = currentWorking
+                    workingOutboxDirty = true
+                    appendDiagnostic("delivery_state msg=\(item.historyRecordId) state=rejected detail=terminal_failure_code=corrupt_envelope")
+                    continue
+                }
+
+                let capturedGeneration = item.mutationGeneration ?? 0
+                inFlightQueueIds.insert(item.queueId)
+
+                let contact = try? contactManager?.get(peerId: item.peerId)
+                let latestRouting = parseRoutingHintsFromNotes(contact?.notes)
+                let fallbackMultipeerPeerId = defaultMultipeerPeerId(fromPublicKey: contact?.publicKey)
+                let routePeerCandidates = buildRoutePeerCandidates(
+                    peerId: item.peerId,
+                    cachedRoutePeerId: item.routePeerId,
+                    notes: contact?.notes,
+                    recipientPublicKey: contact?.publicKey
                 )
-                continue
-            }
-            if let expiryReason = pendingOutboxExpiryReason(for: item, nowEpochSec: now) {
-                appendDiagnostic(
-                    "delivery_state msg=\(item.historyRecordId) state=failed detail=dropped_pending_outbox reason=\(expiryReason) attempt=\(item.attemptCount)"
+                let resolvedRoutePeerId = routePeerCandidates.first
+                let resolvedAddresses = buildDialCandidatesForPeer(
+                    routePeerId: resolvedRoutePeerId,
+                    rawAddresses: item.addresses + latestRouting.listeners,
+                    includeRelayCircuits: true
                 )
-                continue
-            }
-            if item.terminalFailureCode != nil {
-                nextQueue.append(item)
-                continue
-            }
-            if item.nextAttemptAtEpochSec > now {
-                nextQueue.append(item)
-                continue
-            }
 
-            if isMessageDeliveredLocally(item.historyRecordId) {
-                continue
-            }
-            appendDiagnostic("delivery_state msg=\(item.historyRecordId) state=forwarding detail=retry_attempt=\(item.attemptCount + 1)")
-
-            guard let envelopeData = Data(base64Encoded: item.envelopeBase64) else {
-                logger.warning("Dropping corrupt pending envelope \(item.queueId)")
-                continue
-            }
-
-            let contact = try? contactManager?.get(peerId: item.peerId)
-            let latestRouting = parseRoutingHintsFromNotes(contact?.notes)
-            let fallbackMultipeerPeerId = defaultMultipeerPeerId(fromPublicKey: contact?.publicKey)
-            let routePeerCandidates = buildRoutePeerCandidates(
-                peerId: item.peerId,
-                cachedRoutePeerId: item.routePeerId,
-                notes: contact?.notes,
-                recipientPublicKey: contact?.publicKey
-            )
-            let resolvedRoutePeerId = routePeerCandidates.first
-            let resolvedAddresses = buildDialCandidatesForPeer(
-                routePeerId: resolvedRoutePeerId,
-                rawAddresses: item.addresses + latestRouting.listeners,
-                includeRelayCircuits: true
-            )
-
-            let delivery = await attemptDirectSwarmDelivery(
-                routePeerCandidates: routePeerCandidates,
-                addresses: resolvedAddresses,
-                envelopeData: envelopeData,
-                multipeerPeerId: latestRouting.multipeerPeerId ?? fallbackMultipeerPeerId,
-                blePeerId: latestRouting.blePeerId,
-                traceMessageId: item.historyRecordId,
-                attemptContext: "outbox_retry",
-                strictBleOnlyOverride: item.strictBleOnlyMode,
-                recipientIdentityId: item.recipientIdentityId ?? contact?.publicKey,
-                intendedDeviceId: item.intendedDeviceId ?? contact?.lastKnownDeviceId
-            )
-            let selectedRoutePeerId = delivery.acked
-                ? (delivery.routePeerId ?? resolvedRoutePeerId)
-                : delivery.routePeerId
-            if isMessageDeliveredLocally(item.historyRecordId) {
-                continue
-            }
-
-            if let terminalFailureCode = delivery.terminalFailureCode {
-                nextQueue.append(
-                    PendingOutboundEnvelope(
-                        queueId: item.queueId,
-                        historyRecordId: item.historyRecordId,
-                        peerId: item.peerId,
-                        routePeerId: selectedRoutePeerId,
-                        addresses: resolvedAddresses,
-                        envelopeBase64: item.envelopeBase64,
-                        createdAtEpochSec: item.createdAtEpochSec,
-                        attemptCount: item.attemptCount,
-                        nextAttemptAtEpochSec: item.nextAttemptAtEpochSec,
-                        strictBleOnlyMode: item.strictBleOnlyMode,
-                        recipientIdentityId: item.recipientIdentityId,
-                        intendedDeviceId: item.intendedDeviceId,
-                        terminalFailureCode: terminalFailureCode,
-                        ackedWithoutReceiptCount: item.ackedWithoutReceiptCount
+                let delivery: DeliveryAttemptResult
+                if let transportClosure = transportAttemptClosure {
+                    delivery = await transportClosure(
+                        routePeerCandidates,
+                        resolvedAddresses,
+                        envelopeData,
+                        latestRouting.multipeerPeerId ?? fallbackMultipeerPeerId,
+                        latestRouting.blePeerId,
+                        item.historyRecordId,
+                        "outbox_retry",
+                        item.strictBleOnlyMode ?? strictBleOnlyValidation,
+                        item.recipientIdentityId ?? contact?.publicKey,
+                        item.intendedDeviceId ?? contact?.lastKnownDeviceId
                     )
-                )
-                appendDiagnostic("delivery_state msg=\(item.historyRecordId) state=rejected detail=terminal_failure_code=\(terminalFailureCode)")
-                continue
-            }
-
-            if delivery.acked {
-                // A transport ACK is not a genuine delivery failure. Track it
-                // separately so it never consumes the failure-attempt ceiling.
-                let nextAckedWithoutReceiptCount = ackedWithoutReceiptCount + 1
-                let adaptiveReceiptWait = Self.receiptRetryDelaySeconds(
-                    ackedWithoutReceiptCount: nextAckedWithoutReceiptCount
-                )
-                nextQueue.append(
-                    PendingOutboundEnvelope(
-                        queueId: item.queueId,
-                        historyRecordId: item.historyRecordId,
-                        peerId: item.peerId,
-                        routePeerId: selectedRoutePeerId,
+                } else {
+                    delivery = await attemptDirectSwarmDelivery(
+                        routePeerCandidates: routePeerCandidates,
                         addresses: resolvedAddresses,
-                        envelopeBase64: item.envelopeBase64,
-                        createdAtEpochSec: item.createdAtEpochSec,
-                        attemptCount: item.attemptCount,
-                        nextAttemptAtEpochSec: now + adaptiveReceiptWait,
-                        strictBleOnlyMode: item.strictBleOnlyMode,
-                        recipientIdentityId: item.recipientIdentityId,
-                        intendedDeviceId: item.intendedDeviceId,
-                        terminalFailureCode: item.terminalFailureCode,
-                        ackedWithoutReceiptCount: nextAckedWithoutReceiptCount
+                        envelopeData: envelopeData,
+                        multipeerPeerId: latestRouting.multipeerPeerId ?? fallbackMultipeerPeerId,
+                        blePeerId: latestRouting.blePeerId,
+                        traceMessageId: item.historyRecordId,
+                        attemptContext: "outbox_retry",
+                        strictBleOnlyOverride: item.strictBleOnlyMode ?? strictBleOnlyValidation,
+                        recipientIdentityId: item.recipientIdentityId ?? contact?.publicKey,
+                        intendedDeviceId: item.intendedDeviceId ?? contact?.lastKnownDeviceId
                     )
-                )
-                appendDiagnostic("delivery_state msg=\(item.historyRecordId) state=stored detail=awaiting_receipt_delay_sec=\(adaptiveReceiptWait) acked_without_receipt=\(nextAckedWithoutReceiptCount)")
-                continue
+                }
+
+                inFlightQueueIds.remove(item.queueId)
+
+                // Re-fetch freshest working queue
+                guard var freshWorking = workingOutboxQueue else { continue }
+                guard let freshIndex = freshWorking.firstIndex(where: { $0.queueId == dueId }) else {
+                    // Item was removed (e.g. by receipt) during the await: R1 wins, ignore attempt result!
+                    continue
+                }
+                let freshItem = freshWorking[freshIndex]
+
+                // Check if delivered locally during attempt (R1 wins)
+                if isMessageDeliveredLocally(freshItem.historyRecordId) {
+                    freshWorking.remove(at: freshIndex)
+                    workingOutboxQueue = freshWorking
+                    workingOutboxDirty = true
+                    continue
+                }
+
+                // Lattice merge rules:
+                // R2: Terminal identity failure commits even if generation advanced
+                if let terminalCode = delivery.terminalFailureCode {
+                    var updated = freshItem
+                    updated.terminalFailureCode = terminalCode
+                    if let newRoute = delivery.routePeerId { updated = updated.withRoute(newRoute, resolvedAddresses) }
+                    freshWorking[freshIndex] = updated
+                    workingOutboxQueue = freshWorking
+                    workingOutboxDirty = true
+                    appendDiagnostic("delivery_state msg=\(freshItem.historyRecordId) state=rejected detail=terminal_failure_code=\(terminalCode)")
+                    continue
+                }
+
+                // R3: Transport ACK commits even if generation advanced
+                if delivery.acked {
+                    let nextAckedCount = (freshItem.ackedWithoutReceiptCount ?? 0) + 1
+                    let waitDelay = Self.receiptRetryDelaySeconds(ackedWithoutReceiptCount: nextAckedCount)
+                    var updated = freshItem
+                    updated.ackedWithoutReceiptCount = nextAckedCount
+                    updated.nextAttemptAtEpochSec = now + waitDelay
+                    if let newRoute = delivery.routePeerId ?? resolvedRoutePeerId { updated = updated.withRoute(newRoute, resolvedAddresses) }
+                    freshWorking[freshIndex] = updated
+                    workingOutboxQueue = freshWorking
+                    workingOutboxDirty = true
+                    appendDiagnostic("delivery_state msg=\(freshItem.historyRecordId) state=stored detail=awaiting_receipt_delay_sec=\(waitDelay) acked_without_receipt=\(nextAckedCount)")
+                    continue
+                }
+
+                // R5: Transient failure -> Generation CAS check
+                let freshGeneration = freshItem.mutationGeneration ?? 0
+                if freshGeneration != capturedGeneration {
+                    // Stale transient result discarded! Newer scheduling mutation owns the item.
+                    continue
+                }
+
+                let nextAttemptCount = freshItem.attemptCount + 1
+                if nextAttemptCount >= Self.pendingOutboxBurstThreshold {
+                    let jitter = Self.deterministicJitter(for: freshItem.queueId)
+                    let deferSec: UInt64 = 300 + jitter
+                    var updated = freshItem
+                    updated.attemptCount = 0
+                    updated.retryDeferredUntilEpochSec = now + deferSec
+                    updated.nextAttemptAtEpochSec = now + deferSec
+                    if let newRoute = delivery.routePeerId { updated = updated.withRoute(newRoute, resolvedAddresses) }
+                    freshWorking[freshIndex] = updated
+                    workingOutboxQueue = freshWorking
+                    workingOutboxDirty = true
+                    appendDiagnostic("delivery_state msg=\(freshItem.historyRecordId) state=stored detail=retry_burst_deferred_sec=\(deferSec)")
+                } else {
+                    let backoff: UInt64
+                    if nextAttemptCount <= 6 {
+                        backoff = UInt64(min(64, 1 << Int(nextAttemptCount)))
+                    } else {
+                        backoff = 60
+                    }
+                    var updated = freshItem
+                    updated.attemptCount = nextAttemptCount
+                    updated.nextAttemptAtEpochSec = now + backoff
+                    if let newRoute = delivery.routePeerId { updated = updated.withRoute(newRoute, resolvedAddresses) }
+                    freshWorking[freshIndex] = updated
+                    workingOutboxQueue = freshWorking
+                    workingOutboxDirty = true
+                    appendDiagnostic("delivery_state msg=\(freshItem.historyRecordId) state=stored detail=retry_backoff_sec=\(backoff) attempt=\(nextAttemptCount)")
+                }
             }
 
-            let nextAttemptCount = item.attemptCount + 1
-            // Progressive backoff: fast retries first, then slow down
-            // Attempts 1-6: 2^n seconds (2, 4, 8, 16, 32, 64)
-            // Attempts 7-20: 60 seconds
-            // Attempts 21+: 300 seconds (5 min) — patient but persistent
-            let backoff: UInt64
-            if nextAttemptCount <= 6 {
-                backoff = UInt64(min(64, 1 << Int(nextAttemptCount)))
-            } else if nextAttemptCount <= 20 {
-                backoff = 60
-            } else {
-                backoff = 300
+            // Pass-end: EXACTLY ONE atomic bulk write if anything changed!
+            if let finalQueue = workingOutboxQueue, workingOutboxDirty {
+                do {
+                    try savePendingOutboxChecked(finalQueue)
+                    workingOutboxDirty = false
+                } catch {
+                    operationErrors.send(.storageError("Pass-end bulk write failed: \(error.localizedDescription)"))
+                    // Quarantine any terminal items in memory if write failed
+                    for item in finalQueue where item.terminalFailureCode != nil {
+                        quarantinedQueueIds.insert(item.queueId)
+                    }
+                }
             }
-            nextQueue.append(
-                    PendingOutboundEnvelope(
-                        queueId: item.queueId,
-                        historyRecordId: item.historyRecordId,
-                        peerId: item.peerId,
-                        routePeerId: selectedRoutePeerId,
-                        addresses: resolvedAddresses,
-                        envelopeBase64: item.envelopeBase64,
-                        createdAtEpochSec: item.createdAtEpochSec,
-                        attemptCount: nextAttemptCount,
-                        nextAttemptAtEpochSec: now + backoff,
-                        strictBleOnlyMode: item.strictBleOnlyMode,
-                        recipientIdentityId: item.recipientIdentityId,
-                        intendedDeviceId: item.intendedDeviceId,
-                        terminalFailureCode: item.terminalFailureCode,
-                        ackedWithoutReceiptCount: item.ackedWithoutReceiptCount
-                    )
-            )
-            appendDiagnostic("delivery_state msg=\(item.historyRecordId) state=stored detail=retry_backoff_sec=\(backoff) attempt=\(nextAttemptCount)")
-        }
+            workingOutboxQueue = nil
 
-        savePendingOutbox(nextQueue)
+        } while outboxFlushCoalescedRequest
     }
 
-    private func loadPendingOutbox() -> [PendingOutboundEnvelope] {
-        guard let data = try? Data(contentsOf: pendingOutboxURL), !data.isEmpty else {
-            return []
-        }
-        guard let decoded = try? JSONDecoder().decode([PendingOutboundEnvelope].self, from: data) else {
-            logger.warning("Failed to parse pending outbox")
-            return []
-        }
-        return decoded
-    }
-
-    private func savePendingOutbox(_ queue: [PendingOutboundEnvelope]) {
-        do {
-            let data = try JSONEncoder().encode(queue)
-            try data.write(to: pendingOutboxURL, options: .atomic)
-        } catch {
-            logger.warning("Failed to persist pending outbox: \(error.localizedDescription)")
-        }
-    }
-
-    private func pendingOutboxExpiryReason(
-        for item: PendingOutboundEnvelope,
-        nowEpochSec: UInt64
-    ) -> String? {
-        if (item.ackedWithoutReceiptCount ?? 0) == 0,
-           item.attemptCount >= pendingOutboxMaxAttempts {
-            return "max_attempts_exceeded"
-        }
-        return nil
-    }
-
-    private func removePendingOutbound(historyRecordId: String) {
+    func removePendingOutbound(historyRecordId: String) {
         guard !historyRecordId.isEmpty else { return }
-        let queue = loadPendingOutbox()
-        let filtered = queue.filter { $0.historyRecordId != historyRecordId }
-        guard filtered.count != queue.count else { return }
-        savePendingOutbox(filtered)
+        if var current = workingOutboxQueue {
+            let countBefore = current.count
+            current.removeAll { $0.historyRecordId == historyRecordId }
+            if current.count != countBefore {
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                if !outboxFlushInFlight {
+                    try? savePendingOutboxChecked(current)
+                    workingOutboxDirty = false
+                }
+            }
+        } else {
+            do {
+                var queue = try loadPendingOutboxChecked()
+                let countBefore = queue.count
+                queue.removeAll { $0.historyRecordId == historyRecordId }
+                if queue.count != countBefore {
+                    try savePendingOutboxChecked(queue)
+                }
+            } catch {
+                operationErrors.send(.storageError("Failed to remove outbound envelope: \(error.localizedDescription)"))
+            }
+        }
+    }
+
+    private func commitTerminalToOutbox(historyRecordId: String, terminalCode: String) {
+        if var current = workingOutboxQueue {
+            if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                current[index].terminalFailureCode = terminalCode
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                try? savePendingOutboxChecked(current)
+                workingOutboxDirty = false
+            }
+        } else {
+            do {
+                var queue = try loadPendingOutboxChecked()
+                if let index = queue.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                    queue[index].terminalFailureCode = terminalCode
+                    try savePendingOutboxChecked(queue)
+                }
+            } catch {
+                operationErrors.send(.storageError("Failed to commit terminal failure code: \(error.localizedDescription)"))
+            }
+        }
+    }
+
+    private func commitAckToOutbox(historyRecordId: String, routePeerId: String?) {
+        let now = nowEpochSecProvider()
+        if var current = workingOutboxQueue {
+            if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                current[index].ackedWithoutReceiptCount = 1
+                current[index].nextAttemptAtEpochSec = now + receiptAwaitSeconds
+                if let routePeerId { current[index] = current[index].withRoute(routePeerId, []) }
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                try? savePendingOutboxChecked(current)
+                workingOutboxDirty = false
+            }
+        } else {
+            do {
+                var queue = try loadPendingOutboxChecked()
+                if let index = queue.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                    queue[index].ackedWithoutReceiptCount = 1
+                    queue[index].nextAttemptAtEpochSec = now + receiptAwaitSeconds
+                    if let routePeerId { queue[index] = queue[index].withRoute(routePeerId, []) }
+                    try savePendingOutboxChecked(queue)
+                }
+            } catch {
+                operationErrors.send(.storageError("Failed to commit ACK to outbox: \(error.localizedDescription)"))
+            }
+        }
+    }
+
+    private func commitTransientToOutbox(historyRecordId: String, routePeerId: String?) {
+        let now = nowEpochSecProvider()
+        if var current = workingOutboxQueue {
+            if let index = current.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                current[index].attemptCount = 1
+                current[index].nextAttemptAtEpochSec = now + 2
+                if let routePeerId { current[index] = current[index].withRoute(routePeerId, []) }
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                try? savePendingOutboxChecked(current)
+                workingOutboxDirty = false
+            }
+        } else {
+            do {
+                var queue = try loadPendingOutboxChecked()
+                if let index = queue.firstIndex(where: { $0.historyRecordId == historyRecordId }) {
+                    queue[index].attemptCount = 1
+                    queue[index].nextAttemptAtEpochSec = now + 2
+                    if let routePeerId { queue[index] = queue[index].withRoute(routePeerId, []) }
+                    try savePendingOutboxChecked(queue)
+                }
+            } catch {
+                operationErrors.send(.storageError("Failed to commit transient backoff: \(error.localizedDescription)"))
+            }
+        }
+    }
+
+    func retryFailedMessage(messageId: String) async throws -> Bool {
+        let now = nowEpochSecProvider()
+        var changed = false
+
+        func mutate(queue: inout [PendingOutboundEnvelope]) -> Bool {
+            guard let index = queue.firstIndex(where: { $0.historyRecordId == messageId }) else {
+                return false
+            }
+            let item = queue[index]
+            if inFlightQueueIds.contains(item.queueId) {
+                return false
+            }
+            if item.terminalFailureCode != nil || (item.ackedWithoutReceiptCount ?? 0) > 0 {
+                return false
+            }
+            if item.retryDeferredUntilEpochSec == nil && item.nextAttemptAtEpochSec <= now && item.attemptCount == 0 {
+                return false
+            }
+            var updated = item
+            updated.attemptCount = 0
+            updated.retryDeferredUntilEpochSec = nil
+            updated.nextAttemptAtEpochSec = now
+            updated.mutationGeneration = (item.mutationGeneration ?? 0) + 1
+            queue[index] = updated
+            return true
+        }
+
+        if var current = workingOutboxQueue {
+            if mutate(queue: &current) {
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                try savePendingOutboxChecked(current)
+                workingOutboxDirty = false
+                changed = true
+            }
+        } else {
+            var queue = try loadPendingOutboxChecked()
+            if mutate(queue: &queue) {
+                try savePendingOutboxChecked(queue)
+                changed = true
+            }
+        }
+
+        if changed {
+            if let record = try? historyManager?.get(id: messageId) {
+                messageUpdates.send(record)
+            }
+            dispatchFlushPendingOutbox(reason: "manual_retry")
+            return true
+        }
+        return false
     }
 
     private func triggerPendingSyncForPeerIds(_ peerIds: [String], reason: String) {
@@ -5815,44 +6696,52 @@ final class MeshRepository {
         dispatchFlushPendingOutbox(reason: reason)
     }
 
-    private func promotePendingOutboundForPeer(peerId: String, excludingMessageId: String? = nil) {
+    func promotePendingOutboundForPeer(peerId: String, excludingMessageId: String? = nil) {
         let trimmedPeerId = peerId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPeerId.isEmpty else { return }
-        let now = UInt64(Date().timeIntervalSince1970)
-        let queue = loadPendingOutbox()
-        var changed = false
-        let promoted = queue.map { item -> PendingOutboundEnvelope in
-            let routePeerId = item.routePeerId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard item.peerId == trimmedPeerId || routePeerId == trimmedPeerId else { return item }
-            if let excludingMessageId, item.historyRecordId == excludingMessageId {
-                return item
+        let now = nowEpochSecProvider()
+
+        func mutate(queue: inout [PendingOutboundEnvelope]) -> Bool {
+            var didChange = false
+            for i in 0..<queue.count {
+                let item = queue[i]
+                let routePeerId = item.routePeerId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard item.peerId == trimmedPeerId || routePeerId == trimmedPeerId else { continue }
+                if let excludingMessageId, item.historyRecordId == excludingMessageId { continue }
+                if item.terminalFailureCode != nil { continue }
+                if item.retryDeferredUntilEpochSec == nil && item.nextAttemptAtEpochSec <= now && item.attemptCount == 0 {
+                    continue
+                }
+                var updated = item
+                updated.attemptCount = 0
+                updated.retryDeferredUntilEpochSec = nil
+                updated.nextAttemptAtEpochSec = now
+                updated.mutationGeneration = (item.mutationGeneration ?? 0) + 1
+                queue[i] = updated
+                didChange = true
             }
-            if item.terminalFailureCode != nil {
-                return item
-            }
-            if item.nextAttemptAtEpochSec <= now {
-                return item
-            }
-            changed = true
-            return PendingOutboundEnvelope(
-                queueId: item.queueId,
-                historyRecordId: item.historyRecordId,
-                peerId: item.peerId,
-                routePeerId: item.routePeerId,
-                addresses: item.addresses,
-                envelopeBase64: item.envelopeBase64,
-                createdAtEpochSec: item.createdAtEpochSec,
-                attemptCount: item.attemptCount,
-                nextAttemptAtEpochSec: now,
-                strictBleOnlyMode: item.strictBleOnlyMode,
-                recipientIdentityId: item.recipientIdentityId,
-                intendedDeviceId: item.intendedDeviceId,
-                terminalFailureCode: item.terminalFailureCode,
-                ackedWithoutReceiptCount: item.ackedWithoutReceiptCount
-            )
+            return didChange
         }
-        guard changed else { return }
-        savePendingOutbox(promoted)
+
+        if var current = workingOutboxQueue {
+            if mutate(queue: &current) {
+                workingOutboxQueue = current
+                workingOutboxDirty = true
+                if !outboxFlushInFlight {
+                    try? savePendingOutboxChecked(current)
+                    workingOutboxDirty = false
+                }
+            }
+        } else {
+            do {
+                var queue = try loadPendingOutboxChecked()
+                if mutate(queue: &queue) {
+                    try savePendingOutboxChecked(queue)
+                }
+            } catch {
+                operationErrors.send(.storageError("Failed to promote pending outbound: \(error.localizedDescription)"))
+            }
+        }
         appendDiagnostic("delivery_state msg=\(excludingMessageId ?? "unknown") state=forwarding detail=peer_queue_promoted peer=\(trimmedPeerId)")
     }
 
