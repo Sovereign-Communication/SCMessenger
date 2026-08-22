@@ -28,7 +28,7 @@ use crate::privacy::{
     CircuitBuilder, CircuitConfig, CoverConfig, CoverTrafficGenerator, JitterConfig, TimingJitter,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::relay::BootstrapManager;
+use crate::relay::{BootstrapManager, PeerExchangeManager};
 use crate::routing::optimized_engine::OptimizedRoutingEngine;
 use crate::store::backend::MemoryStorage;
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,7 +74,7 @@ use crate::IronCoreError;
 //   circuit_builder fields.
 // - `routing` — Wired as `routing_engine` field.
 // - `transport` — Wired as `transport_manager` field.
-// - `relay` — Wired as `bootstrap_manager` field.
+// - `relay` — Wired as `bootstrap_manager` and `peer_exchange_manager` fields.
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -227,6 +227,10 @@ pub struct IronCore {
     /// stats stay empty until something feeds it real dial events.
     #[cfg(not(target_arch = "wasm32"))]
     relay_bootstrap_manager: Arc<RwLock<Option<crate::transport::bootstrap::BootstrapManager>>>,
+
+    /// Peer exchange manager for relay peer discovery.
+    #[cfg(not(target_arch = "wasm32"))]
+    peer_exchange_manager: Arc<RwLock<PeerExchangeManager>>,
 
     /// Ratchet session manager for forward-secret peer conversations.
     ratchet_sessions: Arc<RwLock<RatchetSessionManager>>,
@@ -381,6 +385,8 @@ impl IronCore {
             relay_bootstrap_manager: Arc::new(RwLock::new(Some(
                 crate::transport::bootstrap::BootstrapManager::with_defaults(),
             ))),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer_exchange_manager: Arc::new(RwLock::new(PeerExchangeManager::new())),
             ratchet_sessions,
             security_audit_pipeline,
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
@@ -471,6 +477,8 @@ impl IronCore {
             relay_bootstrap_manager: Arc::new(RwLock::new(Some(
                 crate::transport::bootstrap::BootstrapManager::with_defaults(),
             ))),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer_exchange_manager: Arc::new(RwLock::new(PeerExchangeManager::new())),
             ratchet_sessions: Arc::new(RwLock::new(RatchetSessionManager::new())),
             security_audit_pipeline,
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
@@ -594,6 +602,8 @@ impl IronCore {
             relay_bootstrap_manager: Arc::new(RwLock::new(Some(
                 crate::transport::bootstrap::BootstrapManager::with_defaults(),
             ))),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer_exchange_manager: Arc::new(RwLock::new(PeerExchangeManager::new())),
             ratchet_sessions: Arc::new(RwLock::new(RatchetSessionManager::new())),
             security_audit_pipeline,
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
@@ -3235,6 +3245,24 @@ impl IronCore {
     pub fn dspy_build_rust_feature_pipeline(&self) -> crate::dspy::modules::OptimizerPipeline {
         crate::dspy::modules::ModuleFactory::build_rust_feature_pipeline()
     }
+    /// Get the list of all blocked identities (WASM version).
+    /// Returns store::blocked::BlockedIdentity directly for WASM targets.
+    #[cfg(target_arch = "wasm32")]
+    pub fn list_blocked_wasm(
+        &self,
+    ) -> Result<Vec<crate::store::blocked::BlockedIdentity>, IronCoreError> {
+        self.blocked_manager.read().list()
+    }
+
+    /// List blocked peers (WASM version).
+    /// Returns store::blocked::BlockedIdentity directly for WASM targets.
+    #[cfg(target_arch = "wasm32")]
+    pub fn list_blocked_peers_wasm(
+        &self,
+    ) -> Result<Vec<crate::store::blocked::BlockedIdentity>, IronCoreError> {
+        self.blocked_manager.read().list()
+    }
+
     pub fn get_libp2p_keypair(&self) -> Result<libp2p::identity::Keypair, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
@@ -3625,10 +3653,40 @@ impl IronCore {
             .read()
             .close_all_notifications()
     }
+    pub fn transport_manager_handle(&self) -> Arc<RwLock<TransportManager>> {
+        self.transport_manager.clone()
+    }
+
+    /// Get the list of currently healthy peer connections from the transport layer.
+    pub fn get_healthy_connections(&self) -> Vec<libp2p::PeerId> {
+        self.transport_manager.read().get_healthy_connections()
+    }
+
+    /// Expire address observations older than the given threshold.
+    /// Called as part of periodic maintenance to prune stale external address data.
+    pub fn expire_address_observations(&self, max_age_secs: u64) {
+        self.transport_manager
+            .read()
+            .expire_address_observations(max_age_secs);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bootstrap_manager_handle(&self) -> Arc<RwLock<Option<BootstrapManager>>> {
+        self.bootstrap_manager.clone()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn peer_exchange_manager_handle(&self) -> Arc<RwLock<PeerExchangeManager>> {
+        self.peer_exchange_manager.clone()
+    }
 
     // -----------------------------------------------------------------------
     // B2 wiring: Transport/Routing diagnostics and maintenance
     // -----------------------------------------------------------------------
+
+    /// Get the list of currently unhealthy peer connections.
+    /// Complements `get_healthy_connections` for transport diagnostics.
+    pub fn get_unhealthy_connections(&self) -> Vec<libp2p::PeerId> {
+        self.transport_manager.read().get_unhealthy_connections()
+    }
 
     /// Get all connection statistics from the transport health monitor.
     /// Returns peer-by-peer connection stats for diagnostics.
@@ -3638,6 +3696,24 @@ impl IronCore {
         self.transport_manager.read().get_all_connection_stats()
     }
 
+    /// Clean up stale connections in the transport health monitor.
+    /// Called as part of periodic maintenance to remove entries for
+    /// peers that have not been active for `max_age_secs`.
+    pub fn cleanup_stale_connections(&self, max_age_secs: u64) {
+        self.transport_manager
+            .read()
+            .cleanup_health_stale_connections(max_age_secs);
+    }
+
+    /// Get the current discovery phase from the routing engine.
+    /// Returns `None` if the routing engine is not yet initialized.
+    pub fn current_discovery_phase(&self) -> Option<crate::routing::DiscoveryPhase> {
+        self.routing_engine
+            .read()
+            .as_ref()
+            .map(|e| e.current_discovery_phase())
+    }
+
     /// Clear an unreachable peer from the negative cache.
     /// Called when a previously-unreachable peer is successfully reconnected,
     /// so future routing decisions consider it reachable again.
@@ -3645,6 +3721,19 @@ impl IronCore {
         if let Some(ref mut engine) = self.routing_engine.write().as_mut() {
             engine.clear_unreachable_peer(peer_id);
         }
+    }
+
+    /// Get activity history for a peer from the adaptive TTL manager.
+    /// Returns `None` if the routing engine is not initialized or the peer
+    /// has no activity record.
+    pub fn get_peer_activity(
+        &self,
+        peer_id: &str,
+    ) -> Option<crate::routing::adaptive_ttl::ActivityHistory> {
+        let mut guard = self.routing_engine.write();
+        guard
+            .as_mut()
+            .and_then(|e| e.adaptive_ttl().get_activity(peer_id).cloned())
     }
 
     /// Access the transport-layer relay bootstrap manager backing the
@@ -4049,6 +4138,11 @@ impl IronCore {
         profile
     }
 
+    /// Get the current relay config derived from device state policy.
+    pub fn get_policy_relay_config(&self) -> RelayConfig {
+        self.policy_engine.read().to_relay_config()
+    }
+
     /// Get the current policy profile (for diagnostics).
     pub fn current_relay_profile(&self) -> crate::drift::RelayProfile {
         self.policy_engine.read().current_profile()
@@ -4245,8 +4339,71 @@ impl IronCore {
     }
 
     // -----------------------------------------------------------------------
+    // B2 wiring: Routing engine — delegate refresh, optimization, evaluation
+    // -----------------------------------------------------------------------
+
+    /// Refresh delegate routes in the routing engine.
+    /// Called when transport state changes to update cached routing information.
+    pub fn routing_refresh_delegate_routes(&self) {
+        let mut guard = self.routing_engine.write();
+        if let Some(ref mut engine) = guard.as_mut() {
+            engine.refresh_delegate_routes();
+        }
+    }
+
+    /// Run an optimization cycle over the routing engine.
+    /// Returns the maintenance result as a JSON string for diagnostics.
+    pub fn routing_run_optimization(&self) -> String {
+        let mut guard = self.routing_engine.write();
+        if let Some(ref mut engine) = guard.as_mut() {
+            let maintenance = engine.run_optimization();
+            serde_json::to_string(&maintenance).unwrap_or_else(|_| "{}".to_string())
+        } else {
+            "{}".to_string()
+        }
+    }
+
+    /// Evaluate all tracked peers in the routing engine's caches.
+    /// Returns the number of entries evicted due to staleness.
+    pub fn routing_evaluate_all_tracked(&self) -> usize {
+        let mut guard = self.routing_engine.write();
+        if let Some(ref mut engine) = guard.as_mut() {
+            engine.evaluate_all_tracked()
+        } else {
+            0
+        }
+    }
+
+    /// Prune routing entries below the given reputation threshold.
+    pub fn routing_prune_below(&self, threshold: f64) {
+        let mut guard = self.routing_engine.write();
+        if let Some(ref mut engine) = guard.as_mut() {
+            engine.prune_below(threshold);
+        }
+    }
+
+    /// Check whether the routing engine's timeout budget allows
+    /// advancing to the next discovery phase.
+    pub fn routing_should_advance(&self) -> bool {
+        let guard = self.routing_engine.read();
+        if let Some(ref engine) = *guard {
+            engine.should_advance()
+        } else {
+            false
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // B2 wiring: Routing engine — prefetch lifecycle
     // -----------------------------------------------------------------------
+
+    /// Start a refresh for a prefetched route.
+    pub fn prefetch_start_refresh(&self, hint: [u8; 4]) {
+        let mut guard = self.routing_engine.write();
+        if let Some(ref mut engine) = guard.as_mut() {
+            engine.prefetch_manager_mut().start_route_refresh(&hint);
+        }
+    }
 
     /// Mark a prefetched route refresh as failed.
     /// Called when a route refresh attempt fails, so the prefetch manager

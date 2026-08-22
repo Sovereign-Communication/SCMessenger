@@ -6,7 +6,6 @@
 
 mod api;
 mod ble_daemon;
-pub mod ble_ids;
 mod ble_mesh;
 mod bootstrap;
 mod config;
@@ -1974,7 +1973,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     }
 
     // Subscribe to default topics
-    for topic in [scmessenger_core::TOPIC_LOBBY, scmessenger_core::TOPIC_MESH] {
+    for topic in ["sc-lobby", "sc-mesh"] {
         let _ = swarm_handle.subscribe_topic(topic.to_string()).await;
     }
 
@@ -2527,7 +2526,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         }
                                         MessageType::Receipt => {
                                             // Received a delivery receipt — the remote peer confirmed delivery.
-                                            if let Ok(receipt) = scmessenger_core::decode_receipt(msg.payload.clone()) {
+                                            if let Ok(receipt) = serde_json::from_slice::<scmessenger_core::Receipt>(&msg.payload) {
                                                 let short_id = receipt.message_id.get(..8).unwrap_or(&receipt.message_id);
                                                 println!("\n{} Delivered: {}", "[OK][OK]".green(), short_id);
                                                 print!("> ");
@@ -3131,7 +3130,7 @@ async fn cmd_relay(
         let _ = swarm_handle.subscribe_topic(topic).await;
     }
     // Subscribe to default topics (hardcoded - matches bootstrap.rs)
-    for topic in [scmessenger_core::TOPIC_LOBBY, scmessenger_core::TOPIC_MESH] {
+    for topic in ["sc-lobby", "sc-mesh"] {
         let _ = swarm_handle.subscribe_topic(topic.to_string()).await;
     }
     println!("{} Subscribed to mesh topics", "[OK]".green());
@@ -4287,9 +4286,11 @@ fn find_contact(manager: &ContactManager, query: &str) -> Result<Contact> {
 
     list.into_iter()
         .find(|c| {
-            c.peer_id == query
+            c.peer_id.eq_ignore_ascii_case(query)
                 || c.nickname.as_ref().map(|n| n.to_lowercase()).as_deref() == Some(&query_lower)
-                || c.public_key == query
+                || c.local_nickname.as_ref().map(|n| n.to_lowercase()).as_deref() == Some(&query_lower)
+                || c.public_key.eq_ignore_ascii_case(query)
+                || scmessenger_core::identity::keys::identity_id_from_public_key_hex(&c.public_key).as_deref() == Some(query)
         })
         .ok_or_else(|| anyhow::anyhow!("Contact not found: {}", query))
 }

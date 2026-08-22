@@ -88,7 +88,7 @@ class BackoffStrategy(
  */
 fun BackoffStrategy.getBackoffLogString(): String {
     val current = getCurrentDelay()
-    return "backoff(current=${current}ms, max=${maxDelayMs}ms, attempts=${getAttemptCount()}, atMax=${isAtMaxDelay()})"
+    return "backoff(current=${current}ms, max=${maxDelayMs}ms, attempts=${getAttemptCount()})"
 }
 
 /**

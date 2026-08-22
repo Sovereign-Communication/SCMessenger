@@ -2683,7 +2683,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if &record.peer_id == peer {
+                if crate::store::history::peer_matches(peer, &record.peer_id) {
                     records.push(record);
                 }
             } else {
@@ -2719,7 +2719,7 @@ impl HistoryManager {
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
 
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if crate::store::history::peer_matches(&peer_id, &record.peer_id) {
                 keys_to_remove.push(key);
             }
         }
@@ -2773,7 +2773,7 @@ impl HistoryManager {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
-            if record.hidden && record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if record.hidden && crate::store::history::peer_matches(&peer_id, &record.peer_id) {
                 to_update.push((key.to_vec(), record));
             }
         }
@@ -2798,7 +2798,7 @@ impl HistoryManager {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
-            if !record.hidden && record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if !record.hidden && crate::store::history::peer_matches(&peer_id, &record.peer_id) {
                 to_update.push((key.to_vec(), record));
             }
         }
@@ -2837,8 +2837,7 @@ impl HistoryManager {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
-            // P0_SECURITY_001: Case-insensitive peer ID matching to match generic HistoryManager behavior
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if crate::store::history::peer_matches(&peer_id, &record.peer_id) {
                 to_delete.push(key.to_vec());
             }
         }

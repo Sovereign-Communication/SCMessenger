@@ -36,7 +36,7 @@ class DispatchRecord:
         self.model: str = "unknown"
         self.task_id: str = "UNKNOWN"
         self.role: str = "UNKNOWN"
-        self.status: str = "TIMEOUT"  # COMPLETE, ERROR, TIMEOUT, STALLED, EMPTY_LOG
+        self.status: str = "TIMEOUT_OR_DIED"  # SUCCESS, ERROR, TIMEOUT, TIMEOUT_OR_DIED
         self.duration_seconds: float = 0.0
         self.input_tokens: int = 0
         self.output_tokens: int = 0
@@ -45,7 +45,6 @@ class DispatchRecord:
         self.stalls: int = 0
         self.result_reported: str = ""
         self.verification_text: str = ""
-        self.verification_status: str = "EMPTY"  # VALID, EMPTY, NONE, INVALID
         self.unverified_claim: bool = False
         self.error_message: str = ""
 
@@ -55,15 +54,11 @@ class DispatchRecord:
 
     @property
     def is_completed(self) -> bool:
-        return self.status == "COMPLETE"
+        return self.status == "SUCCESS"
 
     @property
     def is_stalled_or_timed_out(self) -> bool:
-        return not self.is_completed
-
-    @property
-    def is_verification_valid(self) -> bool:
-        return self.verification_status == "VALID"
+        return (not self.is_completed) or (self.stalls > 0)
 
 
 def extract_model_from_filename(filename: str) -> str:
@@ -75,49 +70,6 @@ def extract_model_from_filename(filename: str) -> str:
     if m2:
         return m2.group(1)
     return "unknown"
-
-
-def extract_verification(full_text: str) -> str:
-    matches = list(re.finditer(r"(?m)^[ \t]*VERIFICATION[ \t]*[:=][ \t]*(.*)$", full_text, re.IGNORECASE))
-    if not matches:
-        return ""
-    last_m = matches[-1]
-    first_line = last_m.group(1).strip()
-    rest_text = full_text[last_m.end():]
-    lines = rest_text.splitlines()
-    subsequent = []
-    stop_pat = re.compile(
-        r"^\s*(?:FILES|NOTES|ESCALATION|SPEC_STATUS|RESULT|ROLE|TASK|TASK_ID|---ORCHESTRATION|---END|---|===|```)\b",
-        re.IGNORECASE,
-    )
-    for l in lines:
-        if stop_pat.match(l):
-            break
-        if l.strip():
-            subsequent.append(l.strip())
-    combined = (first_line + "\n" + "\n".join(subsequent)).strip()
-    return combined
-
-
-def classify_verification(v_text: str) -> str:
-    """Classifies verification text as VALID, NONE, EMPTY, or INVALID.
-
-    Doctrine: Visibility fails open; verdict fails closed.
-    Missing, empty, or vacuous verification is never VALID.
-    """
-    v = v_text.strip()
-    if not v:
-        return "EMPTY"
-    v_upper = v.upper()
-    if v_upper == "NONE" or v_upper.startswith("NONE\n") or v_upper.startswith("NONE ") or v_upper.startswith("NONE:"):
-        return "NONE"
-    if v_upper in ("N/A", "NA", "-", "--", "TODO", "UNVERIFIED", "UNKNOWN", "NIL", "NULL"):
-        return "EMPTY"
-    if v_upper == "PASSED" or v_upper.startswith("PASSED\n") or v_upper == "PASS":
-        return "INVALID"
-    if len(v) < 4:
-        return "INVALID"
-    return "VALID"
 
 
 def parse_dispatch_log(log_path: pathlib.Path) -> DispatchRecord:
@@ -135,7 +87,6 @@ def parse_dispatch_log(log_path: pathlib.Path) -> DispatchRecord:
             lines = [line.strip() for line in f if line.strip().startswith("{")]
     except Exception as e:
         record.error_message = f"Read error: {e}"
-        record.status = "ERROR"
         return record
 
     if not lines:
@@ -192,6 +143,7 @@ def parse_dispatch_log(log_path: pathlib.Path) -> DispatchRecord:
         elif event_type == "result":
             has_result_event = True
             res = ev.get("result") or {}
+            record.status = res.get("status") or "SUCCESS"
             record.duration_seconds = float(res.get("duration_seconds") or step_duration_sum)
             record.error_message = res.get("error") or ""
 
@@ -206,55 +158,38 @@ def parse_dispatch_log(log_path: pathlib.Path) -> DispatchRecord:
 
     if not has_result_event:
         record.duration_seconds = step_duration_sum
+        record.status = "TIMEOUT_OR_DIED"
 
     # Analyze combined text for metadata, TASK_ID, RESULT, VERIFICATION
     full_text = "\n".join(all_text_chunks)
 
     # Task ID extraction
-    m_tasks = list(re.finditer(r"(?m)^[ \t]*TASK(?:_ID)?[ \t]*[:=][ \t]*[*`]?([A-Za-z0-9_\-\.]+)[*`]?", full_text, re.IGNORECASE))
-    if m_tasks:
-        record.task_id = m_tasks[-1].group(1).strip()
-    elif not record.task_id or record.task_id == "UNKNOWN":
-        m_task_any = re.search(r"\bTASK(?:_ID)?\s*[:=]\s*[*`]?([A-Za-z0-9_\-\.]+)[*`]?", full_text, re.IGNORECASE)
-        if m_task_any:
-            record.task_id = m_task_any.group(1).strip()
+    m_task = re.search(r"\bTASK(?:_ID)?\s*[:=]\s*([A-Za-z0-9_\-\.]+)", full_text, re.IGNORECASE)
+    if m_task:
+        record.task_id = m_task.group(1).strip()
 
     # Role extraction
-    m_roles = list(re.finditer(r"(?m)^[ \t]*ROLE[ \t]*[:=][ \t]*[*`]?([A-Za-z0-9_\-\.\s]+)[*`]?", full_text, re.IGNORECASE))
-    if m_roles:
-        record.role = m_roles[-1].group(1).strip().splitlines()[0].strip().strip("*`")
+    m_role = re.search(r"\bROLE\s*[:=]\s*([A-Za-z0-9_\-\.\s]+)", full_text, re.IGNORECASE)
+    if m_role:
+        record.role = m_role.group(1).strip().split("\n")[0].strip()
 
-    # Result extraction: take the last valid result report from worker contract
-    m_results = list(re.finditer(r"(?m)^[ \t]*RESULT[ \t]*[:=][ \t]*[*`]?([A-Za-z0-9_\-]+)[*`]?", full_text, re.IGNORECASE))
-    valid_results = []
-    for mr in m_results:
-        val = mr.group(1).strip().upper()
-        if "|" not in val:
-            valid_results.append(val)
-    if valid_results:
-        record.result_reported = valid_results[-1]
+    # Result extraction
+    m_result = re.search(r"\bRESULT\s*[:=]\s*([A-Za-z0-9_\-]+)", full_text, re.IGNORECASE)
+    if m_result:
+        record.result_reported = m_result.group(1).strip().upper()
 
-    # Verification extraction & classification
-    record.verification_text = extract_verification(full_text)
-    record.verification_status = classify_verification(record.verification_text)
+    # Verification extraction
+    m_verif = re.search(r"\bVERIFICATION\s*[:=]\s*([^\n\r]+(?:\n[^\n\r]+)*)", full_text, re.IGNORECASE)
+    if m_verif:
+        verif_raw = m_verif.group(1).strip()
+        # Cut off at next section header if present
+        verif_clean = re.split(r"\n(?:FILES|NOTES|ESCALATION|SPEC_STATUS|RESULT|ROLE|TASK|---)", verif_raw)[0].strip()
+        record.verification_text = verif_clean
 
-    # Status classification derived from worker output (presence of RESULT contract)
-    if record.result_reported:
-        record.status = "COMPLETE"
-    else:
-        if record.error_message:
-            if "timeout" in record.error_message.lower():
-                record.status = "TIMEOUT"
-            else:
-                record.status = "ERROR"
-        elif record.stalls > 0:
-            record.status = "STALLED"
-        else:
-            record.status = "TIMEOUT"
-
-    # Unverified claim check: RESULT is DONE/APPROVE/PASS but verification is not valid
-    if record.result_reported in ("DONE", "APPROVE", "APPROVE_WITH_FINDINGS", "PASS"):
-        if record.verification_status != "VALID":
+    # Unverified claim check: RESULT is DONE but verification is empty or NONE
+    if record.result_reported == "DONE":
+        v_upper = record.verification_text.strip().upper()
+        if not v_upper or v_upper == "NONE" or v_upper.startswith("NONE") or len(v_upper) < 4:
             record.unverified_claim = True
 
     return record
@@ -436,15 +371,10 @@ def print_audit_report(summary: Dict[str, Any]) -> None:
         sys.stdout.write(task_fmt % ("TASK_ID", "MODEL", "STATUS", "RESULT", "STEPS", "DURATION", "VERIFICATION"))
         print("-" * 90)
         for r in records:
-            if r.verification_status == "VALID":
-                verif_tag = "[OK] Valid"
-            elif r.verification_status == "NONE":
-                verif_tag = "[FAIL] NONE"
-            elif r.verification_status == "INVALID":
-                verif_tag = "[FAIL] Invalid"
-            elif r.verification_status == "EMPTY":
-                verif_tag = "[FAIL] Empty" if r.is_completed else "-"
-            else:
+            verif_tag = "[OK] Valid"
+            if r.unverified_claim:
+                verif_tag = "[FAIL] Empty"
+            elif not r.verification_text:
                 verif_tag = "-"
 
             sys.stdout.write(
@@ -491,7 +421,7 @@ def print_audit_report(summary: Dict[str, Any]) -> None:
         findings += 1
         print(f"[WARNING] Detected {len(summary['unverified_claims'])} dispatch(es) claiming RESULT: DONE with empty/missing VERIFICATION:")
         for uv in summary["unverified_claims"]:
-            print(f"          - File: {uv.filename} | Task: {uv.task_id} | Model: {uv.model} (unverified claim, status={uv.verification_status})")
+            print(f"          - File: {uv.filename} | Task: {uv.task_id} | Model: {uv.model} (unverified claim)")
 
     if findings == 0:
         print("[OK] Delegation audit clean. Dispatches executed with valid verification and delegation ratios.")

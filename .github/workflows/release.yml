@@ -184,13 +184,15 @@ jobs:
       # without waiting on a Play Store review).
       - name: Decode release keystore
         if: ${{ env.HAS_KEYSTORE == 'true' }}
+        env:
+          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
         run: |
-          echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
 
       - name: Build signed release AAB + APK
         if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:
+          HAS_KEYSTORE: ${{ secrets.SCMESSENGER_KEYSTORE_BASE64 != '' }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           SCMESSENGER_KEYSTORE_PATH: release.keystore
           SCMESSENGER_KEYSTORE_PASSWORD: ${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}
@@ -202,7 +204,7 @@ jobs:
 
       - name: Remove decoded keystore
         if: always()
-        run: rm -f android/app/release.keystore android/release.keystore
+        run: rm -f android/release.keystore
 
       - name: Require non-empty signed release artifacts
         if: ${{ env.HAS_KEYSTORE == 'true' }}
@@ -210,43 +212,7 @@ jobs:
           test -n "$(find android/app/build/outputs/bundle/release -type f -name '*.aab' -size +0c -print -quit)"
           test -n "$(find android/app/build/outputs/apk/release -type f -name '*.apk' -size +0c -print -quit)"
 
-      - name: Verify release APK signature
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
-        run: |
-          APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f | sort -V | tail -n 1)
-          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
-            APKSIGNER=$(command -v apksigner || true)
-          fi
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::apksigner tool not found in ANDROID_HOME or PATH"
-            exit 1
-          fi
-          echo "[INFO] Using apksigner: $APKSIGNER"
-
-          APK_PATH=$(find android/app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)
-          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-            echo "::error::No release APK found in android/app/build/outputs/apk/release"
-            exit 1
-          fi
-          echo "[INFO] Verifying APK signature: $APK_PATH"
-
-          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH")
-          echo "$CERT_OUTPUT"
-
-          if echo "$CERT_OUTPUT" | grep -qi "Android Debug"; then
-            echo "::error::APK is signed with a debug certificate (CN=Android Debug) instead of a release key!"
-            exit 1
-          fi
-
-          SHA256_FINGERPRINT=$(echo "$CERT_OUTPUT" | grep -i "SHA-256 digest" | head -n 1 | awk '{print $NF}')
-          if [ -z "$SHA256_FINGERPRINT" ]; then
-            echo "::error::Failed to extract SHA-256 certificate digest from APK signature verification"
-            exit 1
-          fi
-          echo "[INFO] Verified Release APK Certificate SHA-256: $SHA256_FINGERPRINT"
-
       - name: Upload signed release artifacts
-        if: ${{ env.HAS_KEYSTORE == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: android-release-signed

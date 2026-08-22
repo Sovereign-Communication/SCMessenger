@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * ServiceHealthMonitor tracks the health and responsiveness of the mesh service.
- *
+ * 
  * Features:
  * - Monitors service heartbeat and responsiveness
  * - Detects service hangs and ANR conditions
@@ -25,16 +25,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Integrates with MeshForegroundService lifecycle
  */
 class ServiceHealthMonitor(private val context: Context) {
-
+    
     private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val handler = Handler(Looper.getMainLooper())
-
+    
     // Health monitoring configuration
-    private val heartbeatBackoff = com.scmessenger.android.utils.FixedDelayBackoff(5000L)
     private val heartbeatIntervalMs = 5000L // Check service health every 5 seconds
     private val serviceTimeoutMs = 30000L // Service considered hung after 30 seconds
     private val maxConsecutiveFailures = 3 // Trigger recovery after 3 consecutive failures
-
+    
     // Service state tracking
     private var isMonitoring = AtomicBoolean(false)
     @Volatile private var lastHeartbeatTime = 0L
@@ -45,7 +44,7 @@ class ServiceHealthMonitor(private val context: Context) {
     @Volatile private var totalCheckCount = 0
     @Volatile private var failureCount = 0
     @Volatile private var recoveryCount = 0
-
+    
     /**
      * Start monitoring service health.
      */
@@ -53,15 +52,15 @@ class ServiceHealthMonitor(private val context: Context) {
         if (isMonitoring.compareAndSet(false, true)) {
             Timber.i("ServiceHealthMonitor started")
             resetHealthStats()
-
+            
             // Start heartbeat monitoring
             monitorScope.launch {
                 while (isActive && isMonitoring.get()) {
                     checkServiceHealth()
-                    delay(heartbeatBackoff.nextDelay())
+                    delay(heartbeatIntervalMs)
                 }
             }
-
+            
             // Start periodic stats logging
             monitorScope.launch {
                 while (isActive && isMonitoring.get()) {
@@ -71,7 +70,7 @@ class ServiceHealthMonitor(private val context: Context) {
             }
         }
     }
-
+    
     /**
      * Stop monitoring service health.
      */
@@ -82,7 +81,7 @@ class ServiceHealthMonitor(private val context: Context) {
             handler.removeCallbacksAndMessages(null)
         }
     }
-
+    
     /**
      * Reset health statistics. Public for diagnostics and external callers.
      */
@@ -101,7 +100,7 @@ class ServiceHealthMonitor(private val context: Context) {
         serviceHealthy = true
         lastHeartbeatTime = SystemClock.uptimeMillis()
     }
-
+    
     /**
      * Log current health statistics.
      */
@@ -112,44 +111,44 @@ class ServiceHealthMonitor(private val context: Context) {
         } else {
             100
         }
-
+        
         Timber.d("ServiceHealthMonitor stats - Uptime: ${uptime}s, " +
                 "Checks: $totalCheckCount, Failures: $failureCount ($healthPercentage%), " +
                 "Recoveries: $recoveryCount, Healthy: $serviceHealthy")
     }
-
+    
     /**
      * Check service health and take appropriate action.
      */
     private fun checkServiceHealth() {
         totalCheckCount++
-
+        
         try {
             // Check if service is responsive
             val currentTime = SystemClock.uptimeMillis()
             val elapsedSinceLastHeartbeat = currentTime - lastHeartbeatTime
-
+            
             if (elapsedSinceLastHeartbeat > serviceTimeoutMs) {
                 // Service has not responded within timeout period
                 handleServiceTimeout(elapsedSinceLastHeartbeat)
                 return
             }
-
+            
             // Service is healthy
             if (!serviceHealthy) {
                 serviceHealthy = true
                 consecutiveFailureCount = 0
                 Timber.i("Service health restored")
             }
-
+            
             lastHeartbeatTime = currentTime
-
+            
         } catch (e: Exception) {
             Timber.e(e, "Error checking service health")
             handleServiceFailure("Health check exception: ${e.message}")
         }
     }
-
+    
     /**
      * Handle service timeout condition.
      */
@@ -157,9 +156,9 @@ class ServiceHealthMonitor(private val context: Context) {
         consecutiveFailureCount++
         failureCount++
         serviceHealthy = false
-
+        
         Timber.w("Service timeout detected - no heartbeat for ${elapsedTime}ms (threshold: ${serviceTimeoutMs}ms)")
-
+        
         if (consecutiveFailureCount >= maxConsecutiveFailures) {
             Timber.e("Service considered hung - triggering recovery (failures: $consecutiveFailureCount)")
             triggerServiceRecovery()
@@ -167,7 +166,7 @@ class ServiceHealthMonitor(private val context: Context) {
             Timber.w("Service slow to respond - will recover if this continues (${consecutiveFailureCount}/$maxConsecutiveFailures)")
         }
     }
-
+    
     /**
      * Handle service failure.
      */
@@ -175,15 +174,15 @@ class ServiceHealthMonitor(private val context: Context) {
         consecutiveFailureCount++
         failureCount++
         serviceHealthy = false
-
+        
         Timber.e("Service health check failed: $reason")
-
+        
         if (consecutiveFailureCount >= maxConsecutiveFailures) {
             Timber.e("Service considered failed - triggering recovery (failures: $consecutiveFailureCount)")
             triggerServiceRecovery()
         }
     }
-
+    
     /**
      * Trigger service recovery procedure.
      * Runs on monitorScope (Dispatchers.IO) instead of the main thread
@@ -266,70 +265,70 @@ class ServiceHealthMonitor(private val context: Context) {
             false
         }
     }
-
+    
     /**
      * Restart mesh service after graceful shutdown.
      */
     private fun restartMeshService() {
         try {
             Timber.d("Restarting mesh service...")
-
+            
             // In a real implementation, this would:
             // 1. Start the MeshForegroundService again
             // 2. Reinitialize all components
             // 3. Restore previous state if possible
-
+            
             // For now, just log and reset health stats
             resetHealthStats()
             lastHeartbeatTime = SystemClock.uptimeMillis()
-
+            
             Timber.i("Mesh service restarted successfully")
-
+            
         } catch (e: Exception) {
             Timber.e(e, "Service restart failed")
             throw e
         }
     }
-
+    
     /**
      * Force restart mesh service if graceful methods fail.
      */
     private fun forceRestartMeshService() {
         try {
             Timber.w("Forcing mesh service restart...")
-
+            
             // In a real implementation, this would:
             // 1. Force stop the service process
             // 2. Clear any stuck resources
             // 3. Start fresh service instance
-
+            
             // For now, just log and reset
             resetHealthStats()
             lastHeartbeatTime = SystemClock.uptimeMillis()
-
+            
             Timber.i("Forced service restart completed")
-
+            
         } catch (e: Exception) {
             Timber.e(e, "Forced restart failed")
             throw e
         }
     }
-
+    
     /**
      * Request manual restart if automatic methods fail.
      */
     private fun requestManualRestart() {
         Timber.e("Automatic restart failed - manual intervention required")
-
+        
         // In production, this would:
         // 1. Show persistent notification to user
         // 2. Provide restart button in UI
         // 3. Log critical error to crash reporting
         // 4. Attempt periodic retries
-
+        
         // For now, just log the failure
     }
-
+    
     /**
      * Update last heartbeat time (called by service when it's alive).
      */
@@ -341,19 +340,19 @@ class ServiceHealthMonitor(private val context: Context) {
             Timber.d("Service heartbeat received - health restored")
         }
     }
-
+    
     /**
      * Get current service health status.
      */
     fun isServiceHealthy(): Boolean = serviceHealthy
-
+    
     /**
      * Get service uptime in seconds.
      */
     fun getServiceUptimeSeconds(): Long {
         return (SystemClock.uptimeMillis() - lastHeartbeatTime) / 1000
     }
-
+    
     /**
      * Get health statistics summary.
      */
@@ -364,11 +363,11 @@ class ServiceHealthMonitor(private val context: Context) {
         } else {
             100
         }
-
+        
         return "Uptime: ${uptime}s, Health: ${healthPercentage}%, Checks: $totalCheckCount, " +
                "Failures: $failureCount, Recoveries: $recoveryCount"
     }
-
+    
     /**
      * Clean up resources.
      */
@@ -376,7 +375,7 @@ class ServiceHealthMonitor(private val context: Context) {
         stopMonitoring()
         Timber.d("ServiceHealthMonitor cleaned up")
     }
-
+    
     companion object {
         private const val TAG = "ServiceHealthMonitor"
     }

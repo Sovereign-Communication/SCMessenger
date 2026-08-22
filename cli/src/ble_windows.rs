@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, error, info, warn};
 
-use crate::ble_ids::{GATT_SERVICE_UUID, IDENTITY_CHAR_UUID, MESSAGE_CHAR_UUID};
 use crate::server::UiOutbound;
 use scmessenger_core::transport::ble::{GattFragmentHeader, GattReassembler};
 use scmessenger_core::IronCore;
@@ -18,6 +17,10 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
 };
 use windows::Foundation::TypedEventHandler;
 use windows::Storage::Streams::{DataReader, DataWriter};
+
+const GATT_SERVICE_UUID: u128 = 0x0000_DF01_0000_1000_8000_0080_5F9B_34FB;
+const IDENTITY_CHAR_UUID: u128 = 0x0000_DF02_0000_1000_8000_0080_5F9B_34FB;
+const MESSAGE_CHAR_UUID: u128 = 0x0000_DF03_0000_1000_8000_0080_5F9B_34FB;
 
 struct ConnectionState {
     fragments: HashMap<u16, Vec<u8>>,

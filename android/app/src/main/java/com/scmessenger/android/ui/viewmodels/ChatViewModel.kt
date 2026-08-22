@@ -241,6 +241,16 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
+     * Compare two peer IDs canonically (checks direct equality and canonical contact identity).
+     */
+    private fun isSamePeer(id1: String, id2: String): Boolean {
+        if (id1.equals(id2, ignoreCase = true)) return true
+        val c1 = meshRepository.canonicalContactId(id1)
+        val c2 = meshRepository.canonicalContactId(id2)
+        return c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)
+    }
+
+    /**
      * Observe message events from MeshEventBus.
      */
     private fun observeMessageEvents() {
@@ -250,7 +260,7 @@ class ChatViewModel @Inject constructor(
                     is MessageEvent.Received -> {
                         // Reload if message is for current peer (consistent ID comparison)
                         val currentPeer = _peerId.value.orEmpty()
-                        if (PeerIdValidator.isSame(event.messageRecord.peerId, currentPeer)) {
+                        if (isSamePeer(event.messageRecord.peerId, currentPeer)) {
                             loadMessages()
                         }
                     }
@@ -275,7 +285,7 @@ class ChatViewModel @Inject constructor(
     private fun observeIncomingMessages() {
         viewModelScope.launch {
             meshRepository.incomingMessages.collect { message ->
-                if (message.peerId.equals(_peerId.value, ignoreCase = true)) {
+                if (isSamePeer(message.peerId, _peerId.value.orEmpty())) {
                     loadMessages()
                 }
             }
@@ -288,7 +298,7 @@ class ChatViewModel @Inject constructor(
     private fun observeMessageUpdates() {
         viewModelScope.launch {
             meshRepository.messageUpdates.collect { message ->
-                if (PeerIdValidator.isSame(message.peerId, _peerId.value.orEmpty())) {
+                if (isSamePeer(message.peerId, _peerId.value.orEmpty())) {
                     // Replace or add the message
                     val currentMessages = _messages.value.toMutableList()
 

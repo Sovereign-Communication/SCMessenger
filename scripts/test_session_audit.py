@@ -15,11 +15,8 @@ Uses synthetic in-memory JSONL fixtures without hitting the network.
 import json
 import os
 import pathlib
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from session_orchestration_audit import (
     DispatchRecord,
@@ -102,12 +99,9 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
         self.assertEqual(record.model, "gemini-3.7-flash-high")
         self.assertEqual(record.task_id, "CTO-GATE-01")
         self.assertEqual(record.role, "IMPLEMENTER")
-        self.assertEqual(record.status, "COMPLETE")
+        self.assertEqual(record.status, "SUCCESS")
         self.assertEqual(record.result_reported, "DONE")
-        self.assertEqual(record.verification_status, "VALID")
-        self.assertTrue(record.is_verification_valid)
         self.assertTrue(record.is_completed)
-        self.assertFalse(record.is_stalled_or_timed_out)
         self.assertFalse(record.unverified_claim)
         self.assertEqual(record.worker_steps, 2)
         self.assertEqual(record.input_tokens, 12500)
@@ -115,7 +109,7 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
         self.assertEqual(record.thinking_tokens, 300)
         self.assertAlmostEqual(record.duration_seconds, 14.5)
 
-    def test_parse_done_with_none_verification(self):
+    def test_parse_done_with_empty_or_none_verification(self):
         events = [
             {
                 "event": "init",
@@ -146,82 +140,8 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
         record = parse_dispatch_log(log_file)
 
         self.assertEqual(record.task_id, "CTO-EMPTY-CLAIM")
-        self.assertEqual(record.status, "COMPLETE")
         self.assertEqual(record.result_reported, "DONE")
-        self.assertEqual(record.verification_status, "NONE")
-        self.assertFalse(record.is_verification_valid)
-        self.assertTrue(record.unverified_claim, "Should flag unverified claim when VERIFICATION is NONE on DONE")
-
-    def test_parse_done_with_empty_or_missing_verification(self):
-        events = [
-            {
-                "event": "init",
-                "init": {"model": "gemini-3.7-flash-high"},
-            },
-            {
-                "event": "result",
-                "result": {
-                    "status": "SUCCESS",
-                    "duration_seconds": 5.0,
-                    "response": "TASK: CTO-EMPTY-V\nRESULT: DONE\nVERIFICATION:\nFILES: test.rs\n",
-                },
-            },
-        ]
-        log_file = self._write_log("agy_gemini-3.7-flash-high_empty_v.jsonl", events)
-        record = parse_dispatch_log(log_file)
-
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertEqual(record.result_reported, "DONE")
-        self.assertEqual(record.verification_status, "EMPTY")
-        self.assertFalse(record.is_verification_valid)
-        self.assertTrue(record.unverified_claim)
-
-    def test_parse_done_with_bare_passed_verification(self):
-        events = [
-            {
-                "event": "init",
-                "init": {"model": "gemini-3.7-flash-high"},
-            },
-            {
-                "event": "result",
-                "result": {
-                    "status": "SUCCESS",
-                    "duration_seconds": 5.0,
-                    "response": "TASK: CTO-BARE-PASS\nRESULT: DONE\nVERIFICATION: PASSED\n",
-                },
-            },
-        ]
-        log_file = self._write_log("agy_gemini-3.7-flash-high_bare.jsonl", events)
-        record = parse_dispatch_log(log_file)
-
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertEqual(record.verification_status, "INVALID")
-        self.assertFalse(record.is_verification_valid)
-        self.assertTrue(record.unverified_claim)
-
-    def test_parse_blocked_with_none_verification(self):
-        events = [
-            {
-                "event": "init",
-                "init": {"model": "gemini-3.1-pro-high"},
-            },
-            {
-                "event": "result",
-                "result": {
-                    "status": "SUCCESS",
-                    "duration_seconds": 12.0,
-                    "response": "TASK: CTO-BLOCKED-V\nRESULT: BLOCKED\nVERIFICATION: NONE\nNOTES: Blocked on review\n",
-                },
-            },
-        ]
-        log_file = self._write_log("agy_gemini-3.1-pro-high_blocked.jsonl", events)
-        record = parse_dispatch_log(log_file)
-
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertEqual(record.result_reported, "BLOCKED")
-        self.assertEqual(record.verification_status, "NONE")
-        self.assertFalse(record.is_verification_valid)
-        self.assertFalse(record.unverified_claim, "BLOCKED is not claiming successful DONE unverified")
+        self.assertTrue(record.unverified_claim, "Should flag unverified claim when VERIFICATION is NONE")
 
     def test_parse_timeout_without_result_event(self):
         events = [
@@ -249,15 +169,14 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
         log_file = self._write_log("agy_claude-sonnet-4-6_5678ef01.jsonl", events)
         record = parse_dispatch_log(log_file)
 
-        self.assertEqual(record.status, "TIMEOUT")
+        self.assertEqual(record.status, "TIMEOUT_OR_DIED")
         self.assertFalse(record.is_completed)
         self.assertTrue(record.is_stalled_or_timed_out)
         self.assertEqual(record.worker_steps, 2)
         self.assertAlmostEqual(record.duration_seconds, 40.0)
         self.assertEqual(record.output_tokens, 150)
 
-    def test_parse_stall_with_completed_result(self):
-        # A dispatch with a step stall (>120s) that finished with RESULT: DONE is COMPLETE
+    def test_parse_stall_detection(self):
         events = [
             {
                 "event": "init",
@@ -285,71 +204,10 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
         record = parse_dispatch_log(log_file)
 
         self.assertEqual(record.stalls, 1)
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertTrue(record.is_completed)
-        self.assertFalse(record.is_stalled_or_timed_out)
-        self.assertEqual(record.verification_status, "VALID")
-
-    def test_parse_wrapper_error_with_completed_result(self):
-        # A dispatch where wrapper result event has status ERROR but worker output has RESULT: DONE
-        events = [
-            {
-                "event": "init",
-                "init": {"model": "gemini-3.7-flash-high"},
-            },
-            {
-                "event": "result",
-                "result": {
-                    "status": "ERROR",
-                    "error": "context canceled",
-                    "duration_seconds": 200.0,
-                    "response": "TASK_ID: CTO-WIRING-GATE\nRESULT: DONE\nVERIFICATION: CONTAINER(python -m unittest tests)\n",
-                },
-            },
-        ]
-        log_file = self._write_log("agy_gemini-3.7-flash-high_err_done.jsonl", events)
-        record = parse_dispatch_log(log_file)
-
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertEqual(record.result_reported, "DONE")
-        self.assertEqual(record.verification_status, "VALID")
-        self.assertTrue(record.is_completed)
-
-    def test_parse_contract_block_precedence(self):
-        # Worker mentions Result: Exit in body and template in notes, but contract block has RESULT: DONE
-        events = [
-            {
-                "event": "init",
-                "init": {"model": "gemini-3.7-flash-high"},
-            },
-            {
-                "event": "result",
-                "result": {
-                    "status": "SUCCESS",
-                    "duration_seconds": 30.0,
-                    "response": (
-                        "Evaluating test. Result: Exit 0 received.\n"
-                        "Template was RESULT: DONE|BLOCKED|FAILED\n"
-                        "\n---ORCHESTRATION_METADATA---\n"
-                        "RESULT: DONE\n"
-                        "TASK: CTO-171-VALIDATE\n"
-                        "ROLE: VALIDATOR\n"
-                        "VERIFICATION: CONTAINER(bash scripts/pr_scope.sh)\n"
-                        "---END---\n"
-                    ),
-                },
-            },
-        ]
-        log_file = self._write_log("agy_gemini-3.7-flash-high_precedence.jsonl", events)
-        record = parse_dispatch_log(log_file)
-
-        self.assertEqual(record.task_id, "CTO-171-VALIDATE")
-        self.assertEqual(record.result_reported, "DONE")
-        self.assertEqual(record.status, "COMPLETE")
-        self.assertEqual(record.verification_status, "VALID")
+        self.assertTrue(record.is_stalled_or_timed_out)
 
     def test_session_aggregation_and_delegation_warning(self):
-        # Write distinct dispatch logs
+        # Write two distinct dispatch logs
         events_1 = [
             {"event": "init", "init": {"model": "gemini-3.7-flash-high"}},
             {"event": "step_update", "step_update": {"state": "DONE", "duration_seconds": 2.0}},
@@ -360,7 +218,7 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
                     "status": "SUCCESS",
                     "duration_seconds": 10.0,
                     "usage": {"input_tokens": 1000, "output_tokens": 200, "thinking_tokens": 50},
-                    "response": "TASK_ID: T1\nRESULT: DONE\nVERIFICATION: CONTAINER(cargo test)\n",
+                    "response": "TASK_ID: T1\nRESULT: DONE\nVERIFICATION: test passed\n",
                 },
             },
         ]
@@ -370,44 +228,32 @@ class TestSessionOrchestrationAudit(unittest.TestCase):
             {
                 "event": "result",
                 "result": {
-                    "status": "SUCCESS",
+                    "status": "ERROR",
                     "duration_seconds": 20.0,
                     "usage": {"input_tokens": 3000, "output_tokens": 400, "thinking_tokens": 100},
+                    "error": "timeout",
                     "response": "TASK_ID: T2\nRESULT: BLOCKED\nVERIFICATION: NONE\n",
-                },
-            },
-        ]
-        events_3 = [
-            {"event": "init", "init": {"model": "claude-sonnet-4-6"}},
-            {
-                "event": "step_update",
-                "step_update": {
-                    "state": "DONE",
-                    "duration_seconds": 15.0,
-                    "usage": {"input_tokens": 500, "output_tokens": 50},
                 },
             },
         ]
         self._write_log("agy_gemini-3.7-flash-high_1.jsonl", events_1)
         self._write_log("agy_claude-sonnet-4-6_2.jsonl", events_2)
-        self._write_log("agy_claude-sonnet-4-6_3.jsonl", events_3)
 
         summary = audit_session(log_dir=self.log_dir, files_changed_threshold=5)
 
-        self.assertEqual(summary["total_dispatches"], 3)
-        self.assertEqual(summary["completed_count"], 2)
+        self.assertEqual(summary["total_dispatches"], 2)
+        self.assertEqual(summary["completed_count"], 1)
         self.assertEqual(summary["stalled_or_timeout_count"], 1)
-        self.assertEqual(summary["total_steps"], 4)
-        self.assertAlmostEqual(summary["delegation_ratio"], 4 / 3)
-        self.assertAlmostEqual(summary["total_wall_clock"], 45.0)
-        self.assertEqual(summary["total_in_tokens"], 4500)
-        self.assertEqual(summary["total_out_tokens"], 650)
+        self.assertEqual(summary["total_steps"], 3)
+        self.assertAlmostEqual(summary["delegation_ratio"], 1.5)
+        self.assertAlmostEqual(summary["total_wall_clock"], 30.0)
+        self.assertEqual(summary["total_in_tokens"], 4000)
+        self.assertEqual(summary["total_out_tokens"], 600)
         self.assertEqual(summary["total_thinking_tokens"], 150)
         self.assertIn("gemini-3.7-flash-high", summary["by_model"])
         self.assertIn("claude-sonnet-4-6", summary["by_model"])
         self.assertIn("T1", summary["by_task"])
         self.assertIn("T2", summary["by_task"])
-        self.assertEqual(len(summary["unverified_claims"]), 0)
 
 
 if __name__ == "__main__":

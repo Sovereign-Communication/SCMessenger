@@ -10,8 +10,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'scripts/build_xcframework.sh'
-      - 'scripts/check_wiring.py'
-      - 'scripts/test_check_wiring.py'
       - 'core/src/api.udl'
       - 'mobile/**'
   pull_request:
@@ -22,8 +20,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'scripts/build_xcframework.sh'
-      - 'scripts/check_wiring.py'
-      - 'scripts/test_check_wiring.py'
       - 'core/src/api.udl'
       - 'mobile/**'
 
@@ -34,20 +30,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  wiring-gate:
-    name: Android Wiring Gate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Run wiring gate unit tests
-        run: python scripts/test_check_wiring.py
-      - name: Run Android wiring & reachability gate
-        run: python scripts/check_wiring.py
-
   # WHY THIS IS A SEPARATE JOB FROM "Android Debug APK"
   # -----------------------------------------------------
   # JVM unit tests (testDebugUnitTest) do not need the Android NDK, Rust

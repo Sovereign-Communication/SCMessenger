@@ -3,11 +3,6 @@
 //! Provides XDG Base Directory path resolution and desktop integration helpers.
 //! Non-Linux targets compile stubs that return empty/default values.
 
-// UniFFI-generated metadata (UNIFFI_META_CONST_* from the proc-macro
-// scaffolding) trips clippy 1.98's large_const_arrays on generated code we
-// cannot edit. Newer uniffi emits `static`; remove after the uniffi upgrade.
-#![allow(clippy::large_const_arrays)]
-
 // This crate's UniFFI surface is described entirely via proc-macros (no `.udl`
 // scaffolding — see `build.rs`), so it must register its own scaffolding root.
 // Do not also call `uniffi::include_scaffolding!()` in this crate.

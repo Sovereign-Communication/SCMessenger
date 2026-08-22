@@ -34,7 +34,7 @@ class ConversationsViewModel @Inject constructor(
     // Grouped conversations (by peer)
     val conversations = messages.map { messageList ->
         messageList
-            .groupBy { it.peerId }
+            .groupBy { meshRepository.canonicalContactId(it.peerId) }
             // MSG-ORDER-001: Sort strictly by sender-assigned timestamp to ensure consistent ordering across platforms
             .mapValues { (_, msgs) -> msgs.sortedByDescending { it.senderTimestamp } }
             .toList()
@@ -214,6 +214,16 @@ class ConversationsViewModel @Inject constructor(
                 Timber.e(e, "Failed to clear history")
             }
         }
+    }
+
+    /**
+     * Compare two peer IDs canonically (checks direct equality and canonical contact identity).
+     */
+    fun isSamePeer(id1: String, id2: String): Boolean {
+        if (id1.equals(id2, ignoreCase = true)) return true
+        val c1 = meshRepository.canonicalContactId(id1)
+        val c2 = meshRepository.canonicalContactId(id2)
+        return c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)
     }
 
     /**

@@ -79,7 +79,7 @@ fun ChatScreen(
     }
     val chatMessages = remember(messages, conversationId) {
         // MSG-ORDER-001: Sort strictly by sender-assigned timestamp to ensure consistent ordering across platforms
-        messages.filter { it.peerId == conversationId }.sortedBy { it.senderTimestamp }
+        messages.filter { viewModel.isSamePeer(it.peerId, conversationId) }.sortedBy { it.senderTimestamp }
     }
 
     // Wire updateInputText/clearInput into ChatViewModel

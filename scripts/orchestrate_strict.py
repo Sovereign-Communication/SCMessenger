@@ -61,140 +61,19 @@ def read_next_task(queue_file, done_dir="HANDOFF/done", already_seen=None):
     return None
 
 
-OPERATOR_BANNED_PROVIDERS = {"qwenpaid", "dashscope"}
-OPERATOR_BANNED_LANE_IDS = {"qwenpaid", "dashscope"}
-
-TIER_MAP = {
-    "FLASH": "micro",
-    "MICRO": "micro",
-    "CODER": "scoped",
-    "SCOPED": "scoped",
-    "THINK": "reasoning",
-    "REASONING": "reasoning",
-    "MAX": "reasoning",
-    "LONG-CONTEXT": "long-context",
-    "SHELL": "shell",
-    "VERDICT": "verdict",
-}
-
-
-def is_banned_lane_or_provider(provider_or_id):
-    if not provider_or_id:
-        return False
-    val = str(provider_or_id).lower().strip()
-    if val in OPERATOR_BANNED_PROVIDERS or val in OPERATOR_BANNED_LANE_IDS:
-        return True
-    if any(banned in val for banned in ("qwenpaid", "dashscope")):
-        return True
-    return False
-
-
-def load_roster(lanes_path="scripts/lanes.json"):
-    path = Path(lanes_path)
-    if not path.is_absolute():
-        candidates = [SCRIPT_DIR / path.name, Path.cwd() / path, SCRIPT_DIR / "lanes.json"]
-        for cand in candidates:
-            if cand.exists():
-                path = cand
-                break
-    if not path.exists():
-        raise RuntimeError(f"lanes roster not found: {lanes_path}")
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"cannot read lanes roster {path}: {exc}") from exc
-
-
-def select_lane_for_task(tier, lanes_path="scripts/lanes.json", forced_provider=None):
-    """Select the best eligible live lane for a task tier from the roster.
-
-    Fails closed if the roster is missing, if the forced provider is dead or
-    operator-banned, or if no usable live lane satisfies the required tier.
-    """
-    if forced_provider and is_banned_lane_or_provider(forced_provider):
-        return None, None, f"provider/lane '{forced_provider}' is operator-banned"
-
-    try:
-        roster = load_roster(lanes_path)
-    except RuntimeError as exc:
-        return None, None, str(exc)
-
-    dead_entries = roster.get("dead", [])
-    dead_ids = set()
-    for entry in dead_entries:
-        if isinstance(entry, dict) and entry.get("id"):
-            dead_ids.add(entry["id"].lower())
-
-    lanes = roster.get("lanes", [])
-    norm_tier = TIER_MAP.get(str(tier).upper(), str(tier).lower())
-
-    if forced_provider:
-        forced_lower = forced_provider.lower()
-        if forced_lower in dead_ids:
-            return None, None, f"provider/lane '{forced_provider}' is marked dead in roster"
-        matching = [
-            L for L in lanes
-            if isinstance(L, dict) and forced_lower in (L.get("id", "").lower(), L.get("provider", "").lower())
-        ]
-        if not matching:
-            return None, None, f"unknown provider/lane '{forced_provider}'"
-        for L in matching:
-            if is_banned_lane_or_provider(L.get("provider")) or is_banned_lane_or_provider(L.get("id")):
-                return None, None, f"provider/lane '{forced_provider}' is operator-banned"
-            if L.get("id", "").lower() in dead_ids or L.get("provider", "").lower() in dead_ids:
-                return None, None, f"provider/lane '{forced_provider}' is marked dead in roster"
-            if L.get("status", "").upper() != "OK":
-                return None, None, f"provider/lane '{forced_provider}' status is '{L.get('status')}', not OK"
-            return L["provider"], L["model"], None
-        return None, None, f"provider/lane '{forced_provider}' is not usable"
-
-    eligible = []
-    for L in lanes:
-        if not isinstance(L, dict):
-            continue
-        lid = L.get("id", "").lower()
-        lprov = L.get("provider", "").lower()
-        if is_banned_lane_or_provider(lprov) or is_banned_lane_or_provider(lid):
-            continue
-        if lid in dead_ids or lprov in dead_ids:
-            continue
-        if L.get("status", "").upper() != "OK":
-            continue
-        if L.get("cost_class") not in ("free", "free-quota"):
-            continue
-        lane_tiers = [t.lower() for t in L.get("tiers", [])]
-        if norm_tier not in lane_tiers and str(tier).lower() not in lane_tiers:
-            continue
-        eligible.append(L)
-
-    if not eligible:
-        return None, None, f"no eligible live lane available for tier '{tier}' (dead/banned excluded)"
-
-    eligible.sort(key=lambda L: L.get("latency_s") if isinstance(L.get("latency_s"), (int, float)) else 999.0)
-    best = eligible[0]
-    return best["provider"], best["model"], None
-
-
-def dial(task, lake_route_script=None, lanes_path="scripts/lanes.json"):
+def dial(task, lake_route_script):
     command = [
         "python3", str(SCRIPT_DIR / "dispatch_dial.py"), "--tier", task.get("tier", "CODER"),
         "--description", task.get("description", ""), "--retry-count", str(task.get("retry_count", 0)),
-        "--no-resolve-lake",
+        "--lake-route-script", lake_route_script,
     ]
     if task.get("files"):
         command.extend(["--files", *task["files"]])
     result = run(command)
     try:
-        spec = json.loads(result.stdout)
+        return json.loads(result.stdout)
     except json.JSONDecodeError:
         return {"lake": None, "model": None, "router_error": result.stderr.strip() or "unparseable dispatch dial"}
-
-    effective_tier = spec.get("tier", task.get("tier", "CODER"))
-    lake, model, error = select_lane_for_task(effective_tier, lanes_path=lanes_path)
-    spec["lake"] = lake
-    spec["model"] = model
-    spec["router_error"] = error
-    return spec
 
 
 def state_path(state_dir, task_id):
@@ -375,8 +254,6 @@ def register_review_assignment(manifest, state_dir, task_id, assignment):
         "recorded_at": now(),
     }
     if status == "DISPATCHED":
-        if is_banned_lane_or_provider(assignment.get("provider")):
-            raise RuntimeError(f"reviewer provider '{assignment.get('provider')}' is operator-banned")
         for field in ("provider", "model", "reasoning_effort", "dispatch_reference"):
             if not assignment.get(field):
                 raise RuntimeError(f"dispatched review assignment lacks {field} provenance")
@@ -414,8 +291,7 @@ def valid_review_assignment_binding(manifest, state, report, assignment):
         assignment.get("reviewer_role") in required_review_roles(manifest, state) and
         assignment.get("reviewer_role") in independent_reviewer_roles(manifest) and
         assignment.get("dispatch_status") == "DISPATCHED" and
-        assignment.get("provider") and not is_banned_lane_or_provider(assignment.get("provider")) and
-        assignment.get("model") and
+        assignment.get("provider") and assignment.get("model") and
         assignment.get("reasoning_effort") and assignment.get("dispatch_reference") and
         assignment.get("reviewer_isolation_id") and
         assignment.get("reviewer_isolation_id") != writer_isolation_identity(state) and
@@ -682,7 +558,6 @@ def main():
     parser.add_argument("--max-tasks", type=int, default=5)
     parser.add_argument("--provider", help="Force a configured provider; provenance still records it")
     parser.add_argument("--lake-route-script", default="scripts/lake_route.py")
-    parser.add_argument("--lanes", default=str(SCRIPT_DIR / "lanes.json"), help="Path to lanes roster JSON")
     parser.add_argument("--state-dir", default="tmp/orchestration/state")
     parser.add_argument("--dry-run", action="store_true", help="Validate/dial only; do not create state, worktrees, or dispatch")
     parser.add_argument("--record-review-evidence", action="append", default=[], metavar="TASK_ID=PATH",
@@ -745,29 +620,10 @@ def main():
                 "security_gate_required": state.get("security_gate_required", False),
                 "delivery_gate_required": state.get("delivery_gate_required", False),
             }
-            if is_banned_lane_or_provider(spec.get("lake")):
-                print(f"[BLOCKED] {task['id']}: assigned provider '{spec.get('lake')}' is operator-banned")
-                continue
-            lake, model, err = select_lane_for_task(
-                task.get("tier", "CODER"),
-                lanes_path=args.lanes,
-                forced_provider=spec.get("lake"),
-            )
-            if not lake or not model:
-                print(f"[BLOCKED] {task['id']}: resumed provider '{spec.get('lake')}' is not usable ({err})")
-                continue
         else:
-            spec = dial(task, args.lake_route_script, lanes_path=args.lanes)
+            spec = dial(task, args.lake_route_script)
             if args.provider:
-                effective_tier = spec.get("tier", task.get("tier", "CODER"))
-                lake, model, err = select_lane_for_task(
-                    effective_tier,
-                    lanes_path=args.lanes,
-                    forced_provider=args.provider,
-                )
-                spec["lake"] = lake
-                spec["model"] = model
-                spec["router_error"] = err
+                spec["lake"] = args.provider
             if not spec.get("lake") or not spec.get("model"):
                 if not args.dry_run:
                     state = initialize_state(manifest, args.state_dir, task, spec, controller_root)

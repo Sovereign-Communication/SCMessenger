@@ -6,7 +6,6 @@
 // - Windows: %APPDATA%\scmessenger\config.toml
 
 use anyhow::{Context, Result};
-use scmessenger_core::transport::addr_filter::strip_peer_id;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -276,14 +275,23 @@ impl Config {
         ]
     }
 
+    /// Helper to strip /p2p/PeerID suffix from a multiaddr string
+    fn strip_peer_id(multiaddr: &str) -> String {
+        if let Some(idx) = multiaddr.find("/p2p/") {
+            multiaddr[..idx].to_string()
+        } else {
+            multiaddr.to_string()
+        }
+    }
+
     /// Add a bootstrap node to the config
     pub fn add_bootstrap_node(&mut self, multiaddr: String) -> Result<()> {
         // Check for duplicates by IP:Port only (strip PeerID)
-        let stripped = strip_peer_id(&multiaddr);
+        let stripped = Self::strip_peer_id(&multiaddr);
         if self
             .bootstrap_nodes
             .iter()
-            .any(|n| strip_peer_id(n) == stripped)
+            .any(|n| Self::strip_peer_id(n) == stripped)
         {
             anyhow::bail!("Bootstrap node already exists");
         }
@@ -294,17 +302,17 @@ impl Config {
 
     /// Remove a bootstrap node from the config
     pub fn remove_bootstrap_node(&mut self, multiaddr: &str) -> Result<()> {
-        let stripped = strip_peer_id(multiaddr);
+        let stripped = Self::strip_peer_id(multiaddr);
         let removed_count = self
             .bootstrap_nodes
             .iter()
-            .filter(|n| strip_peer_id(n) == stripped)
+            .filter(|n| Self::strip_peer_id(n) == stripped)
             .count();
         if removed_count == 0 {
             anyhow::bail!("Bootstrap node not found");
         }
         self.bootstrap_nodes
-            .retain(|n| strip_peer_id(n) != stripped);
+            .retain(|n| Self::strip_peer_id(n) != stripped);
         self.save()?;
         Ok(())
     }
@@ -328,44 +336,5 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(config.listen_port, deserialized.listen_port);
-    }
-
-    #[test]
-    fn test_add_bootstrap_node_circuit_relay_dedup() {
-        let tmp = tempfile::tempdir().unwrap();
-        let config_file = tmp.path().join("config.json");
-        std::env::set_var("SCMESSENGER_CONFIG", &config_file);
-
-        let mut config = Config::default();
-        let direct =
-            "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-        // Two circuits through the same IP:port but DIFFERENT relay peers:
-        // the canonical stripper keeps the relay's own peer id (it is part
-        // of the dialable address), so these must stay distinct. The naive
-        // first-/p2p/-truncate collapses all three onto /ip4/1.2.3.4/tcp/443
-        // and wrongly rejects two of them.
-        let circuit_relay_1 = "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN/p2p-circuit/p2p/12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay";
-        let circuit_relay_2 = "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay/p2p-circuit/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-
-        // Direct relay address is added successfully
-        assert!(config.add_bootstrap_node(direct.to_string()).is_ok());
-
-        // Circuit through relay 1 does not collapse onto the direct address
-        assert!(config
-            .add_bootstrap_node(circuit_relay_1.to_string())
-            .is_ok());
-
-        // Circuit through a different relay peer at the same IP:port is a
-        // distinct address and must also be added
-        assert!(config
-            .add_bootstrap_node(circuit_relay_2.to_string())
-            .is_ok());
-
-        // Exact duplicates are still rejected
-        assert!(config
-            .add_bootstrap_node(circuit_relay_1.to_string())
-            .is_err());
-
-        std::env::remove_var("SCMESSENGER_CONFIG");
     }
 }

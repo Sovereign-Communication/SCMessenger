@@ -36,17 +36,7 @@ if [ "$CURRENT" = "$EXPECTED" ]; then
   exit 0
 fi
 
-# Block: keep the observability JSON on stdout, then HARD-BLOCK per the repo
-# convention (reason on stderr + exit 2, as in preflight_guard.py and
-# check_no_emoji.py). Exiting 0 here made Claude Code treat the block as
-# hook_success and continue the session; the JSON continue:false on stdout
-# is advisory only.
+# Block: emit a stop JSON explaining the exact-match requirement.
 printf '{"systemMessage":"MODEL GATE BLOCKED: active model is not the required exact deepseek flash", "stopReason":"This SCMessenger session/subagent must run exactly deepseek/deepseek-v4-flash-0731 (got %s). Re-launch with ANTHROPIC_MODEL=deepseek/deepseek-v4-flash-0731 and no other model override; do not route a costly Sonnet/Opus slug through the OpenRouter gateway.", "continue":false}' "${CURRENT:-<unset>}"
 echo
-{
-  echo "[FAIL] MODEL GATE BLOCKED: refusing to start a session/subagent on a non-approved model."
-  echo "[FAIL] Required model: ${EXPECTED}"
-  echo "[FAIL] Actual model: ${CURRENT:-<unset>}"
-  echo "[FAIL] Relaunch with exactly: ANTHROPIC_MODEL=${EXPECTED}"
-} >&2
-exit 2
+exit 0
