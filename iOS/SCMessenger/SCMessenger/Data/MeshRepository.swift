@@ -5034,7 +5034,7 @@ final class MeshRepository {
                 },
                 tryBle: { [self] bleAddr in
                     self.logger.debug("tryBleDelivery: given blePeerId=\(bleAddr)")
-                    let sendTargets = ([bleAddr] + connectedBlePeerIds)
+                    var sendTargets = ([bleAddr] + connectedBlePeerIds)
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty }
                         .reduce(into: [String]()) { deduped, next in
@@ -5042,6 +5042,15 @@ final class MeshRepository {
                                 deduped.append(next)
                             }
                         }
+
+                    // Collect all possible BLE targets (connected centrals, peripherals, and any explicit target)
+                    if sendTargets.isEmpty, let central = bleCentralManager {
+                        sendTargets.append(contentsOf: central.connectedPeripheralIds())
+                    }
+                    if sendTargets.isEmpty, let peripheral = blePeripheralManager {
+                        sendTargets.append(contentsOf: peripheral.subscribedCentralIds())
+                    }
+
                     if sendTargets.isEmpty {
                         logger.debug("tryBleDelivery: no send targets available")
                         return false
@@ -5097,7 +5106,6 @@ final class MeshRepository {
                 },
                 tryTcpMdns: { [self] lanPeerId in
                     // TCP/mDNS transport: Direct LAN delivery via libp2p TCP.
-                    // This peer was discovered via mDNS and has LAN addresses — skip relay.
                     guard let swarmBridge = self.swarmBridge else {
                         self.logDeliveryAttempt(
                             messageId: traceMessageId,
@@ -5151,7 +5159,7 @@ final class MeshRepository {
                     }
                 },
                 tryCore: { [self] corePeerId in
-                    // Core transport attempt (libp2p/internet relay)
+                    // Core transport attempt (libp2p direct unicast or store-and-forward broadcast)
                     guard let swarmBridge = self.swarmBridge else {
                         self.logDeliveryAttempt(
                             messageId: traceMessageId,
@@ -5163,39 +5171,67 @@ final class MeshRepository {
                         return false
                     }
 
-                    let dialCandidates = self.buildDialCandidatesForPeer(
-                        routePeerId: corePeerId,
-                        rawAddresses: addresses,
-                        includeRelayCircuits: true
-                    )
-                    if !dialCandidates.isEmpty {
-                        await self.connectToPeer(corePeerId, addresses: dialCandidates)
-                        _ = await self.awaitPeerConnection(peerId: corePeerId)
+                    // 1. Resolve libp2p PeerId if corePeerId is a valid libp2p string or in contact routing hints
+                    var targetPeerId: String? = nil
+                    if isLibp2pPeerId(corePeerId) {
+                        targetPeerId = corePeerId
+                    } else if let contact = try? contactManager?.get(peerId: corePeerId) {
+                        let hints = parseRoutingHintsFromNotes(contact.notes)
+                        if let lp2p = hints.libp2pPeerId, isLibp2pPeerId(lp2p) {
+                            targetPeerId = lp2p
+                        }
                     }
 
-                    let sendError = await swarmBridge.sendMessageStatus(
-                        peerId: corePeerId,
-                        data: envelopeData,
-                        recipientIdentityId: recipientIdentityId,
-                        intendedDeviceId: intendedDeviceId
-                    )
+                    // 2. Direct Unicast Attempt
+                    if let targetPeerId = targetPeerId {
+                        let dialCandidates = self.buildDialCandidatesForPeer(
+                            routePeerId: targetPeerId,
+                            rawAddresses: addresses,
+                            includeRelayCircuits: true
+                        )
+                        if !dialCandidates.isEmpty {
+                            await self.connectToPeer(targetPeerId, addresses: dialCandidates)
+                            _ = await self.awaitPeerConnection(peerId: targetPeerId)
+                        }
 
-                    if sendError == nil {
+                        let sendError = await swarmBridge.sendMessageStatus(
+                            peerId: targetPeerId,
+                            data: envelopeData,
+                            recipientIdentityId: recipientIdentityId,
+                            intendedDeviceId: intendedDeviceId
+                        )
+
+                        if sendError == nil {
+                            self.logDeliveryAttempt(
+                                messageId: traceMessageId,
+                                medium: "core",
+                                phase: "smart_router",
+                                outcome: "success",
+                                detail: "ctx=\(attemptContext) route=\(targetPeerId)"
+                            )
+                            return true
+                        }
+                    }
+
+                    // 3. Store-and-Forward / Swarm Broadcast Fallback:
+                    // Broadcast encrypted envelope to all connected swarm peers (which store & relay to target)
+                    do {
+                        try await swarmBridge.sendToAllPeers(data: envelopeData)
                         self.logDeliveryAttempt(
                             messageId: traceMessageId,
-                            medium: "core",
+                            medium: "core_broadcast",
                             phase: "smart_router",
-                            outcome: "success",
-                            detail: "ctx=\(attemptContext) route=\(corePeerId)"
+                            outcome: "accepted",
+                            detail: "ctx=\(attemptContext) broadcast_to_all_peers=true"
                         )
                         return true
-                    } else {
+                    } catch {
                         self.logDeliveryAttempt(
                             messageId: traceMessageId,
                             medium: "core",
                             phase: "smart_router",
                             outcome: "failed",
-                            detail: "ctx=\(attemptContext) route=\(String(describing: corePeerId)) reason=\(String(describing: sendError ?? "unknown"))"
+                            detail: "ctx=\(attemptContext) route=\(String(describing: corePeerId)) broadcast_error=\(error.localizedDescription)"
                         )
                         return false
                     }
