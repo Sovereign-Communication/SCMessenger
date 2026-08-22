@@ -150,7 +150,8 @@ final class BLECentralManager: NSObject {
     }
 
     func connectedPeripheralIds() -> [String] {
-        connectedPeripherals.keys.compactMap { peripheralId in
+        guard centralManager.state == .poweredOn else { return [] }
+        return connectedPeripherals.keys.compactMap { peripheralId in
             guard messageCharacteristics[peripheralId] != nil else { return nil }
             return peripheralId.uuidString
         }
@@ -368,6 +369,10 @@ extension BLECentralManager: CBCentralManagerDelegate {
                 appendRepositoryDiagnostic("ble_central_scan_start_deferred")
                 scheduleDutyCycle()
             }
+        } else {
+            connectedPeripherals.removeAll()
+            discoveredPeripherals.removeAll()
+            messageCharacteristics.removeAll()
         }
     }
 

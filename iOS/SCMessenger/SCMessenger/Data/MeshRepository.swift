@@ -4918,12 +4918,14 @@ final class MeshRepository {
     ) async -> DeliveryAttemptResult {
         let strictBleOnly = strictBleOnlyOverride ?? strictBleOnlyValidation
         var effectiveCandidates = routePeerCandidates
-        if effectiveCandidates.isEmpty, let targetId = recipientIdentityId ?? intendedDeviceId {
+        if let targetId = recipientIdentityId ?? intendedDeviceId {
             if isLibp2pPeerId(targetId) {
-                effectiveCandidates.append(targetId)
+                if !effectiveCandidates.contains(targetId) {
+                    effectiveCandidates.append(targetId)
+                }
             } else if let contact = try? contactManager?.get(peerId: targetId) {
                 let hints = parseRoutingHintsFromNotes(contact.notes)
-                if let lp2p = hints.libp2pPeerId, !lp2p.isEmpty {
+                if let lp2p = hints.libp2pPeerId, !lp2p.isEmpty, !effectiveCandidates.contains(lp2p) {
                     effectiveCandidates.append(lp2p)
                 }
             }
@@ -4999,7 +5001,17 @@ final class MeshRepository {
                 tcpMdnsPeerId: effectiveCandidates.first(where: { candidate in
                     let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
                     return !trimmed.isEmpty && (mdnsLanPeers[trimmed]?.isEmpty == false)
-                }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) },
+                }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? {
+                    if let targetId = recipientIdentityId {
+                        let normalizedKey = normalizePublicKey(targetId)
+                        for (lanPeer, addrs) in mdnsLanPeers where !addrs.isEmpty {
+                            if let peerInfo = discoveredPeerMap[lanPeer], normalizePublicKey(peerInfo.publicKey) == normalizedKey {
+                                return lanPeer
+                            }
+                        }
+                    }
+                    return nil
+                }(),
                 routePeerCandidates: effectiveCandidates,
                 addresses: addresses,
                 traceMessageId: traceMessageId,
@@ -5034,7 +5046,10 @@ final class MeshRepository {
                 },
                 tryBle: { [self] bleAddr in
                     self.logger.debug("tryBleDelivery: given blePeerId=\(bleAddr)")
-                    var sendTargets = ([bleAddr] + connectedBlePeerIds)
+                    let liveConnectedBlePeerIds = (
+                        (bleCentralManager?.connectedPeripheralIds() ?? []) +
+                        (blePeripheralManager?.subscribedCentralIds() ?? [])
+                    )
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty }
                         .reduce(into: [String]()) { deduped, next in
@@ -5043,12 +5058,10 @@ final class MeshRepository {
                             }
                         }
 
-                    // Collect all possible BLE targets (connected centrals, peripherals, and any explicit target)
-                    if sendTargets.isEmpty, let central = bleCentralManager {
-                        sendTargets.append(contentsOf: central.connectedPeripheralIds())
-                    }
-                    if sendTargets.isEmpty, let peripheral = blePeripheralManager {
-                        sendTargets.append(contentsOf: peripheral.subscribedCentralIds())
+                    var sendTargets = liveConnectedBlePeerIds
+                    let trimmedBleAddr = bleAddr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedBleAddr.isEmpty && !sendTargets.contains(trimmedBleAddr) {
+                        sendTargets.append(trimmedBleAddr)
                     }
 
                     if sendTargets.isEmpty {

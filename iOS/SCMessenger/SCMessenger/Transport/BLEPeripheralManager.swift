@@ -159,6 +159,9 @@ final class BLEPeripheralManager: NSObject {
     }
 
     func subscribedCentralIds() -> [String] {
+        guard peripheralManager.state == .poweredOn else {
+            return []
+        }
         if !Thread.isMainThread {
             // Return empty array for non-main-thread calls to avoid deadlock
             // Callers should invoke this from main thread for accurate results
@@ -328,21 +331,17 @@ final class BLEPeripheralManager: NSObject {
                 pendingNotifications.removeAll(where: { $0.central.identifier == central.identifier })
                 return accepted
             }
-            // IOS-CRASH-001: Guard against SIGTRAP when CBPeripheralManager is
+            // Guard against transmission when CBPeripheralManager is
             // not in .poweredOn state (e.g. transitioning after BT toggle).
             guard self.peripheralManager.state == .poweredOn else {
-                self.logger.warning("sendDataToCentral: peripheralManager not poweredOn (\(self.peripheralManager.state.rawValue)), buffering fragment")
-                self.pendingNotifications.append((central: central, data: fragment))
-                accepted = true
-                continue
+                self.logger.warning("sendDataToCentral: peripheralManager not poweredOn (\(self.peripheralManager.state.rawValue))")
+                return false
             }
             let success = peripheralManager.updateValue(fragment, for: notifyChar, onSubscribedCentrals: [central])
             if !success {
-                logger.warning("Failed to send fragment, buffering")
+                logger.warning("Failed to send fragment via updateValue, buffering")
                 appendRepositoryDiagnostic("ble_tx_buffer fragment to=\(central.identifier.uuidString.prefix(8))")
                 pendingNotifications.append((central: central, data: fragment))
-                // Buffered notifications are still tied to an active subscribed central.
-                accepted = true
             } else {
                 accepted = true
             }
@@ -484,6 +483,8 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
             }
         case .poweredOff, .unauthorized, .unsupported:
             stopAdvertising()
+            subscribedCentrals.removeAll()
+            pendingNotifications.removeAll()
         default:
             break
         }
