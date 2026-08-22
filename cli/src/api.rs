@@ -353,10 +353,7 @@ pub async fn get_swarm_stats_via_api() -> Result<Vec<ApiConnectionStats>> {
     Ok(response.stats)
 }
 
-/// NOTE: HANDOFF/done/task_wire_get_history_via_api.md claims this was wired,
-/// but no caller exists anywhere in the repo as of this triage (2026-07-03) -
-/// flagged for human follow-up.
-#[allow(dead_code)]
+/// Fetch message history from running node via Control API
 pub async fn get_history_via_api(
     peer_id: Option<String>,
     limit: Option<usize>,
