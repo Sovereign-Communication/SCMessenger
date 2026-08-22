@@ -54,7 +54,7 @@ async fn inspect_adapters(
 ) -> BleResult<Vec<BleAdapterInfo>> {
     let mut infos = Vec::with_capacity(adapters.len());
     for adapter in adapters {
-        let state = match AssertUnwindSafe(adapter.adapter_state())
+        let mut state = match AssertUnwindSafe(adapter.adapter_state())
             .catch_unwind()
             .await
         {
@@ -71,6 +71,19 @@ async fn inspect_adapters(
                 ));
             }
         };
+
+        // CoreBluetooth on macOS initializes asynchronously; give it up to 500ms to report PoweredOn
+        if state != CentralState::PoweredOn {
+            for _ in 0..5 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if let Ok(Ok(s)) = AssertUnwindSafe(adapter.adapter_state()).catch_unwind().await {
+                    state = s;
+                    if state == CentralState::PoweredOn {
+                        break;
+                    }
+                }
+            }
+        }
 
         infos.push(BleAdapterInfo {
             // btleplug does not expose a stable cross-platform address/name here.
