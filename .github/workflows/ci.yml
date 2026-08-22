@@ -87,3 +87,36 @@ jobs:
       - run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
       - run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
       - run: scripts/ffi_surface.sh
+
+  windows-cli-artifact:
+    name: Windows CLI Artifact
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Same protoc setup as the Test job's windows-latest leg: only Windows
+      # runners lack a preinstalled/vendored protoc.
+      - name: Install protoc (Windows)
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release CLI binary
+        run: cargo build -p scmessenger-cli --release
+      # clap serves --version at arg-parse time, before any runtime or network
+      # startup, so running the freshly built exe here is cheap and safe.
+      - name: Write build provenance
+        timeout-minutes: 5
+        run: |
+          $sha = git rev-parse HEAD
+          $ver = & .\target\release\scmessenger-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "git-sha: $sha", "cli-version: $ver" | Set-Content .\target\release\cli-provenance.txt
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cli-${{ github.sha }}
+          path: |
+            target/release/scmessenger-cli.exe
+            target/release/cli-provenance.txt
+          retention-days: 30

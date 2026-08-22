@@ -341,8 +341,10 @@ if (localPropsFile.exists()) {
     localProps.load(new FileInputStream(localPropsFile))
 }
 
-// Helper function to invoke cargo ndk for a target architecture
-def runCargoNdkBuild(String target, String sdkDir, String ndkDir, String rustProfile, String rustDir, boolean isWindows, String msysUcrtBin) {
+// Helper function to invoke cargo ndk for a target architecture.
+// rustProfile is the caller's single source of truth and must be exactly
+// "release" or "debug" -- never empty (see the command construction below).
+def runCargoNdkBuild(String target, String sdkDir, String ndkDir, String rustProfile, boolean isWindows, String msysUcrtBin) {
     exec {
         workingDir project.file('../../')
         // Ensure 16KB page alignment for Android 15+ compatibility and lightweight debug info
@@ -398,11 +400,28 @@ def runCargoNdkBuild(String target, String sdkDir, String ndkDir, String rustPro
         }
 
         def cargoCmd = isWindows ? 'cargo' : (file("${System.getProperty('user.home')}/.cargo/bin/cargo").exists() ? "${System.getProperty('user.home')}/.cargo/bin/cargo" : 'cargo')
-        def effectiveProfile = rustProfile ?: '--release'
+        // Map the profile token to cargo arguments WITHOUT an Elvis operator.
+        // "release" -> pass --release (cargo writes target/<triple>/release/).
+        // "debug"   -> pass NO profile flag (cargo's default dev profile writes
+        //              target/<triple>/debug/, exactly where the copy step looks).
+        // The old code did `rustProfile ?: '--release'`, and because Groovy
+        // treats "" as falsy, every debug build was silently flipped to a
+        // release build while the copy step kept looking in debug/, found
+        // nothing, skipped, and assembleDebug still printed BUILD SUCCESSFUL
+        // with zero libscmessenger_core.so in the APK. An empty or unknown
+        // token is now rejected outright instead of reinterpreted.
+        if (rustProfile != 'release' && rustProfile != 'debug') {
+            throw new GradleException("runCargoNdkBuild: invalid rustProfile '${rustProfile}' (expected 'release' or 'debug')")
+        }
         if (isWindows) {
-            commandLine 'cmd', '/c', "cargo ndk -t $target build $effectiveProfile -p scmessenger-core"
+            def profileFlag = rustProfile == 'release' ? ' --release' : ''
+            commandLine 'cmd', '/c', "cargo ndk -t $target build${profileFlag} -p scmessenger-core"
         } else {
-            def cmd = [cargoCmd, 'ndk', '-t', target, 'build', effectiveProfile, '-p', 'scmessenger-core']
+            def cmd = [cargoCmd, 'ndk', '-t', target, 'build']
+            if (rustProfile == 'release') {
+                cmd << '--release'
+            }
+            cmd.addAll(['-p', 'scmessenger-core'])
             commandLine cmd
         }
     }
@@ -440,23 +459,57 @@ targetList.each { arch ->
             def taskNames = project.gradle.startParameter.taskNames.join(",")
             def isRelease = taskNames.contains("Release") || taskNames.contains("Bundle")
 
-            def rustProfile = isRelease ? "--release" : ""
-            def rustDir = isRelease ? "release" : "debug"
+            // Single source of truth for the cargo profile. The token names BOTH
+            // the profile to build and the target/<triple>/<dir> cargo writes:
+            // "release" -> --release -> release/, "debug" -> default dev profile
+            // -> debug/. It can never be empty -- the previous code passed "" for
+            // debug builds, which the helper's Elvis fallback flipped to a release
+            // build, while the copy below kept looking in debug/ and skipped, so
+            // assembleDebug uploaded APKs without libscmessenger_core.so that
+            // still printed BUILD SUCCESSFUL.
+            def rustProfile = isRelease ? "release" : "debug"
+            def rustDir = rustProfile
 
-            println "Starting buildRustAndroid${arch.name} task (Profile: ${rustDir})..."
+            println "Starting buildRustAndroid${arch.name} task (Profile: ${rustProfile})..."
             println "Using NDK: $ndkDir"
 
-            runCargoNdkBuild(arch.target, sdkDir, ndkDir, rustProfile, rustDir, isWindows, msysUcrtBin)
+            runCargoNdkBuild(arch.target, sdkDir, ndkDir, rustProfile, isWindows, msysUcrtBin)
 
-            // Copy output to destination if built
+            // Copy output to destination. A missing .so here means the APK would
+            // build green and crash on launch with UnsatisfiedLinkError, so this
+            // step FAILS LOUDLY instead of skipping silently (same contract as the
+            // generateUniFFIBindings step-5 assertion below). A build that cannot
+            // start must not pass.
             def sourceFile = file("../../target/${arch.target}/${rustDir}/libscmessenger_core.so")
             def destDir = file("../../core/target/android-libs/${arch.abi}")
-            if (sourceFile.exists()) {
-                destDir.mkdirs()
-                copy {
-                    from sourceFile
-                    into destDir
+            if (!sourceFile.exists()) {
+                def tripleDir = file("../../target/${arch.target}")
+                def lines = []
+                if (tripleDir.exists()) {
+                    tripleDir.listFiles()?.sort { it.name }?.each { entry ->
+                        lines << "    ${entry.name}${entry.isDirectory() ? '/' : ''}"
+                        if (entry.isDirectory() && entry.name in ['debug', 'release']) {
+                            entry.listFiles()?.sort { it.name }?.each { sub ->
+                                lines << "        ${sub.name}${sub.isDirectory() ? '/' : ''}"
+                            }
+                        }
+                    }
+                } else {
+                    lines << "    (${tripleDir} does not exist)"
                 }
+                def listing = lines ? lines.join('\n') : "    (empty)"
+                throw new GradleException(
+                    "Rust native library for ${arch.abi} (${arch.target}) was not produced; " +
+                    "refusing to package an APK that cannot start.\n" +
+                    "  expected: ${sourceFile}\n" +
+                    "  profile:  ${rustProfile}\n" +
+                    "  contents of target/${arch.target} (debug/ and release/ expanded):\n${listing}"
+                )
+            }
+            destDir.mkdirs()
+            copy {
+                from sourceFile
+                into destDir
             }
         }
     }
