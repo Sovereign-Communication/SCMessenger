@@ -294,8 +294,8 @@ final class BLEPeripheralManager: NSObject {
             return false
         }
         
-        guard let messageCharacteristic else {
-            logger.warning("sendDataToCentral: message characteristic unavailable")
+        guard let notifyChar = syncCharacteristic ?? messageCharacteristic else {
+            logger.warning("sendDataToCentral: notify characteristic unavailable")
             return false
         }
         guard subscribedCentrals.contains(where: { $0.identifier == central.identifier }) else {
@@ -325,7 +325,7 @@ final class BLEPeripheralManager: NSObject {
                 accepted = true
                 continue
             }
-            let success = peripheralManager.updateValue(fragment, for: messageCharacteristic, onSubscribedCentrals: [central])
+            let success = peripheralManager.updateValue(fragment, for: notifyChar, onSubscribedCentrals: [central])
             if !success {
                 logger.warning("Failed to send fragment, buffering")
                 appendRepositoryDiagnostic("ble_tx_buffer fragment to=\(central.identifier.uuidString.prefix(8))")
@@ -391,7 +391,7 @@ final class BLEPeripheralManager: NSObject {
 
         syncCharacteristic = CBMutableCharacteristic(
             type: MeshBLEConstants.syncCharUUID,
-            properties: [.read, .write],
+            properties: [.read, .write, .notify],
             value: nil,
             permissions: [.readable, .writeable]
         )
@@ -537,6 +537,12 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
         let totalFrags = Int(data[0]) | (Int(data[1]) << 8)
         let fragIndex = Int(data[2]) | (Int(data[3]) << 8)
+
+        guard totalFrags > 0, totalFrags <= 2048, fragIndex >= 0, fragIndex < totalFrags else {
+            logger.warning("Invalid BLE fragment parameters (index \(fragIndex) of \(totalFrags)) from \(centralId)")
+            return
+        }
+
         let payload = data.subdata(in: 4..<data.count)
 
         if fragIndex == 0 {
@@ -635,7 +641,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
     }
 
     private func processPendingNotifications() {
-        guard let messageChar = messageCharacteristic else { return }
+        guard let notifyChar = syncCharacteristic ?? messageCharacteristic else { return }
         guard peripheralManager.state == .poweredOn else {
             logger.debug("Skipping pending notification flush: peripheralManager not poweredOn")
             return
@@ -647,7 +653,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
                 self.pendingNotifications.removeFirst()
                 continue
             }
-            let success = self.peripheralManager.updateValue(next.data, for: messageChar, onSubscribedCentrals: [next.central])
+            let success = self.peripheralManager.updateValue(next.data, for: notifyChar, onSubscribedCentrals: [next.central])
             if success {
                 self.pendingNotifications.removeFirst()
                 self.logger.debug("Processed buffered notification for \(next.central.identifier)")

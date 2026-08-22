@@ -2492,13 +2492,16 @@ final class MeshRepository {
         }
     }
     private func resolveCanonicalPeerId(senderId: String, senderPublicKeyHex: String) -> String {
-        guard let normalizedIncomingKey = normalizePublicKey(senderPublicKeyHex),
-              let contacts = try? contactManager?.list() else {
-            return senderId
+        guard let normalizedIncomingKey = normalizePublicKey(senderPublicKeyHex) else {
+            return normalizePeerId(senderId)
+        }
+        guard let contacts = try? contactManager?.list() else {
+            return normalizedIncomingKey
         }
 
         let exactMatch = contacts.first {
-            isSamePeerId($0.peerId, id2: senderId) && normalizePublicKey($0.publicKey) == normalizedIncomingKey
+            isSamePeerId($0.peerId, id2: normalizedIncomingKey) ||
+            (isSamePeerId($0.peerId, id2: senderId) && normalizePublicKey($0.publicKey) == normalizedIncomingKey)
         }
         if let match = exactMatch { return match.peerId }
 
@@ -2508,46 +2511,9 @@ final class MeshRepository {
         if keyedMatches.count == 1 {
             return keyedMatches[0].peerId
         }
-        if keyedMatches.count > 1 {
-            logger.warning("Ambiguous canonical sender mapping for key \(normalizedIncomingKey.prefix(8))...; trying route-hint fallback")
-        }
 
-        if isLibp2pPeerId(senderId) {
-            let linkedIdentityMatches = contacts.filter {
-                guard normalizePublicKey($0.publicKey) == normalizedIncomingKey else { return false }
-                guard !isSamePeerId($0.peerId, id2: senderId) else { return false }
-                guard let notes = $0.notes,
-                      let routing = parseRoutingInfo(notes: notes) else { return false }
-
-                if !routing.libp2pPeerId.isEmpty {
-                    return isSamePeerId(routing.libp2pPeerId, id2: senderId)
-                }
-                return false
-            }
-
-            if linkedIdentityMatches.count == 1 {
-                return linkedIdentityMatches[0].peerId
-            }
-            if linkedIdentityMatches.count > 1 {
-                logger.warning("Ambiguous canonical sender mapping for \(senderId); keeping raw sender ID")
-            }
-            return normalizePeerId(senderId)
-        }
-
-        guard isIdentityId(senderId) else { return normalizePeerId(senderId) }
-        let keyedRoutedMatches = contacts.filter {
-            guard normalizePublicKey($0.publicKey) == normalizedIncomingKey else { return false }
-            guard $0.peerId != senderId else { return false }
-            return parseRoutingHintsFromNotes($0.notes).libp2pPeerId != nil || isLibp2pPeerId($0.peerId)
-        }
-        if keyedRoutedMatches.count == 1 {
-            return keyedRoutedMatches[0].peerId
-        }
-        if keyedRoutedMatches.count > 1 {
-            logger.warning("Ambiguous identity sender mapping for \(senderId); keeping raw sender ID")
-        }
-
-        return normalizePeerId(senderId)
+        // Canonical authority: Public key hex is the single source of truth for conversation threads
+        return normalizedIncomingKey
     }
 
     private func resolveCanonicalPeerIdFromMessageHints(
@@ -3653,7 +3619,44 @@ final class MeshRepository {
         guard let historyManager = historyManager else {
             throw MeshError.notInitialized("HistoryManager not initialized")
         }
-        return try historyManager.conversation(peerId: peerId, limit: limit)
+        let directMessages = (try? historyManager.conversation(peerId: peerId, limit: limit)) ?? []
+
+        // Find any aliases for this peer (contact publicKey, notes routing IDs)
+        var alternatePeerIds: Set<String> = []
+        if let contact = try? contactManager?.get(peerId: peerId) {
+            if !contact.publicKey.isEmpty { alternatePeerIds.insert(contact.publicKey) }
+        }
+        if let contacts = try? contactManager?.list() {
+            for c in contacts {
+                if normalizePublicKey(c.publicKey) == normalizePublicKey(peerId) || c.peerId == peerId {
+                    alternatePeerIds.insert(c.peerId)
+                    if !c.publicKey.isEmpty { alternatePeerIds.insert(c.publicKey) }
+                }
+            }
+        }
+        alternatePeerIds.remove(peerId)
+
+        if alternatePeerIds.isEmpty {
+            return directMessages
+        }
+
+        var allMessages = directMessages
+        for altId in alternatePeerIds {
+            if let altMsgs = try? historyManager.conversation(peerId: altId, limit: limit) {
+                allMessages.append(contentsOf: altMsgs)
+            }
+        }
+
+        // Deduplicate by message ID
+        var seenIds = Set<String>()
+        var deduped: [MessageRecord] = []
+        for msg in allMessages {
+            if !seenIds.contains(msg.id) {
+                seenIds.insert(msg.id)
+                deduped.append(msg)
+            }
+        }
+        return deduped
     }
 
     func getMessageRequests(limit: UInt32 = 100) -> [MessageRequestThread] {
@@ -4524,7 +4527,7 @@ final class MeshRepository {
             includeRelayCircuits: true
         )
         let discoveryInfo = PeerDiscoveryInfo(
-            canonicalPeerId: identityId,
+            canonicalPeerId: normalizedKey,
             publicKey: normalizedKey,
             nickname: discoveredNickname,
             transport: .ble,
@@ -4532,20 +4535,23 @@ final class MeshRepository {
             isRelay: false,
             lastSeen: UInt64(Date().timeIntervalSince1970)
         )
-        updateDiscoveredPeer(identityId, info: discoveryInfo)
-        if let nonEmptyLibp2p, nonEmptyLibp2p != identityId {
+        updateDiscoveredPeer(normalizedKey, info: discoveryInfo)
+        if identityId != normalizedKey {
+            updateDiscoveredPeer(identityId, info: discoveryInfo)
+        }
+        if let nonEmptyLibp2p, nonEmptyLibp2p != normalizedKey {
             updateDiscoveredPeer(nonEmptyLibp2p, info: discoveryInfo)
         }
         // Remove the preliminary BLE-UUID entry (isFull=false) created at connection time.
         // Now that identity is confirmed, the blePeerId key is a stale duplicate.
-        if blePeerId != identityId && blePeerId != normalizedLibp2p {
+        if blePeerId != normalizedKey && blePeerId != identityId && blePeerId != normalizedLibp2p {
             discoveredPeerMap = discoveredPeerMap.filter { key, value in
                 key != blePeerId && value.canonicalPeerId != blePeerId
             }
-            logger.debug("Removed preliminary BLE entry \(blePeerId.prefix(8)) → promoted to \(identityId)")
+            logger.debug("Removed preliminary BLE entry \(blePeerId.prefix(8)) → promoted to \(normalizedKey.prefix(8))")
         }
         emitIdentityDiscoveredIfChanged(
-            peerId: identityId,
+            peerId: normalizedKey,
             publicKey: normalizedKey,
             nickname: discoveredNickname,
             libp2pPeerId: nonEmptyLibp2p,
@@ -4911,7 +4917,18 @@ final class MeshRepository {
         intendedDeviceId: String? = nil
     ) async -> DeliveryAttemptResult {
         let strictBleOnly = strictBleOnlyOverride ?? strictBleOnlyValidation
-        let routePeerFallback = routePeerCandidates.first ?? "unknown_route_\(Date().timeIntervalSince1970)"
+        var effectiveCandidates = routePeerCandidates
+        if effectiveCandidates.isEmpty, let targetId = recipientIdentityId ?? intendedDeviceId {
+            if isLibp2pPeerId(targetId) {
+                effectiveCandidates.append(targetId)
+            } else if let contact = try? contactManager?.get(peerId: targetId) {
+                let hints = parseRoutingHintsFromNotes(contact.notes)
+                if let lp2p = hints.libp2pPeerId, !lp2p.isEmpty {
+                    effectiveCandidates.append(lp2p)
+                }
+            }
+        }
+        let routePeerFallback = effectiveCandidates.first ?? (recipientIdentityId ?? "unknown_route_\(Date().timeIntervalSince1970)")
         if strictBleOnly {
             logDeliveryAttempt(
                 messageId: traceMessageId,
@@ -4979,11 +4996,11 @@ final class MeshRepository {
                 envelopeData: envelopeData,
                 multipeerPeerId: strictBleOnly ? nil : multipeerPeerId,
                 blePeerId: effectiveBlePeerId,
-                tcpMdnsPeerId: routePeerCandidates.first(where: { candidate in
+                tcpMdnsPeerId: effectiveCandidates.first(where: { candidate in
                     let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
                     return !trimmed.isEmpty && (mdnsLanPeers[trimmed]?.isEmpty == false)
                 }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) },
-                routePeerCandidates: routePeerCandidates,
+                routePeerCandidates: effectiveCandidates,
                 addresses: addresses,
                 traceMessageId: traceMessageId,
                 attemptContext: attemptContext,

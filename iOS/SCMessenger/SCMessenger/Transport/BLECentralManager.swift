@@ -486,10 +486,15 @@ extension BLECentralManager: CBPeripheralDelegate {
             switch characteristic.uuid {
             case MeshBLEConstants.messageCharUUID:
                 messageCharacteristics[peripheral.identifier] = characteristic
-                requestMessageNotifications(for: peripheral, characteristic: characteristic)
+                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                    requestMessageNotifications(for: peripheral, characteristic: characteristic)
+                }
             case MeshBLEConstants.syncCharUUID:
                 syncCharacteristics[peripheral.identifier] = characteristic
                 appendRepositoryDiagnostic("ble_central_found_sync id=\(peripheral.identifier)")
+                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                    requestMessageNotifications(for: peripheral, characteristic: characteristic)
+                }
             case MeshBLEConstants.identityCharUUID:
                 appendRepositoryDiagnostic("ble_central_reading_identity id=\(peripheral.identifier)")
                 peripheral.readValue(for: characteristic)
@@ -518,7 +523,7 @@ extension BLECentralManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == MeshBLEConstants.messageCharUUID else { return }
+        guard characteristic.uuid == MeshBLEConstants.messageCharUUID || characteristic.uuid == MeshBLEConstants.syncCharUUID else { return }
 
         let peripheralId = peripheral.identifier
         if let error {
@@ -582,7 +587,7 @@ extension BLECentralManager: CBPeripheralDelegate {
                 logger.warning("Could not parse identity beacon from \(peripheral.identifier)")
             }
         } else {
-            // Message or sync data — handle reassembly
+            // Message or sync data -- handle reassembly
             if data.count < 4 {
                 logger.warning("Received tiny BLE packet (<4 bytes) from \(peripheral.identifier)")
                 return
@@ -590,6 +595,12 @@ extension BLECentralManager: CBPeripheralDelegate {
 
             let totalFrags = Int(data[0]) | (Int(data[1]) << 8)
             let fragIndex = Int(data[2]) | (Int(data[3]) << 8)
+
+            guard totalFrags > 0, totalFrags <= 2048, fragIndex >= 0, fragIndex < totalFrags else {
+                logger.warning("Invalid BLE fragment parameters (index \(fragIndex) of \(totalFrags)) from \(peripheral.identifier)")
+                return
+            }
+
             let payload = data.subdata(in: 4..<data.count)
 
             let peripheralID = peripheral.identifier
