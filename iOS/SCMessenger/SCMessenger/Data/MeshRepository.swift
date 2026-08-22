@@ -1835,6 +1835,10 @@ final class MeshRepository {
         let isChatEvent = messageKind == "text" || messageKind.isEmpty
 
         let existingContact = try? contactManager?.get(peerId: canonicalPeerId)
+        if existingContact?.isTombstone == true {
+            logVerbose("Skipping auto-contact creation for user-deleted tombstone peer \(canonicalPeerId)")
+            return
+        }
         let requestPending = isNotificationRequestPending(notes: existingContact?.notes)
         let hasExistingConversation = ((try? historyManager?.conversation(peerId: canonicalPeerId, limit: 1)) ?? []).isEmpty == false
         let notificationSettings = currentNotificationSettings()
@@ -3473,14 +3477,17 @@ final class MeshRepository {
         guard let contactManager = contactManager else {
             throw MeshError.notInitialized("ContactManager not initialized")
         }
-        return try contactManager.list()
+        return try contactManager.list().filter { !$0.isTombstone }
     }
 
     func getContact(peerId: String) throws -> Contact? {
         guard let contactManager = contactManager else {
             throw MeshError.notInitialized("ContactManager not initialized")
         }
-        return try contactManager.get(peerId: peerId)
+        guard let contact = try contactManager.get(peerId: peerId), !contact.isTombstone else {
+            return nil
+        }
+        return contact
     }
 
     func displayNameForPeer(peerId: String) -> String {
@@ -3505,25 +3512,21 @@ final class MeshRepository {
             canonicalPeerId = contact.peerId
         }
 
-        let finalContact: Contact
-        if canonicalPeerId != contact.peerId {
-            finalContact = Contact(
-                peerId: canonicalPeerId,
-                nickname: contact.nickname,
-                localNickname: contact.localNickname,
-                publicKey: contact.publicKey,
-                addedAt: contact.addedAt,
-                lastSeen: contact.lastSeen,
-                notes: contact.notes,
-                lastKnownDeviceId: contact.lastKnownDeviceId,
-                verifiedAt: contact.verifiedAt,
-                isTombstone: contact.isTombstone
-            )
-        } else {
-            finalContact = contact
-        }
+        let finalContact = Contact(
+            peerId: canonicalPeerId,
+            nickname: contact.nickname,
+            localNickname: contact.localNickname,
+            publicKey: contact.publicKey,
+            addedAt: contact.addedAt,
+            lastSeen: contact.lastSeen,
+            notes: contact.notes,
+            lastKnownDeviceId: contact.lastKnownDeviceId,
+            verifiedAt: contact.verifiedAt,
+            isTombstone: false
+        )
 
         try contactManager.add(contact: finalContact)
+        contactManager.flush()
         let routing = parseRoutingHintsFromNotes(finalContact.notes)
         annotateIdentityInLedger(
             routePeerId: routing.libp2pPeerId,
@@ -3539,10 +3542,25 @@ final class MeshRepository {
         guard let contactManager = contactManager else {
             throw MeshError.notInitialized("ContactManager not initialized")
         }
-        try contactManager.remove(peerId: peerId)
-        try? historyManager?.removeConversation(peerId: peerId)
+        let canonicalPeerId = (try? ironCore?.resolveIdentity(anyId: peerId)) ?? peerId
+        let existing = try? contactManager.get(peerId: canonicalPeerId)
+        let tombstone = Contact(
+            peerId: canonicalPeerId,
+            nickname: existing?.nickname,
+            localNickname: existing?.localNickname,
+            publicKey: existing?.publicKey ?? "",
+            addedAt: existing?.addedAt ?? UInt64(Date().timeIntervalSince1970),
+            lastSeen: existing?.lastSeen,
+            notes: "tombstone=true",
+            lastKnownDeviceId: existing?.lastKnownDeviceId,
+            verifiedAt: nil,
+            isTombstone: true
+        )
+        try contactManager.add(contact: tombstone)
+        contactManager.flush()
+        try? historyManager?.removeConversation(peerId: canonicalPeerId)
         checkpointContactPersistence(reason: "contact_removed")
-        logger.info("[OK] Contact removed: \(peerId) and their message history")
+        logger.info("[OK] Contact removed (tombstoned): \(canonicalPeerId) and their message history")
     }
 
     func searchContacts(query: String) throws -> [Contact] {
