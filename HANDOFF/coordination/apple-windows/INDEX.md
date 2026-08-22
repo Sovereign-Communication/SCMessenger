@@ -42,6 +42,7 @@ Polling is read-only: it does not pull, switch, rebase, or clean a checkout.
 | `LOG-EXCHANGE-20260821-001` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `CONFIRMED` | Apple logs extracted; Windows N1 and Android N2 logs requested over SCMessenger. |
 | `5NODE-MATRIX-LOCKIN-20260821-001` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | 5-Node test protocol (N0-N4) locked in; primary SCMessenger CLI synchronization active. |
 | `AWS-NODE-DEPLOY-20260821-001` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Single AWS instance 54.226.67.101 clarified; Windows requested to upgrade cloud node to commit daab8a2b. |
+| `ADV-CAO-CTO-20260821-009` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | iOS v0.5.0 deployed; store-and-forward broadcast fallback enabled; Windows/Android logs requested. |
 | `ADV-CAO-CTO-20260821-001` | `CAO_TO_CTO.md` example only | `001` | `CTO_TO_CAO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 | `ADV-CTO-CAO-20260821-001` | `CTO_TO_CAO.md` example only | `001` | `CAO_TO_CTO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 

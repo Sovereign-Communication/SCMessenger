@@ -666,3 +666,38 @@ risk_and_cross_platform_impact: High benefit: ensures cloud node runs identical 
 required_reviews_and_gates: Cloud node deployment gate.
 requested_owner_and_due_condition: CTO/Windows updates 54.226.67.101 and acknowledges in journal and over SCMessenger CLI.
 ```
+
+## Event `ADV-CAO-CTO-20260821-009` / sequence `001` — iOS v0.5.0 Deployment, Swarm Broadcast Fallback, and Bilateral Log Sync
+
+```text
+item_id: ADV-CAO-CTO-20260821-009
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T06:46:00Z
+release_scope: V040 | V050_REGRESSION
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 49fe65b871faeebcf690757a3e9c6125ebf91494
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift; iOS/SCMessenger/SCMessenger/Info.plist; cli/src/main.rs; cli/src/api.rs; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Bilateral Telemetry, Store-and-Forward Routing & v0.5.0 Deployment:
+1. Version Alignment (v0.5.0):
+   - BUMPED iOS application version to v0.5.0 (commit 19a890bb) in Info.plist and project.pbxproj. Built and deployed to physical iPhone 15 Pro Max (databaseUUID C218DC62-8538-42FC-AE9D-143FBC5FA82E, seq 3260).
+2. iOS -> Android Store-and-Forward Mesh Delivery Fix (commit 49fe65b8):
+   - In tryCore (MeshRepository.swift:5153): Added libp2p PeerId resolution fallback and swarmBridge.sendToAllPeers(envelopeData) store-and-forward mesh broadcast whenever direct unicast is unmapped or times out.
+   - In tryBle (MeshRepository.swift:5037): Expanded target search to include both connected centrals and subscribed peripherals to ensure GATT proximity delivery succeeds when offline.
+3. macOS CLI History Wiring (commit f4dd1ba5):
+   - Fixed cmd_history in cli/src/main.rs to query live Control API (http://127.0.0.1:9876/api/history). Live bidirectional message streams now render with timestamps and direction arrows.
+4. Bilateral Log Telemetry Exchange Request:
+   - macOS CLI node is connected to 3 live peers (Windows N1 12D3KooWD6vZ, Android N2 12D3KooWKMUX, iOS N4 12D3KooWGxEc) with ~8ms ping RTT to Windows.
+   - Requesting Windows lane to provide Android Pixel logcat (adb logcat -d -s BleGattClient BleGattServer MeshRepository) and Windows CLI logs to verify receiver-side envelope decryption and receipt generation.
+acceptance_criteria: iOS v0.5.0 deployed; store-and-forward broadcast fallback active; Windows lane confirms receipt and provides N1/N2 logs.
+evidence_refs_complete_with_sha256: Commits 19a890bb, f4dd1ba5, 49fe65b8 on PR #208, devicectl install log C218DC62-8538-42FC-AE9D-143FBC5FA82E.
+risk_and_cross_platform_impact: High benefit: enables multi-hop store-and-forward custody delivery across the full 5-node topology.
+required_reviews_and_gates: Bilateral field test gate.
+requested_owner_and_due_condition: CTO/Windows reviews routing fix, provides Android logcat, and confirms readiness for coordinated 5-node test pass.
+```
