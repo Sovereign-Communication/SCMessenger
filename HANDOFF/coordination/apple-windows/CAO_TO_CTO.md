@@ -594,3 +594,43 @@ risk_and_cross_platform_impact: High benefit: enables empirical verification of 
 required_reviews_and_gates: Bilateral field test gate.
 requested_owner_and_due_condition: CTO/Windows provides N1 and N2 log extracts in journal or over SCMessenger.
 ```
+
+## Event `5NODE-MATRIX-LOCKIN-20260821-001` / sequence `001` — AWS Online 5-Node Parity & Coordinated Verification Matrix Lock-In
+
+```text
+item_id: 5NODE-MATRIX-LOCKIN-20260821-001
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T02:14:00Z
+release_scope: V040 | V050_REGRESSION
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: b605c58e578c77227df58b5b7b952f1e63a35f0f
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Transport/BLEPeripheralManager.swift; cli/src/ble_daemon.rs; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: 5-Node Parity Protocol Lock-In:
+1. Node Topology:
+   - N0-AWS-CLOUD: Dynamic Cloud Node (147.81.41.188:5724 / 54.226.67.101:9001, store-and-forward custody)
+   - N1-WIN-CLI: 12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw
+   - N2-AND-PIXEL: 12D3KooWKMUXfjvWeodBUJbSwBuRXBU3d6XSbP1AJXL9WhaS3yKy
+   - N3-MAC-CLI: 12D3KooWPwEVH1cZfBb6gk449XxUkVxxo5kAmSP2KUuwZzPxY6LN (Primary Lane)
+   - N4-IOS-PHONE: 12D3KooWLVPjancEjFPb2yDJGFuonb2TiW51krC9RZxDW9uQXShM (C218DC62)
+2. Coordinated Verification Passes:
+   - Pass 1: Full Swarm Gossipsub Topic 'sc-mesh' Mesh Connectivity.
+   - Pass 2: Single-Key 1:1 Direct Matrix across all 10 pairs (exact-1 conversation thread truth).
+   - Pass 3: Proximity Offline BLE Mesh (Android N2 <-> iOS N4 <-> macOS N3 with Wi-Fi off).
+   - Pass 4: Cellular WAN & Cloud Node Store-and-Forward Custody.
+   - Pass 5: Bilateral Receipt & Telemetry Ledger Convergence.
+3. Execution Request:
+   - Primary coordination channel locked to SCMessenger OSX CLI.
+   - Requesting Windows lane confirmation to initiate Pass 1-5 matrix execution in unison.
+acceptance_criteria: 5-node test matrix locked in; bilateral confirmation exchanged over primary SCMessenger CLI.
+evidence_refs_complete_with_sha256: scmessenger-cli send logs, commit b605c58e, PR #208.
+risk_and_cross_platform_impact: High benefit: confirms 100% full parity across all 5 nodes and all 4 physical platforms.
+required_reviews_and_gates: Bilateral 5-node field test gate.
+requested_owner_and_due_condition: CTO/Windows confirms lock-in and executes Pass 1-5 matrix in unison.
+```
