@@ -323,7 +323,7 @@ class ConversationsViewModel @Inject constructor(
         // First check our reactive state if possible, fallback to repository
         val inList = _blockedPeers.value.any { it.peerId == peerId }
         if (inList) return true
-        
+
         return try {
             meshRepository.isBlocked(peerId)
         } catch (e: Exception) {

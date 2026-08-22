@@ -186,7 +186,7 @@ impl ContactManager {
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         let _ = db.remove(peer_id.as_bytes());
-        
+
         let trimmed = peer_id.trim();
         let mut keys_to_remove = Vec::new();
 

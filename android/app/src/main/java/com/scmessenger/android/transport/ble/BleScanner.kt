@@ -521,7 +521,7 @@ class BleScanner(
             Timber.e(e, "Failed to stop BLE scan window")
         }
     }
-    
+
     /**
      * Force restart scanning after a failure with proper backoff.
      * This is called when scan fails and we need to recover.

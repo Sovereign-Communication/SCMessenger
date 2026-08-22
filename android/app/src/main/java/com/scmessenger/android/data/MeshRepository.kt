@@ -1286,7 +1286,7 @@ open class MeshRepository(
                 Timber.w("Network connectivity test: No preferred relays in ledger")
                 return false
             }
-            
+
             ledgerAddresses.any { relay ->
                 try {
                     // Extract IP and port from multiaddr
@@ -1297,10 +1297,10 @@ open class MeshRepository(
                     if (ipIndex < 0 || tcpIndex < 0 || ipIndex + 1 >= parts.size || tcpIndex + 1 >= parts.size) {
                         return@any false
                     }
-                    
+
                     val ip = parts[ipIndex + 1]
                     val port = parts[tcpIndex + 1].toIntOrNull() ?: return@any false
-                    
+
                     val socket = java.net.Socket()
                     socket.connect(java.net.InetSocketAddress(ip, port), 3000)
                     socket.close()
@@ -1637,7 +1637,7 @@ open class MeshRepository(
                                             } catch (e: Exception) {
                                                 null
                                             }
-                                            
+
                                             if (existingContact != null) {
                                                 Timber.i("Contact already exists for public key ${normalizedKey.take(8)}... (peerId=${existingContact.peerId}), skipping auto-creation")
                                                 // Update last seen for existing contact
@@ -1650,7 +1650,7 @@ open class MeshRepository(
                                                     Timber.w("Using fallback peerId for contact creation: ${e.message}")
                                                     PeerIdValidator.normalize(peerId)
                                                 }
-                                                
+
                                                 Timber.i("Auto-creating contact for newly discovered peer: $peerId -> $canonicalId (extracted key: ${normalizedKey.take(8)}...)")
                                                 repoScope.launch {
                                                     upsertFederatedContact(
@@ -3298,7 +3298,7 @@ open class MeshRepository(
             .mapNotNull { candidate ->
                 val observation = bleRouteObservations[candidate] ?: return@mapNotNull null
                 val ageMs = now - observation.lastSeenMs
-                
+
                 // Extended freshness check for TRANSPORT-001: BLE hint staleness fix
                 // 1. Within fresh TTL: use normally
                 // 2. Within stale grace period: use for fallback (slightly stale but better than nothing)
@@ -3448,7 +3448,7 @@ open class MeshRepository(
             val nickname = info.nickname?.trim().orEmpty()
             // P0: Cache identity fields for instant UI load on next startup
             cacheIdentityFields(info)
-            
+
             if (nickname.isNotEmpty()) {
                 // P2 (Bug 4): Latch the lazy-path persistIdentityBackup so a flurry of
                 // post-startup ensureLocalIdentityFederation() calls (each touching
@@ -3742,13 +3742,13 @@ open class MeshRepository(
 
         kotlin.runCatching { meshService?.stop() }
             .onFailure { Timber.w(it, "Failed to stop Rust mesh service") }
-        
+
         identitySyncSentPeers.clear()
         historySyncSentPeers.clear()
         identityEmissionCache.clear()
         connectedEmissionCache.clear()
         mdnsLanPeers.clear()
-        
+
         // Clear discovered peers from UI on service stop
         _discoveredPeers.value = emptyMap()
         Timber.i("Cleared all discovered peers on mesh service stop")
@@ -3898,10 +3898,10 @@ open class MeshRepository(
         if (id.isBlank()) {
             throw IllegalArgumentException("ID cannot be blank for operation: $operation")
         }
-        
+
         val trimmed = id.trim()
         val resolvedCanonicalId = canonicalContactId(trimmed)
-        
+
         // Additional validation: Check if this ID maps to multiple contacts (ambiguity check)
         try {
             val contacts = contactManager?.list().orEmpty()
@@ -3909,7 +3909,7 @@ open class MeshRepository(
                 val contactId = canonicalContactId(it.peerId)
                 PeerIdValidator.isSame(contactId, resolvedCanonicalId)
             }
-            
+
             if (matchingContacts.size > 1) {
                 Timber.w("ID_AMBIGUITY: Operation '$operation' on ID '$trimmed' matches ${matchingContacts.size} contacts:")
                 matchingContacts.forEach { contact ->
@@ -3920,7 +3920,7 @@ open class MeshRepository(
         } catch (e: Exception) {
             Timber.w("ID_VALIDATION: Could not check contact ambiguity for '$trimmed': ${e.message}")
         }
-        
+
         return resolvedCanonicalId
     }
 
@@ -3961,7 +3961,7 @@ open class MeshRepository(
         Timber.d("ID_RESOLUTION: Fallback to normalized input: ${normalizedFallback.take(16)}...")
         return normalizedFallback
     }
-    
+
     /**
      * Legacy canonicalId function - kept for backward compatibility.
      * @deprecated Use canonicalContactId() for new code.
@@ -4201,7 +4201,7 @@ open class MeshRepository(
         } catch (e: Exception) {
             Timber.w("Failed to remove conversation history for $canonical: ${e.message}")
         }
-        
+
         // Clear in-memory caches to prevent stale contact from showing (CONTACT-STALE-001)
         // 1. Remove from discovered peers cache
         _discoveredPeers.update { current ->
@@ -4211,16 +4211,16 @@ open class MeshRepository(
                     PeerIdValidator.isSame(key, canonical) ||
                     PeerIdValidator.isSame(info.peerId, canonical)
             }.keys
-            
+
             if (keysToRemove.isEmpty()) current else current - keysToRemove
         }
-        
+
         // 2. Remove from BLE route observations cache
         val keysToRemove = bleRouteObservations.keys.filter { key ->
             key == canonical || PeerIdValidator.isSame(key, canonical)
         }
         keysToRemove.forEach { bleRouteObservations.remove(it) }
-        
+
         Timber.d("Contact removed: $canonical and their message history, caches cleared, tombstoned")
     }
 
@@ -4762,22 +4762,22 @@ open class MeshRepository(
             val contact = contactManager?.get(routingPeerId)
             if (publicKey == null && contact != null && !contact.publicKey.isNullOrEmpty()) {
                 publicKey = contact.publicKey.trim()
-                
+
                 // CRITICAL: Validate public key length
                 if (publicKey.length != 64) {
                     Timber.e("SEND_MSG_BUG: Contact has invalid public key length: ${publicKey.length} (expected 64)")
                     Timber.e("SEND_MSG_BUG: Contact peer_id: ${contact.peerId}")
                     Timber.e("SEND_MSG_BUG: Routing peer_id: $routingPeerId")
                     Timber.e("SEND_MSG_BUG: Public key value: '$publicKey'")
-                    
+
                     // Try to recover from discovered peers
                     val discoveredPeer = _discoveredPeers.value.entries.find {
                         PeerIdValidator.isSame(it.key, routingPeerId) ||
                         PeerIdValidator.isSame(it.key, contact.peerId) ||
                         (it.value.publicKey == contact.publicKey)
                     }?.value
-                    
-                    if (discoveredPeer != null && !discoveredPeer.publicKey.isNullOrEmpty() && 
+
+                    if (discoveredPeer != null && !discoveredPeer.publicKey.isNullOrEmpty() &&
                         discoveredPeer.publicKey.trim().length == 64) {
                         publicKey = discoveredPeer.publicKey.trim()
                         Timber.w("SEND_MSG_RECOVER: Using public key from discovered peers: ${publicKey?.take(8)}")
@@ -4920,7 +4920,7 @@ open class MeshRepository(
                         Timber.e("Failed to prepare message: IronCore not initialized")
                         return@withContext
                     }
-                
+
                 coreEnqueued = true
 
                 val realMessageId = prepared.messageId.trim()
@@ -4951,7 +4951,7 @@ open class MeshRepository(
                         historyManager?.flush()
                         repoScope.launch { _messageUpdates.emit(reconciledRecord) }
                         Timber.d("SEND_MSG: Reconciled message ID: $initialMessageId -> $realMessageId")
-                        
+
                         // AND-MSG-DISAPPEAR-001: Verify message was actually stored
                         val storedMessage = try {
                             historyManager?.get(realMessageId)
@@ -5046,7 +5046,7 @@ open class MeshRepository(
                 Timber.i("Message sent (encrypted) to $normalizedPeerId (id=$realMessageId)")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to send message to $normalizedPeerId")
-                
+
                 if (coreEnqueued) {
                     Timber.i("Suppressing exception because message was successfully enqueued in core outbox: ${e.message}")
                     return@withContext
@@ -6711,7 +6711,7 @@ open class MeshRepository(
                         )
                         return@attemptDelivery false
                     }
-                    
+
                     val liveRouteHints = getDialHintsForRoutePeer(corePeerId)
                     val dialCandidates = buildDialCandidatesForPeer(
                         routePeerId = corePeerId,
@@ -6723,14 +6723,14 @@ open class MeshRepository(
                         val connected = awaitPeerConnection(corePeerId, timeoutMs = 2000L)
                         Timber.d("[ROUTE] Transport: route=$corePeerId connected=$connected timeout=2000ms")
                     }
-                    
+
                     val directError = bridge.sendMessageStatus(
                         corePeerId,
                         encryptedData,
                         recipientIdentityId,
                         intendedDeviceId
                     )
-                    
+
                     if (directError == null) {
                         logDeliveryAttempt(
                             messageId = traceMessageId,
@@ -6876,7 +6876,7 @@ open class MeshRepository(
                 error = if (localFallback.acked) null else "legacy_fallback_failed"
             )
         }
-        
+
         val localAcked = smartResult.success
 
         // A transport result is authoritative for this attempt. Do not let a
@@ -8067,10 +8067,10 @@ open class MeshRepository(
     private fun mergeNotes(existing: String?, incoming: String?): String? {
         if (existing.isNullOrBlank()) return incoming
         if (incoming.isNullOrBlank()) return existing
-        
+
         val existingComponents = existing.split(';', '\n').map { it.trim() }.filter { it.isNotEmpty() }
         val incomingComponents = incoming.split(';', '\n').map { it.trim() }.filter { it.isNotEmpty() }
-        
+
         // Build a map of key:value pairs, preferring existing values
         val merged = mutableMapOf<String, String>()
         for (component in existingComponents) {
@@ -8089,7 +8089,7 @@ open class MeshRepository(
                 merged[key] = component
             }
         }
-        
+
         return merged.values.filter { it.isNotEmpty() }.joinToString(";").ifEmpty { null }
     }
 
@@ -8098,13 +8098,13 @@ open class MeshRepository(
             Timber.d("Invalid libp2p peer ID format: $libp2pPeerId")
             return null
         }
-        
+
         Timber.d("resolveTransportIdentity called for: $libp2pPeerId")
-        
+
         // Relay peers should not have user-visible transport identities
         val isRelay = isBootstrapRelayPeer(libp2pPeerId)
         Timber.d("  isBootstrapRelayPeer check: $isRelay")
-        
+
         if (isRelay) {
             Timber.d("  → Filtering relay peer from transport identity resolution")
             return null
@@ -8139,7 +8139,7 @@ open class MeshRepository(
             contact.peerId == libp2pPeerId || parseRoutingHints(contact.notes).libp2pPeerId == libp2pPeerId
         }
         val canonicalContact = routeLinked ?: keyMatches.firstOrNull()
-        
+
         if (canonicalContact == null) {
             if (isBootstrapRelayPeerFromKey(normalizedKey)) {
                 Timber.d("No existing contact for transport key ${normalizedKey.take(8)}..., treating as transient relay")
@@ -8590,10 +8590,10 @@ open class MeshRepository(
             }
             .mapNotNull { info ->
                 // Prefer libp2pPeerId for routing if available
-                val routeId = info.libp2pPeerId?.trim()?.takeIf { 
+                val routeId = info.libp2pPeerId?.trim()?.takeIf {
                     it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it)
-                } ?: info.peerId.trim().takeIf { 
-                    it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) 
+                } ?: info.peerId.trim().takeIf {
+                    it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it)
                 }
                 routeId
             }
@@ -9710,13 +9710,13 @@ open class MeshRepository(
         } else {
             var listeners = normalizeOutboundListenerHints(listenerAddresses).toMutableList()
             val externalAddresses = normalizeExternalAddressHints(getExternalAddresses())
-            
+
             if (localIp != null) {
                 listeners = listeners.map { addr ->
                     if (addr.contains("0.0.0.0")) addr.replace("0.0.0.0", localIp) else addr
                 }.toMutableList()
             }
-            
+
             payload.put("listeners", org.json.JSONArray(listeners))
             payload.put("external_addresses", org.json.JSONArray(externalAddresses))
             payload.put("connection_hints", org.json.JSONArray((listeners + externalAddresses).distinct()))
