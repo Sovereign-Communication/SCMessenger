@@ -17,6 +17,12 @@ class SmartTransportRouter {
 
     companion object {
         private const val TAG = "SmartTransportRouter"
+        // A timeout here cancels the preferred attempt mid-dial and then
+        // relaunches the same transport inside the race below. Too short a
+        // value turns every LAN send into a cancel-and-retry cycle, which is
+        // how a working Wi-Fi path stops flowing entirely. 500ms is the value
+        // LAN delivery was last verified against; do not lower it without a
+        // measurement showing the dial completes faster.
         private const val PREFERRED_TRANSPORT_TIMEOUT_MS = 500L
         private const val DEDUP_CACHE_TTL_MS = 300_000L // 5 minutes
     }
@@ -336,10 +342,8 @@ class SmartTransportRouter {
             availableTransports.add(TransportAttempt(TransportType.WIFI_DIRECT, wifiTarget) { tryWifi(wifiTarget) })
         }
 
-        val bleTarget = blePeerId?.trim()?.takeIf { it.isNotEmpty() }
-        if (bleTarget != null) {
-            availableTransports.add(TransportAttempt(TransportType.BLE, bleTarget) { tryBle(bleTarget) })
-        }
+        val bleTarget = blePeerId?.trim().orEmpty()
+        availableTransports.add(TransportAttempt(TransportType.BLE, bleTarget) { tryBle(bleTarget) })
 
         val tcpMdnsTarget = tcpMdnsPeerId?.trim()?.takeIf { it.isNotEmpty() }
         if (tcpMdnsTarget != null) {

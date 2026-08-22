@@ -220,10 +220,12 @@ class ConversationsViewModel @Inject constructor(
      * Compare two peer IDs canonically (checks direct equality and canonical contact identity).
      */
     fun isSamePeer(id1: String, id2: String): Boolean {
-        if (id1.equals(id2, ignoreCase = true)) return true
+        if (id1.equals(id2, ignoreCase = true) || PeerIdValidator.isSame(id1, id2)) return true
         val c1 = meshRepository.canonicalContactId(id1)
         val c2 = meshRepository.canonicalContactId(id2)
-        return c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)
+        return (c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)) ||
+               (c1.isNotEmpty() && (c1.equals(id2, ignoreCase = true) || PeerIdValidator.isSame(c1, id2))) ||
+               (c2.isNotEmpty() && (c2.equals(id1, ignoreCase = true) || PeerIdValidator.isSame(c2, id1)))
     }
 
     /**

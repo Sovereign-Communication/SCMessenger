@@ -364,9 +364,18 @@ class BleGattClient(
                     deviceAddress,
                     targetAddress
                 )
-            } else {
-                Timber.w("Not connected to %s, requesting reconnect before send", deviceAddress)
+            } else if (deviceAddress.isNotBlank()) {
+                Timber.w("Not connected to %s, initiating connection and waiting for CONNECTED...", deviceAddress)
                 connect(deviceAddress)
+                val connected = withTimeoutOrNull(1500L) {
+                    while (connectionStates[deviceAddress] != ConnectionState.CONNECTED) {
+                        delay(50)
+                    }
+                    true
+                } ?: false
+                if (!connected) return false
+                gatt = activeConnections[deviceAddress]
+            } else {
                 return false
             }
         }
@@ -375,13 +384,19 @@ class BleGattClient(
             return false
         }
 
-        val state = connectionStates[targetAddress]
+        var state = connectionStates[targetAddress]
         if (state != ConnectionState.CONNECTED) {
-            Timber.w("Cannot send data - not in CONNECTED state for %s: %s", targetAddress, state)
-            if (state != ConnectionState.CONNECTING) {
+            Timber.w("Cannot send data - waiting for CONNECTED state for %s (current: %s)", targetAddress, state)
+            if (state != ConnectionState.CONNECTING && state != ConnectionState.DISCOVERING_SERVICES) {
                 connect(targetAddress)
             }
-            return false
+            val connected = withTimeoutOrNull(1500L) {
+                while (connectionStates[targetAddress] != ConnectionState.CONNECTED) {
+                    delay(50)
+                }
+                true
+            } ?: false
+            if (!connected) return false
         }
 
         val service = activeGatt.getService(BleGattServer.SERVICE_UUID)

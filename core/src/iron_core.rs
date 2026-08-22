@@ -2085,6 +2085,21 @@ impl IronCore {
                 }
             }
 
+            // Also check ledger manager identities (wire-learned & seed entries)
+            for entry in self.ledger_manager.dialable_addresses().into_iter().chain(self.ledger_manager.seed_addresses(64)) {
+                if let Some(ref pk_hex) = entry.public_key {
+                    let pk_clean = pk_hex.to_lowercase();
+                    if pk_clean == trimmed {
+                        return Ok(pk_clean);
+                    }
+                    if let Ok(pk_bytes) = hex::decode(&pk_clean) {
+                        if hex::encode(blake3::hash(&pk_bytes).as_bytes()) == trimmed {
+                            return Ok(pk_clean);
+                        }
+                    }
+                }
+            }
+
             // No stored record resolves it. Only now fall back to the heuristic,
             // which is correct for a genuine public key of a peer we have never
             // seen, and is the best available answer for anything else.
