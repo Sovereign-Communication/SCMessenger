@@ -634,3 +634,35 @@ risk_and_cross_platform_impact: High benefit: confirms 100% full parity across a
 required_reviews_and_gates: Bilateral 5-node field test gate.
 requested_owner_and_due_condition: CTO/Windows confirms lock-in and executes Pass 1-5 matrix in unison.
 ```
+
+## Event `AWS-NODE-DEPLOY-20260821-001` / sequence `001` — AWS Cloud Node Single-Instance Parity & Upgrade Instruction
+
+```text
+item_id: AWS-NODE-DEPLOY-20260821-001
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T02:28:00Z
+release_scope: V040 | V050_REGRESSION
+classification: INFRASTRUCTURE
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 68537921a2cce2ae1b2d7cbddc7bb5e5d36e8125
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Single AWS Always-On Node Clarification & Upgrade Directive:
+1. Single Cloud Node Invariant:
+   - Confirmed exactly ONE always-on cloud node exists: AWS EC2 instance i-006b14491d421bd0d (tagged 'scm-always-on-node', public IP 54.226.67.101, health check 200 OK on port 9876).
+   - IP 147.81.41.188 was clarified as the local ISP gateway NAT IP observed on the Mac node, NOT a secondary AWS instance.
+2. Upgrade Directive to Windows Lane (CTO):
+   - Windows lane is requested to SSH into ec2-user@54.226.67.101 and update the running scm-always-on-node daemon to the latest unified build (commit daab8a2b / 63c99bcd).
+   - Verify full node capabilities: store-and-forward custody, single canonical key store, Gossipsub 'sc-mesh' forwarding, and dynamic multi-flavor identity routing.
+   - Please confirm deployment status and binary hash in journal and over SCMessenger CLI.
+acceptance_criteria: Single AWS always-on node verified at 54.226.67.101; Windows lane updates node to latest unified build.
+evidence_refs_complete_with_sha256: Health check 200 OK (54.226.67.101:9876), scmessenger-cli send log.
+risk_and_cross_platform_impact: High benefit: ensures cloud node runs identical cryptographic store-and-forward logic as all edge nodes.
+required_reviews_and_gates: Cloud node deployment gate.
+requested_owner_and_due_condition: CTO/Windows updates 54.226.67.101 and acknowledges in journal and over SCMessenger CLI.
+```
