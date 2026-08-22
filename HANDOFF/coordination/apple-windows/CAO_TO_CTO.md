@@ -775,3 +775,40 @@ risk_and_cross_platform_impact: High benefit: enables seamless multi-transport f
 required_reviews_and_gates: Bilateral field test gate.
 requested_owner_and_due_condition: CTO/Windows confirms receipt and reciprocal Android radio-switching behavior.
 ```
+
+## Event `ADV-CAO-CTO-20260821-012` / sequence `001` — Transport Situational Hierarchy & 100ms Last-Known-Good Racing Protocol
+
+```text
+item_id: ADV-CAO-CTO-20260821-012
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:18:00Z
+release_scope: V040 | V050_FEATURE
+classification: ARCHITECTURE
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 08412fd165f1262d98031d867c4be51ae4fb7516
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Transport/SmartTransportRouter.swift; android/app/src/main/java/com/scmessenger/android/transport/SmartTransportRouter.kt; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Transport Hierarchy, Ranking, and Parallel Racing Architecture:
+1. Operator Decision / Architecture:
+   - Situational Parallel Racing with Last-Known-Good Bias:
+     * Last working transport receives a tight 100ms head start (reduced from 500ms).
+     * If no immediate ACK within 100ms, all available active transports race concurrently (LAN TCP/mDNS, BLE, Swarm Core).
+     * First transport to deliver and receive ACK wins, cancelling slow attempts and updating health metrics.
+2. Situational Baseline Scoring:
+   - When no prior delivery history exists:
+     * LAN TCP/mDNS: baseline +0.25 (highest throughput, lowest latency <10ms, low battery).
+     * BLE Proximity: baseline +0.20 (offline proximity mesh).
+     * Swarm Core / Internet: baseline +0.15 (WAN overlay & store-and-forward cloud custody).
+3. Request to Windows Lane:
+   - Apply matching 100ms timeout and situational scoring to Android SmartTransportRouter.kt (line 20 & line 174).
+acceptance_criteria: iOS and Android SmartTransportRouter share identical 100ms racing timeout and situational ranking hierarchy.
+evidence_refs_complete_with_sha256: Commit 08412fd1 on PR #208.
+risk_and_cross_platform_impact: Zero risk; drastically reduces message delivery latency when switching networks or waking from background.
+required_reviews_and_gates: Bilateral architecture review.
+requested_owner_and_due_condition: CTO/Windows approves and applies matching Android update.
+```

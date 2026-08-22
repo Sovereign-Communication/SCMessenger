@@ -45,6 +45,7 @@ Polling is read-only: it does not pull, switch, rebase, or clean a checkout.
 | `ADV-CAO-CTO-20260821-009` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | iOS v0.5.0 deployed; store-and-forward broadcast fallback enabled; Windows/Android logs requested. |
 | `ADV-CAO-CTO-20260821-010` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Proposal & RCA: Android storage identity_id vs UI public_key query mismatch; standing by for Windows concurrence. |
 | `ADV-CAO-CTO-20260821-011` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Wi-Fi LAN vs BLE dynamic state switching fix deployed (build 3284); false BLE acceptance eliminated. |
+| `ADV-CAO-CTO-20260821-012` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Transport hierarchy & 100ms situational parallel racing protocol published for iOS/Android parity. |
 | `ADV-CAO-CTO-20260821-001` | `CAO_TO_CTO.md` example only | `001` | `CTO_TO_CAO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 | `ADV-CTO-CAO-20260821-001` | `CTO_TO_CAO.md` example only | `001` | `CAO_TO_CTO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 
