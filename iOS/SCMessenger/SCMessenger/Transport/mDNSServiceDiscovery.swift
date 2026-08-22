@@ -244,6 +244,11 @@ extension mDNSServiceDiscovery: NetServiceDelegate {
             return
         }
 
+        guard !host.hasPrefix("169.254."), !host.lowercased().hasPrefix("fe80:") else {
+            logger.debug("Ignoring link-local mDNS result for \(sender.name) at \(host)")
+            return
+        }
+
         guard let peerId = resolvedPeerId else {
             logger.warning("Ignoring mDNS result without a valid libp2p peer ID: \(sender.name)")
             return

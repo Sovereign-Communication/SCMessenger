@@ -31,6 +31,7 @@ final class BLEPeripheralManager: NSObject {
 
     // Subscribed centrals
     private var subscribedCentrals: [CBCentral] = []
+    private var subscribedCharacteristicUuids: [UUID: CBUUID] = [:]
 
     // Privacy rotation
     private var rotationInterval: TimeInterval = MeshBLEConstants.privacyRotationInterval
@@ -158,6 +159,9 @@ final class BLEPeripheralManager: NSObject {
     }
 
     func subscribedCentralIds() -> [String] {
+        guard peripheralManager.state == .poweredOn else {
+            return []
+        }
         if !Thread.isMainThread {
             // Return empty array for non-main-thread calls to avoid deadlock
             // Callers should invoke this from main thread for accurate results
@@ -294,8 +298,18 @@ final class BLEPeripheralManager: NSObject {
             return false
         }
         
-        guard let messageCharacteristic else {
-            logger.warning("sendDataToCentral: message characteristic unavailable")
+        let notifyChar: CBMutableCharacteristic? = {
+            if let uuid = subscribedCharacteristicUuids[central.identifier] {
+                if uuid == MeshBLEConstants.messageCharUUID {
+                    return messageCharacteristic
+                } else if uuid == MeshBLEConstants.syncCharUUID {
+                    return syncCharacteristic
+                }
+            }
+            return messageCharacteristic ?? syncCharacteristic
+        }()
+        guard let notifyChar else {
+            logger.warning("sendDataToCentral: notify characteristic unavailable")
             return false
         }
         guard subscribedCentrals.contains(where: { $0.identifier == central.identifier }) else {
@@ -317,21 +331,17 @@ final class BLEPeripheralManager: NSObject {
                 pendingNotifications.removeAll(where: { $0.central.identifier == central.identifier })
                 return accepted
             }
-            // IOS-CRASH-001: Guard against SIGTRAP when CBPeripheralManager is
+            // Guard against transmission when CBPeripheralManager is
             // not in .poweredOn state (e.g. transitioning after BT toggle).
             guard self.peripheralManager.state == .poweredOn else {
-                self.logger.warning("sendDataToCentral: peripheralManager not poweredOn (\(self.peripheralManager.state.rawValue)), buffering fragment")
-                self.pendingNotifications.append((central: central, data: fragment))
-                accepted = true
-                continue
+                self.logger.warning("sendDataToCentral: peripheralManager not poweredOn (\(self.peripheralManager.state.rawValue))")
+                return false
             }
-            let success = peripheralManager.updateValue(fragment, for: messageCharacteristic, onSubscribedCentrals: [central])
+            let success = peripheralManager.updateValue(fragment, for: notifyChar, onSubscribedCentrals: [central])
             if !success {
-                logger.warning("Failed to send fragment, buffering")
+                logger.warning("Failed to send fragment via updateValue, buffering")
                 appendRepositoryDiagnostic("ble_tx_buffer fragment to=\(central.identifier.uuidString.prefix(8))")
                 pendingNotifications.append((central: central, data: fragment))
-                // Buffered notifications are still tied to an active subscribed central.
-                accepted = true
             } else {
                 accepted = true
             }
@@ -391,7 +401,7 @@ final class BLEPeripheralManager: NSObject {
 
         syncCharacteristic = CBMutableCharacteristic(
             type: MeshBLEConstants.syncCharUUID,
-            properties: [.read, .write],
+            properties: [.read, .write, .notify],
             value: nil,
             permissions: [.readable, .writeable]
         )
@@ -473,6 +483,8 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
             }
         case .poweredOff, .unauthorized, .unsupported:
             stopAdvertising()
+            subscribedCentrals.removeAll()
+            pendingNotifications.removeAll()
         default:
             break
         }
@@ -537,6 +549,12 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
         let totalFrags = Int(data[0]) | (Int(data[1]) << 8)
         let fragIndex = Int(data[2]) | (Int(data[3]) << 8)
+
+        guard totalFrags > 0, totalFrags <= 2048, fragIndex >= 0, fragIndex < totalFrags else {
+            logger.warning("Invalid BLE fragment parameters (index \(fragIndex) of \(totalFrags)) from \(centralId)")
+            return
+        }
+
         let payload = data.subdata(in: 4..<data.count)
 
         if fragIndex == 0 {
@@ -600,7 +618,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier.uuidString) subscribed to \(characteristic.uuid.shortUUID)")
-        // Ensure we only record subscription for the message sync characteristic (or both)
+        subscribedCharacteristicUuids[central.identifier] = characteristic.uuid
         if characteristic.uuid == MeshBLEConstants.messageCharUUID {
             logger.info("==> ANDROID CENTRAL \(central.identifier.uuidString) IS NOW SUBSCRIBED TO MESSAGE CHAR! This gives us the target to send data back over!")
         }
@@ -612,6 +630,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier) unsubscribed from \(characteristic.uuid.shortUUID)")
+        subscribedCharacteristicUuids.removeValue(forKey: central.identifier)
         subscribedCentrals.removeAll(where: { $0.identifier == central.identifier })
         pendingNotifications.removeAll(where: { $0.central.identifier == central.identifier })
         
@@ -635,19 +654,29 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
     }
 
     private func processPendingNotifications() {
-        guard let messageChar = messageCharacteristic else { return }
         guard peripheralManager.state == .poweredOn else {
             logger.debug("Skipping pending notification flush: peripheralManager not poweredOn")
             return
         }
         while !self.pendingNotifications.isEmpty {
             let next = self.pendingNotifications[0]
-            guard self.subscribedCentrals.contains(where: { $0.identifier == next.central.identifier }) else {
+            let notifyChar: CBMutableCharacteristic? = {
+                if let uuid = subscribedCharacteristicUuids[next.central.identifier] {
+                    if uuid == MeshBLEConstants.messageCharUUID {
+                        return messageCharacteristic
+                    } else if uuid == MeshBLEConstants.syncCharUUID {
+                        return syncCharacteristic
+                    }
+                }
+                return messageCharacteristic ?? syncCharacteristic
+            }()
+            guard self.subscribedCentrals.contains(where: { $0.identifier == next.central.identifier }),
+                  let targetChar = notifyChar else {
                 self.logger.debug("Dropping buffered notification for unsubscribed central \(next.central.identifier)")
                 self.pendingNotifications.removeFirst()
                 continue
             }
-            let success = self.peripheralManager.updateValue(next.data, for: messageChar, onSubscribedCentrals: [next.central])
+            let success = self.peripheralManager.updateValue(next.data, for: targetChar, onSubscribedCentrals: [next.central])
             if success {
                 self.pendingNotifications.removeFirst()
                 self.logger.debug("Processed buffered notification for \(next.central.identifier)")

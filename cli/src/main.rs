@@ -1619,6 +1619,35 @@ async fn cmd_history(
     search_query: Option<String>,
     limit: usize,
 ) -> Result<()> {
+    if api::is_api_available().await && search_query.is_none() {
+        if let Ok(messages) = api::get_history_via_api(peer_filter.clone(), Some(limit)).await {
+            if messages.is_empty() {
+                println!("{}", "No messages found.".dimmed());
+                return Ok(());
+            }
+
+            println!("{} ({} messages)", "Message History".bold(), messages.len());
+            println!();
+
+            for msg in messages {
+                let direction = if msg.direction == "sent" || msg.direction == "Sent" {
+                    "→".bright_green()
+                } else {
+                    "←".bright_blue()
+                };
+
+                let time = format_timestamp(msg.timestamp).dimmed();
+                let peer = msg.peer_id;
+
+                println!("{} {} [{}]", direction, peer.bright_cyan(), time);
+                println!("   {}", msg.content);
+                println!();
+            }
+
+            return Ok(());
+        }
+    }
+
     let data_dir = config::Config::data_dir()?;
     let storage_path = data_dir.join("storage");
     let core = IronCore::with_storage(path_to_string(&storage_path)?);

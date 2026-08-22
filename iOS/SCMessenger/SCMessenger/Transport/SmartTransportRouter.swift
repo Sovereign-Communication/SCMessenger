@@ -75,8 +75,8 @@ final class SmartTransportRouter {
     private var messageDedupCache: [String: MessageDedupEntry] = [:]
     private let dedupCacheTtl: TimeInterval = 300 // 5 minutes
     
-    // Timeout for "preferred" transport before racing all
-    private let preferredTransportTimeoutMs: UInt64 = 500
+    // Timeout for "preferred" transport head start before racing all in parallel
+    private let preferredTransportTimeoutMs: UInt64 = 100
     
     // Last successful transport per peer (for "previously used/good path")
     private var lastSuccessfulTransport: [String: TransportType] = [:]
@@ -140,15 +140,23 @@ final class SmartTransportRouter {
             }
         }
         
-        // Otherwise, find the transport with the highest score
+        // Otherwise, find the transport with the highest score + situational default bias
         let allTransports: [TransportType] = TransportType.allCases
         var bestTransport: TransportType?
         var bestScore: Double = -1
         
         for transport in allTransports {
             let health: TransportHealth = getHealth(peerId: peerId, transport: transport)
-            if health.score > bestScore {
-                bestScore = health.score
+            let situationalDefault: Double = {
+                switch transport {
+                case .tcpMdns, .multipeer: return 0.25 // High throughput local LAN
+                case .ble: return 0.20                 // Low power proximity
+                case .internet: return 0.15            // Cloud / wide area
+                }
+            }()
+            let effectiveScore = health.score + situationalDefault
+            if effectiveScore > bestScore {
+                bestScore = effectiveScore
                 bestTransport = transport
             }
         }
@@ -252,16 +260,18 @@ final class SmartTransportRouter {
             availableTransports.append((.multipeer, multipeerTarget, { await tryMultipeer(multipeerTarget) }))
         }
         
-        if let bleTarget = blePeerId?.trimmingCharacters(in: .whitespacesAndNewlines), !bleTarget.isEmpty {
-            availableTransports.append((.ble, bleTarget, { await tryBle(bleTarget) }))
-        }
+        // BLE is always a viable proximity transport candidate
+        let effectiveBleTarget = blePeerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        availableTransports.append((.ble, effectiveBleTarget, { await tryBle(effectiveBleTarget) }))
         
         if let tcpMdnsTarget = tcpMdnsPeerId?.trimmingCharacters(in: .whitespacesAndNewlines), !tcpMdnsTarget.isEmpty {
             availableTransports.append((.tcpMdns, tcpMdnsTarget, { await tryTcpMdns(tcpMdnsTarget) }))
         }
         
-        if let internetTarget = routePeerCandidates.first?.trimmingCharacters(in: .whitespacesAndNewlines), !internetTarget.isEmpty {
-            availableTransports.append((.internet, internetTarget, { await tryCore(internetTarget) }))
+        // Internet/Core relay is always a viable network transport candidate
+        let effectiveInternetTarget = routePeerCandidates.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? peerId
+        if !effectiveInternetTarget.isEmpty {
+            availableTransports.append((.internet, effectiveInternetTarget, { await tryCore(effectiveInternetTarget) }))
         }
         
         guard !availableTransports.isEmpty else {
