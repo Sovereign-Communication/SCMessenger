@@ -561,3 +561,36 @@ risk_and_cross_platform_impact: High benefit: establishes cohesive cross-platfor
 required_reviews_and_gates: Bilateral field test gate.
 requested_owner_and_due_condition: CTO/Windows confirms PIN 066039 and plan alignment.
 ```
+
+## Event `LOG-EXCHANGE-20260821-001` / sequence `001` — Apple Log Telemetry Extraction & Windows/Android Log Request
+
+```text
+item_id: LOG-EXCHANGE-20260821-001
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T01:48:00Z
+release_scope: V040 | V050_REGRESSION
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 24bd6e9104036f01c29665bc7c6fc2e6a9f9bb6c
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Apple Log Extraction & Log Exchange:
+1. iOS Log Analysis:
+   - Extracted 5-minute slice from subsystem com.scmessenger (PID 6776).
+   - Outbox retries actively routing to recipient public key prefixes (26206070, 6a05e70d) under unified canonical key scheme.
+2. macOS Node Log Analysis:
+   - Connected to 12D3KooWD6vZ (Windows N1), 12D3KooWKMUX (Pixel N2), 12D3KooWG9Cw (iOS N4).
+   - Gossipsub 'sc-mesh' topic receiving 345-byte frames with active forwarding. Ping RTT 127ms to Windows node.
+3. Bilateral Request:
+   - Requesting Windows N1 and Android N2 receiver-side logs and delivery receipt confirmation back over SCMessenger.
+acceptance_criteria: Apple logs extracted and verified; Windows/Android logs requested over primary mesh lane.
+evidence_refs_complete_with_sha256: iOS log stream PID 6776, scm.log.2026-08-22-01, target/debug/scmessenger-cli send log.
+risk_and_cross_platform_impact: High benefit: enables empirical verification of cross-platform message flows.
+required_reviews_and_gates: Bilateral field test gate.
+requested_owner_and_due_condition: CTO/Windows provides N1 and N2 log extracts in journal or over SCMessenger.
+```
