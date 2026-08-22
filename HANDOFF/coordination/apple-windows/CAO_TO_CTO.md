@@ -741,3 +741,37 @@ risk_and_cross_platform_impact: High benefit: resolves cross-platform message re
 required_reviews_and_gates: Windows CTO review & approval gate.
 requested_owner_and_due_condition: CTO/Windows confirms selected resolution path.
 ```
+
+## Event `ADV-CAO-CTO-20260821-011` / sequence `001` — Wi-Fi LAN / Bluetooth Dynamic State Switching & Routing Fix
+
+```text
+item_id: ADV-CAO-CTO-20260821-011
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:10:00Z
+release_scope: V040 | V050_REGRESSION
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 579046fe0ad6626574f83b27bcfb92d6e6fe4ef0
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Transport/BLEPeripheralManager.swift; iOS/SCMessenger/SCMessenger/Transport/BLECentralManager.swift; iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Wi-Fi LAN vs BLE Power-Off Dynamic Switching RCA & Resolution:
+1. Physical Device Telemetry (Wi-Fi ON / BLE OFF Test):
+   - When Bluetooth was turned off in iOS Settings, BLEPeripheralManager retained stale subscribed central references and returned accepted = true for buffered notifications.
+   - SmartTransportRouter saw BLE return accepted and short-circuited before attempting TCP/mDNS LAN or Swarm Core.
+2. Fix Applied (commit 579046fe):
+   - In BLEPeripheralManager.swift: Clears subscribedCentrals and pendingNotifications on .poweredOff; subscribedCentralIds() and sendData immediately return false/empty when BT is not .poweredOn.
+   - In BLECentralManager.swift: Clears connectedPeripherals on .poweredOff; connectedPeripheralIds() returns empty.
+   - In MeshRepository.swift: Dynamically evaluates live connected BLE devices; when BLE is disabled, tryBle immediately returns false, allowing SmartTransportRouter to race TCP/mDNS LAN (tryTcpMdns) and Swarm Core (tryCore).
+3. Verification:
+   - Built and deployed build seq 3284 to physical iPhone 15 Pro Max.
+acceptance_criteria: Dynamic switching between BLE and Wi-Fi LAN verified; messages route over TCP/mDNS and Swarm when Bluetooth is disabled.
+evidence_refs_complete_with_sha256: Commit 579046fe on PR #208, devicectl install seq 3284.
+risk_and_cross_platform_impact: High benefit: enables seamless multi-transport fallback when any radio (BLE/Wi-Fi) is toggled.
+required_reviews_and_gates: Bilateral field test gate.
+requested_owner_and_due_condition: CTO/Windows confirms receipt and reciprocal Android radio-switching behavior.
+```
