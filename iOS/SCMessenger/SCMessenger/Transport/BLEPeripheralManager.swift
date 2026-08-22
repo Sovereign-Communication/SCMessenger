@@ -31,6 +31,7 @@ final class BLEPeripheralManager: NSObject {
 
     // Subscribed centrals
     private var subscribedCentrals: [CBCentral] = []
+    private var subscribedCharacteristicUuids: [UUID: CBUUID] = [:]
 
     // Privacy rotation
     private var rotationInterval: TimeInterval = MeshBLEConstants.privacyRotationInterval
@@ -294,7 +295,17 @@ final class BLEPeripheralManager: NSObject {
             return false
         }
         
-        guard let notifyChar = syncCharacteristic ?? messageCharacteristic else {
+        let notifyChar: CBMutableCharacteristic? = {
+            if let uuid = subscribedCharacteristicUuids[central.identifier] {
+                if uuid == MeshBLEConstants.messageCharUUID {
+                    return messageCharacteristic
+                } else if uuid == MeshBLEConstants.syncCharUUID {
+                    return syncCharacteristic
+                }
+            }
+            return messageCharacteristic ?? syncCharacteristic
+        }()
+        guard let notifyChar else {
             logger.warning("sendDataToCentral: notify characteristic unavailable")
             return false
         }
@@ -606,7 +617,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier.uuidString) subscribed to \(characteristic.uuid.shortUUID)")
-        // Ensure we only record subscription for the message sync characteristic (or both)
+        subscribedCharacteristicUuids[central.identifier] = characteristic.uuid
         if characteristic.uuid == MeshBLEConstants.messageCharUUID {
             logger.info("==> ANDROID CENTRAL \(central.identifier.uuidString) IS NOW SUBSCRIBED TO MESSAGE CHAR! This gives us the target to send data back over!")
         }
@@ -618,6 +629,7 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         logger.info("Central \(central.identifier) unsubscribed from \(characteristic.uuid.shortUUID)")
+        subscribedCharacteristicUuids.removeValue(forKey: central.identifier)
         subscribedCentrals.removeAll(where: { $0.identifier == central.identifier })
         pendingNotifications.removeAll(where: { $0.central.identifier == central.identifier })
         
@@ -641,19 +653,29 @@ extension BLEPeripheralManager: CBPeripheralManagerDelegate {
     }
 
     private func processPendingNotifications() {
-        guard let notifyChar = syncCharacteristic ?? messageCharacteristic else { return }
         guard peripheralManager.state == .poweredOn else {
             logger.debug("Skipping pending notification flush: peripheralManager not poweredOn")
             return
         }
         while !self.pendingNotifications.isEmpty {
             let next = self.pendingNotifications[0]
-            guard self.subscribedCentrals.contains(where: { $0.identifier == next.central.identifier }) else {
+            let notifyChar: CBMutableCharacteristic? = {
+                if let uuid = subscribedCharacteristicUuids[next.central.identifier] {
+                    if uuid == MeshBLEConstants.messageCharUUID {
+                        return messageCharacteristic
+                    } else if uuid == MeshBLEConstants.syncCharUUID {
+                        return syncCharacteristic
+                    }
+                }
+                return messageCharacteristic ?? syncCharacteristic
+            }()
+            guard self.subscribedCentrals.contains(where: { $0.identifier == next.central.identifier }),
+                  let targetChar = notifyChar else {
                 self.logger.debug("Dropping buffered notification for unsubscribed central \(next.central.identifier)")
                 self.pendingNotifications.removeFirst()
                 continue
             }
-            let success = self.peripheralManager.updateValue(next.data, for: notifyChar, onSubscribedCentrals: [next.central])
+            let success = self.peripheralManager.updateValue(next.data, for: targetChar, onSubscribedCentrals: [next.central])
             if success {
                 self.pendingNotifications.removeFirst()
                 self.logger.debug("Processed buffered notification for \(next.central.identifier)")
