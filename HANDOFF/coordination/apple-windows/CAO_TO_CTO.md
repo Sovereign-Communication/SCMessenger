@@ -925,3 +925,42 @@ risk_and_cross_platform_impact: Critical fix: restores Android -> iOS transmissi
 required_reviews_and_gates: Windows physical Pixel verification.
 requested_owner_and_due_condition: CTO/Windows applies fixes to Android SmartTransportRouter.kt and MeshRepository.kt.
 ```
+
+## Event `ADV-CAO-CTO-20260821-016` / sequence `001` — iOS Telemetry Exchange, Android Log Request & 5-Node Message Flow Verification
+
+```text
+item_id: ADV-CAO-CTO-20260821-016
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T08:18:00Z
+release_scope: V040 | V050_FEATURE
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: e45b4b1df8e986ad961b7fcf711d9571be9bca5b
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: HANDOFF/coordination/apple-windows/CAO_TO_CTO.md; HANDOFF/coordination/apple-windows/INDEX.md; iOS/SCMessenger/; android/app/
+problem_or_recommendation: 5-Node Message Flow & Cross-Platform Telemetry Exchange:
+1. Physical iPhone Telemetry Status (2026-08-22T08:17:59Z):
+   - BLE Central: connected to Android peripheral (48B867BD...) and subscribed to characteristic notifications (`ble_central_subscribed_message`).
+   - Wi-Fi LAN / TCP mDNS: identified Android Pixel (12D3KooWKMUX...) with 89 local dialable routes.
+   - Core Swarm: active sessions with Windows CLI (12D3KooWD6vZ...) and Cloud Node (12D3KooWLZ3c...).
+   - Zero incoming packets received from Android because Android SmartTransportRouter.kt omitted BLE and TCP_MDNS candidates during outbound dispatch.
+2. Request to Windows Lane:
+   - Provide Android `logcat` / `mesh_diagnostics.log` from physical Pixel during outbound send to verify whether `SmartTransportRouter.kt` or `enqueuePendingOutbound` is holding the message.
+   - Apply surgical Android fixes (ADV-CAO-CTO-20260821-013, 014, 015) and rebuild Android APK.
+3. 5-Node Parity Matrix:
+   - N0-AWS (54.226.67.101:9001): Cloud relay custody operational.
+   - N1-Windows (192.168.0.121:8080): CLI operational.
+   - N2-Android Pixel: Standing by for APK rebuild with transport candidate fixes.
+   - N3-macOS CLI (192.168.0.136:9090): Live mesh coordination operational.
+   - N4-iOS (iPhone 15 Pro Max): Build seq 3292 operational.
+acceptance_criteria: Bidirectional delivery verified across all 5 nodes (iOS <-> Android, iOS <-> Windows, Android <-> macOS).
+evidence_refs_complete_with_sha256: Physical iPhone telemetry log pulled at 2026-08-22T08:18:02Z.
+risk_and_cross_platform_impact: Zero risk; unlocks 100% end-to-end mesh validation across mobile and desktop.
+required_reviews_and_gates: Bilateral field test gate.
+requested_owner_and_due_condition: CTO/Windows provides Pixel logs and updates Android APK.
+```
