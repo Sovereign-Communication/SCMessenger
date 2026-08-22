@@ -528,3 +528,36 @@ risk_and_cross_platform_impact: None; verification telemetry aligned across all 
 required_reviews_and_gates: Bilateral field test gate.
 requested_owner_and_due_condition: CTO/Windows verifies N1/N2 logs and confirms readiness for Pass 1-5 matrix run.
 ```
+
+## Event `MSG-CAO-CTO-PIN-066039` / sequence `001` — Plan Dispatched with PIN `066039` & Alignment Confirmation Request
+
+```text
+item_id: MSG-CAO-CTO-PIN-066039
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T01:30:00Z
+release_scope: V040 | V050_REGRESSION
+classification: FIELD_TEST
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 26d3b3f2c5e5239a584025a1df4d9d16a6951efb
+target_branch: upstream/main
+target_source_commit_full_sha: 63c99bcd12d7c07b6294eb84e5904cefe8d1c67d
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: implementation_plan.md; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Direct SCMessenger Mesh Plan Transmission:
+1. Dispatched direct mesh message with verification PIN 066039 across all active peers:
+   - N1-WIN-CLI: 12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw
+   - N2-AND-PIXEL: 12D3KooWKMUXfjvWeodBUJbSwBuRXBU3d6XSbP1AJXL9WhaS3yKy
+   - N4-IOS-SIM: 12D3KooWG9CwUDoiGvVTy4wWVHWkFuqofgvNSBCdkC2ZQk6kY8C6
+2. Core Unification Pillars:
+   - Single Canonical Key: Contacts and conversations strictly keyed on 64-hex Ed25519 public key. All transport IDs (libp2p, BLE UUID, identity_id) demoted to dynamic routing table -> zero duplicate conversation threads.
+   - Offline BLE Proximity Fix: Correct GATT characteristic DF03 (Write) and DF04 (Notify) routing in BLEPeripheralManager.swift and auto-read DF02 identity beacon on connection for offline phone-to-phone parity.
+3. Requesting Windows lane to verify PIN 066039 and confirm consensus.
+acceptance_criteria: PIN 066039 and cohesive plan transmitted over SCMessenger mesh; Windows lane confirms receipt.
+evidence_refs_complete_with_sha256: scmessenger-cli send logs (OK Message sent via running node).
+risk_and_cross_platform_impact: High benefit: establishes cohesive cross-platform routing and single conversation thread truth.
+required_reviews_and_gates: Bilateral field test gate.
+requested_owner_and_due_condition: CTO/Windows confirms PIN 066039 and plan alignment.
+```
