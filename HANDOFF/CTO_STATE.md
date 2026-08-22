@@ -1,8 +1,133 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-16 (merge train advanced; see the banner below)
+Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-2026-08-22. SESSION RECORD — audit of the dead Antigravity session
+
+A 13-hour Antigravity session (id `2224b573`, 2,569 steps, 46 operator requests)
+died on a dropped stream, not a rate limit, three seconds after a green
+`assembleDebug`. Its last claims are therefore unverified, not merely unfinished.
+
+### Retraction — there is no evidenced bilateral consensus
+
+That session wrote a formal `[OK-PLAN-ACK]` into `HANDOFF/gpt/CTO_TO_CAO.md`
+citing a reference document. All three elements fail verification: commit
+`0dc1f357` is not a valid object; `FIVENODE_CONSENSUS_PLAN_2026-08-21.md` exists
+in no ref at any point in history; PR #208 is real but is the Apple lane's 4-node
+parity status doc. The operator cleared both lanes to auto-proceed on the
+strength of that claim. **That file has been rewritten to retract it.** Do not
+treat the prior ack as authority.
+
+### Defect status, verified against `daab8a2b` — the B1-B5 worklist was stale
+
+| ID | Status | Evidence |
+|---|---|---|
+| B1 mDNS self-peer guard | `[OK]` committed | `fd7655fa`; `MdnsServiceDiscovery.kt:211-212` |
+| B2 outbox attempt cap | `[WARNING]` working tree only | `pendingOutboxMaxAttempts` still has 4 refs in HEAD |
+| B3 receipt convergence | `[OK]` committed | `4083e59b`; `iron_core.rs:3460`, gated `Delivered\|Read` |
+| B4 `routing_peer_seen` | `[OK]` fixed 2026-08-22, unmerged | branch `cto/routing-peer-seen-2026-08-22` |
+| B5 ledger → Android cellular | `[WARNING]` working tree only | `iron_core.rs` +15, `MeshRepository.kt` +225 |
+
+W1/W2/W3 from the 2026-08-21 plan were already complete when it was written.
+
+### RELEASE BLOCKER — `daab8a2b` silently deleted three CI gates
+
+That commit's whole message is one line about identity unification, no body. It
+also removed: **Verify release APK signature** (`release.yml`) — the check that
+fails a build signed `CN=Android Debug`; **Android Wiring Gate** (`mobile.yml`),
+while `scripts/check_wiring.py` still exists; and **Windows CLI Artifact**
+(`ci.yml`), reverting PR #203 which had merged minutes earlier.
+
+`origin/main` retains all three. **Resolve the PR #209 workflow conflicts by
+taking main's side** — that restores every gate without reverting anyone's work.
+Conflicts are confined to `mobile.yml` and `release.yml`; no source conflicts.
+
+### The request-response panic — my earlier framing was WRONG
+
+`HANDOFF/archive/P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH_2026-08-09.md`
+opens by describing a 4-node-convergence panic. **Its own later updates
+contradict that** and I initially propagated the wrong version. Corrected:
+
+- Reproduced **3/3 with a single peer** (iPhone), fastest in **62 s**. It needs
+  one chatty peer, not a fleet.
+- Signature is 4-6 simultaneous connections to ONE peer, several to the
+  byte-identical multiaddr within 30 ms.
+- Trigger chain: identity churn → ghost ledger entries → dial dedup misses →
+  concurrent connections to one endpoint → connection-map drift → assertion.
+- **The PR #144 address-level dial dedup did NOT fix it** — reproduced with the
+  fix in, and the connection count rose from 4 to 6. Negative result, recorded.
+
+**Most actionable finding:** the panic is `debug_assert_eq!` at
+`libp2p-request-response-0.29.0/src/lib.rs:678`. This workspace's
+`[profile.release]` does not set `debug-assertions`, so it defaults OFF and the
+assertion is **compiled out of release builds**. Every panicking run in the
+ticket was a debug build. Running the field test on release binaries very likely
+removes this specific process death.
+
+Caveat, do not overstate: two `.expect()` calls at lines ~670 and ~676 panic in
+BOTH profiles on a genuinely inconsistent connection map, and suppressing the
+assert does not repair the drift. Release changes the odds; it is not a fix.
+
+### Dispatches 2026-08-22 (free agy Gemini lane, isolated worktrees, unpushed)
+
+**B — `cto/routing-peer-seen-2026-08-22` — ACCEPT (pending audit gate).**
+Nine real production call sites wired in `iron_core.rs` (TCP, BLE, relay
+ingress) plus a falsifiability test that establishes the StoreAndCarry/0.0
+baseline, then proves Direct/BLE, switch to TCP with BLE preserved in
+`alternatives`, and failover back. Touches merge-blocked `core/src/routing/` —
+needs `crypto-security-auditor` before merge.
+
+**A — `cto/panic-self-circuit-guard-2026-08-22` — REJECT as incomplete.**
+The self-circuit guard in `addr_filter.rs` is correct and well-tested but has
+**zero callers** — dead code that changes no runtime behaviour, the exact B4
+pathology. My packet caused this by scoping the writable path to
+`addr_filter.rs` alone when the call sites live elsewhere. The worker's written
+analysis was excellent and honest (correctly labelled it a mitigation, and it
+was the source that caught my 4-node error). Re-dispatch with the wiring path
+in scope — and note the guard does not address the real trigger anyway.
+
+### Environment
+
+**`cargo test --workspace --no-run` DOES NOT FIT ON THIS MACHINE.** It filled
+C: twice in one session. The second run went from 15 GB free to **7.3 MB
+(100% used)** because `target/debug/deps` alone reaches **20 GB** — many
+integration-test binaries, each linked at `opt-level = 3` with debuginfo.
+
+Both failures were disk, and both disguised themselves as code errors:
+- run 1: `can't find crate for scmessenger_core`, `found invalid metadata files
+  for crate serde`
+- run 2: `error: linking with 'link.exe' failed: exit code: 1318` (also 1140,
+  1180) — no "no space" text anywhere
+
+`cargo check --workspace` passed clean (0 errors, 0 warnings) on the same tree
+both times. **Use `cargo check --workspace` plus a scoped
+`cargo test -p <crate> --lib --no-run` as the local gate, and let CI run the
+full workspace gate on a clean runner.** Wrap any long local build in a
+watchdog that kills cargo below ~3 GB free; a 100%-full C: destabilises Windows.
+
+`scripts/clean_target.sh --deps` reclaimed 19.6 GB cleanly and preserved built
+binaries and `core/target/generated-sources`. A cheaper first move exists and
+was skipped this session: `find target/debug -name "*.pdb" -delete` frees
+comparable space without dirtying cargo fingerprints, so nothing recompiles.
+
+Current: 20 GB free / 92%. The four Android target triples were reclaimed
+earlier via `--triples` and will be rebuilt by cargo-ndk on the next Gradle
+run (~15-20 min).
+
+Git Bash `date` on this machine is ~7.5 h off Windows local time. Use PowerShell
+`Get-Date` for anything time-sensitive.
+
+### Still open
+
+- Phase 0 working-tree commit (B2/B5, router timeout 100ms→500ms revert, blank
+  BLE target filtering) — gate re-run then commit. Stage explicit paths only.
+- PR #209 rebase, taking main's side on the two workflow files.
+- Apple/CAO lane owes written CR1-CR3 answers and has never supplied iOS/macOS
+  logs despite six operator requests across the dead session.
+- Five of the six mis-filed P0 tickets in `POST_TAG_QUEUE.md` §2 are still
+  sitting in `HANDOFF/archive/` undispositioned.
 
 > **2026-08-16 — READ `HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md` FIRST.**
 > #167, #168, #169 and #165 are **merged to tracking**. The lane picture in §3
