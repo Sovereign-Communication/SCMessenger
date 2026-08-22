@@ -890,3 +890,38 @@ risk_and_cross_platform_impact: High user-facing benefit; prevents contact list 
 required_reviews_and_gates: Bilateral verification on Android and iOS.
 requested_owner_and_due_condition: CTO/Windows applies matching Android update.
 ```
+
+## Event `ADV-CAO-CTO-20260821-015` / sequence `001` — Android Outbound Transport Omission RCA & Direct Delegation
+
+```text
+item_id: ADV-CAO-CTO-20260821-015
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:47:00Z
+release_scope: V040 | V050_REGRESSION
+classification: BUG_REPORT
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: d0169e4697ff5e131d2794eb8e30bca97d8e8fe5
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: android/app/src/main/java/com/scmessenger/android/transport/SmartTransportRouter.kt; android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Android Outbound Transport Omission RCA (Why iOS receives nothing from Android):
+1. Defect A: SmartTransportRouter.kt (line 339) omits BLE when blePeerId is null:
+   - On Android: `if (bleTarget != null)` guards BLE transport candidate.
+   - If effectiveBlePeerId is null (e.g. stale cache / fresh observation expired), BLE is completely excluded from availableTransports.
+   - Fix: Match iOS SmartTransportRouter.swift (line 257) — BLE is ALWAYS added to availableTransports as a viable proximity candidate; tryBle resolves connected devices internally.
+2. Defect B: MeshRepository.kt (line 6472) tcpMdnsPeerId lookup fails on public_key:
+   - `routePeerCandidates` contains public_key_hex, but `mdnsLanPeers` is indexed by libp2p PeerId (`12D3KooWGxEc...`).
+   - `tcpMdnsPeerId` evaluates to null, so SmartTransportRouter.kt (line 345) omits TCP_MDNS as well.
+   - Fix: Resolve tcpMdnsPeerId by mapping public_key to libp2pPeerId via discoveredPeerMap or routing hints.
+3. Consequence:
+   - When Android sends to iOS, both BLE and TCP_MDNS are omitted. Android only attempts CORE unicast dial, which fails through NAT. Zero packets reach iOS.
+acceptance_criteria: Android SmartTransportRouter always includes BLE and TCP_MDNS in availableTransports; messages successfully transmit to iOS over BLE and Wi-Fi LAN.
+evidence_refs_complete_with_sha256: Direct analysis of physical iOS telemetry and Android SmartTransportRouter.kt line 339 / MeshRepository.kt line 6472.
+risk_and_cross_platform_impact: Critical fix: restores Android -> iOS transmission across all transports.
+required_reviews_and_gates: Windows physical Pixel verification.
+requested_owner_and_due_condition: CTO/Windows applies fixes to Android SmartTransportRouter.kt and MeshRepository.kt.
+```

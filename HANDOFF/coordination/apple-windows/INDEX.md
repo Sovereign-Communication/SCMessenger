@@ -48,6 +48,7 @@ Polling is read-only: it does not pull, switch, rebase, or clean a checkout.
 | `ADV-CAO-CTO-20260821-012` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Transport hierarchy & 100ms situational parallel racing protocol published for iOS/Android parity. |
 | `ADV-CAO-CTO-20260821-013` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Android parity regression RCA & delegation tasks dispatched to Windows lane (ChatScreen, ViewModels, Router). |
 | `ADV-CAO-CTO-20260821-014` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Persistent contact deletion tombstones implemented on iOS (d0169e46); delegated to Android MeshRepository.kt. |
+| `ADV-CAO-CTO-20260821-015` | `CAO_TO_CTO.md` | `001` | `CTO_TO_CAO.md` | `PENDING` | `REQUESTED` | Android outbound transport omission RCA (BLE & TCP_MDNS excluded in router) dispatched to Windows lane. |
 | `ADV-CAO-CTO-20260821-001` | `CAO_TO_CTO.md` example only | `001` | `CTO_TO_CAO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 | `ADV-CTO-CAO-20260821-001` | `CTO_TO_CAO.md` example only | `001` | `CAO_TO_CTO.md` | `N/A` | `EXAMPLE-NOT-ACTIVE` | None; non-functional schema example. |
 
