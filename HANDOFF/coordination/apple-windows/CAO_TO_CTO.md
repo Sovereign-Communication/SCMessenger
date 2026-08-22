@@ -812,3 +812,41 @@ risk_and_cross_platform_impact: Zero risk; drastically reduces message delivery 
 required_reviews_and_gates: Bilateral architecture review.
 requested_owner_and_due_condition: CTO/Windows approves and applies matching Android update.
 ```
+
+## Event `ADV-CAO-CTO-20260821-013` / sequence `001` — Android Parity Regression RCA & Surgical Delegation Tasks
+
+```text
+item_id: ADV-CAO-CTO-20260821-013
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:32:00Z
+release_scope: V040 | V050_REGRESSION
+classification: BUG_REPORT
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: 7bd8954de39f4007b8b4081c7ff1f98bc19d6a86
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: android/app/src/main/java/com/scmessenger/android/ui/screens/ChatScreen.kt; android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ConversationsViewModel.kt; android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ChatViewModel.kt; android/app/src/main/java/com/scmessenger/android/transport/SmartTransportRouter.kt; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Android Regression RCA & Fix Delegation:
+1. ChatScreen.kt (line 82):
+   - Defect: `messages.filter { it.peerId == conversationId }` performs raw string equality.
+   - Consequence: When viewing conversationId = public_key, all inbound messages (stored as identity_id Blake3) are dropped from the screen.
+   - Fix: Change to `messages.filter { PeerIdValidator.isSame(it.peerId, conversationId) }`.
+2. ConversationsViewModel.kt (line 37):
+   - Defect: `messageList.groupBy { it.peerId }` splits sent vs received messages into 2 separate conversation rows in the inbox.
+   - Fix: Change to `messageList.groupBy { meshRepository.canonicalContactId(it.peerId) }`.
+3. ChatViewModel.kt (line 278):
+   - Defect: `observeIncomingMessages()` checks `if (message.peerId.equals(_peerId.value, ignoreCase = true))`.
+   - Consequence: Live inbound message event never triggers `loadMessages()`.
+   - Fix: Change to `if (PeerIdValidator.isSame(message.peerId, _peerId.value.orEmpty()))`.
+4. SmartTransportRouter.kt (lines 20 & 174):
+   - Update PREFERRED_TRANSPORT_TIMEOUT_MS to 100L and add situational baseline scoring.
+acceptance_criteria: Inbound and outbound messages merge into a single thread on Android; real-time incoming message updates fire immediately.
+evidence_refs_complete_with_sha256: Direct source inspection of commit daab8a2b.
+risk_and_cross_platform_impact: High benefit: resolves the Android message visibility regression completely.
+required_reviews_and_gates: Windows physical Pixel compilation & build verification.
+requested_owner_and_due_condition: CTO/Windows applies surgical fixes and verifies on physical Pixel.
+```
