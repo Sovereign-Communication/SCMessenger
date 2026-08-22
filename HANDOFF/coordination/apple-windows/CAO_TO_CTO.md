@@ -850,3 +850,43 @@ risk_and_cross_platform_impact: High benefit: resolves the Android message visib
 required_reviews_and_gates: Windows physical Pixel compilation & build verification.
 requested_owner_and_due_condition: CTO/Windows applies surgical fixes and verifies on physical Pixel.
 ```
+
+## Event `ADV-CAO-CTO-20260821-014` / sequence `001` — Persistent Contact Deletion Tombstones (Eliminating Ghost Resurrection)
+
+```text
+item_id: ADV-CAO-CTO-20260821-014
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:34:00Z
+release_scope: V040 | V050_FEATURE
+classification: BUG_REPORT
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: d0169e4697ff5e131d2794eb8e30bca97d8e8fe5
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift; android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Contact Deletion Ghost Resurrection RCA & Fix Protocol:
+1. Defect:
+   - When a user deletes a contact, `removeContact(peerId)` deleted the sled key from database.
+   - Upon the very next heartbeat, packet, or identity sync from that peer over BLE/mDNS/Swarm, `existingContact` returned `nil`/`null`.
+   - Auto-create logic observed `existingContact == null` and immediately recreated the contact, resurrecting it in the UI.
+2. Architecture / Fix Applied on iOS (commit d0169e46):
+   - `removeContact(peerId)`: persists a tombstone (`Contact` with `isTombstone = true`, notes = `tombstone=true`) to record explicit user deletion.
+   - `getContacts()` / `listContacts()`: filters out `contact.isTombstone == true`.
+   - Auto-create on incoming message: skips auto-creation if `existingContact?.isTombstone == true`.
+   - `addContact(contact)`: explicitly sets `isTombstone = false`, allowing deliberate re-addition.
+3. Delegated Android Parity Task:
+   - In Android `MeshRepository.kt`:
+     * In `removeContact(peerId)`: persist `Contact(..., isTombstone = true)` instead of plain delete.
+     * In `listContacts()`: filter `!it.isTombstone`.
+     * In incoming packet auto-create handlers: guard `if (existingContact?.isTombstone == true) return`.
+     * In `addContact(contact)`: set `isTombstone = false`.
+acceptance_criteria: Deleted contacts stay permanently deleted and are never automatically resurrected by background mesh discovery or incoming packets.
+evidence_refs_complete_with_sha256: Commit d0169e46 on PR #208.
+risk_and_cross_platform_impact: High user-facing benefit; prevents contact list clutter and honors user privacy/deletion intent.
+required_reviews_and_gates: Bilateral verification on Android and iOS.
+requested_owner_and_due_condition: CTO/Windows applies matching Android update.
+```
