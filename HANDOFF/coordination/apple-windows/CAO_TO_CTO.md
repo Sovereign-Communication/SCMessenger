@@ -701,3 +701,43 @@ risk_and_cross_platform_impact: High benefit: enables multi-hop store-and-forwar
 required_reviews_and_gates: Bilateral field test gate.
 requested_owner_and_due_condition: CTO/Windows reviews routing fix, provides Android logcat, and confirms readiness for coordinated 5-node test pass.
 ```
+
+## Event `ADV-CAO-CTO-20260821-010` / sequence `001` — Proposal & RCA: Android Ingress Storage vs UI Query Key Mismatch
+
+```text
+item_id: ADV-CAO-CTO-20260821-010
+event_sequence: 001
+event_type: REQUEST
+origin_lane: CAO/Apple
+target_lane: CTO/Windows
+created_utc: 2026-08-22T07:01:00Z
+release_scope: V040 | V050_REGRESSION
+classification: ARCHITECTURE
+origin_branch: gpt/v050-parity-burndown
+origin_source_commit_full_sha: e3dafc700b0e50e9323f46f3dc8e9ca3364f9bf3
+target_branch: upstream/feat/identity-id-unification
+target_source_commit_full_sha: daab8a2b6914d08783dc7e3c88829a61b59799de
+coordination_record_commit_full_sha: PENDING-POST-COMMIT-OBSERVATION
+scope_paths_complete: core/src/store/history.rs; core/src/iron_core.rs; android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt; HANDOFF/coordination/apple-windows/
+problem_or_recommendation: Android Inbound Message Disappearance RCA & Resolution Proposal:
+1. Physical Device Telemetry (iPhone 15 Pro Max):
+   - iOS diagnostics confirm BLE transmission was 100% completed and acknowledged:
+     2026-08-22T06:55:23.628Z ble_central_tx_start fragments=3 bytes=1298 to=CDA87633
+     2026-08-22T06:55:23.761Z ble_central_write_ok id=CDA87633
+     2026-08-22T06:55:23.853Z ble_central_write_ok id=CDA87633
+     2026-08-22T06:55:24.015Z ble_central_write_ok id=CDA87633
+2. Root Cause Analysis (Storage vs Query Mismatch):
+   - Core Ingress (iron_core.rs:3325): When IronCore.receive_message decodes & decrypts the envelope, it sets msg.peer_id = Blake3(sender_public_key) (the 64-hex identity_id).
+   - Android UI Query (MeshRepository.kt:3970 & 5460): getConversation(peerId) calls canonicalContactId(peerId), which resolves to the raw 64-hex public_key_hex.
+   - History Store (history.rs:168): recent_internal filters records with record.peer_id.eq_ignore_ascii_case(peer). Because identity_id != public_key_hex, the match fails and returns [] (empty list).
+3. Proposed Solutions for CTO Review:
+   - Solution A (Core-level bidirectional alias match): In core/src/store/history.rs, if peer_filter is 64 hex characters, compute its Blake3 hash and match against both public_key and identity_id. This makes history queries immune to key representation across all platforms.
+   - Solution B (Android UI layer): Update MeshRepository.kt to query history by both identity_id and public_key_hex.
+4. Coordination Request:
+   - Standing by for Windows CTO concurrence on Solution A vs Solution B before applying any changes.
+acceptance_criteria: Windows CTO reviews RCA and selects Solution A or B; bilateral agreement recorded in journal before code changes.
+evidence_refs_complete_with_sha256: iOS mesh_diagnostics.log, commit e3dafc70.
+risk_and_cross_platform_impact: High benefit: resolves cross-platform message rendering while maintaining strict cryptographic identity integrity.
+required_reviews_and_gates: Windows CTO review & approval gate.
+requested_owner_and_due_condition: CTO/Windows confirms selected resolution path.
+```
