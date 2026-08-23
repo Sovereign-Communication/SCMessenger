@@ -36,6 +36,19 @@ import com.scmessenger.android.ui.viewmodels.MainViewModel
 import com.scmessenger.android.ui.viewmodels.DeepLinkData
 import com.scmessenger.android.ui.settings.MeshSettingsScreen
 import com.scmessenger.android.ui.settings.PowerSettingsScreen
+import com.scmessenger.android.ui.join.JoinMeshScreen
+import com.scmessenger.android.data.MeshRepository
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
+import androidx.compose.ui.platform.LocalContext
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface MeshAppEntryPoint {
+    fun getMeshRepository(): MeshRepository
+}
 
 /**
  * Root composable for the SCMessenger app.
@@ -256,6 +269,9 @@ fun MeshNavHost(
                     },
                     onNavigateToTopology = {
                         navController.navigate("topology")
+                    },
+                    onNavigateToJoinMesh = {
+                        navController.navigate(Screen.JoinMesh.route)
                     }
                 )
             }
@@ -325,6 +341,27 @@ fun MeshNavHost(
         }
 
 
+
+        composable(Screen.Diagnostics.route) {
+            DiagnosticsScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.JoinMesh.route) {
+            val context = LocalContext.current
+            val repository = remember(context) {
+                EntryPointAccessors.fromApplication(
+                    context.applicationContext,
+                    MeshAppEntryPoint::class.java
+                ).getMeshRepository()
+            }
+            JoinMeshScreen(
+                repository = repository,
+                onJoinSuccess = { navController.popBackStack() },
+                onCancel = { navController.popBackStack() }
+            )
+        }
 
         composable(Screen.BlockedPeers.route) {
             BlockedPeersScreen(
@@ -397,6 +434,7 @@ sealed class Screen(val route: String, val label: String, val icon: androidx.com
     object Diagnostics : Screen("diagnostics", "Diagnostics", androidx.compose.material.icons.Icons.Default.Settings)
     object BlockedPeers : Screen("blocked_peers", "Blocked Peers", androidx.compose.material.icons.Icons.Filled.Block)
     object RequestsInbox : Screen("requests_inbox", "Requests", androidx.compose.material.icons.Icons.Default.Add)
+    object JoinMesh : Screen("join_mesh", "Join Mesh", androidx.compose.material.icons.Icons.Filled.Router)
 
     companion object {
         val fullRoleBottomNavItems = listOf(Conversations, Contacts, Dashboard, Settings)
