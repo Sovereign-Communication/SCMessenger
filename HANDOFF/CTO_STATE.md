@@ -4,6 +4,110 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-23c. GATE A WAS INCOMPLETE -- corrected after an independent CEO pass
+
+An independent Opus CEO pass, run cold and deliberately not shown the earlier
+advisor's answers, found four things in my four-node plan. I verified each
+against the repo before accepting it. **Three were right and one changes the
+gate materially.**
+
+### CORRECTION 1 -- six P0s were dispositioned against a TWO-node topology, and
+### their own re-entry triggers have now fired
+
+`POST_TAG_QUEUE.md` (repo root, not `HANDOFF/`) §2 dispositioned six P0 tickets
+to S4 on an explicit premise:
+
+> D4 is a Pixel 6a exchanging a message with the AWS EC2 node. **Two endpoints.**
+> No Windows desktop, no iOS, no BLE, no growing mesh.
+
+The four-node gate reverses three of those four exclusions. Each ticket carries
+a re-entry trigger **that I wrote**, and I verified all four verbatim in the
+file:
+
+| Ticket | Re-entry trigger, as written | Fired by |
+|---|---|---|
+| `P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH` | "Re-entry: the five-node gate." | The gate itself -- the trigger is mesh **growth** past two endpoints, so four nodes fires it as surely as five |
+| `P0_UPNP_PANIC_KILLS_DESKTOP_NODE` | "Re-entry: before any desktop build ships." | N3 is `scm-windows-amd64.exe`, published as a release asset |
+| `P0_BLE_L2CAP_ACCEPT_SPIN` | "Re-entry: before any claim that offline/proximity messaging works." | D7, which is in Gate C |
+| `P0_NO_RELAY_FALLBACK_FOR_ROAMING_PEERS` | "Re-entry: the first two-handset test, where both peers are behind carrier NAT." | D4 -- N1 and N2, cross-network |
+
+**Gate A listed none of them.**
+
+This is the same failure mode as the security bug, one level up: a disposition
+was ruled valid against a premise, the premise changed, and nobody re-checked.
+I made exactly the mistake I wrote L4 about.
+
+**Re-run that table BEFORE the gate, not after it fails.** Each of the four is
+either fixed, explicitly accepted with the acceptance recorded, or it blocks.
+
+(`P0_DUAL_BIND_TCP_AND_WS` does appear genuinely fixed -- `multiport.rs` now
+states dual-binding "is eliminated" -- but the ticket still sits in
+`HANDOFF/todo/`, which is its own signal about disposition hygiene.)
+
+### CORRECTION 2 -- #219 is not in Gate A and N3 cannot work without it
+
+N3 **is** the Windows CLI. The Windows CLI mints a fresh identity on nearly
+every invocation. My own `CTO_TO_CAO_2026-08-22_IDENTITY_CHURN.md` traces the
+desktop-killing panic to exactly that churn, citing 20 distinct PeerIds for one
+host in 8 minutes.
+
+A four-node gate with an identity-churning N3 produces uninterpretable noise or
+a dead swarm. **Verified: #219 is `MERGEABLE/BEHIND` and RED on `Lint` and
+`Rust Linting`.**
+
+Either #219 joins Gate A, or N3 leaves the gate. There is no third option.
+
+Note #222 fixes the *root cause* (`iron_core.rs:402`) while #219 treats the
+symptom at the CLI boundary; confirm whether #222 alone is sufficient for N3
+before assuming both are required.
+
+### CORRECTION 3 -- "friends-and-family" is not a distribution channel
+
+Gate D held "the friends-and-family announcement" on the audit while tagging
+`v0.4.0-rc.1` publicly. **A GitHub release is public the moment it exists.**
+There is no private tier. Either accept that and label the release accordingly,
+or use a **draft release** and hand the APK over by hand -- but stop making a
+risk decision against a channel that does not exist.
+
+### CORRECTION 4 -- I demanded a date on the freeze and did not apply it to myself
+
+I quoted "put a date on the freeze" approvingly. Gate D -- external audit,
+"days not weeks", "real money not tokens" -- has **no budget figure, no scope
+document, no shortlist, and no lead-time estimate anywhere in the repo.** That
+is the same unbounded hold, one layer up. Either it gets a number and a named
+firm, or it is not a gate.
+
+### Also flagged, and verified: one green lane is green by suppression
+
+`main` being "green on all nine lanes" is being used as a shipping credential.
+`.github/workflows/docker-test-suite.yml` carries `continue-on-error: true` at
+lines 300, 432 and 495. If the Docker Integration Suite is passing through a
+suppressed step, the honest sentence is **"eight green and one suppressed"** --
+and that belongs in the release notes, not just here.
+
+### Accepted process change -- deny ignored parameters in the crypto perimeter
+
+The root cause was visible in the function signature the whole time:
+`_our_signing_key` and `_sender_bundle`, two underscore-prefixed parameters in a
+**handshake** function -- the compiler was explicitly told to stop complaining
+about the two inputs that provide sender authentication.
+
+A clippy deny scoped to `core/src/{crypto,transport,routing,privacy}/` would
+have failed CI on this months ago with zero human judgement involved. **This is
+the cheapest control proposed in this whole session.** Do it.
+
+### Revised Gate A
+
+| # | Work | PR | State |
+|---|---|---|---|
+| A1 | V2 + V1 sender authentication | #221 | DRAFT, BEHIND, 0 failing checks. Needs verification + re-review of the MERGED tree |
+| A2 | Storage fail-loud | #222 | DRAFT, BEHIND, 0 failing checks |
+| A3 | Android degraded-storage wiring | #227 | DRAFT, stacked on #222 |
+| A4 | Android reachability | #220 | Wiring gate: 2 known findings -- **accept, do not fix** |
+| **A5** | **CLI identity persistence** | **#219** | **RED on Lint / Rust Linting. Blocks N3.** Confirm whether #222 alone suffices |
+| **A6** | **Re-run the POST_TAG_QUEUE §2 re-entry table** | -- | **Four triggers fired. Fix, or accept in writing.** |
+| **A7** | **Clippy deny on ignored params in the merge-blocked perimeter** | -- | Config change; would have caught the original defect |
+
 ## 0-2026-08-23b. FOUR-NODE GATE -- the execution queue to the v0.4.0 tag
 
 Supersedes the five-node topology in
