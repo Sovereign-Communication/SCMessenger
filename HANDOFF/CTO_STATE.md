@@ -1,8 +1,137 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-21 (strict:true live with 4 contexts; merge train complete; see section 0-latest)
+Last updated: 2026-08-23 (checkpoint #3: V1-downgrade forgery on #221 CONFIRMED by an executed, previously-unexecuted test -- not merged; see section 0-checkpoint-2026-08-23-c)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-checkpoint-2026-08-23-c. SESSION RECORD -- 2026-08-23 (CTO, scheduled 60-min checkpoint #3, CLOUD sandbox). READ FIRST.
+
+**Follows PR #223 and PR #224** (both `docs(cto)` checkpoints from earlier
+today, both still OPEN and unmerged as of this section -- their content is
+not on `main` and is not duplicated here; all three should be reconciled
+into one section whenever any of them lands). Read #224's `0-checkpoint-
+2026-08-23-b` addendum first if this file's history is confusing -- it has
+the full #221/#222 CI-fix history this section builds on.
+
+### What I verified before touching anything
+
+`mcp__github__pull_request_read` on #221 (head `00c946f`, unchanged since
+#224) and #222 (head `3b706628`, unchanged since #224): **all 33 check runs
+green on both**, including `macOS Native Tests` on #222 (the job that
+flaked once in #224's 1-hour check-in and has now passed twice in a row --
+still not proof it's fixed, but two-for-two is stronger than one-for-two).
+No new commits, no new comments beyond the 12:07Z BLOCK on #221. `main` HEAD
+still `b538f3ba`; no v0.4.0 tag; latest release still v0.1.9 (2026-03-19).
+
+### THE HEADLINE: the 12:07Z adversarial finding on #221 is no longer a claim -- I ran it
+
+#224 correctly declined to write a V1-bypass test itself ("a security-
+sensitive ingress-guard change... needs the adversarial reviewer or the
+operator, not a unilateral CTO patch") and left the BLOCK verdict standing
+on reasoning alone. That was the right call for *fixing* it, but a
+falsifiable claim sitting unexecuted for 3.5+ hours on the exact defect
+that blocks the tag is itself a gap this seat closed by writing the
+reproduction (not the fix) and running it -- verifying, not patching.
+
+Built an isolated worktree off #221's branch (`cto/v2-sender-auth-2026-08-22`,
+head `00c946f`), wrote `core/tests/test_v1_legacy_downgrade_forgery.rs`
+(not committed to any branch -- scratch verification only, discarded after
+the run), and executed it. It constructs exactly the attack the 12:07Z
+review described: "Mallory" never touches Alice's signing key, computes
+ordinary ephemeral X25519 ECDH against Bob's *published* key, sets
+`Envelope.sender_public_key` to Alice's public key bytes, encrypts with
+that as AAD, wraps it as `WireEnvelope::V1`, and calls
+`IronCore::receive_message` on Bob's node.
+
+First run used a wrong local KDF-context string in the test itself and
+predictably failed decryption for an unrelated reason (an honest mistake in
+the harness, not the target) -- caught by inspecting `crypto/encrypt.rs`'s
+real `KDF_CONTEXT` constant, fixed, and re-run:
+
+```
+$ cargo test -p scmessenger-core --test test_v1_legacy_downgrade_forgery
+running 1 test
+test test_v1_unsigned_envelope_impersonation_is_rejected ... FAILED
+
+thread '...' panicked at core/tests/test_v1_legacy_downgrade_forgery.rs:70:5:
+SECURITY FAILURE: unsigned V1 envelope forged as Alice was ACCEPTED by Bob.
+Attribution: Some("e1a78ff7add5c5961538422fdf8820005d05c5dfe01a390ed956e46188423c9e")
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored
+```
+
+The assertion (`result.is_err()`, i.e. "Bob must reject this") failed --
+meaning Bob's `receive_message` **accepted** the forged envelope and
+returned a `Message` attributed to Alice's real public key hex. **CONFIRMED,
+by execution, on #221's current head (`00c946f`), not main:** the V1-
+downgrade sender-impersonation bypass the 12:07Z review raised is real. All
+33 CI checks are green on this exact commit -- CI does not exercise this
+path at all, in either direction. This is the "tests that certify nothing"
+failure mode this project has been burned by three times before, now a
+fourth: a fully green PR, for a PR whose entire purpose is closing a sender-
+forgery hole, that a stranger with no access to any private key can still
+use to forge messages under someone else's identity.
+
+Root cause, read directly in `iron_core.rs`'s ingress guard (added by
+`2aadf489`, the fix commit both #223 and #224 already partially read): the
+guard branches on `decode_wire_signed_envelope` succeeding (verifies V1/V2
+*signed* wrappers) or the Drift byte tag matching (verifies Drift envelopes).
+Only in the **third, final fallback** -- plain `decode_wire_envelope` on
+unsigned/legacy bytes -- does it reject `WireEnvelope::V2`, but NOT
+`WireEnvelope::V1`. A raw legacy `Envelope` (bincode, no Drift tag, no
+signed wrapper) decodes straight through as `V1` and is passed to
+`decrypt_with_ratchet_fallback`, which for a non-ratcheted V1 envelope calls
+`decrypt_message` -- ECDH against the *recipient's* real static key plus
+whatever `sender_public_key` bytes the sender chose as AAD. AAD proves the
+ciphertext wasn't tampered with; it does not prove the sender possesses that
+key. Exactly the review's claim, exactly what the code does, exactly what
+the test now shows happening.
+
+**Did not attempt a fix.** This is a security-design decision (reject all
+unsigned legacy V1 envelopes at ingress, which the 12:07Z review itself
+flagged as needing a prior check for "whether anything legitimate still
+sends unsigned V1") squarely inside the crypto-security-auditor's lane, not
+a CTO seat's to make unilaterally in a 60-minute checkpoint. Test file was
+scratch-only in an isolated worktree and was not pushed anywhere.
+
+### #222 -- unchanged verdict from #224, still not close
+
+Same head (`3b706628`), still DRAFT, still has the author's own documented
+gap (`mobile_bridge.rs` Android call site never calls
+`is_storage_degraded()`). `macOS Native Tests` green on this run (see
+above) -- not independently re-verified beyond reading the check-run
+conclusion, no log pulled this session since it already passed.
+
+### Verdict this checkpoint: unchanged -- the tag is not close, nothing merged
+
+Neither PR is safe to merge. #221 now has its blocking defect proven by
+execution rather than asserted by review, which should make it *harder*,
+not easier, to wave through on green CI alone. No merge, no push to a
+shared branch, no tag action taken. `main` unchanged at `b538f3ba`.
+
+### NEXT CHECKPOINT, IN ORDER
+
+1. **#221 is the critical path.** It needs a real fix for the V1-downgrade
+   bypass (reject unsigned legacy `WireEnvelope::V1` at ingress, or prove
+   nothing legitimate still sends it and remove the legacy path entirely),
+   then a fresh `crypto-security-auditor` pass, then operator sign-off --
+   in that order. Until then it is a P0 fix that itself ships a P0. Do not
+   let 33 green checks read as "ready."
+2. Reconcile PRs #223, #224, and this one (#221-followups) -- three
+   separate unmerged docs branches now carry overlapping checkpoint
+   history. Whoever picks this up next should merge the CTO_STATE.md
+   content into one section (keep all three as history per the standing
+   rule, mark the superseded ones) and close out the older two PRs once
+   folded in, rather than letting a fourth pile on.
+3. #222: still needs the Android `is_storage_degraded()` wiring before it's
+   ready, per its own PR body. `macOS Native Tests` passing twice is
+   encouraging but two data points is not a flake diagnosis either way.
+4. Not reached this session, same as #223/#224: SHIP_PLAN D6/D7 hardware
+   verification (no operator/hardware in this sandbox); #205-#220 backlog
+   (dependabot, Apple-fork docs, Android/routing/identity-unification
+   branches) -- none inspected this session either.
+
+---
 
 ## 0-latest. SESSION RECORD -- 2026-08-21 (CTO, Qwen FULL seat on Windows). READ AFTER SECTION 0.
 
