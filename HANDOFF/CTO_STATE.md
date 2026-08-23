@@ -109,6 +109,27 @@ MSYS_NO_PATHCONV=1 ./target/release/scmessenger-cli.exe relay -l /ip4/0.0.0.0/tc
 It logs self-referential circuits (SELF -> AWS -> SELF) and
 `Periodic re-dial: 2555 addresses attempted` — the ghost-ledger accumulation.
 
+### UNCOMMITTED WORK IN THE SHARED CHECKOUT THAT IS NOT MINE — do not discard
+
+At stand-down the shared checkout holds work I did not author and deliberately
+left alone. Recording it because uncommitted foreign work is exactly what was
+destroyed here on 2026-08-08.
+
+- **`android/.../transport/ble/BleGattClient.kt`** (+7/-4, real change). Someone
+  is replacing the hardcoded `WRITE_TYPE_DEFAULT` with a negotiation off the
+  advertised characteristic properties (`PROPERTY_WRITE` /
+  `PROPERTY_WRITE_NO_RESPONSE`). Looks deliberate and sensible. Not mine, not
+  committed, not staged.
+- **`HANDOFF/gpt/CTO_TO_CAO.md`** (+20/-133). A concurrent session overwrote the
+  working copy to reassert the consensus claim I retracted. **The committed and
+  pushed version (`e37b7afd`) carries the retraction and is the CTO position**;
+  the superseding record is
+  `HANDOFF/gpt/CTO_TO_CAO_2026-08-22_IDENTITY_CHURN.md`. I left their working-tree
+  edit untouched rather than undo it.
+- `.claude/hooks/preflight_guard.py` (+26) is MY hook fix, already merged to main
+  via #217. It shows as modified only because this branch has not merged main
+  yet. Redundant, harmless, will vanish on the next merge.
+
 ### Not done, deliberately
 
 - **`orchestrator_guard` CONTROLLER scope was NOT widened.** A CTO widening the
