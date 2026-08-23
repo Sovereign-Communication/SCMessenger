@@ -4,6 +4,121 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-22d. BOTH FIXES LAND AND VERIFY -- main is GREEN
+
+### main is green on `b538f3ba`. D1 SATISFIED.
+
+All nine lanes success: CI, Lint, Mobile, Cross, iOS Build & Test, Docker
+Integration Suite, Docker Publish, Repository Hygiene, Push on main. The 30+
+minute wait earlier in the session was runner backlog from the dependabot
+batch, not failure. **This is the first green main this plan has recorded.**
+
+### Packet J -- V2 sender auth. VERIFIED BY THE CTO, not by the worker.
+
+Branch `cto/v2-sender-auth-2026-08-22`, commit `2aadf489`, pushed.
+
+**The worker's falsifiability answer was PROSE, not command output.** It
+described what would happen on revert instead of running it. That is the exact
+failure mode the packet was written to prevent, and it is why the packet
+demanded pasted output. Do not accept the worker's section 4 as evidence.
+
+**The CTO check that does count.** I extracted the ORIGINAL forgery test from
+`bab533e0` -- byte-identical, written by a different worker that never saw this
+fix and could not have tuned it -- dropped it into the fixed tree, and ran it:
+
+```
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... FAILED
+Direct WireEnvelope::V2 primitive decryption failed:
+  "decryption failed: aead::Error"
+```
+
+The attack that worked three hours ago no longer works. Then the pair that
+proves it is not a blanket denial of service:
+
+```
+test test_v2_hybrid_envelope_forgery_is_rejected ... ok
+test test_v2_hybrid_honest_sender_succeeds ... ok
+```
+
+Local three-part gate, run by me: `cargo fmt --all --check` exit 0,
+`cargo check --workspace` exit 0 with zero errors and zero warnings,
+`cargo check -p scmessenger-wasm --target wasm32-unknown-unknown` exit 0.
+
+**Note the original test dies at Leg 1**, so that run does NOT independently
+exercise Leg 2. Ingress verification is covered only by the worker's own test.
+State that honestly when this goes to review.
+
+### My own adversarial read of J -- three findings for the auditor
+
+**1. `signing_hash()` is a pure extraction. Leg 2 is backward compatible.**
+The hash body is unchanged from the old private `sign()`, so `verify()` accepts
+signatures from unfixed peers. **The wire break comes ENTIRELY from Leg 1's KDF
+context change.** Leg 2 could ship independently as non-breaking hardening if we
+ever need to decouple them.
+
+**2. The static-DH derivation is asymmetric, and this is the real review
+question.** Sender computes `DH(ed25519_to_x25519_secret(our_signing_key),
+their_bundle.x25519_public)`. Receiver computes `DH(our_x25519_secret,
+ed25519_public_to_x25519(sender_bundle.ed25519_public))`. These agree **only if
+`our_x25519_secret` corresponds to `bundle.x25519_public`**. The honest-path
+test proves it holds in that configuration. Given this repo just ran an identity
+unification across flavors, **if any flavor populates `x25519_public`
+independently of the Ed25519 key, sessions fail silently.** The bundle already
+carries a dedicated X25519 key -- ask the auditor why the sender side derives
+from Ed25519 instead of using it.
+
+**3. `verify()` returns `DriftError::IoError` for signature failure.** Minor,
+but a forgery attempt will read as an I/O problem in field logs during the very
+gate where we are hunting for exactly that. Rename before the run.
+
+**A concern I raised and then withdrew, recorded so nobody re-raises it.** The
+diff deletes the Drift encoding path from `encode_envelope`, which the header
+described as the primary compact LZ4 format -- it looked like a wire regression
+that would show up on BLE as fragmentation noise. It is not. `encode_envelope`
+has exactly ONE caller, a test in its own file. The real send path is
+`iron_core.rs:834` and `:884`, which build the Drift envelope and call
+`to_bytes()` directly with the real signing key. Dead API, no runtime change.
+I checked before reporting rather than after.
+
+### Packet K -- storage fail-loud. Committed, CTO verification in flight.
+
+Branch `cto/storage-fail-loud-2026-08-22`, commit `70a00e9d`, pushed.
+
+Unlike J, **this worker actually executed its revert check** -- the run appears
+as executed steps in the dispatch log, not as narrative -- and labelled its own
+report `VERIFICATION: NONE (verifier must re-run)`. Honest.
+
+Design: `Err(_) => MemoryStorage` replaced with a `DegradedStorage` that fails
+every operation loudly, logs `[ERROR]`, and sets `storage_degraded`. Lock
+contention (OS 32/33, WouldBlock, sharing violations) is distinguished from
+corruption. `initialize_identity()` refuses to mint into RAM. Block checks fail
+closed. New accessors: `is_storage_degraded()`, `storage_error()`,
+`is_storage_healthy()`, `try_with_storage()`.
+
+### Disk -- the binding constraint all session, and how it was handled
+
+Three reclaims, all of build artifacts only, all after confirming the commits
+were durable in the shared object store and nothing tracked lived under
+`target/`:
+
+- `_scm_wt/v2forge/target` 4.2 GB, after the forgery proof was pushed
+- `_scm_wt/wiring-split/target` 10.2 GB, PR #220 already pushed -- this one was
+  an emergency, J's build had taken free space to **2.8 GB**
+- `_scm_wt/storefix/target` 6.7 GB, after K was committed and pushed
+
+**Commit and push worker output BEFORE reclaiming anything.** That ordering is
+what made all three of these safe rather than a repeat of 2026-08-08.
+
+### Next, in order
+
+1. Adversarial crypto review of J. `core/src/crypto/` is merge-blocked; finding
+   2 above is the question that matters most.
+2. Operator sign-off on J. Not mine to give.
+3. Merge K (not in the blocked perimeter), then J.
+4. Tag `v0.4.0-rc.1`. Release machinery is verified ready -- signed AAB + APK
+   with the apksigner gate, plus `scm-windows-amd64.exe`.
+5. Five-node rollout per `HANDOFF/gpt/CTO_TO_CAO_2026-08-22_FIVE_NODE_ROLLOUT.md`.
+
 ## 0-2026-08-22c. P0 CONFIRMED BY EXECUTION -- rollout freeze held
 
 Operator asked to be pushed to the next five-node test, on Windows/Android,
