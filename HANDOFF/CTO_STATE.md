@@ -1,8 +1,209 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
+Last updated: 2026-08-23 (stand-down; four-node gate prep, two P0s closed)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-2026-08-23z. STAND-DOWN — READ THIS FIRST, THEN STOP READING
+
+Everything below this section is history and detail. This section is what you
+need to resume. **Do not read the whole file** — it is long and most of it is
+superseded.
+
+### The one-line state
+
+Two P0 forgery holes were found and fixed this session. `main` is green. The
+tag is blocked on four concrete items, none of which is design work.
+
+### What is true right now
+
+| Fact | Evidence |
+|---|---|
+| `main` is green, honestly | Nine lanes pass. The "green by suppression" claim was investigated and **retracted** — see §0-2026-08-23d |
+| `main` HEAD | `e5ff72cf` (moved during the session) |
+| D1 satisfied | first green main this plan recorded |
+| D5 satisfied | #139 merged |
+| No `v0.4.0` tag exists | latest public release is v0.1.9, March 2026 |
+| Release machinery works | a tag alone produces the signed APK + Windows CLI. **D2 needs a tag, not a build** |
+
+### The gate is FOUR nodes, and the tag is a DRAFT release
+
+N1/N2 Android, N3 Windows CLI, N4 AWS relay. Apple is a **parallel lane with a
+join point**, not a blocker — it joins as N5 if CI goes green in time
+(`HANDOFF/gpt/CTO_TO_CAO_2026-08-23_APPLE_LANE_ACTIVE.md`, `AW-BILAT-0003`).
+
+`v0.4.0-rc.1` is cut as a **draft** GitHub release — a published release is
+public the moment it exists, and this build is not for the public. Publishing
+gates on the external audit being **commissioned**, not completed. Ruling and
+reasoning in §0-2026-08-23d.
+
+### What blocks the tag — the whole list
+
+| # | Item | State | Next action |
+|---|---|---|---|
+| A1 | #221 V1+V2 sender auth | Verified, **not mergeable** | Close the X25519 coverage gap (§0-2026-08-23e); **fresh adversarial review of the MERGED tree** — the old review read `2aadf489`, now stale; merge `main` in; clippy |
+| A2 | #222 storage fail-loud | Verified green, BEHIND | Merge `main` in |
+| A3 | #227 Android degraded-storage wiring | Verified green, stacked on #222 | Merge after A2 |
+| A4 | #220 Android reachability | 2 known wiring findings | **Accept, do not fix** — the passphrase revert re-orphans SecurityUtils; record the acceptance |
+| A5 | #219 CLI identity persistence | **RED on Lint / Rust Linting** | **N3 is the Windows CLI and churns identity without this.** Either fix, or drop N3 from the gate. Check first whether #222 alone suffices |
+| A6 | POST_TAG_QUEUE §2 re-entry table | Agent dispatched; result may be unread | Four triggers fired — see §0-2026-08-23c. Fix or accept **in writing** before the gate |
+| A7 | Clippy deny on ignored params + required negative-test job | Agent dispatched; result may be unread | Worktree `_scm_wt/cihard`, branch `cto/ci-hardening-2026-08-23` |
+
+**If an agent result was never read, its work is in the worktree.** Check
+`git -C _scm_wt/cihard status` and the branch log before re-dispatching anything.
+
+### The two things most likely to bite you
+
+1. **A6 is the same class of mistake as the security bug.** Six P0s were
+   dispositioned against a **two-endpoint** premise. The gate is now four nodes,
+   and four re-entry triggers written into `POST_TAG_QUEUE.md` have fired. I
+   built a gate plan that listed none of them. Re-run that table before the
+   gate, not after it fails.
+2. **#221 has a protection with no regression coverage.** Reverting the
+   dedicated-X25519 fix leaves CI green. Proven by running it. Do not merge
+   #221 believing the test suite protects that fix.
+
+### Rules that actually saved this session
+
+- **Verify a fix by running the ORIGINAL test** — written by a worker who never
+  saw the fix and could not have tuned it. Non-circular and unfakeable. Pair it
+  with an honest-path test so "reject everything" cannot pass.
+- **Demand pasted command output for revert checks.** One worker answered with
+  prose describing what *would* happen. It read like verification and was not.
+- **Ask where the hole went.** A partial security fix moves it — that question,
+  in the review packet verbatim, is what found the V1 downgrade.
+- **Ask what closing it breaks.** Reviewers do not. It is the difference between
+  a fix and a fleet-wide outage.
+- **Commit and push worker output BEFORE reclaiming disk.** Every reclaim this
+  session was safe only because of that ordering.
+
+### Operational, non-obvious
+
+- **Disk is the binding constraint.** It hit 2.2 GB twice. Reclaim `target/` of
+  worktrees whose PRs are pushed. `scripts/clean_target.sh` refuses whenever ANY
+  build process is alive even in a different worktree — scope the reclaim to
+  `target/debug/deps` to preserve `target/release/` and the running relay binary.
+- **Never two build tools at once.** Agents must poll
+  `tasklist | grep -icE "cargo\.exe|rustc\.exe|gradle|java\.exe"` to 0 first.
+- **Do not run `cargo test --workspace --no-run`** — it drives
+  `target/debug/deps` to 20 GB and has filled this disk twice.
+- **`cargo fmt --all` silently no-ops in a worktree.** Use `cargo fmt -p <pkg>`.
+- **`CARGO_INCREMENTAL=0` on a warm worktree** forces a full rebuild.
+- **The scheduled cloud routine is DISABLED** (`trig_012ouEf2qNUmhJ8fmz1RHWAY`).
+  It fired 10 times unattended, several runs 2-4 hours, overlapping. **Do not
+  re-enable without operator sign-off** — autonomous spend is a business
+  decision, not a CTO one. Full account in §0-2026-08-23 L1.
+
+### Do not repeat these mistakes from this session
+
+- I claimed a CI lane was "green by suppression" and said **verified** when I had
+  only grepped for a string. Retracted in §0-2026-08-23d. Check what a
+  `continue-on-error` is attached to before repeating anyone's inference.
+- I asserted the static-DH sides "agree only if `our_x25519_secret` corresponds
+  to `bundle.x25519_public`". False — independent CSPRNG seeds; they agree by
+  commutativity. The concern was still worth raising; the stated precondition
+  was wrong.
+- I deferred a decision to the operator that the CTO and CEO could resolve
+  between them. Escalate ties on money and staffing; do not escalate judgement
+  calls you are equipped to make.
+- **I truncated this very file** with a careless splice while writing this
+  stand-down -- an index-based cut silently dropped four of the day's sections.
+  It was recoverable ONLY because they were already committed; I rebuilt from
+  `git show HEAD:HANDOFF/CTO_STATE.md`. **Commit before restructuring a file
+  you are also appending to**, and after any scripted splice, `grep` for the
+  section headers you expect rather than trusting the write.
+
+### CEO procedure (new standard, operator directive 2026-08-23)
+
+Spawn a **fresh CEO subagent per call**, cold-context, and **do not show it prior
+CEO answers** — anchoring destroys the value. Two independent passes this
+session split on the audit question, which is exactly the signal you want. Opus
+for consensus passes. Include facts against yourself; a CEO briefing that omits
+the CTO's own errors is worthless.
+
+## 0-2026-08-23e. #221 VERIFIED -- and one protection has NO test coverage
+
+Branch `cto/v2-sender-auth-2026-08-22`, HEAD `062faedc`. Not pushed at time of
+writing.
+
+### All four tests pass; the honest path still works
+
+```
+test_v1_bincode_downgrade_forgery ................... ok
+test_v1_legacy_forged_unsigned_envelope_is_rejected . ok
+test_v1_legacy_honest_sender_succeeds ............... ok
+test_v2_hybrid_envelope_forgery_is_rejected ......... ok
+test_v2_hybrid_honest_sender_succeeds ............... ok
+```
+
+`cargo fmt --all --check` exit 0. `cargo check --workspace` exit 0.
+`cargo check -p scmessenger-wasm --target wasm32-unknown-unknown` exit 0 (9
+pre-existing dead-code warnings in `swarm.rs` / `iron_core.rs`, untouched by
+this branch).
+
+The two honest-path tests matter as much as the rejections: they prove the fix
+does not "work" by refusing all traffic.
+
+### Revert check 1 -- ingress guard. FAILS ON REVERT, as required.
+
+With the guard reverted:
+
+```
+P0 REGRESSION: IronCore::receive_message accepted a forged, unsigned V1
+envelope and attributed it to Alice without Alice's private key ever being
+used. Got: Some(("4cd34678c59c...", Some("MALLORY_V1_DOWNGRADE_FORGED_PAYLOAD")))
+test result: FAILED. 0 passed; 1 failed
+```
+
+Both V1 tests fail on revert and pass when restored. **This protection is
+genuinely covered.**
+
+### Revert check 2 -- dedicated X25519 plumbing. DOES NOT FAIL. COVERAGE GAP.
+
+Reverting `init_as_sender_hybrid` / `init_as_receiver_hybrid` to the
+Ed25519-derived pairing -- **both sides together, faithfully, from the
+originating commit `05f3e597`** -- leaves both V2 tests GREEN:
+
+```
+test test_v2_hybrid_envelope_forgery_is_rejected ... ok
+test test_v2_hybrid_honest_sender_succeeds ... ok
+test result: ok. 2 passed; 0 failed
+```
+
+This is a real finding, not a botched revert. Reverting both sides restores a
+**self-consistent but cryptographically inferior** scheme: the forgery test only
+asserts that a sender lacking the real private key material is rejected, and
+that holds under either derivation. It never asserts *which* key the DH uses.
+
+**Consequence: if anyone reverts the cross-protocol key-reuse fix in future, CI
+stays green.** The protection is real and its regression coverage is absent.
+
+This is exactly the property the CI-hardening work (A7) is meant to
+institutionalise: a claimed security property with no test naming it. It is also
+the strongest possible argument for that job existing -- the gap was invisible
+until someone ran the revert.
+
+**Close before merge**: a test that pins the wiring, e.g. a sender session built
+from identity A's dedicated `x25519_encryption_secret` must NOT interoperate
+with a receiver deriving A's DH public from A's Ed25519 key. That asserts the
+derivation, not merely the outcome.
+
+### Not run
+
+- `clippy` -- outside the three-command gate given to that dispatch. Run it at
+  merge sign-off.
+- `cargo test --workspace --no-run` -- forbidden on this machine; it fills the
+  disk.
+
+### Merge status
+
+**#221 is NOT ready to merge.** Outstanding:
+
+1. the coverage gap above
+2. fresh adversarial review of the **merged** tree -- the earlier review examined
+   `2aadf489`, which is three commits stale
+3. `main` merged in (branch is BEHIND; `main` moved to `e5ff72cf`)
+4. clippy
 
 ## 0-2026-08-23d. DECISIONS -- the audit gate, and a retraction
 
