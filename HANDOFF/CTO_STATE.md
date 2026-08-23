@@ -4,6 +4,119 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-22b. STAND-DOWN HANDOFF — read this first
+
+### Landed
+
+**PR #217 MERGED.** `main` is now `b538f3ba`. The CRLF recurrence is fixed at its
+root: `.gitattributes` extended 10 -> 91 lines with explicit `binary` rules, and
+the one-time `git add --renormalize .` that had never been run. **546 CRLF files
+-> 0.** A fresh `git worktree` no longer starts dirty with hundreds of phantom
+modifications. 33 CI checks passed, zero failures.
+
+**Set this locally, and tell every contributor to:**
+
+```
+git config merge.renormalize true
+```
+
+Without it, branches predating `b538f3ba` conflict across the sweep. With it the
+cost is zero. Measured overlap before the merge was 6 file-touches across 5 PRs.
+
+### In flight when I stood down
+
+**Dispatch I** (`cto/v2-forgery-proof-2026-08-22`, worktree `_scm_wt/v2forge`)
+is running the forgery test for the P0 below. It had not committed. Check
+`tmp/dispatch/launch6.log` and the worktree for a commit. **Its result decides
+whether the P0 is real.**
+
+### THE IMPORTANT ONE — P0, unproven, needs your judgement
+
+`HANDOFF/todo/P0_V2_HYBRID_HANDSHAKE_HAS_NO_SENDER_AUTHENTICATION_2026-08-22.md`
+
+The V2 hybrid handshake appears to provide **no sender authentication**, on the
+default negotiated suite. `init_as_receiver_hybrid` (`core/src/crypto/ratchet.rs:508`)
+takes `_our_signing_key` and `_sender_bundle` and reads NEITHER; the root key is
+`blake3(ss_hybrid || transcript_hash)`, and no term needs the sender's private
+key. `verify_envelope_v2` has only test callers and `core/src/drift/envelope.rs`
+has no verify function at all.
+
+If it holds: anyone with two published bundles can send a message that decrypts
+cleanly and is attributed to a contact of their choosing.
+
+**This was derived by reading, not execution. Do not act on it until dispatch I
+reports.** If the forgery fails, the ticket is wrong and should be corrected
+loudly, not quietly deleted.
+
+### PR board
+
+| PR | State | Note |
+|---|---|---|
+| #217 | **MERGED** | CRLF root fix |
+| #220 | Open | Reachability split out of #216. Wiring gate will report **2** findings, not 0 — the passphrase revert re-orphans SecurityUtils. That is correct. |
+| #215 | Draft, BLOCKED | Superseded by `cto/routing-peer-seen-v2-2026-08-22`, which is ALSO blocked on the P0 above |
+| #216 | Draft, BLOCKED | Passphrase half. Do not re-land without fixing the destroy-on-error recovery path AND the `<device-transfer>` exclusion |
+| #219 | Draft, BLOCKED | `verify-signature` fails open; `identity import` blocked on the machine you'd run it on; root cause unfixed |
+| #218 | Draft by design | Dead code; the panic analysis is the value |
+
+### Three tests today certified nothing. Assume this failure mode.
+
+- **#215** derived its own expected hint, so it passed while the feature was
+  provably broken (`blake3(raw)` vs `blake3(hex)` never matched).
+- **#219**'s test calls only `core/` APIs the PR does not touch and never invokes
+  the CLI binary. **It passes on `origin/main` unmodified.**
+- **#216**'s tests were genuinely good — the exception, worth noting.
+
+Put "does this test fail if you revert the fix?" in every packet. I now do.
+
+### Reviewing a function is not reviewing its dependencies
+
+I read `migrateOrGeneratePassphrase`, confirmed its write -> commit -> read-back
+-> verify -> delete ordering, and pronounced it fail-safe. It is, internally. I
+never checked that `getEncryptedSharedPreferences` — which supplies the store it
+writes into — calls `deleteSharedPreferences` on error. That made the "fix" a
+data-loss regression on device transfer. The adversarial review caught it.
+
+### Operational traps that cost real time today
+
+- **`cargo fmt --all` silently no-ops in a git worktree.** Exits 0, writes
+  nothing, and a following `--check` reports the same diffs. Use
+  `cargo fmt -p <package>`. Cost three round-trips before I spotted it.
+- **`cargo test --workspace --no-run` does not fit this disk** (drives
+  `target/debug/deps` to 20 GB). Local gate is:
+  `cargo fmt --all --check` + `cargo check --workspace` +
+  `cargo check -p scmessenger-wasm --target wasm32-unknown-unknown`. Full gate
+  belongs on CI.
+- **`cargo check --workspace` builds HOST only.** It missed a wasm32 break I
+  introduced (`ledger_manager` is `cfg(not(wasm32))`).
+- **Disk hit 2.9 GB with a build running.** My watchdog fired 9 times and
+  reclaimed nothing, because I had already deleted every PDB and it knew no other
+  trick, then it exited silently. Stale worktree `target/` dirs are the big win:
+  `_scm_wt/wiring/target` alone was 9.3 GB. A watchdog whose reclaim does nothing
+  must escalate, not keep logging.
+- **MSYS mangles `/`-leading args to native exes.** `relay -l /ip4/0.0.0.0/tcp/9001`
+  became `C:/Program Files/Git/ip4/...`. Prefix `MSYS_NO_PATHCONV=1`.
+
+### Windows relay node
+
+Owned by the CTO seat, running PID from this session, 0 panics, stable identity
+`12D3KooWD6vZ...` (unchanged since 2026-08-09). Start it with:
+
+```
+MSYS_NO_PATHCONV=1 ./target/release/scmessenger-cli.exe relay -l /ip4/0.0.0.0/tcp/9001
+```
+
+It logs self-referential circuits (SELF -> AWS -> SELF) and
+`Periodic re-dial: 2555 addresses attempted` — the ghost-ledger accumulation.
+
+### Not done, deliberately
+
+- **`orchestrator_guard` CONTROLLER scope was NOT widened.** A CTO widening the
+  role that constrains the CTO is the pattern that control exists to resist.
+  Operator decision.
+- Worktrees under `_scm_wt/` are left in place; several hold uncommitted CR-noise
+  that is not real work. `_scm_wt/wiring/target` was deleted to reclaim disk.
+
 ## 0-2026-08-22. SESSION RECORD — audit of the dead Antigravity session
 
 A 13-hour Antigravity session (id `2224b573`, 2,569 steps, 46 operator requests)
