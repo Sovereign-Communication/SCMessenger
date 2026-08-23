@@ -4,6 +4,115 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-22f. THE FIX MOVED THE HOLE -- V1 downgrade CONFIRMED by execution
+
+### PR #221 is BLOCKED. It closed the V2 half only.
+
+Adversarial review returned **BLOCK**, and a Claude-native agent then **proved
+it by execution** -- not prose:
+
+```
+[CONFIRMED] Forged message accepted and attributed to
+sender_id=ce93c909cdfcdc49c4b1d18044402389ff06ddfae9656fdda6d14d6fd1c24cba
+P0 CONFIRMED: IronCore::receive_message accepted a forged, unsigned V1 envelope
+and attributed it to Alice without Alice's private key ever being used.
+```
+
+The ingress guard at `core/src/iron_core.rs:3304-3313` rejected unsigned **V2**
+envelopes only. An attacker builds a raw legacy `Envelope`, sets
+`sender_public_key` to Alice's, encrypts to Bob by ordinary ephemeral X25519
+ECDH, and bincode-serializes it. bincode writes a 64-bit length prefix so byte 0
+is `0x20`, matching neither `DRIFT_VERSION` (0x01) nor `WIRE_TAG_V2` -- the
+Drift path is skipped, `decode_wire_signed_envelope` fails, the untagged
+fallback yields `WireEnvelope::V1`, the `matches!` guard is false, and
+`decrypt_message` succeeds because `sender_public_key` is used only as AAD.
+**AAD binds a value to a ciphertext; it does not prove key possession.**
+
+**This hole is NOT introduced by #221 -- it is on `main` today.** But we cannot
+tag a release claiming authenticated messaging while it is open.
+
+The question that found it was in the review packet: *"Can an attacker force the
+V1 path instead, and is V1 authenticated? If so, this PR moved the hole rather
+than closing it."* Ask that question on every partial security fix.
+
+### The remediation, and the one thing the review did NOT check
+
+**Rejecting unsigned V1 at ingress is safe, and this was verified rather than
+assumed.** Every production send path -- both branches of
+`IronCore::send_message` at `:823-886` -- routes through
+`DriftEnvelope::from_legacy_envelope` or `from_v2_envelope`, both of which take
+`&signing_key` and Ed25519-sign before serializing. `codec::encode_envelope`,
+`encode_wire_envelope` and `encode_wire_signed_envelope`, the functions that
+would emit raw unsigned bytes, are called **only from unit tests**. So nothing
+legitimate emits unsigned envelopes and this breaks no working traffic.
+
+The reviewer did not check that. It is the difference between a safe fix and a
+fleet-wide outage, and it should be a standing question on any ingress
+tightening.
+
+### MY FINDING 1 WAS WRONG IN ITS PREMISE. Correcting it loudly.
+
+I wrote that the sender/receiver static-DH derivations "agree only if
+`our_x25519_secret` corresponds to `bundle.x25519_public`". **That precondition
+is false.**
+
+`IdentityKeys::generate()` (`core/src/identity/keys.rs:114-136`) samples
+`signing_key` and `x25519_encryption_secret` from two **independent** CSPRNG
+seeds, and `bundle.x25519_public` derives strictly from the latter. It is never
+equal to `ed25519_public_to_x25519(bundle.ed25519_public)`.
+
+The session succeeded anyway, by commutativity -- sender computes
+`DH(Sender.ed25519->x25519, Recipient.bundle.x25519_public)`, receiver computes
+`DH(Recipient.x25519_secret, Sender.ed25519->x25519)`, and both are the same
+scalar product.
+
+The concern was still worth raising: chasing it surfaced that the sender
+converts its **signing** key for DH when a dedicated X25519 key already exists.
+Cross-protocol reuse between signatures and key exchange is a known sharp edge;
+Signal X3DH and Noise both use separate keys. Now fixed on both sides together.
+
+### Two of my findings HELD, confirmed by line-by-line read
+
+- `signing_hash()` is **byte-identical** to the pre-patch `sign()` hashing loop,
+  field for field. `verify()` accepts signatures from unfixed peers, so the wire
+  break comes **entirely** from the KDF context change. The compatibility story
+  in the Apple lane handoff stands.
+- **Rejection precedes all state mutation.** Verification at `:3279`, `:3289`,
+  `:3296`, `:3310` all run before `ratchet_sessions.write()` at `:3330` and
+  before `decrypt_with_ratchet_fallback` or `inbox.write()`. No ratchet
+  desynchronisation from forged input, so no denial-of-service primitive.
+
+### VERIFICATION GAP -- open, and honestly reported by the worker
+
+The implementing agent stopped at the 3 GB disk floor and **said so** rather
+than claiming success. Outstanding on `_scm_wt/v2auth`, uncommitted:
+
+- post-fix run of `test_v1_bincode_downgrade_forgery` (expect PASS)
+- post-fix run of `test_v2_hybrid_envelope_forgery_is_rejected` **and**
+  `test_v2_hybrid_honest_sender_succeeds` -- the honest path is the DoS check
+- revert checks for all three
+- `cargo clippy --workspace`, standalone wasm32 check
+- the commit itself, deliberately withheld
+
+`cargo check --workspace` did pass clean before the floor was hit. **That is
+compile-level confidence only. Do not treat it as done.**
+
+### Disk emergency, and the guard that mis-fired
+
+Free space hit **2.2 GB** with the Android build holding 14.32 GB in
+`_scm_wt/androidwire/target`. `scripts/clean_target.sh` refused -- its guard
+counts build processes and cannot tell that the running build is in a DIFFERENT
+worktree from the artifacts being reclaimed.
+
+I did not override it blindly. I scoped the reclaim to
+`SCMessenger/target/debug/deps` only -- 3.70 GB, no tracked files, nothing
+underneath the running build -- which preserves `target/release/` and therefore
+the **running Windows relay binary**. Free space 2.2 -> 5.8 GB.
+
+**Improve that guard**: it should compare the build's working directory against
+the reclaim path instead of counting processes globally, or it will keep
+blocking the exact recovery it exists to enable.
+
 ## 0-2026-08-22e. K VERIFIED -- and one real gap found at the Android boundary
 
 ### K gates, run by me
