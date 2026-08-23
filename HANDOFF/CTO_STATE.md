@@ -46,7 +46,7 @@ reasoning in §0-2026-08-23d.
 | A3 | #227 Android degraded-storage wiring | Verified green, stacked on #222 | Merge after A2 |
 | A4 | #220 Android reachability | 2 known wiring findings | **Accept, do not fix** — the passphrase revert re-orphans SecurityUtils; record the acceptance |
 | A5 | #219 CLI identity persistence | **RED on Lint / Rust Linting** | **N3 is the Windows CLI and churns identity without this.** Either fix, or drop N3 from the gate. Check first whether #222 alone suffices |
-| A6 | POST_TAG_QUEUE §2 re-entry table | Agent dispatched; result may be unread | Four triggers fired — see §0-2026-08-23c. Fix or accept **in writing** before the gate |
+| A6 | POST_TAG_QUEUE §2 re-entry table | **DONE — 2 BLOCKS, 3 FIXED** | See §0-2026-08-23f. **Desktop panic can kill N3 mid-gate; relay fallback is unproven and fails silently.** Both need an operator ruling or work before the gate |
 | A7 | Clippy deny on ignored params + required negative-test job | Agent dispatched; result may be unread | Worktree `_scm_wt/cihard`, branch `cto/ci-hardening-2026-08-23` |
 
 **If an agent result was never read, its work is in the worktree.** Check
@@ -54,6 +54,11 @@ reasoning in §0-2026-08-23d.
 
 ### The two things most likely to bite you
 
+0. **A6 came back with two BLOCKS -- read §0-2026-08-23f first.** N3 (Windows)
+   can panic and exit mid-gate via two unconditional  calls that fire
+   in release builds; capture its **stderr separately** or a recurrence is
+   invisible. And relay fallback for roamed peers was never verified -- it fails
+   as **silent non-delivery**, the hardest mode to recognise in the field.
 1. **A6 is the same class of mistake as the security bug.** Six P0s were
    dispositioned against a **two-endpoint** premise. The gate is now four nodes,
    and four re-entry triggers written into `POST_TAG_QUEUE.md` have fired. I
@@ -120,6 +125,115 @@ CEO answers** — anchoring destroys the value. Two independent passes this
 session split on the audit question, which is exactly the signal you want. Opus
 for consensus passes. Include facts against yourself; a CEO briefing that omits
 the CTO's own errors is worthless.
+
+## 0-2026-08-23f. RE-ENTRY TABLE RE-RUN -- two BLOCKS, three FIXED
+
+A6 complete. Verified against `main` tip, with file:line evidence for every
+claim. **This changes the gate plan and it is the most important unread result
+of the session.**
+
+| Ticket | Verdict |
+|---|---|
+| `P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH` | **BLOCKS** |
+| `P0_NO_RELAY_FALLBACK_FOR_ROAMING_PEERS` | **BLOCKS** |
+| `P0_UPNP_PANIC_KILLS_DESKTOP_NODE` | FIXED |
+| `P0_BLE_L2CAP_ACCEPT_SPIN` | FIXED |
+| `P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT` | FIXED (bookkeeping only) |
+
+### BLOCK 1 -- the desktop panic. N3 can die mid-gate.
+
+The per-peer concurrency cap is real and tested (`cli/src/ledger.rs:224-226`,
+commit `c242fb53`, `test_per_peer_concurrent_connection_cap` at `:2132`) **but it
+gates only the CLI's own periodic ledger-scheduler dial path**
+(`cli/src/main.rs:596-598`).
+
+`core/src/transport/swarm.rs` has roughly **19 independent `swarm.dial()` sites**
+-- relay dial `:3278`, NAT hole-punch seed `:6435`, candidate ladder
+`:6095-6108` -- gated only by the older per-**address** `DialPolicyManager`,
+which **explicitly permits up to 3 concurrent dials to the same address**
+(`core/src/transport/dial_policy.rs:160-169`, asserted by its own
+`test_concurrent_dial_limit` at `:488-504`) and never consults established
+connection count.
+
+**My earlier "release builds probably remove this" note was half right and
+therefore misleading.** `Cargo.toml:131-136` sets no `debug-assertions`
+override, so the `debug_assert_eq!` at `libp2p-request-response-0.29.0/src/lib.rs:678`
+IS compiled out of `scm-windows-amd64.exe`. **But the same function carries two
+unconditional `.expect()` panics at `lib.rs:670` and `:676` that fire in every
+profile.** Our own guard (`swarm.rs:5334-5390`) runs *after* libp2p's internal
+handler and protects only application state -- it cannot prevent a crate-internal
+panic.
+
+**What the operator sees:** N3 exits cleanly -- `swarm_event_loop_died`, process
+gone. Not a hang. Most likely during D6 transport-failover churn.
+
+**Required before the gate, minimum:** capture N3 **stderr separately**. The
+original ticket records that this panic never reaches the rolling tracing log --
+only stderr. Without that capture a recurrence is invisible rather than
+diagnosable.
+
+Then either (a) an explicit operator ACCEPTABLE ruling with the workaround
+recorded -- "restart N3 promptly; a mid-gate panic is a known-possible event, not
+a new regression" -- or (b) extend the peer-level cap to the swarm dial paths,
+which is work inside merge-blocked `core/src/transport/` and needs
+`crypto-security-auditor` sign-off. **(a) is an operator judgement call, not
+mine.**
+
+### BLOCK 2 -- relay fallback. Silent non-delivery, the worst failure mode.
+
+Genuinely fixed and tested: loopback/self-dial filtering
+(`core/src/transport/addr_filter.rs:1324`, `cli/src/ledger.rs:586-594`, commit
+`92ad1532`) and stale-address reaping (`test_stale_address_reaping`,
+`ledger.rs:2165-2189`).
+
+**But reaping fires only when a new DIRECT dial succeeds**, so it does nothing
+for a peer reachable only via relay. And the ticket's central acceptance
+criterion -- that a circuit through the relay we hold a live connection to is
+actually constructed and prioritised ahead of dead direct candidates -- **was
+never verified, not even manually.** No regression test exists anywhere in
+`core/tests`, `core/src`, or `cli/src`.
+
+The ticket's own closing words: *"whether a circuit through 12D3KooWPJK6...
+(AWS) is ever constructed needs a targeted check... I will not repeat the mistake
+of concluding absence from a filter that could not have shown presence."*
+
+**What the operator sees:** not a crash, not a hang -- a message queued for a
+roamed peer sits retrying in the outbox with no explicit error. **Whether it ever
+arrives depends on ladder ordering nobody has proven.**
+
+**Cheap, concrete action before relying on the D4/D6 cross-NAT leg:** pull the
+candidate-ladder debug log (`swarm.rs:6095`, `"Dialing candidate ladder for
+{}: {:?}"`) during a two-handset cross-NAT run and confirm by eye that a
+`p2p-circuit` entry through the live AWS relay both **appears in the ladder and
+is actually dialled**. That is the targeted check the ticket asked for and never
+got -- minutes of log reading.
+
+If the circuit is not reached, this blocks D4 and D6 outright, and the
+"D4 has a public IP so no relay is needed" premise that `POST_TAG_QUEUE.md` used
+to defer it does not survive the move to two handsets.
+
+### The three FIXED, with the caveats that matter
+
+- **UPnP** -- removed entirely (zero references in `Cargo.toml` and
+  `behaviour.rs`); 93-minute clean soak recorded. Loose end: `Cargo.lock:3056`
+  still resolves `libp2p-upnp 0.5.0`, likely stale. Hygiene only.
+- **BLE L2CAP spin** -- full rewrite (`BleL2capManager.kt`, commits `fdb32e7d`,
+  `35c9a2db`): every accept failure closes and nulls the socket, exponential
+  backoff 250ms->30s, silent-null-spin path closed. 3 unit tests passing.
+  **D7 can proceed.** Caution for scoring: a single failed L2CAP accept during
+  D7 is no longer evidence BLE is broken -- it retries on backoff. Score a
+  *sustained* absence of successful connections, not one transient error.
+- **DUAL_BIND** -- genuinely fixed (`multiport.rs:75-124`, commit `cdf8c0fc`)
+  with two tests asserting the ticket's own criteria. Move it out of
+  `HANDOFF/todo/` with a `Disposition: DONE` line.
+
+### Method note worth keeping
+
+The agent did not run cargo (another build held the machine). It corroborated
+Rust test claims against a **green CI run on `e5ff72cf`** and the Android claim
+against an **on-disk timestamped test-results XML**, and said plainly which
+claims rested on which. That is the right shape for a read-only audit: cite what
+you actually observed, and name the substitute when you could not run it.
 
 ## 0-2026-08-23e. #221 VERIFIED -- and one protection has NO test coverage
 
