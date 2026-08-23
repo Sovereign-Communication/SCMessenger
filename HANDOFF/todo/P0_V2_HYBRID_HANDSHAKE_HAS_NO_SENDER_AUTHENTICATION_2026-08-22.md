@@ -1,6 +1,6 @@
 # P0 -- the V2 hybrid handshake provides NO sender authentication
 
-Status: OPEN -- operator decision required
+Status: CONFIRMED 2026-08-22 by executed test -- fix dispatched, operator sign-off required to merge
 Severity: P0. Message forgery / sender impersonation on the DEFAULT suite.
 Found: 2026-08-22, during adversarial review of PR #215's remediation branch
 Affects: `core/src/crypto/ratchet.rs`, all platforms (CLI, Android, iOS, WASM)
@@ -95,14 +95,33 @@ the send path stores sessions under the recipient's pubkey hex
 `hex(blake3(pubkey))` (`encrypt.rs:597`) -- so send and receive never share a
 session. That mismatch is itself worth a separate ticket.
 
-## NOT YET PROVEN
+## PROVEN -- 2026-08-22
 
-No forgery test has been executed. The above is derived by reading the
-derivation and confirming the two unused parameters and the absent ingress
-verification. **Before anyone spends effort on a fix, write
-`test_v2_hybrid_envelope_forgeable_without_sender_key` and confirm the
-forgery actually succeeds.** If it fails, something authenticates the sender
-that this analysis missed, and that path should be documented instead.
+**CONFIRMED BY EXECUTION. This is no longer an analysis.**
+
+`core/tests/test_v2_hybrid_forgery.rs` on branch `cto/v2-forgery-proof-2026-08-22`
+(commit `bab533e0`) demonstrates the forgery end to end:
+
+```
+running 1 test
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+Independently re-run by the CTO from a clean 13m02s rebuild, so the result is
+not a stale artifact. The test:
+
+- generates Alice's identity and DROPS her private keys before the attack begins
+- gives Mallory only the two published `PublicKeyBundle`s
+- signs the envelope with `[0u8; 64]` -- a zero signature
+- feeds the forged Drift envelope into the real `IronCore::receive_message`
+- asserts Bob accepts it, decrypts it, and attributes `sender_id` to Alice
+
+All four assertions hold. Both the primitive level
+(`decrypt_with_ratchet_fallback`) and the full-system level
+(`IronCore::receive_message`) accept the forgery.
+
+The ticket analysis below was correct in every particular.
 
 ## Impact if confirmed
 

@@ -4,6 +4,110 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-22c. P0 CONFIRMED BY EXECUTION -- rollout freeze held
+
+Operator asked to be pushed to the next five-node test, on Windows/Android,
+after 0.4.0 and 0.5.0 scope was complete. This section is the honest answer.
+
+### The forgery is real. I ran it myself.
+
+Dispatch I returned. `core/tests/test_v2_hybrid_forgery.rs`
+(`cto/v2-forgery-proof-2026-08-22`, commit `bab533e0`) passes. I re-ran it from
+a **clean 13m02s rebuild**, so it is not a stale artifact:
+
+```
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+I read all 334 lines before trusting it. It is NOT one of this project's
+self-certifying tests: Alice's private keys are dropped before the attack
+begins, the signature is literally `[0u8; 64]`, and the forged envelope goes
+through the real `IronCore::receive_message` -- not a helper written beside the
+test. Bob accepts it and files it under Alice.
+
+**The P0 ticket's analysis was correct in every particular.** Ticket status
+updated from "NOT YET PROVEN" to PROVEN.
+
+### Second P0 promoted from PR #219's diagnosis
+
+`core/src/iron_core.rs:402` `Err(_) => MemoryStorage::new()` is one line with
+three consequences: CLI identity churn (proven in the field), the desktop
+request-response panic chain, and the fail-CLOSED block checks at `:1179` and
+`:3395` silently inverting. PR #219 says so itself and deliberately scopes to
+the CLI boundary. The arm itself is now dispatched.
+
+### Dispatched -- `tmp/dispatch/launch7.sh`, strictly sequential
+
+| Packet | Branch / worktree | Scope |
+|---|---|---|
+| **J** | `cto/v2-sender-auth-2026-08-22` / `_scm_wt/v2auth` | Bind sender static X25519 into the root KDF, new derive_key context, verify signature at ingress. Both legs. |
+| **K** | `cto/storage-fail-loud-2026-08-22` / `_scm_wt/storefix` | Stop the silent RAM degradation; prove block checks cannot invert. |
+
+Both packets carry the falsifiability gate explicitly: **"does this test fail if
+you revert the fix?" -- run it both ways and paste the output.** Both are DRAFT
+PR only. J is inside the merge-blocked crypto perimeter.
+
+Sequential, not parallel: 8.3 GB free and each build costs ~4 GB. The launcher
+waits for a free build slot, refuses below 5 GB, and reclaims J's target between
+runs only if free drops under 7 GB.
+
+### Why the tag is NOT being cut today
+
+`HANDOFF/plans/PR139_FIVE_NODE_FIELD_GATE_REFERENCE.md` section 1.1, operator
+locked: *"any runtime fix creates a new anchor and restarts qualification."*
+
+The J fix changes the handshake KDF context string -- deliberately wire-breaking
+so version skew fails closed. Rolling out today therefore guarantees a second
+full five-node qualification round. **One round, after the freeze, is cheaper
+than two.** That is the recommendation, not a decision I have taken alone; it is
+in front of the operator.
+
+### The rollout machinery itself is READY -- verified, and this is good news
+
+`.github/workflows/release.yml` on `main` is complete and correct. A pushed tag
+produces:
+
+- signed release **AAB + APK** (all four signing secrets exist in the repo,
+  set 2026-08-15), with native-lib verification AND the `apksigner` signature
+  gate that catches a `CN=Android Debug` build
+- `scm-windows-amd64.exe`, plus linux/macos-amd64/macos-arm64 CLIs
+- SHA256 checksums and build provenance per artifact
+
+The gates `daab8a2b` deleted are present on `origin/main`. Nothing needs
+building for D2 -- it needs a tag on a SHA we trust.
+
+### Gap list against SHIP_PLAN D1-D7, as of now
+
+| ID | State | Blocker |
+|---|---|---|
+| D1 main green | **UNKNOWN** | `CI` and `Lint` still QUEUED on `b538f3ba` 26+ min. Runner backlog, not a failure. Re-check. |
+| D2 signed APK | Machinery ready | Needs a tag. No `v0.4.0*` tag exists; latest release is v0.1.9 from March. |
+| D3 README | Not re-verified this session | |
+| D4/D6/D7 field proofs | Blocked | Need the frozen build. |
+| D5 no long-lived branch | **DONE** | #139 merged. |
+
+**v0.5.0 scope is not late -- it has not started, by policy.** `SHIP_PLAN.md`
+section 4 defers iOS parity until after the 0.4.0 tag. The Apple lane also still
+owes written CR1-CR3 answers and has never once supplied an iOS/macOS log across
+six operator requests. A five-node gate whose fifth node cannot produce evidence
+is a four-node gate described dishonestly. Said plainly to the CAO.
+
+### Written this session
+
+`HANDOFF/gpt/CTO_TO_CAO_2026-08-22_FIVE_NODE_ROLLOUT.md` (`AW-BILAT-0002`) --
+tells the Apple lane to build from the tag `v0.4.0-rc.1` and nothing else, why
+the freeze is held, the wire-skew warning, the receiver-side-only scoring rules,
+and the three things their lane owes. `CTO_TO_CAO.md` deliberately untouched;
+it is contested and holds another session's uncommitted edits.
+
+### Operational note
+
+`CARGO_INCREMENTAL=0` on a worktree cargo already built with default settings
+invalidates every fingerprint and forces a full rebuild -- 13 minutes and 4.2 GB
+for one test. That cost was mine and avoidable. Match the flags the prior build
+used, or accept the rebuild knowingly.
+
 ## 0-2026-08-22b. STAND-DOWN HANDOFF — read this first
 
 ### Landed
