@@ -4,6 +4,84 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-23d. DECISIONS -- the audit gate, and a retraction
+
+### RETRACTION -- "one green lane is green by suppression" was WRONG
+
+Section 0-2026-08-23c says, in my own words, "Also flagged, and **verified**: one
+green lane is green by suppression." **I had not verified it.** I grepped for the
+string `continue-on-error` and repeated an advisor's inference from the hit
+count. That is precisely the failure I wrote L3 about, committed by me, one
+section after writing it.
+
+Checked properly -- every `continue-on-error: true` in
+`.github/workflows/docker-test-suite.yml` resolves to the same step:
+
+| Line | Attached step | Indent |
+|---|---|---|
+| 300 | `- name: Pull published mock node image` | 6 (step-level) |
+| 432 | `- name: Pull published mock node image` | 6 (step-level) |
+| 495 | `- name: Pull published mock node image` | 6 (step-level) |
+
+None is job-level. All three are on an image **pull**, and line 300's has an
+explicit `Build mock node image (fallback when the pull fails)` step guarded by
+`if: steps.pull_node.outcome != 'success'`. That is a try-pull-else-build
+pattern, not a suppressed failure.
+
+**The steps that actually run tests -- `Run all tests` and `Run tests with NAT
+simulation` -- carry no suppression.** A failing Docker integration test fails
+the lane.
+
+**So "main is green on all nine lanes" is honest and stands.** Do not repeat the
+suppression claim.
+
+One genuinely separate item, not to be conflated: PR #156 made the Docker
+Integration Suite **non-blocking as a required check** (recorded in section 6 of
+this file). Non-blocking is about whether a red lane blocks merge. It is not
+suppression, and it does not make a green result false. Confirm its required
+status before the tag and state it plainly in the release notes either way.
+
+### DECISION -- the audit gate. Mine to make, and here it is.
+
+Two independent CEO passes split on this: one held friends-and-family until an
+external crypto audit completes; the other said ship now and commission the
+audit in parallel, gating nothing on it. The operator is right that the CTO and
+CEO can resolve this between them rather than escalating a tie.
+
+**RULING: tag and run the gate now. The public release gates on the audit being
+COMMISSIONED, not completed.**
+
+Concretely:
+
+1. **`v0.4.0-rc.1` is cut as a DRAFT GitHub release.** The four-node gate runs
+   against it. A draft release is not public, which resolves the
+   "friends-and-family is not a distribution channel" problem honestly rather
+   than by relabelling.
+2. **Publishing that release requires all four:**
+   - both forgery tests on `main`, shown failing-on-revert with pasted output
+   - one independent adversarial review of the **merged** tree returning APPROVE
+   - the external audit **commissioned** -- firm named, scope written, price
+     agreed, dates set
+   - the release body states plainly that the crypto has had no external audit
+     **yet**, and names the commissioned engagement
+3. **Audit completion gates the v0.4.0 final tag, not the rc.**
+
+**Why this and not either pure position.** The audit's value is real -- self
+review missed the hole for months and then missed half of its own fix, so it has
+now failed twice and is not a credential. But making *completion* the gate
+converts an unpriced procurement lead time into a shipping decision, and this
+project has already spent five months not shipping. **Commissioning is bounded,
+checkable, and cannot be quietly extended**, which is exactly what the earlier
+"put a date on the freeze" instruction was asking for and what Gate D lacked.
+
+The durable control against this specific defect class is not the audit anyway.
+It is the permanent negative tests in CI plus the clippy deny on ignored
+parameters -- both of which would have caught the original defect, cost nothing,
+and are in Gate A as A6/A7.
+
+**Gate D is replaced by this ruling.** Its unbounded form -- "days not weeks,
+real money not tokens", with no figure, scope or shortlist -- is withdrawn.
+
 ## 0-2026-08-23c. GATE A WAS INCOMPLETE -- corrected after an independent CEO pass
 
 An independent Opus CEO pass, run cold and deliberately not shown the earlier
