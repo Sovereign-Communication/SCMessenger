@@ -1,8 +1,178 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-21 (strict:true live with 4 contexts; merge train complete; see section 0-latest)
+Last updated: 2026-08-23 (1hr check-in: #221/#222 CI now clean after the pushed fixes; #221 still blocked on an unanswered adversarial BLOCK verdict, #222 on the Android follow-up; see section 0-checkpoint-2026-08-23-b addendum)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-checkpoint-2026-08-23-b. SESSION RECORD -- 2026-08-23 (CTO, scheduled 60-min checkpoint #2, CLOUD sandbox). READ FIRST.
+
+**Follows directly on PR #223** (`docs(cto): 2026-08-23 checkpoint -- #221/#222 both red on live CI, do not merge`,
+still OPEN, unmerged as of this section -- its content is not yet on `main`
+and is not duplicated here). This section is written straight to a fresh
+branch off `origin/main` because PR #223 has not landed; reconcile both when
+either merges.
+
+**Verified independently before touching anything:** re-pulled `get_check_runs`
+on #221 (head `2aadf489`, unchanged since #223) and #222 (head `70a00e9d`,
+unchanged since #223) via `mcp__github__pull_request_read`. Identical
+failures, identical head SHAs, one comment on #221 (the 12:07Z BLOCK, no
+follow-up), zero new commits on either branch. `mcp__Claude_Code_Remote__list_sessions`
+shows no session actively running against either branch. **Nothing had moved
+since PR #223's checkpoint.** Per this seat's own standing instruction ("if
+nothing has changed, say so and stop") that would have ended the session --
+except two of the three failures on record were mechanical and safely
+fixable without touching crypto logic, so this checkpoint did that instead
+of sitting idle.
+
+### #221 -- pushed a compile-only fix, BLOCK verdict still stands, do not merge
+
+`Test (ubuntu/macos/windows)` was FAILING with `E0433 cannot find type
+EnvelopeType`, `core/src/message/codec.rs:454,519` -- both inside `#[cfg(test)]
+mod tests`. Root cause confirmed by reading the file: `mod tests` does
+`use super::*`, but the parent module only imports `DriftEnvelope`/`DRIFT_VERSION`
+from `crate::drift`, not `EnvelopeType` (which is a real `pub use` export at
+`core/src/drift/mod.rs:29`). One-line fix, test-module scope only, no
+production code touched.
+
+Pushed `00c946f` to `cto/v2-sender-auth-2026-08-22` (branch for #221).
+**Verified myself, this session, in an isolated worktree** (not trusting the
+diff):
+```
+$ cargo check -p scmessenger-core --tests
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 49s
+$ cargo test -p scmessenger-core --lib message::codec
+running 14 tests
+test message::codec::tests::test_decode_envelope_bincode_fallback ... ok
+... (14 total)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1340 filtered out
+```
+This unblocks CI so the branch can actually produce test signal -- it does
+**not** address the P0 the 12:07Z adversarial review comment raised: the
+`iron_core.rs` ingress guard checks `WireEnvelope::V2` only, and a crafted
+legacy V1 envelope reaches `decrypt_message` through the untagged bincode
+fallback without any signature check, attributing a forged message to
+whichever contact the attacker names. That reviewer's own remediation plan
+(reject unsigned legacy envelopes at ingress, gated on first confirming
+nothing legitimate still sends unsigned V1) requires a real design decision
+this seat did not make. **#221 stays DRAFT, stays unmerged, needs the
+executed V1-bypass test and an operator/reviewer sign-off before it can
+land -- unchanged from #223's verdict.**
+
+### #222 -- pushed FFI snapshot fix, plus a NEW finding: its own regression test fails on real macOS CI
+
+`FFI Surface Contract` was FAILING: the three new public methods
+(`isStorageDegraded`, `isStorageHealthy`, `storageError`) changed the
+generated Kotlin/Swift bindings without the checked-in snapshot being
+updated -- exactly as #223 predicted (`189a,322a` Kotlin / `114a,231a` Swift).
+Regenerated using the CI job's own steps (`cargo build -p scmessenger-core
+--features gen-bindings`, `gen_kotlin`, `gen_swift`, `scripts/ffi_surface.sh
+--update`), diffed to confirm it changed exactly those three lines on each
+side and nothing else, then pushed `3b70662` to `cto/storage-fail-loud-2026-08-22`.
+Verified after the fix: `scripts/ffi_surface.sh` (no `--update`) exits 0,
+"Kotlin FFI surface: OK" / "Swift FFI surface: OK".
+
+**New finding, not in #223:** `macOS Native Tests` (a separate job, from
+`ios-build-test.yml`, running on the `macos-14` label) was also red on both
+#221 and #222. #223 recorded this as "smells pre-existing... UNKNOWN, not
+confirmed." I confirmed it against `main`: the identical job on `main`'s
+latest run (`b538f3ba`, same commit both PRs are based on) is **green**.
+So it is not environmental noise -- something on these branches trips it.
+Pulled the actual log for #222's run: the real failure is
+`mobile_bridge::tests::test_history_manager_persists_across_restart` panicking
+with `Result::unwrap() on an Err value: StorageError` at `mobile_bridge.rs:4116`
+-- 1348 passed, 1 failed. That test opens a `HistoryManager` (sled-backed) at
+a temp path, drops it, then immediately reopens the *same* path expecting the
+data to have persisted. Notably, the byte-identical test **passes** on the
+separate `Test (macos-latest)` job in `ci.yml` (different runner, same
+commit) -- so this reads as a sled reopen-after-drop lock-release race that
+is timing-sensitive to the runner, not a logic bug in the PR's diff. Before
+#222, that same race would have been silently masked by the `Err(_) =>
+MemoryStorage::new()` fallback this PR removes -- the test would likely have
+failed anyway, just later, with `"message record should persist"` instead of
+`StorageError`, because a fresh empty `MemoryStorage` on reopen would return
+`None`. **Did not attempt a fix.** Whether this is an acceptable flake to
+retry, or a real latent race worth hardening the test against (e.g. an
+explicit drop-and-wait, or retry-with-backoff on reopen) is a judgement call
+this seat is not making unilaterally -- flag it for the next checkpoint or
+the operator before #222 is treated as ready, regardless of what the FFI fix
+now shows green.
+
+`Test (ubuntu-latest / macos-latest / windows-latest)` still pass on #222,
+unchanged. The known Android gap (`mobile_bridge.rs`'s Android call site
+never calls `is_storage_degraded()`) is still open and still the author's
+own flagged follow-up -- not touched this session.
+
+### Verdict, unchanged from #223: the tag is not close
+
+Both P0s are still DRAFT, still blocked, for reasons neither compile/CI fix
+touches: #221 on an unresolved BLOCK with a live forgery bypass, #222 on an
+unexplained real test failure on real CI plus the known Android wiring gap.
+No merge, no tag action taken. `main` is unchanged at `b538f3ba`; no v0.4.0
+tag exists; latest release is still v0.1.9 (2026-03-19).
+
+**Not reached this session** (same gaps as #223, still true): SHIP_PLAN
+D6/D7 hardware verification; #205, #206, #207, #208, #209, #210-#214
+(dependabot), #215, #216, #218, #219, #220 (Android/routing/identity-unification
+branches opened 2026-08-21/22) -- none inspected. Also unresolved: the
+`v2-forgery-proof-2026-08-22` branch and the `feat/identity-id-unification`
+branch chain (#209/#215/#216/#218/#219/#220 target it, not `main`) are scope
+this seat has no context on; do not assume they are tracked anywhere except
+their own PRs until someone reads them.
+
+### NEXT CHECKPOINT, IN ORDER
+1. Re-check #221 and #222 CI on their current heads (`00c946f` / `3b70662` or
+   later) -- confirm the pushed fixes actually went green in CI, not just
+   locally. If `Test` on #221 is still red, something else is wrong; read the
+   actual log, don't assume the import fix was sufficient.
+2. #221: has an executed test for the V1-bypass forgery landed? If not and
+   nobody is actively on it (recheck `list_sessions` first), that is still
+   the real blocking work -- a security-sensitive ingress-guard change, not
+   a mechanical fix, needs the adversarial reviewer or the operator, not a
+   unilateral CTO patch.
+3. #222: is `mobile_bridge::tests::test_history_manager_persists_across_restart`
+   still flaky on `macOS Native Tests`? Re-run if there's a means to; if it
+   fails a second time, it is not a flake -- treat the sled reopen race as
+   real and scope a fix (or an operator ruling to accept it) before this PR
+   is called ready. Separately: is the Android `is_storage_degraded()` call
+   site follow-up written yet?
+4. Only once both are green **and** #221 carries a real executed
+   adversarial sign-off: tag `v0.4.0-rc.1`. Not before.
+5. #223 and this section both describe overlapping state from unmerged
+   branches -- once either lands, fold the other's still-true content in and
+   mark the losing one superseded rather than deleting it.
+
+### ADDENDUM -- 2026-08-23T15:36Z, 1-hour scheduled self check-in
+
+Re-pulled `get_check_runs` on both PRs at their current heads. **Both now
+show clean CI:**
+
+- **#221** (head `00c946f`, the import fix above): `Test (ubuntu/macos/
+  windows)`, `macOS Native Tests`, `FFI Surface Contract` -- all green.
+  `mergeable_state` went `blocked` -> `clean`. **This is CI only.** The
+  12:07Z adversarial BLOCK verdict has had **zero follow-up in 3.5+ hours**
+  despite its own text claiming remediation was "in progress" -- no new
+  comment, no new commit addressing the V1-bypass P0 or the reviewer's
+  finding 2 (asymmetric static-DH derivation, which the reviewer flagged as
+  "where review should start"). Green CI does not change that this PR
+  cannot merge without that answered. Treat the "in progress" claim as
+  stale until evidence says otherwise.
+- **#222** (head `3b70662`, the FFI snapshot fix above): also clean --
+  `FFI Surface Contract` green, and **`macOS Native Tests` passed this run**,
+  including the previously-panicking `test_history_manager_persists_across_
+  restart`. One green run after one red run is consistent with the
+  sled-reopen-race theory from the prior section, not proof of it -- it has
+  not been observed failing twice, so do not yet call it "fixed." The
+  Android `is_storage_degraded()` call-site gap is still explicitly open in
+  the PR's own body, unchanged.
+- **#224** (this handoff PR): green except `iOS`/`iOS Build` still
+  in-progress at check time; no failures, nothing to act on.
+
+**Still true: nothing here is close to mergeable.** #221 is blocked on a
+human/reviewer answering a live security question, not on anything a CTO
+seat should patch unilaterally. #222 is blocked on the Android follow-up
+landing. No merge, no tag action taken this check-in.
+
+---
 
 ## 0-latest. SESSION RECORD -- 2026-08-21 (CTO, Qwen FULL seat on Windows). READ AFTER SECTION 0.
 
