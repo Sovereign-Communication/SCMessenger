@@ -1,8 +1,132 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-21 (strict:true live with 4 contexts; merge train complete; see section 0-latest)
+Last updated: 2026-08-23 (cloud checkpoint; #221/#222 both red on their own CI, do not merge; see section 0-checkpoint-2026-08-23)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-checkpoint-2026-08-23. SESSION RECORD -- 2026-08-23 (CTO, scheduled 60-min checkpoint, CLOUD sandbox). READ FIRST.
+
+**Environment note:** this seat ran in a cloud sandbox with `gh`-equivalent GitHub
+MCP tools and a git checkout only -- no Windows machine, no `_scm_wt/`
+worktrees, no build cache, no Windows relay node, no Pixel. Nothing below was
+verified on hardware; everything is from GitHub state and CI logs, with
+literal command/tool output, not recollection.
+
+**File-gap found:** the most recent section in this file on disk, before this
+one, is `SESSION ADDENDUM -- 2026-08-20`. There is **no 2026-08-22 section**.
+Whatever produced the "2026-08-22, sign-off given" narrative this session's
+prompt carried did not come from this file -- treat it as unverified. Real
+gap: PRs up to #222 exist and #217 (CRLF renormalization) is already merged
+to main, none of it recorded here. Someone should reconcile that before
+adding more parallel history.
+
+**Re-derived live state (`mcp__github__*` tools, not `gh` -- unavailable in
+this sandbox):**
+
+- `main` HEAD = `b538f3ba` (merge of #217). All CI workflows on that push
+  show `conclusion: success` (CI, Lint, Repository Hygiene, Docker Publish,
+  Docker Integration Suite, Mobile, Cross, iOS Build & Test). **D1 (main
+  green) reconfirmed live**, independent of the stale note above.
+- No `v0.4.0` tag. `list_releases` -> latest is `v0.2.1` / `v0.1.9`, both
+  published 2026-03-19. Five-month gap confirmed, unchanged.
+
+**#221 `fix(crypto): bind sender identity into V2 root key...` -- NOT
+close to mergeable. Opened `2026-08-23T11:52Z`, ~1 hour before this
+checkpoint, not carried over from the 22nd.** State: OPEN, DRAFT,
+`mergeable_state: blocked`. Its own PR body says "adversarial review still
+outstanding" -- this contradicts the "sign-off was given, review pending"
+framing this checkpoint started with.
+
+- `12:07Z`, 15 minutes before this checkpoint began: an adversarial-review
+  comment landed on the PR. **Verdict: BLOCK.** Explicitly static-analysis
+  only -- the reviewer states outright it ran nothing and to "treat the P0
+  below as a claim until the executed test lands." **New P0**:
+  `iron_core.rs`'s ingress guard rejects unsigned `WireEnvelope::V2` only; a
+  crafted **legacy V1** envelope reaches decode through the untagged bincode
+  fallback and bypasses the guard entirely -- the same forgery this PR
+  exists to close, through a different code path. Pre-existing on `main`,
+  not introduced by this PR, but it means the tag cannot yet claim
+  authenticated messaging even if #221 lands as-is. The same comment says
+  remediation is "in progress" -- a signal that another session is already
+  mid-fix on this branch.
+- Pulled the actual CI logs, not the PR body's claims: `get_check_runs` on
+  head `2aadf489` shows `Test (ubuntu-latest)`, `Test (macos-latest)`,
+  `Test (windows-latest)` all **FAILURE**, on all three platforms, with the
+  identical real compiler error:
+  ```
+  error[E0433]: cannot find type `EnvelopeType` in this scope
+    --> core/src/message/codec.rs:454:28  (and :519:28)
+  ```
+  A plain missing import (`use crate::drift::EnvelopeType;`) in the exact
+  file the PR's own body claims to have verified: *"cargo check --workspace
+  exit 0 (zero errors, zero warnings)."* **That claim is false on the
+  current head.** This is exactly the "verification claim contradicted by
+  a real re-run" failure mode this project has been burned by before --
+  the CTO checkpoint prompt itself named it as the thing to watch for, and
+  this is a live instance of it, not a hypothetical.
+- **Did not touch this branch.** Between (a) an unresolved BLOCK verdict
+  with a new P0, (b) a compile failure on every platform, and (c) a
+  15-minutes-old comment saying remediation is already in progress, pushing
+  a competing fix risks exactly the concurrent-session collision this
+  repo's rules warn about. Left it for whoever is already working it, or
+  the next checkpoint if that stalls.
+
+**#222 `fix(core): stop silently degrading persistent storage to RAM` --
+also not close.** Opened `2026-08-23T11:53Z`, OPEN, DRAFT,
+`mergeable_state: unstable`. Outside the crypto-blocked perimeter
+(`message/`, `iron_core.rs` at root -- not `crypto/transport/routing/
+privacy/`), so no adversarial-review gate applies, but the PR body itself
+flags an open gap: the Android call site (`mobile_bridge.rs`) never calls
+`is_storage_degraded()`, so a locked/corrupt store now yields a silently
+inert Android app instead of the old identity-churn bug. Author says a
+follow-up "should land before the five-node run."
+
+- `get_check_runs` on head `70a00e9d`: **`FFI Surface Contract` FAILS** --
+  mechanical, not a logic defect. The new public methods
+  (`isStorageDegraded`, `isStorageHealthy`, `storageError`) changed the
+  Kotlin/Swift FFI surface; the checked-in snapshot files were never
+  regenerated, so `scripts/ffi_surface.sh` diffs them and fails loudly
+  (working as designed). Straightforward once someone owns the PR: `189a,
+  322a` in the Kotlin snapshot, `114a, 231a` in the Swift one.
+- `macOS Native Tests` also FAILS on this head -- but the **same job name
+  fails on #221 too**, whose diff is unrelated. That smells pre-existing or
+  environmental rather than caused by either PR, but this was **not**
+  independently confirmed against a green `main` run this session -- record
+  as UNKNOWN, not "safe to ignore."
+- `Test (ubuntu-latest / macos-latest / windows-latest)` all **PASS** on
+  #222 (unlike #221).
+
+**Verdict this checkpoint: the tag is not close.** Both P0 blockers are
+open, draft, and red on their own CI; #221 additionally carries a live,
+unresolved BLOCK with a newly discovered forgery bypass distinct from the
+one it was written to fix. **Neither is safe to merge.** No merge, no push,
+no tag action was taken this session.
+
+**Not reached this session** (say so rather than imply coverage): SHIP_PLAN
+D6/D7 hardware verification (no operator/hardware in this sandbox, as
+instructed); #205-#220 (dependabot backlog, #207/#208 Apple-fork docs,
+#209/#215/#216/#218/#219/#220 -- all opened 2026-08-21/22, none inspected);
+live branch-protection state (not re-verified this session, only the
+2026-08-21 record above claims `strict:true`).
+
+### NEXT CHECKPOINT, IN ORDER
+1. Re-check #221: did the "remediation in progress" land? If so, re-verify
+   with a fresh `get_check_runs` **and** demand an executed test for the V1
+   bypass specifically (distinct from the V2 test already in the PR) --
+   pasted command output, not PR-body prose. Confirm the `EnvelopeType`
+   import error is actually gone in CI, not just believed fixed.
+2. If #221 is still broken and nobody is actively on it: fix the compile
+   error (missing `use crate::drift::EnvelopeType;` in `codec.rs`) and
+   the V1-bypass gap, but check for force-pushes/rebases first so a fix
+   doesn't stack on now-stale work.
+3. #222: regenerate the Kotlin/Swift FFI snapshots and push; independently
+   verify `is_storage_degraded()` actually gets wired at the Android call
+   site before treating the PR as ready, not just before it merges.
+4. Only once both are green **and** carry a real (executed) adversarial
+   sign-off for #221: tag `v0.4.0-rc.1`. Not before.
+5. Reconcile the #193-#220 gap in this file per the note above.
+
+---
 
 ## 0-latest. SESSION RECORD -- 2026-08-21 (CTO, Qwen FULL seat on Windows). READ AFTER SECTION 0.
 
