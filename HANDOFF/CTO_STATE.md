@@ -47,10 +47,59 @@ reasoning in §0-2026-08-23d.
 | A4 | #220 Android reachability | 2 known wiring findings | **Accept, do not fix** — the passphrase revert re-orphans SecurityUtils; record the acceptance |
 | A5 | #219 CLI identity persistence | **RED on Lint / Rust Linting** | **N3 is the Windows CLI and churns identity without this.** Either fix, or drop N3 from the gate. Check first whether #222 alone suffices |
 | A6 | POST_TAG_QUEUE §2 re-entry table | **DONE — 2 BLOCKS, 3 FIXED** | See §0-2026-08-23f. **Desktop panic can kill N3 mid-gate; relay fallback is unproven and fails silently.** Both need an operator ruling or work before the gate |
-| A7 | Clippy deny on ignored params + required negative-test job | Agent dispatched; result may be unread | Worktree `_scm_wt/cihard`, branch `cto/ci-hardening-2026-08-23` |
+| A7 | Clippy deny on ignored params + required negative-test job | **IN FLIGHT, UNCOMMITTED** | Worktree `_scm_wt/cihard`, branch `cto/ci-hardening-2026-08-23`. **Do not re-dispatch -- inspect first.** See the A7 note below |
 
 **If an agent result was never read, its work is in the worktree.** Check
 `git -C _scm_wt/cihard status` and the branch log before re-dispatching anything.
+
+### A7 note -- work in flight at stand-down, DO NOT re-dispatch blind
+
+An agent was still working when this session stood down. Its output is
+**uncommitted in `_scm_wt/cihard`** (branch `cto/ci-hardening-2026-08-23`, based
+on `e5ff72cf`). It is real work, not scratch. Inspect before doing anything:
+
+```
+git -C _scm_wt/cihard status --short
+git -C _scm_wt/cihard diff
+```
+
+At stand-down the tree held:
+
+| File | What it means |
+|---|---|
+| `.github/workflows/lint.yml` | the CI wiring for the new gate |
+| `core/src/crypto/mod.rs` | module-root lint attribute (it chose `deny` at module roots over a Cargo lint table) |
+| `core/src/privacy/mod.rs` | same |
+| `core/src/routing/mod.rs` | same |
+| `core/src/transport/mod.rs` | same |
+| `core/src/transport/multiport.rs` | **an existing violation it had to resolve** |
+| `core/src/transport/wifi_aware.rs` | same |
+| `core/src/transport/wifi_direct.rs` | same |
+| `scripts/check_perimeter_underscore_params.py` | a helper it added |
+
+**The three transport files are the interesting part.** Those are pre-existing
+ignored parameters inside the merge-blocked perimeter -- the same shape as the
+defect that started all this (`_our_signing_key` and `_sender_bundle`,
+underscore-prefixed in a handshake function so the compiler would stop
+complaining about the two inputs providing sender authentication).
+
+**Review each one on its own merits.** The packet asked the agent to mark each
+either legitimate-with-reason (trait impl, `cfg` stub) or suspicious. **Do not
+accept a blanket `#[allow]` sweep.** If any of those three is a genuinely ignored
+input rather than a required-by-signature placeholder, it is a candidate second
+instance of the original bug, and that is worth more than the lint itself.
+
+Also outstanding from that packet, likely unfinished:
+
+- **Proof the lint fires.** It was told to introduce a deliberate violation,
+  paste the failure, remove it, paste the pass. A lint not proven to fire is not
+  a lint.
+- **The negative-test CI job** must fail loudly when it selects zero tests. The
+  three forgery tests are not on `main` yet, so a job matching a hardcoded list
+  would report green while running nothing -- worse than no job.
+- **The Docker required-check question**: green is honest (retraction in
+  §0-2026-08-23d), but whether the suite is a *required* check after PR #156
+  made it non-blocking is unconfirmed, and it belongs in the release notes.
 
 ### The two things most likely to bite you
 
