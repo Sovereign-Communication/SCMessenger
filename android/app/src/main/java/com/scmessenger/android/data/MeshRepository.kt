@@ -10,7 +10,6 @@ import com.scmessenger.android.utils.CircuitBreaker
 import com.scmessenger.android.utils.NetworkFailureMetrics
 import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.PeerKeyUtils
-import com.scmessenger.android.utils.SecurityUtils
 import com.scmessenger.android.utils.FileLoggingTree
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
@@ -61,9 +60,6 @@ open class MeshRepository(
 
 
     companion object {
-        private const val PLATFORM_SECURE_KEYS_LEGACY_PREFS = "platform_secure_keys"
-        private const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
-
         private const val IDENTITY_BACKUP_PREFS = "identity_backup_prefs"
         private const val IDENTITY_BACKUP_KEY = "identity_backup_v1"
 
@@ -3472,18 +3468,19 @@ open class MeshRepository(
         }
     }
 
-    private val passphraseLock = Any()
-
+    // TODO(SEC): Plaintext storage defect — backup passphrase stored in unencrypted MODE_PRIVATE SharedPreferences.
+    // Blocked from EncryptedSharedPreferences migration in PR #216 due to device-to-device transfer data-loss regression
+    // (KeyStore reset on transfer orphans identity backup). Needs follow-up fix excluding prefs from device-transfer.
     private fun getPlatformSecuredPassphrase(): String {
-        synchronized(passphraseLock) {
-            val encryptedPrefs = SecurityUtils.getEncryptedSharedPreferences(context)
-            val legacyPrefs = context.getSharedPreferences(PLATFORM_SECURE_KEYS_LEGACY_PREFS, Context.MODE_PRIVATE)
-            return SecurityUtils.migrateOrGeneratePassphrase(
-                targetPrefs = encryptedPrefs,
-                legacyPrefs = legacyPrefs,
-                keyName = BACKUP_PASSPHRASE_KEY
-            )
+        val prefs = context.getSharedPreferences("platform_secure_keys", Context.MODE_PRIVATE)
+        var key = prefs.getString("backup_passphrase_v1", null)
+        if (key == null) {
+            val bytes = ByteArray(32)
+            java.security.SecureRandom().nextBytes(bytes)
+            key = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            prefs.edit().putString("backup_passphrase_v1", key).commit()
         }
+        return key ?: ""
     }
 
     private fun updateFileLoggingTreeCore(core: uniffi.api.IronCore?) {
@@ -5615,15 +5612,8 @@ open class MeshRepository(
         settingsManager = null
         autoAdjustEngine = null
 
-        // 2. Clear identity backup SharedPreferences & secured passphrases
+        // 2. Clear identity backup SharedPreferences
         identityBackupPrefs.edit().clear().apply()
-        try {
-            val encryptedPrefs = SecurityUtils.getEncryptedSharedPreferences(context)
-            encryptedPrefs.edit().clear().apply()
-        } catch (e: Exception) {
-            Timber.w("Failed to clear encrypted prefs during wipe: ${e.message}")
-        }
-        context.getSharedPreferences(PLATFORM_SECURE_KEYS_LEGACY_PREFS, Context.MODE_PRIVATE).edit().clear().apply()
 
         // P0: Clear cached identity fields so reset is reflected on next launch
         identityCachePrefs.edit().clear().apply()

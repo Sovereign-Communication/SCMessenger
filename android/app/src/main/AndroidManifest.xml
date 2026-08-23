@@ -132,11 +132,16 @@
             </intent-filter>
         </receiver>
 
-        <!-- Share Receiver for handling incoming share intents -->
+        <!-- Share Receiver for handling incoming share intents.
+             NOTE: android:exported="false" because BroadcastReceivers do not receive share intents
+             from the Android share sheet (which resolves ACTION_SEND against Activities via queryIntentActivities).
+             Exported, it created security risks (contact enumeration, sled locking on main thread, crashing).
+             Registered here to satisfy manifest reachability gate C3, but non-functional as a share target
+             until re-implemented as an Activity. -->
         <receiver
             android:name=".utils.ShareReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
