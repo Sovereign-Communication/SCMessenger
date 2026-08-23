@@ -10,8 +10,6 @@ import com.scmessenger.android.utils.CircuitBreaker
 import com.scmessenger.android.utils.NetworkFailureMetrics
 import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.PeerKeyUtils
-import com.scmessenger.android.utils.SecurityUtils
-import com.scmessenger.android.utils.BackoffStrategy
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -74,41 +72,6 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_NICKNAME = "nickname"
         private const val IDENTITY_CACHE_PEER_ID = "libp2p_peer_id"
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
-        internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
-        internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
-
-        internal fun resolvePlatformSecuredPassphrase(
-            encryptedPrefs: SharedPreferences,
-            legacyPrefsProvider: () -> SharedPreferences,
-            deleteLegacyFile: () -> Unit
-        ): String {
-            val encryptedKey = encryptedPrefs.getString(BACKUP_PASSPHRASE_KEY, null)
-            if (!encryptedKey.isNullOrEmpty()) {
-                return encryptedKey
-            }
-
-            val legacyPrefs = legacyPrefsProvider()
-            val legacyKey = legacyPrefs.getString(BACKUP_PASSPHRASE_KEY, null)
-            if (!legacyKey.isNullOrEmpty()) {
-                val committed = encryptedPrefs.edit().putString(BACKUP_PASSPHRASE_KEY, legacyKey).commit()
-                if (committed) {
-                    legacyPrefs.edit().remove(BACKUP_PASSPHRASE_KEY).commit()
-                    if (legacyPrefs.all.isEmpty()) {
-                        deleteLegacyFile()
-                    }
-                    Timber.i("Migrated backup passphrase from legacy plaintext store to EncryptedSharedPreferences")
-                } else {
-                    Timber.e("Failed to commit backup passphrase to EncryptedSharedPreferences; keeping legacy store intact")
-                }
-                return legacyKey
-            }
-
-            val bytes = ByteArray(32)
-            java.security.SecureRandom().nextBytes(bytes)
-            val newKey = java.util.Base64.getEncoder().encodeToString(bytes)
-            encryptedPrefs.edit().putString(BACKUP_PASSPHRASE_KEY, newKey).commit()
-            return newKey
-        }
         // v0.4.0: there are no dedicated relays and no hardcoded node addresses --
         // every node is a full relay, and discovery is ledger sharing (invite/QR
         // seeds a new node's ledger; mDNS/BLE learns LAN peers). The static
@@ -425,7 +388,6 @@ open class MeshRepository(
     // timeout-induced downgrade of successfully-sent messages.
     private val RECEIPT_ACK_TIMEOUT_MS: Long = 60_000L
     private val receiptAwaitSeconds: Long = RECEIPT_ACK_TIMEOUT_MS / 1000L  // 60 seconds
-    private val pendingOutboxMaxAttempts: Int = 12
     private val pendingOutboxMaxAgeSeconds: Long = 7L * 24L * 60L * 60L
     private val historySyncSentPeers = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val HISTORY_SYNC_COOLDOWN_MS = 60_000L
@@ -842,10 +804,7 @@ open class MeshRepository(
             .count()
 
         if (highRetryMessages > 10) {
-            val atMax = retryBackoff.isAtMaxDelay()
-            val attempts = retryBackoff.getAttemptCount()
-            val currentDelay = retryBackoff.getCurrentDelay()
-            Timber.w("Retry storm detected: $highRetryMessages messages with >5 attempts (backoff=${currentDelay}ms, attempts=$attempts, atMax=$atMax)")
+            Timber.w("Retry storm detected: $highRetryMessages messages with >5 attempts")
         }
     }
 
@@ -1412,12 +1371,7 @@ open class MeshRepository(
             // P0: One-time migration to unify legacy IDs (libp2p, etc) into canonical Identity IDs (hash)
             migrateToCanonicalIds()
 
-            // WS12.41: Inject IronCore into FileLoggingTree for summarized logging
-            timber.log.Timber.forest().forEach { tree ->
-                if (tree is com.scmessenger.android.utils.FileLoggingTree) {
-                    tree.setIronCore(ironCore)
-                }
-            }
+
 
             // WS12.41: Start storage maintenance loop
             startStorageMaintenance()
@@ -1572,9 +1526,23 @@ open class MeshRepository(
                         }
                         if (lanAddrs.isNotEmpty()) {
                             mdnsLanPeers[trimmedPeerId] = lanAddrs
+                            val transportIdentity = resolveTransportIdentity(peerId)
+                            if (transportIdentity != null) {
+                                val pk = transportIdentity.publicKey.trim().lowercase()
+                                val canon = transportIdentity.canonicalPeerId.trim().lowercase()
+                                if (pk.isNotEmpty()) mdnsLanPeers[pk] = lanAddrs
+                                if (canon.isNotEmpty()) mdnsLanPeers[canon] = lanAddrs
+                            }
                             Timber.i("TCP/mDNS: LAN peer detected $trimmedPeerId with ${lanAddrs.size} local addresses")
                         } else {
                             mdnsLanPeers.remove(trimmedPeerId)
+                            val transportIdentity = resolveTransportIdentity(peerId)
+                            if (transportIdentity != null) {
+                                val pk = transportIdentity.publicKey.trim().lowercase()
+                                val canon = transportIdentity.canonicalPeerId.trim().lowercase()
+                                if (pk.isNotEmpty()) mdnsLanPeers.remove(pk)
+                                if (canon.isNotEmpty()) mdnsLanPeers.remove(canon)
+                            }
                         }
 
 	                        val dialCandidates = buildDialCandidatesForPeer(
@@ -1770,6 +1738,13 @@ open class MeshRepository(
                             pruneDisconnectedPeer(canonicalId)
                         }
                         mdnsLanPeers.remove(trimmedPeerId)
+                        val transportIdentity = resolveTransportIdentity(peerId)
+                        if (transportIdentity != null) {
+                            val pk = transportIdentity.publicKey.trim().lowercase()
+                            val canon = transportIdentity.canonicalPeerId.trim().lowercase()
+                            if (pk.isNotEmpty()) mdnsLanPeers.remove(pk)
+                            if (canon.isNotEmpty()) mdnsLanPeers.remove(canon)
+                        }
 
                         emitDisconnectedIfChanged(
                             peerId = peerId
@@ -1885,8 +1860,11 @@ open class MeshRepository(
                         // (Rust only fires this callback after successful decryption)
                         val isChatEvent = messageKind == "text" || messageKind.isEmpty()
 
-                        val existingContact = try { contactManager?.get(canonicalPeerId) } catch (e: Exception) { null }
-                        if (existingContact == null && normalizedSenderKey != null && isChatEvent) {
+                        val existingContact = getContact(canonicalPeerId)
+                            ?: (normalizedSenderKey?.let { getContact(it) })
+                        if (existingContact?.isTombstone == true) {
+                            Timber.d("Ignoring auto-contact creation for tombstoned contact $canonicalPeerId")
+                        } else if (existingContact == null && normalizedSenderKey != null && isChatEvent) {
                             var routeNotes = if (!routePeerId.isNullOrBlank()) {
                                 appendRoutingHint(notes = null, key = "libp2p_peer_id", value = routePeerId)
                             } else {
@@ -1920,7 +1898,8 @@ open class MeshRepository(
                                 Timber.w("Auto-create contact failed for ${canonicalPeerId.take(8)}: ${e.message}")
                             }
                         } else if (existingContact != null) {
-                            try { contactManager?.updateLastSeen(canonicalPeerId) } catch (e: Exception) {
+                            val resolvedPeer = existingContact.peerId
+                            try { contactManager?.updateLastSeen(resolvedPeer) } catch (e: Exception) {
                                 Timber.d("updateLastSeen failed: ${e.message}")
                             }
 
@@ -3066,6 +3045,7 @@ open class MeshRepository(
             val normalizedLibp2p = libp2pPeerId.takeIf { !it.isNullOrBlank() }?.trim()
             noteBleRouteObservation(peerId = blePeerId, bleAddress = blePeerId, source = "identity_self")
             noteBleRouteObservation(peerId = identityId, bleAddress = blePeerId, source = "identity_canonical")
+            noteBleRouteObservation(peerId = publicKeyHex, bleAddress = blePeerId, source = "identity_public_key")
             noteBleRouteObservation(peerId = normalizedLibp2p, bleAddress = blePeerId, source = "identity_route")
 
             val discoveredNickname = prepopulateDiscoveryNickname(
@@ -3487,18 +3467,15 @@ open class MeshRepository(
     }
 
     private fun getPlatformSecuredPassphrase(): String {
-        val encryptedPrefs = SecurityUtils.getEncryptedSharedPreferences(context)
-        return resolvePlatformSecuredPassphrase(
-            encryptedPrefs = encryptedPrefs,
-            legacyPrefsProvider = { context.getSharedPreferences(PLATFORM_SECURE_KEYS_PREFS, Context.MODE_PRIVATE) },
-            deleteLegacyFile = {
-                try {
-                    context.deleteSharedPreferences(PLATFORM_SECURE_KEYS_PREFS)
-                } catch (e: Exception) {
-                    Timber.w("Failed to delete empty legacy preferences file: ${e.message}")
-                }
-            }
-        )
+        val prefs = context.getSharedPreferences("platform_secure_keys", Context.MODE_PRIVATE)
+        var key = prefs.getString("backup_passphrase_v1", null)
+        if (key == null) {
+            val bytes = ByteArray(32)
+            java.security.SecureRandom().nextBytes(bytes)
+            key = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            prefs.edit().putString("backup_passphrase_v1", key).commit()
+        }
+        return key ?: ""
     }
 
     private fun restoreIdentityFromBackup(core: uniffi.api.IronCore): Boolean {
@@ -3947,7 +3924,7 @@ open class MeshRepository(
         return resolvedCanonicalId
     }
 
-    private fun canonicalContactId(id: String): String {
+    fun canonicalContactId(id: String): String {
         val trimmed = id.trim()
         if (trimmed.isEmpty()) return trimmed
 
@@ -4061,7 +4038,7 @@ open class MeshRepository(
                 notes = contact.notes,
                 lastKnownDeviceId = contact.lastKnownDeviceId,
                 verifiedAt = contact.verifiedAt,
-                isTombstone = contact.isTombstone
+                isTombstone = false
             )
         }
 
@@ -4136,7 +4113,53 @@ open class MeshRepository(
     }
 
     fun getContact(peerId: String): uniffi.api.Contact? {
-        return contactManager?.get(canonicalId(peerId))
+        val trimmed = peerId.trim()
+        if (trimmed.isEmpty()) return null
+
+        val direct = try { contactManager?.get(trimmed) } catch (_: Exception) { null }
+        if (direct != null && (!direct.localNickname.isNullOrBlank() || !direct.nickname.isNullOrBlank())) {
+            return direct
+        }
+
+        val canonical = canonicalId(trimmed)
+        if (canonical != trimmed) {
+            val canonContact = try { contactManager?.get(canonical) } catch (_: Exception) { null }
+            if (canonContact != null && (!canonContact.localNickname.isNullOrBlank() || !canonContact.nickname.isNullOrBlank())) {
+                return canonContact
+            }
+        }
+
+        val allContacts = try { contactManager?.list().orEmpty() } catch (_: Exception) { emptyList() }
+        val t = trimmed.lowercase()
+        val can = canonical.lowercase()
+        val matchedWithNick = allContacts.firstOrNull { c ->
+            val pk = c.publicKey?.trim()?.lowercase().orEmpty()
+            val cPeer = c.peerId.trim().lowercase()
+            val notes = c.notes?.trim()?.lowercase().orEmpty()
+            val hasNick = !c.localNickname.isNullOrBlank() || !c.nickname.isNullOrBlank()
+            hasNick && (
+                (pk.isNotEmpty() && (pk == t || pk == can || PeerIdValidator.isSame(pk, t) || PeerIdValidator.isSame(pk, can))) ||
+                (cPeer.isNotEmpty() && (cPeer == t || cPeer == can || PeerIdValidator.isSame(cPeer, t) || PeerIdValidator.isSame(cPeer, can))) ||
+                (notes.isNotEmpty() && (notes.contains(t) || notes.contains(can)))
+            )
+        }
+        if (matchedWithNick != null) {
+            return matchedWithNick
+        }
+
+        val anyMatch = allContacts.firstOrNull { c ->
+            val pk = c.publicKey?.trim()?.lowercase().orEmpty()
+            val cPeer = c.peerId.trim().lowercase()
+            val notes = c.notes?.trim()?.lowercase().orEmpty()
+            (pk.isNotEmpty() && (pk == t || pk == can || PeerIdValidator.isSame(pk, t) || PeerIdValidator.isSame(pk, can))) ||
+            (cPeer.isNotEmpty() && (cPeer == t || cPeer == can || PeerIdValidator.isSame(cPeer, t) || PeerIdValidator.isSame(cPeer, can))) ||
+            (notes.isNotEmpty() && (notes.contains(t) || notes.contains(can)))
+        }
+
+        return (if (direct != null && (!direct.localNickname.isNullOrBlank() || !direct.nickname.isNullOrBlank())) direct else null)
+            ?: (if (canonical != trimmed) try { contactManager?.get(canonical) } catch (_: Exception) { null } else null)
+            ?: direct
+            ?: anyMatch
     }
 
     /**
@@ -4155,7 +4178,24 @@ open class MeshRepository(
 
     fun removeContact(peerId: String) {
         val canonical = canonicalId(peerId)
-        contactManager?.remove(canonical)
+        val existing = getContact(canonical) ?: getContact(peerId)
+        if (existing != null) {
+            val tombstone = uniffi.api.Contact(
+                peerId = existing.peerId,
+                nickname = existing.nickname,
+                localNickname = existing.localNickname,
+                publicKey = existing.publicKey,
+                addedAt = existing.addedAt,
+                lastSeen = existing.lastSeen,
+                notes = existing.notes,
+                lastKnownDeviceId = existing.lastKnownDeviceId,
+                verifiedAt = existing.verifiedAt,
+                isTombstone = true
+            )
+            try { contactManager?.add(tombstone) } catch (_: Exception) {}
+        } else {
+            contactManager?.remove(canonical)
+        }
         try {
             historyManager?.removeConversation(canonical)
         } catch (e: Exception) {
@@ -4181,15 +4221,15 @@ open class MeshRepository(
         }
         keysToRemove.forEach { bleRouteObservations.remove(it) }
 
-        Timber.d("Contact removed: $canonical and their message history, caches cleared")
+        Timber.d("Contact removed: $canonical and their message history, caches cleared, tombstoned")
     }
 
     fun listContacts(): List<uniffi.api.Contact> {
-        return contactManager?.list() ?: emptyList()
+        return contactManager?.list()?.filter { !it.isTombstone } ?: emptyList()
     }
 
     fun searchContacts(query: String): List<uniffi.api.Contact> {
-        return contactManager?.search(query) ?: emptyList()
+        return contactManager?.search(query)?.filter { !it.isTombstone } ?: emptyList()
     }
 
     fun setContactNickname(peerId: String, nickname: String?) {
@@ -5054,6 +5094,7 @@ open class MeshRepository(
             return
         }
         val relay = ledgerManager?.getPreferredRelays(1u)?.firstOrNull()
+            ?: ledgerManager?.seedAddresses(1u)?.firstOrNull()
         if (relay == null) {
             Timber.i("No known relay in ledger yet -- skipping proactive NAT dial (fresh install; ledger fills in via invite/QR or LAN discovery)")
             return
@@ -6411,9 +6452,7 @@ open class MeshRepository(
         )
         val effectiveBlePeerId = connectedBleDevices.firstOrNull()
             ?: freshBleObservation?.address
-            ?: requestedBlePeerId?.takeIf {
-                resolveFreshBlePeerId(listOf(it))?.address == it
-            }
+            ?: requestedBlePeerId
 
         if (requestedBlePeerId == null && effectiveBlePeerId != null) {
             logDeliveryAttempt(
@@ -6472,9 +6511,24 @@ open class MeshRepository(
                 tcpMdnsPeerId = routePeerCandidates
                     .firstOrNull { candidate ->
                         val trimmed = candidate.trim()
-                        mdnsLanPeers[trimmed]?.isNotEmpty() == true
+                        mdnsLanPeers[trimmed]?.isNotEmpty() == true ||
+                        mdnsLanPeers[trimmed.lowercase()]?.isNotEmpty() == true
                     }
-                    ?.trim(),
+                    ?.trim() ?: run {
+                        // Fallback: If direct LAN listener addresses exist in listeners list, register them
+                        val directLanListeners = listeners.filter { addr ->
+                            val a = addr.trim()
+                            (a.startsWith("/ip4/192.168.") || a.startsWith("/ip4/10.") || a.startsWith("/ip4/172.")) &&
+                            (a.contains("/tcp/") || a.contains("/udp/"))
+                        }
+                        if (directLanListeners.isNotEmpty()) {
+                            val fallbackTarget = routePeerFallback.trim()
+                            mdnsLanPeers[fallbackTarget] = directLanListeners
+                            fallbackTarget
+                        } else {
+                            null
+                        }
+                    },
                 routePeerCandidates = routePeerCandidates,
                 listeners = listeners,
                 traceMessageId = traceMessageId,
@@ -6540,7 +6594,13 @@ open class MeshRepository(
                         return@attemptDelivery false
                     }
 
-                    val sendTargets = linkedSetOf(bleAddr).apply { addAll(connectedBleDevices) }
+                    // The router now always offers BLE, so bleAddr may be blank
+                    // when there is no cached hint. Drop it rather than burning
+                    // a doomed send on an empty address; the connected devices
+                    // below are the real targets in that case.
+                    val sendTargets = linkedSetOf(bleAddr)
+                        .apply { addAll(connectedBleDevices) }
+                        .filter { it.isNotBlank() }
 
                     for (target in sendTargets) {
                         if (bleClient != null) {
@@ -6596,21 +6656,24 @@ open class MeshRepository(
                     }
 
                     // Dial LAN addresses directly (no relay circuits)
-                    val lanAddrs = mdnsLanPeers[lanPeerId] ?: emptyList()
+                    val lanAddrs = mdnsLanPeers[lanPeerId]
+                        ?: mdnsLanPeers[lanPeerId.lowercase()]
+                        ?: emptyList()
+                    val dialPeerId = resolveTransportIdentity(lanPeerId)?.canonicalPeerId ?: lanPeerId
                     if (lanAddrs.isNotEmpty()) {
                         val dialCandidates = buildDialCandidatesForPeer(
-                            routePeerId = lanPeerId,
+                            routePeerId = dialPeerId,
                             rawAddresses = lanAddrs,
                             includeRelayCircuits = false
                         )
                         if (dialCandidates.isNotEmpty()) {
-                            connectToPeer(lanPeerId, dialCandidates)
-                            awaitPeerConnection(lanPeerId, timeoutMs = 1000L)
+                            connectToPeer(dialPeerId, dialCandidates)
+                            awaitPeerConnection(dialPeerId, timeoutMs = 1000L)
                         }
                     }
 
                     val directError = bridge.sendMessageStatus(
-                        lanPeerId,
+                        dialPeerId,
                         encryptedData,
                         recipientIdentityId,
                         intendedDeviceId
@@ -6622,7 +6685,7 @@ open class MeshRepository(
                             medium = "tcp_mdns",
                             phase = "smart_router",
                             outcome = "success",
-                            detail = "ctx=$attemptContext route=$lanPeerId lan_addrs=${lanAddrs.size}"
+                            detail = "ctx=$attemptContext route=$dialPeerId lan_addrs=${lanAddrs.size}"
                         )
                         true
                     } else {
@@ -6755,7 +6818,13 @@ open class MeshRepository(
                         return@attemptWifiThenBleFallback false
                     }
 
-                    val sendTargets = linkedSetOf(bleAddr).apply { addAll(connectedBleDevices) }
+                    // The router now always offers BLE, so bleAddr may be blank
+                    // when there is no cached hint. Drop it rather than burning
+                    // a doomed send on an empty address; the connected devices
+                    // below are the real targets in that case.
+                    val sendTargets = linkedSetOf(bleAddr)
+                        .apply { addAll(connectedBleDevices) }
+                        .filter { it.isNotBlank() }
 
                     for (target in sendTargets) {
                         if (bleClient != null) {
@@ -7088,7 +7157,7 @@ open class MeshRepository(
                 // Once message reaches Sent state (confirmed by transport), it may NOT move to Failed or Corrupted.
                 // Messages that have been acked by transport are tracked separately (ackedWithoutReceiptCount)
                 // and should only be stopped via age-based ceiling (above), never via attempt-count ceiling.
-                if (item.ackedWithoutReceiptCount > 0) {
+                if (item.ackedWithoutReceiptCount > 0 && !reason.startsWith("peer_discovered")) {
                     // Transport-confirmed success: keep message in Sent state indefinitely (until age-based stop)
                     Timber.d("Skipping retry for ${item.historyRecordId}: transport-acked message cannot be downgraded acked_count=${item.ackedWithoutReceiptCount}")
                     logDeliveryState(
@@ -7104,17 +7173,26 @@ open class MeshRepository(
                     updated = true
                     continue
                 }
-                // AND-DELIVERY-001: Enforce maximum retry limit to prevent infinite retries
-                // Only applies to messages that have NOT been transport-acked
-                if (item.attemptCount >= pendingOutboxMaxAttempts) {
-                    Timber.w("Dropping message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts) - NOT transport-acked")
-                    markMessageCorrupted(item.historyRecordId)
+                // P0_ANDROID_FINITE_RETRY_ABANDONMENT: REMOVED hard attempt cap.
+                // Delivery obligation is INDEFINITE until confirmed delivered or explicitly
+                // cancelled by the user/policy. markMessageCorrupted is reserved for
+                // genuinely undecodable payloads -- never for unreachable peers.
+                //
+                // For high attempt counts, escalate the backoff interval so the loop
+                // stays bounded and does not flood diagnostics logs.
+                // Attempts 1-3: 60s, 4-6: 5min, 7-12: 30min, 13+: 24h ceiling.
+                if (item.attemptCount >= 12 && item.nextAttemptAtEpochSec <= now) {
+                    val longBackoff = 86_400L  // 24h max interval
+                    Timber.d(
+                        "Pending outbox: high-attempt backoff for ${item.historyRecordId} " +
+                        "attempt=${item.attemptCount} backoff=${longBackoff}s"
+                    )
                     logDeliveryState(
                         messageId = item.historyRecordId,
-                        state = "failed",
-                        detail = "dropped_pending_outbox reason=max_attempts_exceeded attempt=${item.attemptCount}"
+                        state = "pending_backoff",
+                        detail = "attempt=${item.attemptCount} next_retry_in=${longBackoff}s"
                     )
-                    iterator.remove()
+                    iterator.set(item.copy(nextAttemptAtEpochSec = now + longBackoff))
                     updated = true
                     continue
                 }
@@ -7225,8 +7303,7 @@ open class MeshRepository(
                     storeLastKnownRoutePeerId(item.peerId, selectedRoutePeerId)
                     // AND-DELIVERY-001 / FARM WS-A3: transport genuinely succeeded, so
                     // track this on the separate ackedWithoutReceiptCount counter, NOT
-                    // attemptCount - a confirmed send must never count toward the
-                    // genuine-failure ceiling below (pendingOutboxMaxAttempts).
+                    // attemptCount - a confirmed send must never count toward a retry cap.
                     // P3_ANDROID_RETRY_SUPPRESSION: First receipt window is now 60s (RECEIPT_ACK_TIMEOUT_MS)
                     // to allow relay custody delay + network latency. No-downgrade rule prevents
                     // transport-acked messages from being marked Failed/Corrupted.
@@ -8223,6 +8300,10 @@ open class MeshRepository(
             }
 
             val existing = existingByKey ?: existingById
+            if (existing?.isTombstone == true && !createIfMissing) {
+                Timber.d("Skipping federated upsert for tombstoned contact ${existing.peerId}")
+                return@withLock
+            }
             if (existing == null && !createIfMissing) {
                 return@withLock
             }
@@ -8988,27 +9069,24 @@ open class MeshRepository(
         Timber.i("Bootstrap: network=%s, cellular=%b, priority=%s",
             networkDetector.networkType.value, isCellular, transportPriority)
 
-        // Build the candidate list from proven ledger relays. Do not hardcode
-        // an endpoint: a fresh install legitimately has no candidates until
-        // invite/QR, LAN discovery, or a successful ledger exchange supplies
-        // one. The previous empty list made every periodic bootstrap pass a
-        // misleading zero-attempt "all-failed" result, including cellular.
-        val addresses = prioritizeAddressesForCurrentNetwork(
-            (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
-                .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
-                .distinct()
-        )
+        // Build the candidate list from proven ledger relays and learned seed entries.
+        val preferred = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
+        val seeds = (ledgerManager?.seedAddresses(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
+        val candidates = (preferred + seeds).distinct()
+        val addresses = prioritizeAddressesForCurrentNetwork(candidates)
 
         if (addresses.isEmpty()) {
             Timber.i(
-                "Bootstrap: no proven ledger relay candidates; " +
+                "Bootstrap: no ledger relay candidates; " +
                     "network=${networkDetector.networkType.value}, cellular=$isCellular"
             )
             nextBootstrapAttemptMs = nowMs + 30_000L
             return
         }
 
-        Timber.i("Bootstrap: attempting ${addresses.size} proven ledger relay candidate(s)")
+        Timber.i("Bootstrap: attempting ${addresses.size} ledger relay candidate(s)")
 
         var anySuccess = false
         for (addr in addresses) {
@@ -9079,9 +9157,25 @@ open class MeshRepository(
 
     private fun prioritizeAddressesForCurrentNetwork(addresses: List<String>): List<String> {
         if (addresses.size <= 1) return addresses
+        if (networkDetector.isCellularNetwork) {
+            // On cellular, prioritize public WAN IPs (non-RFC1918) over private LAN subnets
+            val wan = addresses.filterNot { isRfc1918Address(it) }
+            val lan = addresses.filter { isRfc1918Address(it) }
+            return (wan + lan).distinct()
+        }
         val lan = addresses.filter { isSameLanAddress(it) }
         if (lan.isEmpty()) return addresses
         return (lan + addresses.filterNot { it in lan }).distinct()
+    }
+
+    private fun isRfc1918Address(multiaddr: String): Boolean {
+        val targetIp = extractIpv4FromMultiaddr(multiaddr) ?: return false
+        val parts = targetIp.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return false
+        return parts[0] == 10 ||
+            (parts[0] == 172 && parts[1] in 16..31) ||
+            (parts[0] == 192 && parts[1] == 168) ||
+            parts[0] == 127
     }
 
     private fun isSameLanAddress(multiaddr: String): Boolean {
@@ -9133,13 +9227,12 @@ open class MeshRepository(
             relayCircuitBreaker.resetAll()
         }
 
-        // Build prioritized address list from the ledger (v0.4.0: no dedicated
-        // relays, no hardcoded node addresses -- discovery is ledger sharing).
-        // A fresh install has an empty ledger and legitimately has no
-        // candidates here; that falls straight through to the mDNS fallback
-        // below, which is the intended cold-start path, not a bug.
-        val prioritizedAddresses = (ledgerManager?.getPreferredRelays(5u) ?: emptyList())
+        // Build prioritized address list from proven ledger relays and learned seed entries.
+        val preferred = (ledgerManager?.getPreferredRelays(5u) ?: emptyList())
             .map { it.multiaddr }
+        val seeds = (ledgerManager?.seedAddresses(5u) ?: emptyList())
+            .map { it.multiaddr }
+        val prioritizedAddresses = prioritizeAddressesForCurrentNetwork((preferred + seeds).distinct())
         if (prioritizedAddresses.isEmpty()) {
             Timber.i("Racing bootstrap: no known relays in ledger yet, going straight to mDNS fallback")
         }

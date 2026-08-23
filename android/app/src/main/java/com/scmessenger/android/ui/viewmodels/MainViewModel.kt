@@ -74,9 +74,6 @@ class MainViewModel @Inject constructor(
     val identityInfo: uniffi.api.IdentityInfo?
         get() = meshRepository.getIdentityInfoNonBlocking()
 
-    val repository: MeshRepository
-        get() = meshRepository
-
     private val _isStorageLow = MutableStateFlow(false)
     val isStorageLow = _isStorageLow.asStateFlow()
 
@@ -308,81 +305,62 @@ class MainViewModel @Inject constructor(
     }
 
     fun handleDeepLink(uri: Uri) {
-        try {
-            if (uri.scheme != "scmessenger" || uri.host !in setOf("invite", "add")) {
-                Timber.w("Ignoring unsupported deep link: $uri")
-                return
-            }
-            val publicKey = uri.getQueryParameter("public_key")?.trim()
-            if (publicKey.isNullOrBlank()) {
-                Timber.w("Deep link missing public_key: $uri")
-                return
-            }
-            if (!publicKey.matches(Regex("^[0-9a-fA-F]{64}$"))) {
-                Timber.w("Deep link has invalid public_key; ignoring: $uri")
-                return
-            }
-            val rawRoutePeerId = uri.getQueryParameter("libp2p_peer_id")?.trim()
-                ?: uri.getQueryParameter("peer_id")?.trim()
-            val routePeerId = rawRoutePeerId?.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
-            if (!rawRoutePeerId.isNullOrBlank() && routePeerId == null) {
-                Timber.w("Deep link has invalid libp2p peer ID; suppressing automatic dial: $rawRoutePeerId")
-            }
-            // Parse multiaddrs from multiple query params: 'listeners' (repeated),
-            // 'connection_hints', 'listener', and 'bootstrap' (single, comma-separated).
-            // The APK share flow uses 'bootstrap' in the download URL.
-            val rawListeners = (
-                uri.getQueryParameters("listeners") +
-                    uri.getQueryParameters("connection_hints") +
-                    uri.getQueryParameters("listener") +
-                    listOfNotNull(uri.getQueryParameter("bootstrap"))
-            )
-                .flatMap { it.split(',') }
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .distinct()
-
-            // Validate multiaddrs to prevent attacker-chosen addresses from untrusted QR codes.
-            // SECURITY: This is a new attack surface -- validation is critical.
-            val deviceIp = meshRepository.getLocalIpAddress()
-            val listeners = if (routePeerId != null) {
-                DeepLinkValidator.sanitizeDeepLinkMultiaddrs(rawListeners, deviceIp)
-            } else {
-                emptyList()
-            }
-
-            val data = DeepLinkData(
-                publicKey = publicKey,
-                peerId = routePeerId,
-                nickname = uri.getQueryParameter("nickname")?.trim(),
-                identityId = uri.getQueryParameter("identity_id")?.trim(),
-                libp2pPeerId = routePeerId,
-                listeners = listeners
-            )
-            Timber.i("Deep link parsed: peerId=${data.peerId}, nickname=${data.nickname}, listeners=${data.listeners.size}")
-            _pendingDeepLink.value = data
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to handle deep link: $uri")
+        if (uri.scheme != "scmessenger" || uri.host !in setOf("invite", "add")) {
+            Timber.w("Ignoring unsupported deep link: $uri")
+            return
         }
-    }
-
-    /**
-     * Dial peer addresses from a parsed deep link only after explicit user confirmation.
-     */
-    fun confirmAndDialPendingDeepLink(data: DeepLinkData? = null) {
-        val target = data ?: _pendingDeepLink.value
-        val targetPeerId = target?.libp2pPeerId ?: target?.peerId
-        val listeners = target?.listeners.orEmpty()
-        if (targetPeerId != null && listeners.isNotEmpty()) {
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    meshRepository.connectToPeer(targetPeerId, listeners)
-                    Timber.i("Deep link dial initiated for peer: $targetPeerId")
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to dial peer from deep link: $targetPeerId")
-                }
-            }
+        val publicKey = uri.getQueryParameter("public_key")?.trim()
+        if (publicKey.isNullOrBlank()) {
+            Timber.w("Deep link missing public_key: $uri")
+            return
         }
+        if (!publicKey.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+            Timber.w("Deep link has invalid public_key; ignoring: $uri")
+            return
+        }
+        val rawRoutePeerId = uri.getQueryParameter("libp2p_peer_id")?.trim()
+            ?: uri.getQueryParameter("peer_id")?.trim()
+        val routePeerId = rawRoutePeerId?.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
+        if (!rawRoutePeerId.isNullOrBlank() && routePeerId == null) {
+            Timber.w("Deep link has invalid libp2p peer ID; suppressing automatic dial: $rawRoutePeerId")
+        }
+        // Parse multiaddrs from multiple query params: 'listeners' (repeated),
+        // 'connection_hints', 'listener', and 'bootstrap' (single, comma-separated).
+        // The APK share flow uses 'bootstrap' in the download URL.
+        val rawListeners = (
+            uri.getQueryParameters("listeners") +
+                uri.getQueryParameters("connection_hints") +
+                uri.getQueryParameters("listener") +
+                listOfNotNull(uri.getQueryParameter("bootstrap"))
+        )
+            .flatMap { it.split(',') }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+
+        // Validate multiaddrs to prevent attacker-chosen addresses from untrusted QR codes.
+        // SECURITY: This is a new attack surface -- validation is critical.
+        val deviceIp = meshRepository.getLocalIpAddress()
+        val listeners = if (routePeerId != null) {
+            DeepLinkValidator.sanitizeDeepLinkMultiaddrs(rawListeners, deviceIp)
+        } else {
+            emptyList()
+        }
+
+        val data = DeepLinkData(
+            publicKey = publicKey,
+            peerId = routePeerId,
+            nickname = uri.getQueryParameter("nickname")?.trim(),
+            identityId = uri.getQueryParameter("identity_id")?.trim(),
+            libp2pPeerId = routePeerId,
+            listeners = listeners
+        )
+        Timber.i("Deep link parsed: peerId=${data.peerId}, nickname=${data.nickname}, listeners=${data.listeners.size}")
+        _pendingDeepLink.value = data
+
+        // TODO: Wire auto-dial via MeshRepository.connectToPeer(peerId, addresses)
+        // once validation is reviewed and approved by the operator.
+        // For now, only parse and expose via DeepLinkData.listeners.
     }
 
     fun consumeDeepLink(): DeepLinkData? {

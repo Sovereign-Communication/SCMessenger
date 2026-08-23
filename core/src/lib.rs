@@ -1,8 +1,3 @@
-// UniFFI-generated metadata (UNIFFI_META_CONST_* in target/*/out/api.uniffi.rs)
-// trips clippy 1.98's large_const_arrays on generated code we cannot edit.
-// Newer uniffi emits `static`; remove this allow after the uniffi upgrade.
-#![allow(clippy::large_const_arrays)]
-
 pub mod abuse;
 pub mod blocked_bridge;
 pub mod contacts_bridge;

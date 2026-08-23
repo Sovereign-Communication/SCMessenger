@@ -11,6 +11,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import com.scmessenger.android.utils.BackoffStrategy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,7 +36,7 @@ class BleScanner(
     private val onPeerDiscovered: (String) -> Unit,
     private val onDataReceived: (String, ByteArray) -> Unit,
     private val quotaManager: BleQuotaManager = BleQuotaManager(),
-    private val backoffStrategy: BleBackoffStrategy = BleBackoffStrategy(),
+    private val backoffStrategy: BackoffStrategy = BackoffStrategy(),
     private val onScanFailure: (() -> Unit)? = null
 ) {
     data class BleDiscoveryStats(

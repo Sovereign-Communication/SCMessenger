@@ -34,7 +34,7 @@ class ConversationsViewModel @Inject constructor(
     // Grouped conversations (by peer)
     val conversations = messages.map { messageList ->
         messageList
-            .groupBy { it.peerId }
+            .groupBy { meshRepository.canonicalContactId(it.peerId) }
             // MSG-ORDER-001: Sort strictly by sender-assigned timestamp to ensure consistent ordering across platforms
             .mapValues { (_, msgs) -> msgs.sortedByDescending { it.senderTimestamp } }
             .toList()
@@ -217,6 +217,18 @@ class ConversationsViewModel @Inject constructor(
     }
 
     /**
+     * Compare two peer IDs canonically (checks direct equality and canonical contact identity).
+     */
+    fun isSamePeer(id1: String, id2: String): Boolean {
+        if (id1.equals(id2, ignoreCase = true) || PeerIdValidator.isSame(id1, id2)) return true
+        val c1 = meshRepository.canonicalContactId(id1)
+        val c2 = meshRepository.canonicalContactId(id2)
+        return (c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)) ||
+               (c1.isNotEmpty() && (c1.equals(id2, ignoreCase = true) || PeerIdValidator.isSame(c1, id2))) ||
+               (c2.isNotEmpty() && (c2.equals(id1, ignoreCase = true) || PeerIdValidator.isSame(c2, id1)))
+    }
+
+    /**
      * Check if a peer can be messaged (exists in contacts or discovered peers).
      * AND-SEND-BTN-001: Benefiting from in-memory ID resolution cache.
      */
@@ -311,7 +323,7 @@ class ConversationsViewModel @Inject constructor(
         // First check our reactive state if possible, fallback to repository
         val inList = _blockedPeers.value.any { it.peerId == peerId }
         if (inList) return true
-        
+
         return try {
             meshRepository.isBlocked(peerId)
         } catch (e: Exception) {

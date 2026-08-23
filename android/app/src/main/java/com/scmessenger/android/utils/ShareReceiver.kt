@@ -14,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 /**
@@ -59,7 +58,7 @@ class ShareReceiver : BroadcastReceiver() {
                 }
             }
             else -> {
-                Toast.makeText(context, context.getString(R.string.share_error_unsupported_type, type), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Unsupported share type: $type", Toast.LENGTH_SHORT).show()
                 Timber.w("Unsupported share type: $type")
             }
         }
@@ -83,21 +82,21 @@ class ShareReceiver : BroadcastReceiver() {
             .orEmpty()
 
         if (textItems.isEmpty() && streamItems.isEmpty()) {
-            Toast.makeText(context, context.getString(R.string.share_error_no_items), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "No shareable items found", Toast.LENGTH_SHORT).show()
             Timber.w("ACTION_SEND_MULTIPLE had no supported payloads")
             return
         }
 
         val content = buildString {
             if (textItems.isNotEmpty()) {
-                append(context.getString(R.string.share_text_items_header))
+                append("Shared text items:")
                 textItems.forEachIndexed { index, item ->
                     append("\n${index + 1}. $item")
                 }
             }
             if (streamItems.isNotEmpty()) {
                 if (isNotEmpty()) append("\n\n")
-                append(context.getString(R.string.share_attachments_header))
+                append("Shared attachments (URI references):")
                 streamItems.forEachIndexed { index, uri ->
                     append("\n${index + 1}. $uri")
                 }
@@ -116,7 +115,7 @@ class ShareReceiver : BroadcastReceiver() {
             val contacts = repository.listContacts()
 
             if (contacts.isEmpty()) {
-                Toast.makeText(context, context.getString(R.string.share_error_no_contacts), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "No contacts available", Toast.LENGTH_SHORT).show()
                 Timber.w("No contacts to share with")
                 return
             }
@@ -131,7 +130,7 @@ class ShareReceiver : BroadcastReceiver() {
             // For now, attempt dialog but catch WindowManager.BadTokenException
             try {
                 AlertDialog.Builder(context)
-                    .setTitle(R.string.share_title_share_to_contact)
+                    .setTitle("Share to Contact")
                     .setItems(contactNames) { dialog, which ->
                         val selectedContact = contacts[which]
                         sendMessageToContact(context, repository, selectedContact.peerId, content)
@@ -145,13 +144,13 @@ class ShareReceiver : BroadcastReceiver() {
                 Timber.w("Cannot show dialog from BroadcastReceiver context, using toast fallback")
                 Toast.makeText(
                     context,
-                    context.getString(R.string.share_toast_open_app_fallback),
+                    "Open SCMessenger to share content with contacts",
                     Toast.LENGTH_LONG
                 ).show()
             }
         } catch (e: Exception) {
             Timber.e(e, "Failed to show contact picker")
-            Toast.makeText(context, context.getString(R.string.share_error_failed_to_load_contacts), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Failed to load contacts", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -168,15 +167,11 @@ class ShareReceiver : BroadcastReceiver() {
         scope.launch {
             try {
                 repository.sendMessage(peerId, content)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, context.getString(R.string.share_toast_message_queued), Toast.LENGTH_SHORT).show()
-                }
+                Toast.makeText(context, "Message queued for sending", Toast.LENGTH_SHORT).show()
                 Timber.i("Shared message queued for $peerId")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to send shared message")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, context.getString(R.string.share_error_failed_to_send), Toast.LENGTH_SHORT).show()
-                }
+                Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
             } finally {
                 scope.cancel()
             }

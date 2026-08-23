@@ -165,7 +165,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if record.peer_id.eq_ignore_ascii_case(peer) {
+                if peer_matches(peer, &record.peer_id) {
                     records.push(record);
                 }
             } else {
@@ -202,7 +202,7 @@ impl HistoryManager {
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if record.hidden && peer_matches(peer_id, &record.peer_id) {
                 record.hidden = false;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -226,7 +226,7 @@ impl HistoryManager {
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if !record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if !record.hidden && peer_matches(peer_id, &record.peer_id) {
                 record.hidden = true;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -279,7 +279,7 @@ impl HistoryManager {
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
 
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if peer_matches(&peer_id, &record.peer_id) {
                 self.backend
                     .remove(&key)
                     .map_err(|_| IronCoreError::StorageError)?;
@@ -425,6 +425,78 @@ impl HistoryManager {
     }
 }
 
+fn extract_pubkey_from_peer_id_str(peer_id: &str) -> Option<String> {
+    let parsed: libp2p::PeerId = peer_id.parse().ok()?;
+    let mh = parsed.as_ref();
+    if mh.code() != 0 {
+        return None;
+    }
+    let pk = libp2p::identity::PublicKey::try_decode_protobuf(mh.digest()).ok()?;
+    let ed25519_pk = pk.try_into_ed25519().ok()?;
+    Some(hex::encode(ed25519_pk.to_bytes()))
+}
+
+pub(crate) fn peer_matches(filter: &str, record_peer: &str) -> bool {
+    if record_peer.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+
+    let filter_trimmed = filter.trim();
+    let record_trimmed = record_peer.trim();
+
+    // Check if filter is 64-hex (public_key) and record_peer is identity_id (blake3 hash)
+    if filter_trimmed.len() == 64 && filter_trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        if let Ok(bytes) = hex::decode(filter_trimmed) {
+            if bytes.len() == 32 {
+                let id = hex::encode(blake3::hash(&bytes).as_bytes());
+                if record_trimmed.eq_ignore_ascii_case(&id) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Check if record_peer is 64-hex (public_key) and filter is identity_id (blake3 hash)
+    if record_trimmed.len() == 64 && record_trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        if let Ok(bytes) = hex::decode(record_trimmed) {
+            if bytes.len() == 32 {
+                let id = hex::encode(blake3::hash(&bytes).as_bytes());
+                if filter_trimmed.eq_ignore_ascii_case(&id) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Check if filter is a libp2p PeerId and extracts to public_key or identity_id
+    if let Some(pubkey) = extract_pubkey_from_peer_id_str(filter_trimmed) {
+        if record_trimmed.eq_ignore_ascii_case(&pubkey) {
+            return true;
+        }
+        if let Ok(bytes) = hex::decode(&pubkey) {
+            let id = hex::encode(blake3::hash(&bytes).as_bytes());
+            if record_trimmed.eq_ignore_ascii_case(&id) {
+                return true;
+            }
+        }
+    }
+
+    // Check if record_peer is a libp2p PeerId and extracts to public_key or identity_id
+    if let Some(pubkey) = extract_pubkey_from_peer_id_str(record_trimmed) {
+        if filter_trimmed.eq_ignore_ascii_case(&pubkey) {
+            return true;
+        }
+        if let Ok(bytes) = hex::decode(&pubkey) {
+            let id = hex::encode(blake3::hash(&bytes).as_bytes());
+            if filter_trimmed.eq_ignore_ascii_case(&id) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,5 +639,58 @@ mod tests {
 
         // Verify the corrupt record is skipped (meaning it was not removed)
         assert!(backend.get(corrupt_key).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_multi_flavor_peer_matching() {
+        let backend = Arc::new(MemoryStorage::new());
+        let history = HistoryManager::new(backend);
+
+        let public_key =
+            "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
+        let pk_bytes = hex::decode(&public_key).unwrap();
+        let identity_id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
+
+        // 1. Sent message stored with public_key (as Android does)
+        let sent_record = MessageRecord {
+            id: "msg-sent-1".to_string(),
+            peer_id: public_key.clone(),
+            direction: MessageDirection::Sent,
+            content: "Hello from Android".to_string(),
+            timestamp: 1000,
+            sender_timestamp: 1000,
+            delivered: true,
+            hidden: false,
+        };
+        history.add(sent_record).unwrap();
+
+        // 2. Inbound message stored with identity_id (as Core does)
+        let recv_record = MessageRecord {
+            id: "msg-recv-1".to_string(),
+            peer_id: identity_id.clone(),
+            direction: MessageDirection::Received,
+            content: "Hello from Windows".to_string(),
+            timestamp: 1005,
+            sender_timestamp: 1005,
+            delivered: true,
+            hidden: false,
+        };
+        history.add(recv_record).unwrap();
+
+        // Query by identity_id -> should return BOTH sent and received!
+        let conv_by_id = history.conversation(identity_id.clone(), 10).unwrap();
+        assert_eq!(
+            conv_by_id.len(),
+            2,
+            "Query by identity_id must return both sent (public_key) and received (identity_id)"
+        );
+
+        // Query by public_key -> should return BOTH sent and received!
+        let conv_by_pk = history.conversation(public_key.clone(), 10).unwrap();
+        assert_eq!(
+            conv_by_pk.len(),
+            2,
+            "Query by public_key must return both sent (public_key) and received (identity_id)"
+        );
     }
 }

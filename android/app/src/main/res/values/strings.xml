@@ -514,21 +514,4 @@
     <string name="contacts_action_add_button">Add</string>
     <string name="settings_error_export_backup">Failed to export backup: %1$s</string>
 
-    <!-- Deep Link Confirmation Dialog -->
-    <string name="deep_link_connect_dialog_title">Connect to Peer?</string>
-    <string name="deep_link_connect_dialog_message">Connect to %1$s at the following address(es)?</string>
-    <string name="deep_link_action_connect">Connect</string>
-
-    <!-- Share Receiver -->
-    <string name="share_title_share_to_contact">Share to Contact</string>
-    <string name="share_error_unsupported_type">Unsupported share type: %1$s</string>
-    <string name="share_error_no_items">No shareable items found</string>
-    <string name="share_text_items_header">Shared text items:</string>
-    <string name="share_attachments_header">Shared attachments (URI references):</string>
-    <string name="share_error_no_contacts">No contacts available</string>
-    <string name="share_toast_open_app_fallback">Open SCMessenger to share content with contacts</string>
-    <string name="share_error_failed_to_load_contacts">Failed to load contacts</string>
-    <string name="share_toast_message_queued">Message queued for sending</string>
-    <string name="share_error_failed_to_send">Failed to send message</string>
-
 </resources>

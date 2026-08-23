@@ -144,7 +144,7 @@ impl ContactManager {
         Ok(())
     }
 
-    /// Get a contact by peer ID
+    /// Get a contact by peer ID, public key, or identity ID
     pub fn get(&self, peer_id: String) -> Result<Option<Contact>, crate::IronCoreError> {
         let db = self.db.lock();
         if let Some(data) = db
@@ -154,17 +154,64 @@ impl ContactManager {
             let contact: Contact = serde_json::from_slice(&data)
                 .context("Failed to deserialize contact")
                 .map_err(|_| crate::IronCoreError::Internal)?;
-            Ok(Some(contact))
-        } else {
-            Ok(None)
+            return Ok(Some(contact));
         }
+
+        let trimmed = peer_id.trim();
+
+        // Scan entries to find matching public key, identity ID, or peer ID
+        for item in db.iter() {
+            let (_, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if contact.peer_id.eq_ignore_ascii_case(trimmed)
+                    || contact.public_key.eq_ignore_ascii_case(trimmed)
+                {
+                    return Ok(Some(contact));
+                }
+                if let Ok(pk_bytes) = hex::decode(&contact.public_key) {
+                    if pk_bytes.len() == 32 {
+                        let id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
+                        if id.eq_ignore_ascii_case(trimmed) {
+                            return Ok(Some(contact));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Remove a contact
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
-        db.remove(peer_id.as_bytes())
-            .map_err(|_| crate::IronCoreError::StorageError)?;
+        let _ = db.remove(peer_id.as_bytes());
+
+        let trimmed = peer_id.trim();
+        let mut keys_to_remove = Vec::new();
+
+        for item in db.iter() {
+            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if contact.peer_id.eq_ignore_ascii_case(trimmed)
+                    || contact.public_key.eq_ignore_ascii_case(trimmed)
+                {
+                    keys_to_remove.push(key);
+                } else if let Ok(pk_bytes) = hex::decode(&contact.public_key) {
+                    if pk_bytes.len() == 32 {
+                        let id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
+                        if id.eq_ignore_ascii_case(trimmed) {
+                            keys_to_remove.push(key);
+                        }
+                    }
+                }
+            }
+        }
+
+        for key in keys_to_remove {
+            let _ = db.remove(key);
+        }
+
         Ok(())
     }
 
@@ -470,6 +517,43 @@ mod tests {
         assert_eq!(contact.nickname.as_deref(), Some("FederatedName"));
         assert_eq!(contact.local_nickname.as_deref(), Some("LocalAlias"));
         assert_eq!(reloaded.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_contact_manager_multi_flavor_lookup() -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let public_key =
+            "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
+        let pk_bytes = hex::decode(&public_key).unwrap();
+        let identity_id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
+
+        // Contact stored under libp2p peer ID (as CLI does)
+        let contact = Contact::new(
+            "12D3KooWCPCJ6B3aQD55nd7FvjuUkrhHRgqXGXoNGw2rstaohUrw".to_string(),
+            public_key.clone(),
+        )
+        .with_nickname("Lucas Ballek".to_string());
+        manager.add(contact)?;
+
+        // 1. Get by peer ID
+        let c1 = manager.get("12D3KooWCPCJ6B3aQD55nd7FvjuUkrhHRgqXGXoNGw2rstaohUrw".to_string())?;
+        assert!(c1.is_some());
+        assert_eq!(c1.unwrap().nickname.as_deref(), Some("Lucas Ballek"));
+
+        // 2. Get by public key
+        let c2 = manager.get(public_key)?;
+        assert!(c2.is_some());
+        assert_eq!(c2.unwrap().nickname.as_deref(), Some("Lucas Ballek"));
+
+        // 3. Get by identity ID (Blake3 hash)
+        let c3 = manager.get(identity_id)?;
+        assert!(c3.is_some());
+        assert_eq!(c3.unwrap().nickname.as_deref(), Some("Lucas Ballek"));
+
         Ok(())
     }
 }

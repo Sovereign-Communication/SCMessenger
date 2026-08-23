@@ -67,50 +67,11 @@ A ticket is D4 work only if its trigger exists in **that** topology.
 | # | Ticket | Ruling | Reason |
 |---|---|---|---|
 | 4 | `P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT` | **-> `HANDOFF/todo/`. D4 WORK.** | The only one whose trigger is live in D4. Verified in the current tree post-#139: `core/src/transport/multiport.rs:73-80` pushes both `/ip4/0.0.0.0/tcp/{port}` and `/ip4/0.0.0.0/tcp/{port}/ws` for the **same** port. The node advertises both; only one can bind. A phone dialling the unbound one fails negotiation. Unfixed |
-| 1 | `P0_NO_MOBILE_BOOTSTRAP_MEANS_NO_OFF_LAN_RENDEZVOUS` | -> S4 **[SUPERSEDED 2026-08-18]** | **[SUPERSEDED 2026-08-18 -- Justification Void]** Original: *D4 seeds the node address **out-of-band**. Verified a working in-app path exists independent of the empty bootstrap list: `ui/join/JoinMeshScreen.kt:359-370` parses a join bundle's `"bootstrap_peers": ["/ip4/x.x.x.x/tcp/yyyy"]` and dials via `SwarmHandle.dial()`. `DEFAULT_BOOTSTRAP_NODES` being empty (`cli/src/bootstrap.rs:26`) blocks *organic* discovery, not a scanned join. **Re-entry: before any release where a user is expected to connect without scanning a code.***<br><br>**Correction (2026-08-18):** Justification void. `JoinMeshScreen.kt:49` is unreachable (`[C1_ZERO_CALLERS]`, no NavHost route in `MeshApp.kt`). The deep-link path (`MainActivity.kt:148-153`, `MainViewModel.kt:307`, `MeshApp.kt:237`) parses addresses but deliberately does NOT dial (`MainViewModel.kt:361-363` TODO). S4 deferral is unsupportable on evidence given; bears directly on D4. Escalated to operator for decision (see below). |
+| 1 | `P0_NO_MOBILE_BOOTSTRAP_MEANS_NO_OFF_LAN_RENDEZVOUS` | -> S4 | D4 seeds the node address **out-of-band**. Verified a working in-app path exists independent of the empty bootstrap list: `ui/join/JoinMeshScreen.kt:359-370` parses a join bundle's `"bootstrap_peers": ["/ip4/x.x.x.x/tcp/yyyy"]` and dials via `SwarmHandle.dial()`. `DEFAULT_BOOTSTRAP_NODES` being empty (`cli/src/bootstrap.rs:26`) blocks *organic* discovery, not a scanned join. **Re-entry: before any release where a user is expected to connect without scanning a code.** |
 | 2 | `P0_NO_RELAY_FALLBACK_FOR_ROAMING_PEERS` | -> S4 | Relay fallback matters when **both** peers are NAT-bound. The AWS node has a public IP, so the phone dials it directly and no relay hop is required. **Re-entry: the first two-handset test, where both peers are behind carrier NAT -- that is the topology this describes, and it is not D4's.** |
 | 3 | `P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH` | -> S4 | Trigger is mesh **growth** -- multiple connections per peer churning. D4 is two endpoints. The fix is also in the tree: `observation.rs` `ConnectionTracker` now keys by `connection_id` rather than clobbering per-peer, and the comment above the `ConnectionClosed` arm in `swarm.rs` documents this exact panic as its reason. **Re-entry: the five-node gate.** |
 | 5 | `P0_UPNP_PANIC_KILLS_DESKTOP_NODE` | -> S4 | Fix merged with #139, now on `main`. The outstanding item is a **Windows desktop soak**, and D4 involves no Windows desktop. **Re-entry: before any desktop build ships.** |
 | 6 | `P0_BLE_L2CAP_ACCEPT_SPIN` | -> S4 | **The ruling the CEO invited: BLE is out of D4 scope, explicitly.** D4 is Android-to-AWS over the internet; BLE is never exercised. Recorded as a scope decision, not an oversight. **Re-entry: before any claim that offline/proximity messaging works -- which the README must not assert until then (CEO_RULINGS §7.3).** |
-
-### Correction to #1 (`P0_NO_MOBILE_BOOTSTRAP_MEANS_NO_OFF_LAN_RENDEZVOUS`) -- 2026-08-18
-
-**Original reasoning SUPERSEDED 2026-08-18 -- Justification is VOID.**
-
-The S4 deferral justification asserted that a working in-app rendezvous path existed via `JoinMeshScreen.kt:359-370`. The CTO verified all of the following facts this session:
-
-1. **`JoinMeshScreen` is UNREACHABLE (dead code):**
-   - Static analysis / wiring checks on `origin/main` report `[C1_ZERO_CALLERS] ui/join/JoinMeshScreen.kt:49 - JoinMeshScreen` -- zero callers in Kotlin code.
-   - There is no `composable()` registration in `MeshApp`'s NavHost (`android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt`).
-   - Its five sub-views (`QrScannerView`, `ParsingView`, `ConnectingView`, `SuccessView`, `ErrorView`) are all `C4_TRANSITIVE_DEAD` behind it.
-   - While the parsing logic at `JoinMeshScreen.kt:359-370` is real, no user or UI path can reach or invoke it. Code that cannot be invoked is not "a working in-app path".
-
-2. **A DIFFERENT path exists and IS reachable, but deliberately DOES NOT DIAL:**
-   - `AndroidManifest.xml:83-89` declares the `scmessenger://invite` and `scmessenger://add` deep links on `MainActivity` (restored by PR #176), verified live with `pm query-activities -a VIEW -d scmessenger://invite` -> `MainActivity`.
-   - `ui/MainActivity.kt:148-153` (cold start) and `:348-355` (`onNewIntent`) both route `ACTION_VIEW` to `mainViewModel.handleDeepLink(uri)`.
-   - `ui/viewmodels/MainViewModel.kt:307-359` `handleDeepLink` parses `public_key`, `libp2p_peer_id` and multiaddrs from `listeners`, `connection_hints`, `listener`, and `bootstrap`, validates them via `DeepLinkValidator.sanitizeDeepLinkMultiaddrs`, and stores `DeepLinkData`.
-   - `ui/MeshApp.kt:237` consumes it via `mainVm.consumeDeepLink()` to populate `AddContactScreen`.
-   - BUT `MainViewModel.kt:361-363` reads, verbatim:
-     ```kotlin
-     // TODO: Wire auto-dial via MeshRepository.connectToPeer(peerId, addresses)
-     // once validation is reviewed and approved by the operator.
-     // For now, only parse and expose via DeepLinkData.listeners.
-     ```
-   - Therefore, the reachable deep-link path parses the address into UI state and deliberately does NOT connect to it, pending an unrecorded operator approval.
-
-**CTO Position:**
-The S4 deferral of `P0_NO_MOBILE_BOOTSTRAP_MEANS_NO_OFF_LAN_RENDEZVOUS` is **NOT supportable** on the evidence given, because neither claimed in-app rendezvous path can actually connect a user. This finding bears directly on **D4** (Android <-> AWS node), which assumes the node address can be seeded out-of-band.
-
-**Open Decision for the Operator (AGENTS.md rule 9):**
-Per AGENTS.md rule 9 (architecture decisions escalate to operator), three paths are available:
-- **Option (i):** Return `P0_NO_MOBILE_BOOTSTRAP_MEANS_NO_OFF_LAN_RENDEZVOUS` to D4 work.
-  * *Trade-off:* Eliminates out-of-band dependency by shipping default/configured bootstrap nodes, but expands pre-tag scope.
-- **Option (ii):** Approve and wire the auto-dial TODO at `MainViewModel.kt:361-363` (`MeshRepository.connectToPeer(peerId, addresses)`).
-  * *Trade-off:* Minimal code change (~5 LOC) making deep-link/QR invites functional immediately, but requires operator approval of the connection trigger security surface.
-- **Option (iii):** Restore `JoinMeshScreen` route and entry point in `MeshApp.kt` NavHost.
-  * *Trade-off:* Restores the dedicated multi-step QR scanning and connection progress UI, but adds navigation complexity and UI testing surface.
-
-Ticket filed: `HANDOFF/todo/P0_DEEPLINK_PARSES_BUT_NEVER_DIALS_2026-08-18.md`.
 
 **Escalation attached to #4.** The ticket carries an unmade decision the CTO is
 not taking: *"Fix direction (needs operator decision -- merge-blocked path)"* --
@@ -135,8 +96,6 @@ And a correction the CTO owes on his own earlier statement: the deep link is
 **not** D4's rendezvous path. QR joins land in `JoinMeshScreen`, not
 `handleDeepLink`. #176 stays tag-blocking for feature completeness -- a shared
 `scmessenger://invite` link is dead -- but it does **not** block D4.
-
-> **Correction to note above (SUPERSEDED 2026-08-18):** The statement that "QR joins land in `JoinMeshScreen`" was based on orphaned code. `JoinMeshScreen.kt` has zero callers and no route in `MeshApp.kt`. Deep links (`scmessenger://invite` / `scmessenger://add`) are routed to `handleDeepLink`, which parses but deliberately does not dial (`MainViewModel.kt:361-363`).
 
 ---
 
@@ -283,4 +242,3 @@ a reason, so that "we decided against it" never gets mistaken for "we forgot".
 | 2026-08-16 | Register created. Amnesty verified non-destructive (79/79 tracked). Six P0s flagged for recall. Nine S4 items enumerated with owners and triggers | CEO |
 | 2026-08-16 | S4-10 added. Participation pilot run against 4 free lanes: mechanism proven, 4/4 yes. Kept out of the critical path; operationalisation checklist in Section 3a | CEO |
 | 2026-08-16 | Operator ruling: consent is **continuing, not a gate**. Negative-control requirement dropped in favour of a standing mid-task `DEFER` exit. 4/4 accepted at the door on that basis | Operator |
-| 2026-08-18 | Row 1 disposition corrected: `JoinMeshScreen` is dead code (zero callers, no NavHost route); deep-link path parses but does not dial (`MainViewModel.kt:361-363` TODO). S4 deferral voided, escalated to operator for decision. Ticket `HANDOFF/todo/P0_DEEPLINK_PARSES_BUT_NEVER_DIALS_2026-08-18.md` filed | CTO |

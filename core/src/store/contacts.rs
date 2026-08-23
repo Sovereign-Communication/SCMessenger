@@ -247,14 +247,57 @@ impl ContactManager {
         {
             let contact: Contact =
                 serde_json::from_slice(&data).map_err(|_| IronCoreError::Internal)?;
-            Ok(Some(contact))
-        } else {
-            // If not found by peer_id, try resolving as identity_id
-            if let Ok(Some(public_key)) = self.resolve_identity_id(&peer_id) {
-                return self.get(public_key);
-            }
-            Ok(None)
+            return Ok(Some(contact));
         }
+
+        let trimmed = peer_id.trim();
+
+        // 1. If resolving via identity_id index succeeds, look up by that public key
+        if let Ok(Some(public_key)) = self.resolve_identity_id(trimmed) {
+            if let Ok(Some(contact)) = self.get_by_public_key(&public_key) {
+                return Ok(Some(contact));
+            }
+        }
+
+        // 2. Direct lookup by public key if trimmed is a candidate public key
+        if let Ok(Some(contact)) = self.get_by_public_key(trimmed) {
+            return Ok(Some(contact));
+        }
+
+        // 3. If trimmed is a 64-hex Blake3 identity ID not yet in index, scan contacts for matching public key Blake3 hash
+        if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            if let Ok(contacts) = self.list() {
+                for contact in contacts {
+                    if let Ok(pk_bytes) = hex::decode(&contact.public_key) {
+                        if pk_bytes.len() == 32 {
+                            let id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
+                            if id.eq_ignore_ascii_case(trimmed) {
+                                // Populate index for fast lookup next time
+                                let _ = self.save_identity_id_index(&id, &contact.public_key);
+                                return Ok(Some(contact));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. If peer_id is a libp2p Peer ID, extract public key and lookup
+        if let Ok(parsed) = trimmed.parse::<libp2p::PeerId>() {
+            let mh = parsed.as_ref();
+            if mh.code() == 0 {
+                if let Ok(pk) = libp2p::identity::PublicKey::try_decode_protobuf(mh.digest()) {
+                    if let Ok(ed_pk) = pk.try_into_ed25519() {
+                        let pubkey_hex = hex::encode(ed_pk.to_bytes());
+                        if let Ok(Some(contact)) = self.get_by_public_key(&pubkey_hex) {
+                            return Ok(Some(contact));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Find a contact by its canonical Ed25519 public-key hex.
@@ -279,6 +322,8 @@ impl ContactManager {
         if let Some(contact) = self.get(peer_id.clone())? {
             let bundle_key = contact_bundle_key(&contact.public_key);
             let _ = self.backend.remove(&bundle_key);
+            let key = contact_key(&contact.peer_id);
+            let _ = self.backend.remove(&key);
         }
         let key = contact_key(&peer_id);
         self.backend

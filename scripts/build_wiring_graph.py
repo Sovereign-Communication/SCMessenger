@@ -5,10 +5,6 @@ Parses HANDOFF_AUDIT/REPO_MAP.jsonl, HANDOFF/discovery/REPO_MAP.jsonl,
 and repo_map_index.json. Produces wiring_graph.json and
 unwired_functions.json for the Cytoscape.js dashboard.
 
-Corpus records whose file no longer exists in the tree (ghost entries) are
-dropped with a printed count. A configured input that is missing from the
-tree is reported as SKIPPED-GONE, never silently skipped.
-
 Usage:
     python scripts/build_wiring_graph.py
 """
@@ -127,38 +123,22 @@ def derive_module(file_path: str) -> str:
 # JSONL multi-line parser
 # ---------------------------------------------------------------------------
 def parse_audit_jsonl(path: Path):
-    """Parse AUDIT REPO_MAP.jsonl.
+    """Parse AUDIT REPO_MAP.jsonl — multi-line JSON separated by BOM markers.
 
-    Accepts both historically-produced formats:
-      - standard JSONL (one JSON record per line)
-      - multi-line JSON segments separated by BOM markers (older format)
+    Format: <record1 JSON>\\n<BOM><record2 JSON>\\n<BOM>...
     """
     with open(path, "r", encoding="utf-8-sig") as fh:
         raw = fh.read()
 
-    if "\ufeff" in raw:
-        # BOM-separated multi-line segments.
-        segments = raw.split("\ufeff")
-        for seg in segments:
-            seg = seg.strip()
-            if not seg:
-                continue
-            try:
-                yield json.loads(seg)
-            except json.JSONDecodeError as exc:
-                print(f"  [WARN] skipping malformed segment in {path.name}: "
-                      f"{str(exc)[:100]}")
-        return
-
-    # Standard JSONL (one record per line).
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
+    segments = raw.split("﻿")
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
             continue
         try:
-            yield json.loads(line)
+            yield json.loads(seg)
         except json.JSONDecodeError as exc:
-            print(f"  [WARN] skipping malformed line in {path.name}: "
+            print(f"  [WARN] skipping malformed segment in {path.name}: "
                   f"{str(exc)[:100]}")
 
 
@@ -186,59 +166,34 @@ def main():
 
     # 1. Load index → build (basename, chunk) → full_path lookup
     print("\n[1/6] Loading repo_map_index.json ...")
+    with open(INDEX_JSON, "r", encoding="utf-8-sig") as fh:
+        index = json.load(fh)
+    files_index = index.get("files", {})
+
     basename_chunk_to_path = {}
-    if INDEX_JSON.exists():
-        with open(INDEX_JSON, "r", encoding="utf-8-sig") as fh:
-            index = json.load(fh)
-        files_index = index.get("files", {})
+    for full_path, meta in files_index.items():
+        basename = os.path.basename(full_path)
+        for ch in meta.get("chunks", []):
+            key = (basename, ch)
+            if key in basename_chunk_to_path:
+                # Should never happen per our collision analysis, but be safe
+                existing = basename_chunk_to_path[key]
+                print(f"  [WARN] collision: {key} -> {existing} vs {full_path}")
+            basename_chunk_to_path[key] = full_path
 
-        for full_path, meta in files_index.items():
-            basename = os.path.basename(full_path)
-            # The index sometimes stores `chunks` as a scalar int instead
-            # of a list -- normalize before iterating.
-            ch_list = meta.get("chunks", [])
-            if isinstance(ch_list, int):
-                ch_list = [ch_list]
-            for ch in ch_list:
-                key = (basename, ch)
-                if key in basename_chunk_to_path:
-                    # Should never happen per our collision analysis, but be safe
-                    existing = basename_chunk_to_path[key]
-                    print(f"  [WARN] collision: {key} -> {existing} vs {full_path}")
-                basename_chunk_to_path[key] = full_path
-
-        print(f"  Index: {len(files_index)} files, "
-              f"{len(basename_chunk_to_path)} (basename,chunk) entries")
-    else:
-        # Tolerate a missing index: records carrying full paths still
-        # resolve; only basename-only records go unresolved. Print the
-        # reduced confidence rather than failing silently.
-        print("  [WARNING] repo_map_index.json not found -- "
-              "basename-only audit records will be unresolved.")
+    print(f"  Index: {len(files_index)} files, "
+          f"{len(basename_chunk_to_path)} (basename,chunk) entries")
 
     # 2. Parse AUDIT REPO_MAP.jsonl (primary source)
     print("\n[2/6] Parsing HANDOFF_AUDIT/REPO_MAP.jsonl ...")
     audit_functions = []  # list of normalized dicts
     audit_parse_errors = 0
-    # Ghost filter: records whose file no longer exists in this tree are
-    # dropped and REPORTED, so the unwired count reflects the tree that
-    # actually exists.
-    ghost_records = []  # (full_path, func_count)
     for rec in parse_audit_jsonl(AUDIT_JSONL):
-        file_field = rec.get("file", "")
+        basename = rec.get("file", "")
         chunk = rec.get("chunk", 0)
-        # Support both full-path records and bare basenames resolved via
-        # repo_map_index.json.
-        if "/" in file_field.replace("\\", "/"):
-            full_path = file_field.replace("\\", "/")
-        else:
-            full_path = basename_chunk_to_path.get((file_field, chunk))
+        full_path = basename_chunk_to_path.get((basename, chunk))
         if full_path is None:
             audit_parse_errors += 1
-            continue
-
-        if not (REPO_ROOT / full_path).exists():
-            ghost_records.append((full_path, len(rec.get("funcs", []))))
             continue
 
         crate_name, language, color = detect_crate_and_lang(full_path)
@@ -261,68 +216,37 @@ def main():
 
     print(f"  Parsed {len(audit_functions)} function records "
           f"({audit_parse_errors} unresolved)")
-    ghost_func_total = sum(n for _, n in ghost_records)
-    print(f"  [GHOST-FILTER] dropped {len(ghost_records)} records / "
-          f"{ghost_func_total} functions whose files no longer exist in this tree:")
-    for gpath, gcount in sorted(ghost_records):
-        print(f"    [GHOST-DROPPED] {gpath} ({gcount} funcs)")
-    if ghost_records:
-        # Reduced confidence is printed MORE, never less.
-        print("  [INFO] ghost entries removed from the corpus: the unwired "
-              "count now reflects only files present in this tree.")
 
     # 3. Parse DISCOVERY REPO_MAP.jsonl (overlay for is_stub + extra funcs)
     print("\n[3/6] Parsing HANDOFF/discovery/REPO_MAP.jsonl ...")
     discovery_functions = []
     disc_parse_errors = 0
-    disc_ghost_records = []
-    disc_ghost_func_total = 0
-    if DISCOVERY_JSONL.exists():
-        for rec in parse_discovery_jsonl(DISCOVERY_JSONL):
-            full_path = rec.get("file_path", "")
-            if not full_path:
-                disc_parse_errors += 1
-                continue
+    for rec in parse_discovery_jsonl(DISCOVERY_JSONL):
+        full_path = rec.get("file_path", "")
+        if not full_path:
+            disc_parse_errors += 1
+            continue
 
-            if not (REPO_ROOT / full_path).exists():
-                disc_ghost_records.append((full_path, len(rec.get("functions", []))))
-                continue
+        crate_name, language, color = detect_crate_and_lang(full_path)
+        module = derive_module(full_path)
 
-            crate_name, language, color = detect_crate_and_lang(full_path)
-            module = derive_module(full_path)
+        for func in rec.get("functions", []):
+            discovery_functions.append({
+                "name": func.get("name", ""),
+                "file": full_path,
+                "line": func.get("line_approx", 0),
+                "chunk": 0,  # discovery doesn't track chunks
+                "calls_out_to": func.get("calls_out_to", []),
+                "is_stub": func.get("is_stub_or_incomplete", False),
+                "crate": crate_name,
+                "language": language,
+                "color": color,
+                "module": module,
+                "source": "discovery",
+            })
 
-            for func in rec.get("functions", []):
-                discovery_functions.append({
-                    "name": func.get("name", ""),
-                    "file": full_path,
-                    "line": func.get("line_approx", 0),
-                    "chunk": 0,  # discovery doesn't track chunks
-                    "calls_out_to": func.get("calls_out_to", []),
-                    "is_stub": func.get("is_stub_or_incomplete", False),
-                    "crate": crate_name,
-                    "language": language,
-                    "color": color,
-                    "module": module,
-                    "source": "discovery",
-                })
-
-        print(f"  Parsed {len(discovery_functions)} function records "
-              f"({disc_parse_errors} unresolved)")
-        disc_ghost_func_total = sum(n for _, n in disc_ghost_records)
-        if disc_ghost_records:
-            print(f"  [GHOST-FILTER] dropped {len(disc_ghost_records)} discovery "
-                  f"records / {disc_ghost_func_total} functions:")
-            for gpath, gcount in sorted(disc_ghost_records):
-                print(f"    [GHOST-DROPPED] {gpath} ({gcount} funcs)")
-            print("  [INFO] ghost entries removed from the discovery overlay; "
-                  "the unwired count now reflects only files present in this tree.")
-        else:
-            print("  [INFO] no ghost entries in discovery overlay.")
-    else:
-        # Loud skip, never silent: without this overlay, is_stub is always
-        # False and stub counts downstream are structurally zero.
-        print("  [SKIPPED-GONE] HANDOFF/discovery/REPO_MAP.jsonl not found -- "
-              "no stub overlay; stub counts will be structurally zero.")
+    print(f"  Parsed {len(discovery_functions)} function records "
+          f"({disc_parse_errors} unresolved)")
 
     # TODO(kunal, 2026-05-04): REPO_MAP generation must enforce is_stub tracking
     # in the AUDIT pipeline. Currently the AUDIT file has no is_stub field,
@@ -506,11 +430,6 @@ def main():
         "unresolved": len(unresolved_refs),
         "crates": sorted(set(n["crate"] for n in nodes_out)),
         "files": len(set(n["file"] for n in nodes_out)),
-        # Ghost accounting: corpus records dropped because their file no
-        # longer exists in this tree. Nonzero means reduced confidence:
-        # the corpus predates the tree state.
-        "ghost_files_dropped": len(ghost_records) + len(disc_ghost_records),
-        "ghost_functions_dropped": ghost_func_total + disc_ghost_func_total,
         "generated_at": _now_iso(),
     }
 
@@ -520,12 +439,6 @@ def main():
             "version": "1.0",
             "generated_at": stats["generated_at"],
             "description": "REPO_MAP call graph for Cytoscape.js wiring visualizer",
-            "inputs": [
-                "HANDOFF_AUDIT/REPO_MAP.jsonl",
-                "HANDOFF/discovery/REPO_MAP.jsonl",
-            ],
-            "ghost_files_dropped": stats["ghost_files_dropped"],
-            "ghost_functions_dropped": stats["ghost_functions_dropped"],
         },
         "stats": stats,
         "nodes": nodes_out,
@@ -549,12 +462,6 @@ def main():
             "version": "1.0",
             "generated_at": stats["generated_at"],
             "description": "Unwired functions — no callers and no callees",
-            "inputs": [
-                "HANDOFF_AUDIT/REPO_MAP.jsonl",
-                "HANDOFF/discovery/REPO_MAP.jsonl",
-            ],
-            "ghost_files_dropped": stats["ghost_files_dropped"],
-            "ghost_functions_dropped": stats["ghost_functions_dropped"],
         },
         "count": len(unwired),
         "functions": sorted(unwired, key=lambda n: (n["file"], n["line"])),
@@ -583,14 +490,13 @@ def main():
     print(f"  Wired:        {stats['wired']}  ({100*wired_count//max(1,stats['total_functions'])}%)")
     print(f"  Unwired:      {stats['unwired']}")
     print(f"  Stubs:        {stats['stubs']}")
-    print(f"  Ghosts drop:  {stats['ghost_files_dropped']} files / "
-          f"{stats['ghost_functions_dropped']} funcs")
     print(f"  Int edges:    {stats['internal_edges']}")
     print(f"  Ext refs:     {stats['external_refs']}")
     print(f"  Unresolved:   {stats['unresolved']}")
     print(f"  Crates:       {', '.join(stats['crates'])}")
     print("=" * 60)
     print("Done.")
+
 
 # ---------------------------------------------------------------------------
 # Simple-name edge resolution

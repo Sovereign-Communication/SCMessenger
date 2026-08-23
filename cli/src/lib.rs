@@ -6,7 +6,6 @@
 
 pub mod api;
 pub mod ble_daemon;
-pub mod ble_ids;
 pub mod ble_mesh;
 pub mod bootstrap;
 pub mod cli;

@@ -18,17 +18,6 @@
 # this on costs nothing today and cannot be blamed for blocking work. The
 # 34-minute Android APK job is intentionally NOT required.
 #
-# 2026-08-19/20 adjustments (documented in HANDOFF/CTO_STATE.md section 0):
-# - "Android JVM Unit Tests" is NOT a required context. It is PATH-FILTERED
-#   (does not run on scripts/docs-only PRs), so requiring it left four
-#   already-green PRs permanently BLOCKED with "the base branch policy
-#   prohibits the merge". Verifying a context NAME EXISTS is not enough;
-#   it must RUN ON EVERY PR. Apply that test before ever adding a context.
-# - strict defaults to FALSE to match the live configuration (set false so
-#   the merge train was not serialized behind a full CI cycle per merge on
-#   degraded runners). Pass --strict to flip it true once the train lands;
-#   that flip is an operator decision, not a script default.
-#
 # required_approving_review_count is 0, NOT 1, and that is load-bearing.
 # GitHub forbids approving your own pull request. With enforce_admins TRUE and
 # a single-operator repo, requiring one approval would mean nobody on earth
@@ -40,41 +29,32 @@
 # is the part that would have stopped ebf5411b. Raise this to 1 the moment a
 # second human has write access, not before.
 #
-#   scripts/apply_branch_protection.sh --dry-run            # show the payload
-#   scripts/apply_branch_protection.sh --dry-run --strict   # strict:true payload
-#   scripts/apply_branch_protection.sh --apply [--strict]
+#   scripts/apply_branch_protection.sh --dry-run   # show the payload, change nothing
+#   scripts/apply_branch_protection.sh --apply
 #   scripts/apply_branch_protection.sh --status
 #   scripts/apply_branch_protection.sh --remove    # emergency only; prints a warning
 #
-# Run this AFTER large PRs land. Protecting a branch that a 100-commit PR is
+# Run this AFTER PR #139 merges. Protecting a branch that a 100-commit PR is
 # about to land into only creates friction.
 
 set -uo pipefail
 REPO="Sovereign-Communication/SCMessenger"
 BRANCH="main"
-STRICT="false"
-ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    --strict) STRICT="true" ;;
-    *) ARGS+=("$arg") ;;
-  esac
-done
-MODE="${ARGS[0]:---dry-run}"
+MODE="${1:---dry-run}"
 
-# Exact check-run names, verified against a real run on 2026-08-15, minus the
-# path-filtered Android JVM context removed 2026-08-19 (see header). GitHub
+# Exact check-run names, verified against a real run on 2026-08-15. GitHub
 # matches these literally -- a typo silently means "no check required", which
 # is worse than no protection because it looks protected.
-read -r -d '' PAYLOAD <<JSON
+read -r -d '' PAYLOAD <<'JSON'
 {
   "required_status_checks": {
-    "strict": $STRICT,
+    "strict": true,
     "contexts": [
       "Repository Hygiene Checks",
       "Lint",
       "Rust Linting",
-      "Test (ubuntu-latest)"
+      "Test (ubuntu-latest)",
+      "Android JVM Unit Tests"
     ]
   },
   "enforce_admins": true,
@@ -102,38 +82,28 @@ case "$MODE" in
 
   --dry-run)
     echo "DRY RUN -- nothing will change."
-    echo "target: $REPO branch $BRANCH (strict: $STRICT)"
+    echo "target: $REPO branch $BRANCH"
     echo
     echo "$PAYLOAD"
     echo
-    echo "Verifying every required context actually runs on recent PRs."
-    echo "A context name that never appears is a silent no-op, and a"
-    echo "path-filtered context BLOCKS PRs it never ran on (the Android JVM"
-    echo "lesson from 2026-08-19):"
-    CTXTMP="$(git rev-parse --show-toplevel)/tmp/_ctx_check.txt"
-    mkdir -p "$(dirname "$CTXTMP")"
-    gh run list --branch main -L 5 --json databaseId --jq '.[].databaseId' 2>/dev/null \
-      | while read -r runid; do
-          gh api "repos/$REPO/actions/runs/$runid/jobs" --jq '.jobs[].name' 2>/dev/null
-        done | sort -u > "$CTXTMP"
-    for c in "Repository Hygiene Checks" "Lint" "Rust Linting" "Test (ubuntu-latest)"; do
-      if grep -Fxq "$c" "$CTXTMP" 2>/dev/null; then
+    echo "Verifying every required context has actually run recently."
+    echo "A context name that never appears is a silent no-op:"
+    gh pr checks 139 --json name --jq '.[].name' 2>/dev/null > /tmp/_ctx.txt
+    while IFS= read -r c; do
+      if grep -Fxq "$c" /tmp/_ctx.txt 2>/dev/null; then
         echo "  [OK]   $c"
       else
-        echo "  [WARN] $c  -- not seen in recent main runs; would never gate anything"
+        echo "  [WARN] $c  -- not seen in recent checks; would never gate anything"
       fi
-    done
+    done < <(echo "$PAYLOAD" | grep -oE '"[^"]+"' | sed -n '/Hygiene\|^"Lint"$\|Rust Linting\|Test (ubuntu\|Android JVM/p' | tr -d '"')
     echo
     echo "re-run with --apply to enable."
     ;;
 
   --apply)
-    PROTTMP="$(git rev-parse --show-toplevel)/tmp/_prot_payload.json"
-    PROTOUT="$(git rev-parse --show-toplevel)/tmp/_prot_out.json"
-    mkdir -p "$(dirname "$PROTTMP")"
-    echo "$PAYLOAD" > "$PROTTMP"
+    echo "$PAYLOAD" > /tmp/_prot.json
     if gh api -X PUT "repos/$REPO/branches/$BRANCH/protection" \
-         -H "Accept: application/vnd.github+json" --input "$PROTTMP" > "$PROTOUT" 2>&1; then
+         -H "Accept: application/vnd.github+json" --input /tmp/_prot.json > /tmp/_prot_out.json 2>&1; then
       echo "[OK] protection enabled on $BRANCH"
       echo "  required checks : $(gh api "repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.contexts | join(", ")' 2>/dev/null)"
       echo "  enforce_admins  : $(gh api "repos/$REPO/branches/$BRANCH/protection" --jq '.enforce_admins.enabled' 2>/dev/null)"
@@ -143,7 +113,7 @@ case "$MODE" in
       echo "deliberately, and say so in the commit message."
     else
       echo "[FAIL] could not enable protection:"
-      cat "$PROTOUT"
+      cat /tmp/_prot_out.json
       exit 1
     fi
     ;;

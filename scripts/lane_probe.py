@@ -37,18 +37,6 @@ def knob(lane):
         else {"effort": "low"}
 
 
-def thinking_knob(lane):
-    """Z.AI (zai) models dump reasoning into reasoning_content and return
-    content='' unless thinking is explicitly disabled. An empty content string
-    is a silent vacuous success, which is worse than an error.
-
-    This parameter is zai-only. Google, NVIDIA NIM, Cerebras and Groq reject
-    unknown fields, so it must never be sent to any other provider."""
-    if lane.get("provider") != "zai":
-        return None
-    return {"type": "disabled"}
-
-
 def probe(lane, timeout=200):
     key = load_key(lane.get("key_file"), lane.get("key_var"))
     if not key:
@@ -59,9 +47,6 @@ def probe(lane, timeout=200):
     k = knob(lane)
     if k is not None:
         body["reasoning"] = k
-    t = thinking_knob(lane)
-    if t is not None:
-        body["thinking"] = t
     h = {"Content-Type": "application/json", "Authorization": f"Bearer {key}",
          "User-Agent": "scm-lane-probe/1.0"}
     if lane["provider"] == "openrouter":
@@ -75,13 +60,7 @@ def probe(lane, timeout=200):
         dt = time.time() - t0
         if "choices" not in d:
             return "ERROR", None, json.dumps(d)[:90]
-        msg = d["choices"][0]["message"]
-        c = msg.get("content") or ""
-        reasoning = msg.get("reasoning_content") or ""
-        if not c.strip() and reasoning.strip():
-            return "ERROR", dt, (f"empty content but non-empty reasoning_content "
-                                 f"({len(reasoning)} chars; thinking disabled knob "
-                                 f"missing or ignored)")
+        c = d["choices"][0]["message"].get("content") or ""
         if not c.strip():
             return "EMPTY", dt, "content empty -- reasoning-token trap, adjust knob"
         return "OK", dt, f"{len(c)} chars"

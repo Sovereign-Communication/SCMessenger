@@ -30,7 +30,6 @@ class ServiceHealthMonitor(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
 
     // Health monitoring configuration
-    private val heartbeatBackoff = com.scmessenger.android.utils.FixedDelayBackoff(5000L)
     private val heartbeatIntervalMs = 5000L // Check service health every 5 seconds
     private val serviceTimeoutMs = 30000L // Service considered hung after 30 seconds
     private val maxConsecutiveFailures = 3 // Trigger recovery after 3 consecutive failures
@@ -58,7 +57,7 @@ class ServiceHealthMonitor(private val context: Context) {
             monitorScope.launch {
                 while (isActive && isMonitoring.get()) {
                     checkServiceHealth()
-                    delay(heartbeatBackoff.nextDelay())
+                    delay(heartbeatIntervalMs)
                 }
             }
 

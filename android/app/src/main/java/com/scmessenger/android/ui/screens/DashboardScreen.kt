@@ -45,8 +45,7 @@ fun DashboardScreen(
     dashboardViewModel: DashboardViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     onNavigateToPeerList: () -> Unit = {},
-    onNavigateToTopology: () -> Unit = {},
-    onNavigateToJoinMesh: () -> Unit = {}
+    onNavigateToTopology: () -> Unit = {}
 ) {
     val serviceState by serviceViewModel.serviceState.collectAsState()
     val isRunning by serviceViewModel.isRunning.collectAsState()
@@ -180,12 +179,6 @@ fun DashboardScreen(
             item {
                 DashboardToTopologyNavigation(
                     onNavigateToTopology = { onNavigateToTopology() },
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            item {
-                DashboardToJoinMeshNavigation(
-                    onNavigateToJoinMesh = { onNavigateToJoinMesh() },
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
@@ -469,37 +462,6 @@ fun DashboardToTopologyNavigation(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(stringResource(R.string.dashboard_nav_topology_action))
-            }
-        }
-    }
-}
-
-/**
- * Navigation helper to navigate to JoinMeshScreen.
- */
-@Composable
-fun DashboardToJoinMeshNavigation(
-    onNavigateToJoinMesh: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = stringResource(R.string.join_mesh_qr_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            Text(
-                text = stringResource(R.string.join_mesh_qr_description),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-            Button(
-                onClick = onNavigateToJoinMesh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.join_mesh_qr_title))
             }
         }
     }
