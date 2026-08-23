@@ -119,6 +119,56 @@ run (~15-20 min).
 Git Bash `date` on this machine is ~7.5 h off Windows local time. Use PowerShell
 `Get-Date` for anything time-sensitive.
 
+### ADVERSARIAL REVIEW BLOCKED #215 AND #216 — read before touching either
+
+The mandated review returned **BLOCK** on both. Three critical findings were
+re-verified by the CTO afterwards and all three held.
+
+**#215 does not do what it claims.** The routing hint preimages do not match:
+
+| site | preimage |
+|---|---|
+| `optimized_engine.rs:390` (`peer_seen`) | `blake3(&peer_id)` — raw `[u8; 32]` |
+| `iron_core.rs:938` (send path) | `blake3(recipient_id.as_bytes())` — 64-char **hex string** |
+
+`blake3(raw) != blake3(ascii_hex)`. The hint registered on sighting can never be
+found by the send path, so transport failover is NOT restored on the IronCore
+path. Only `swarm.rs:5690` uses a matching derivation. The test passes because it
+derives its hint the same way `peer_seen` does — it certifies the code it was
+written beside, not the code that ships. **The PR description asserting this
+fixed the operator's failover symptom was wrong and has been retracted.**
+
+Also CRITICAL: the sighting is keyed on `sender_public_key_hex`, which is NOT
+authenticated on the V1 non-ratcheted branch — `decrypt_message` uses it only as
+AAD, which binds it to the ciphertext without proving key possession, and branch
+selection is made from attacker-controlled fields. Reachable from raw BLE GATT
+bytes (`mobile_bridge.rs:1443`) and any libp2p peer (`swarm.rs:3596`). Attack
+surface shipped without the benefit.
+
+**#216's security fix is a DATA-LOSS REGRESSION.** This one is a CTO validation
+error worth recording precisely: I read `migrateOrGeneratePassphrase`, confirmed
+its write -> commit -> read-back -> verify -> delete ordering, and called it
+fail-safe. It is — *internally*. **I never checked the durability of the store it
+writes into.**
+
+`SecurityUtils.getEncryptedSharedPreferences()` uses
+`context.deleteSharedPreferences(...)` as its KeyStore recovery path, and
+`scmessenger_secure_prefs.xml` is NOT excluded from `<device-transfer>` in
+`data_extraction_rules.xml` (verified: 0 matches). So: user transfers to a new
+phone -> prefs arrive, hardware master key does not -> decrypt throws -> store is
+DELETED -> fresh passphrase generated -> identity backup permanently orphaned.
+**The current plaintext build survives that transfer; the "fix" breaks it.**
+
+**Lesson: validating a function is not validating its dependencies.** The
+migration logic was sound and the surrounding store was not.
+
+**`iron_core.rs:402` is worse than previously recorded.** The
+`Err(_) => MemoryStorage::new()` arm shares its backend with `blocked_manager`,
+so the deliberately fail-CLOSED block checks at `:1179` and `:3395` silently
+become fail-OPEN whenever storage degrades. Separate P0; not a merge blocker on
+its own, but it must NOT be cited to wave through #216, which adds a second sled
+open on the same path.
+
 ### Open PRs from this session — nothing is only-local any more
 
 | PR | Branch | State |
