@@ -4,6 +4,63 @@ Status: Active
 Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-22e. K VERIFIED -- and one real gap found at the Android boundary
+
+### K gates, run by me
+
+```
+cargo fmt --all --check                                    exit 0
+cargo check --workspace                                    exit 0, 0 errors
+cargo check -p scmessenger-wasm --target wasm32-unknown...  exit 0, 0 errors
+cargo test -p scmessenger-core --test test_storage_fail_loud
+  test_storage_lock_contention_does_not_silently_mint_memory_identity ... ok
+  test_try_with_storage_and_logs_fails_on_locked_storage             ... ok
+  test_degraded_storage_fails_closed_on_blocked_peer_checks          ... ok
+  3 passed; 0 failed
+```
+
+The tests are non-vacuous. They create real sled lock contention, then assert
+`initialize_identity()` **fails** rather than minting a disposable identity --
+which is exactly the churn bug -- and that block checks stay closed.
+
+**I did NOT re-run K's revert check, and I am not claiming I did.** The tests
+call APIs the fix introduces (`is_storage_degraded()`, `try_with_storage()`), so
+a naive revert does not compile and "it fails on revert" would be uninformative.
+A 20-minute cold rebuild to demonstrate that was not worth the disk. What
+corroborates K instead is stronger than a synthetic revert: the six churned
+identities observed on the real Windows CLI in PR #219, plus the `Err(_) =>
+MemoryStorage` arm being plainly visible in the source on `main`.
+
+### FINDING -- K is correct in the core and INCOMPLETE at the Android call site
+
+`core/src/mobile_bridge.rs` is **untouched** by K. `MeshService::start` calls
+`IronCore::with_storage(path)` at `:312` (and `with_storage_and_logs` at `:300`),
+then goes straight to `core.start()?` and proceeds. **It never asks
+`is_storage_degraded()`.**
+
+So on Android, a locked or corrupt store now produces a core that fails every
+operation, with the user seeing an app that starts and then does nothing. The
+logs will scream `[ERROR]`, which is a genuine improvement over silent identity
+churn -- but this is the same "implementation present, call site absent"
+pathology that produced B4 and the dead `addr_filter` guard.
+
+**Do not let the five-node run be debugged blind on this.** Either wire the
+Android boundary to surface the degraded state before the run, or write it into
+the run book so a dead Android node is diagnosed in one minute instead of a day.
+
+WASM is unaffected and I checked rather than assumed: `mobile_bridge.rs` guards
+the whole block with `cfg(not(target_arch = "wasm32"))` and WASM takes
+`IronCore::new()`, which never touches sled.
+
+### Both packets now stand where they should
+
+| Packet | Branch | Gates | Falsifiability | Blocker to merge |
+|---|---|---|---|---|
+| J | `cto/v2-sender-auth-2026-08-22` `2aadf489` | 3/3 green | **CTO-run, decisive** -- original forgery test now FAILS | Adversarial review + operator sign-off (merge-blocked perimeter) |
+| K | `cto/storage-fail-loud-2026-08-22` `70a00e9d` | 3/3 green | Worker-run, corroborated by field evidence | Android call-site gap above; not in the blocked perimeter |
+
+Draft PRs deliberately NOT opened yet -- awaiting operator direction.
+
 ## 0-2026-08-22d. BOTH FIXES LAND AND VERIFY -- main is GREEN
 
 ### main is green on `b538f3ba`. D1 SATISFIED.
