@@ -76,6 +76,7 @@ fun SettingsScreen(
     var importPassphrase by remember { mutableStateOf("") }
 
     var showExportBackupDialog by remember { mutableStateOf(false) }
+    var showApkShareDialog by remember { mutableStateOf(false) }
     var exportPassphrase by remember { mutableStateOf("") }
     var exportPassphraseConfirm by remember { mutableStateOf("") }
     var exportPassphraseError by remember { mutableStateOf<String?>(null) }
@@ -250,7 +251,8 @@ fun SettingsScreen(
 
         // Advanced / Diagnostics Section
         AdvancedSettingsSection(
-            onNavigateToDiagnostics = onNavigateToDiagnostics
+            onNavigateToDiagnostics = onNavigateToDiagnostics,
+            onShareApkClick = { showApkShareDialog = true }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -443,6 +445,12 @@ fun SettingsScreen(
     }
 
 
+
+    if (showApkShareDialog) {
+        com.scmessenger.android.ui.dialogs.ApkShareDialog(
+            onDismiss = { showApkShareDialog = false }
+        )
+    }
 
     SnackbarHost(
         hostState = snackbarHostState,
@@ -1170,7 +1178,8 @@ fun PrivacySection(
 
 @Composable
 fun AdvancedSettingsSection(
-    onNavigateToDiagnostics: () -> Unit
+    onNavigateToDiagnostics: () -> Unit,
+    onShareApkClick: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -1198,12 +1207,24 @@ fun AdvancedSettingsSection(
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
-            // In Paranoid Mode, share APK and diagnostics UI buttons are disabled.
-            Text(
-                text = stringResource(R.string.settings_advanced_permissions_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Button(
+                onClick = onShareApkClick,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.settings_button_share_apk))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onNavigateToDiagnostics,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.settings_button_diagnostics))
+            }
         }
     }
 }
