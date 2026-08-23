@@ -2086,7 +2086,12 @@ impl IronCore {
             }
 
             // Also check ledger manager identities (wire-learned & seed entries)
-            for entry in self.ledger_manager.dialable_addresses().into_iter().chain(self.ledger_manager.seed_addresses(64)) {
+            for entry in self
+                .ledger_manager
+                .dialable_addresses()
+                .into_iter()
+                .chain(self.ledger_manager.seed_addresses(64))
+            {
                 if let Some(ref pk_hex) = entry.public_key {
                     let pk_clean = pk_hex.to_lowercase();
                     if pk_clean == trimmed {
