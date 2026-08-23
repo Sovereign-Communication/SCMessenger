@@ -1,7 +1,7 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (checkpoint #3: V1-downgrade forgery on #221 CONFIRMED by an executed, previously-unexecuted test -- not merged; see section 0-checkpoint-2026-08-23-c)
+Last updated: 2026-08-23 (checkpoint #3 + 1hr check-in: V1-downgrade forgery on #221 CONFIRMED, then a real fix landed (c4a3ec1f) and independently re-verified rejecting the forgery -- still needs adversarial sign-off, not merged; see section 0-checkpoint-2026-08-23-c)
 Entry point: `/CTO`. This file is the whole context load.
 
 ## 0-checkpoint-2026-08-23-c. SESSION RECORD -- 2026-08-23 (CTO, scheduled 60-min checkpoint #3, CLOUD sandbox). READ FIRST.
@@ -130,6 +130,61 @@ shared branch, no tag action taken. `main` unchanged at `b538f3ba`.
    verification (no operator/hardware in this sandbox); #205-#220 backlog
    (dependabot, Apple-fork docs, Android/routing/identity-unification
    branches) -- none inspected this session either.
+
+### ADDENDUM -- 2026-08-23T19:23Z, scheduled 1-hour self check-in
+
+A fourth checkpoint (PR #226, `checkpoint #4`) ran in the interim and did the
+read-only legwork the 12:07Z review asked for before any fix: confirmed by
+repo-wide grep that no production send path (`prepare_message_internal`,
+neither the ratchet-disabled nor default branch) ever emits an unsigned
+`encode_wire_envelope` -- every legitimate sender wraps in a signed
+`DriftEnvelope`. That answered the open precondition; it did not touch code.
+
+Then, separately, `cto/v2-sender-auth-2026-08-22` (#221) picked up a real
+third commit, `c4a3ec1f`, **"reject unsigned V1 (not just V2) wire envelopes
+at ingress."** Its message names the 12:07Z review and this checkpoint's own
+#225 finding directly, extends the ingress guard to reject *any* envelope
+that reaches the raw-bincode fallback regardless of decoded version, and
+adds `core/tests/test_v1_legacy_envelope_forgery_is_rejected.rs`.
+
+**Did not take the commit message on trust.** Re-ran the exact same
+independent reproduction from this section's headline finding, unmodified,
+in a fresh worktree against the new head (`c4a3ec1f`):
+
+```
+$ cargo test -p scmessenger-core --test test_v1_legacy_downgrade_forgery
+test test_v1_unsigned_envelope_impersonation_is_rejected ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored
+```
+
+Where it previously panicked with "SECURITY FAILURE... ACCEPTED by Bob", it
+now passes -- Bob rejects the forged envelope. Also ran the PR's own new
+test file, to check it isn't a reject-everything trick that would make an
+honest send fail too:
+
+```
+$ cargo test -p scmessenger-core --test test_v1_legacy_envelope_forgery_is_rejected
+test test_v1_legacy_forged_unsigned_envelope_is_rejected ... ok
+test test_v1_legacy_honest_sender_succeeds ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored
+```
+
+CI on the new head: all 33 checks green (`get_check_runs`, `c4a3ec1f`).
+
+**Still not merge-ready.** `core/src/crypto/` is inside the merge-blocked
+perimeter; the only comment on #221 remains the original 12:07Z BLOCK --
+**no adversarial reviewer has signed off on this specific commit yet.** The
+fix reads as correct and is now independently corroborated by two separate
+test implementations plus green CI, which is meaningfully stronger evidence
+than a commit message, but it is not the durable review artifact
+AGENTS.md rule 8 and this repo's own merge-blocked-perimeter rule require.
+**Did not merge.** Flagging for the crypto-security-auditor or the operator
+to give the actual sign-off -- that is the one remaining gate between #221
+and mergeable, as far as this checkpoint's evidence goes.
+
+No action taken on #222, #226, or the PR #223/#224/#225/#226 reconciliation
+this check-in -- out of scope for a targeted re-verification pass. `main`
+unchanged at `b538f3ba`, no tag action taken.
 
 ---
 
