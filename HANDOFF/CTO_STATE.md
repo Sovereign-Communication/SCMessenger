@@ -1,7 +1,7 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (cloud checkpoint follow-up; pushed compile/CI fixes to #221 and #222; both still blocked; see section 0-checkpoint-2026-08-23-b)
+Last updated: 2026-08-23 (1hr check-in: #221/#222 CI now clean after the pushed fixes; #221 still blocked on an unanswered adversarial BLOCK verdict, #222 on the Android follow-up; see section 0-checkpoint-2026-08-23-b addendum)
 Entry point: `/CTO`. This file is the whole context load.
 
 ## 0-checkpoint-2026-08-23-b. SESSION RECORD -- 2026-08-23 (CTO, scheduled 60-min checkpoint #2, CLOUD sandbox). READ FIRST.
@@ -140,6 +140,37 @@ their own PRs until someone reads them.
 5. #223 and this section both describe overlapping state from unmerged
    branches -- once either lands, fold the other's still-true content in and
    mark the losing one superseded rather than deleting it.
+
+### ADDENDUM -- 2026-08-23T15:36Z, 1-hour scheduled self check-in
+
+Re-pulled `get_check_runs` on both PRs at their current heads. **Both now
+show clean CI:**
+
+- **#221** (head `00c946f`, the import fix above): `Test (ubuntu/macos/
+  windows)`, `macOS Native Tests`, `FFI Surface Contract` -- all green.
+  `mergeable_state` went `blocked` -> `clean`. **This is CI only.** The
+  12:07Z adversarial BLOCK verdict has had **zero follow-up in 3.5+ hours**
+  despite its own text claiming remediation was "in progress" -- no new
+  comment, no new commit addressing the V1-bypass P0 or the reviewer's
+  finding 2 (asymmetric static-DH derivation, which the reviewer flagged as
+  "where review should start"). Green CI does not change that this PR
+  cannot merge without that answered. Treat the "in progress" claim as
+  stale until evidence says otherwise.
+- **#222** (head `3b70662`, the FFI snapshot fix above): also clean --
+  `FFI Surface Contract` green, and **`macOS Native Tests` passed this run**,
+  including the previously-panicking `test_history_manager_persists_across_
+  restart`. One green run after one red run is consistent with the
+  sled-reopen-race theory from the prior section, not proof of it -- it has
+  not been observed failing twice, so do not yet call it "fixed." The
+  Android `is_storage_degraded()` call-site gap is still explicitly open in
+  the PR's own body, unchanged.
+- **#224** (this handoff PR): green except `iOS`/`iOS Build` still
+  in-progress at check time; no failures, nothing to act on.
+
+**Still true: nothing here is close to mergeable.** #221 is blocked on a
+human/reviewer answering a live security question, not on anything a CTO
+seat should patch unilaterally. #222 is blocked on the Android follow-up
+landing. No merge, no tag action taken this check-in.
 
 ---
 
