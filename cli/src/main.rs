@@ -4288,9 +4288,15 @@ fn find_contact(manager: &ContactManager, query: &str) -> Result<Contact> {
         .find(|c| {
             c.peer_id.eq_ignore_ascii_case(query)
                 || c.nickname.as_ref().map(|n| n.to_lowercase()).as_deref() == Some(&query_lower)
-                || c.local_nickname.as_ref().map(|n| n.to_lowercase()).as_deref() == Some(&query_lower)
+                || c.local_nickname
+                    .as_ref()
+                    .map(|n| n.to_lowercase())
+                    .as_deref()
+                    == Some(&query_lower)
                 || c.public_key.eq_ignore_ascii_case(query)
-                || scmessenger_core::identity::keys::identity_id_from_public_key_hex(&c.public_key).as_deref() == Some(query)
+                || scmessenger_core::identity::keys::identity_id_from_public_key_hex(&c.public_key)
+                    .as_deref()
+                    == Some(query)
         })
         .ok_or_else(|| anyhow::anyhow!("Contact not found: {}", query))
 }

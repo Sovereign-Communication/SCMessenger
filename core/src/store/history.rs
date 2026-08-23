@@ -646,7 +646,8 @@ mod tests {
         let backend = Arc::new(MemoryStorage::new());
         let history = HistoryManager::new(backend);
 
-        let public_key = "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
+        let public_key =
+            "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
         let pk_bytes = hex::decode(&public_key).unwrap();
         let identity_id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
 
@@ -678,10 +679,18 @@ mod tests {
 
         // Query by identity_id -> should return BOTH sent and received!
         let conv_by_id = history.conversation(identity_id.clone(), 10).unwrap();
-        assert_eq!(conv_by_id.len(), 2, "Query by identity_id must return both sent (public_key) and received (identity_id)");
+        assert_eq!(
+            conv_by_id.len(),
+            2,
+            "Query by identity_id must return both sent (public_key) and received (identity_id)"
+        );
 
         // Query by public_key -> should return BOTH sent and received!
         let conv_by_pk = history.conversation(public_key.clone(), 10).unwrap();
-        assert_eq!(conv_by_pk.len(), 2, "Query by public_key must return both sent (public_key) and received (identity_id)");
+        assert_eq!(
+            conv_by_pk.len(),
+            2,
+            "Query by public_key must return both sent (public_key) and received (identity_id)"
+        );
     }
 }

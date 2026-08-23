@@ -119,6 +119,40 @@ run (~15-20 min).
 Git Bash `date` on this machine is ~7.5 h off Windows local time. Use PowerShell
 `Get-Date` for anything time-sensitive.
 
+### Open PRs from this session — nothing is only-local any more
+
+| PR | Branch | State |
+|---|---|---|
+| [#215](https://github.com/Sovereign-Communication/SCMessenger/pull/215) | `cto/routing-peer-seen-2026-08-22` | B4 fixed and CTO-verified. **Needs `crypto-security-auditor`** — touches `core/src/routing/`. |
+| [#216](https://github.com/Sovereign-Communication/SCMessenger/pull/216) | `cto/android-wiring-restore-2026-08-22` | Wiring 32 -> 9. Stacked on `feat/identity-id-unification`. Packet F is closing the last 9. |
+| [#217](https://github.com/Sovereign-Communication/SCMessenger/pull/217) | `cto/crlf-root-fix-2026-08-22` | `.gitattributes` rules only. **The `git add --renormalize .` sweep is deliberately NOT included** — 550 files, and the emoji hook blocks it on 21 pre-existing files without `--no-verify`. Operator decision. |
+| [#218](https://github.com/Sovereign-Communication/SCMessenger/pull/218) | `cto/panic-self-circuit-guard-2026-08-22` | DRAFT. Code is dead (zero callers) — opened to preserve the panic analysis, which is the valuable part. Do not merge until wired. |
+| [#209](https://github.com/Sovereign-Communication/SCMessenger/pull/209) | `feat/identity-id-unification` | MERGEABLE. Was CONFLICTING. |
+
+### THE LOCAL GATE IS NOT `cargo check` — it missed two real breaks today
+
+Both from my own commit `c8a758d5`, both caught only by CI:
+
+- `cargo fmt --check` — over-long iterator chain (fixed `d665979b`)
+- **wasm32** — `ledger_manager` is `cfg(not(wasm32))`; the new lookup used it
+  unconditionally and broke the WASM lane (fixed `bf6ca5f0`)
+
+`cargo check --workspace` builds the HOST target only. Use all three:
+
+```
+cargo fmt --all --check
+cargo check --workspace
+cargo check -p scmessenger-wasm --target wasm32-unknown-unknown
+```
+
+### Restoring the gates keeps surfacing real debt
+
+Every gate restored in `b4ba61f3` went red on pre-existing problems, because
+PR #209 had been BLOCKED as CONFLICTING and the suite had never run:
+Repository Hygiene on 1,098 untouched lines, `cargo fmt` on 3 files I never
+edited, and the Wiring Gate on 32 findings covering nine unreachable features.
+None of that was new breakage. It had simply stopped being reported.
+
 ### Still open
 
 - Phase 0 working-tree commit (B2/B5, router timeout 100ms→500ms revert, blank

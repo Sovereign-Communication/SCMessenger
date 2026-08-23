@@ -2085,8 +2085,17 @@ impl IronCore {
                 }
             }
 
-            // Also check ledger manager identities (wire-learned & seed entries)
-            for entry in self.ledger_manager.dialable_addresses().into_iter().chain(self.ledger_manager.seed_addresses(64)) {
+            // Also check ledger manager identities (wire-learned & seed entries).
+            // `ledger_manager` is `cfg(not(wasm32))` -- there is no ledger on the
+            // wasm build, so this lookup simply does not exist there and
+            // resolution falls through to the heuristic below.
+            #[cfg(not(target_arch = "wasm32"))]
+            for entry in self
+                .ledger_manager
+                .dialable_addresses()
+                .into_iter()
+                .chain(self.ledger_manager.seed_addresses(64))
+            {
                 if let Some(ref pk_hex) = entry.public_key {
                     let pk_clean = pk_hex.to_lowercase();
                     if pk_clean == trimmed {

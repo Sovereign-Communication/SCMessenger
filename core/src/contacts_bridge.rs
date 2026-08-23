@@ -526,13 +526,17 @@ mod tests {
         let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
         let manager = ContactManager::new(storage_path)?;
 
-        let public_key = "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
+        let public_key =
+            "2620607086af6de0d8c4f181a09ee5c90b0a5f968a7379a31b9906c4255fbd9c".to_string();
         let pk_bytes = hex::decode(&public_key).unwrap();
         let identity_id = hex::encode(blake3::hash(&pk_bytes).as_bytes());
 
         // Contact stored under libp2p peer ID (as CLI does)
-        let contact = Contact::new("12D3KooWCPCJ6B3aQD55nd7FvjuUkrhHRgqXGXoNGw2rstaohUrw".to_string(), public_key.clone())
-            .with_nickname("Lucas Ballek".to_string());
+        let contact = Contact::new(
+            "12D3KooWCPCJ6B3aQD55nd7FvjuUkrhHRgqXGXoNGw2rstaohUrw".to_string(),
+            public_key.clone(),
+        )
+        .with_nickname("Lucas Ballek".to_string());
         manager.add(contact)?;
 
         // 1. Get by peer ID
