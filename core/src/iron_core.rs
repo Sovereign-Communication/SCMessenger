@@ -2085,7 +2085,11 @@ impl IronCore {
                 }
             }
 
-            // Also check ledger manager identities (wire-learned & seed entries)
+            // Also check ledger manager identities (wire-learned & seed entries).
+            // `ledger_manager` is `cfg(not(wasm32))` -- there is no ledger on the
+            // wasm build, so this lookup simply does not exist there and
+            // resolution falls through to the heuristic below.
+            #[cfg(not(target_arch = "wasm32"))]
             for entry in self
                 .ledger_manager
                 .dialable_addresses()
