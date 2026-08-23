@@ -14,6 +14,33 @@ use web_time::SystemTime;
 /// 32-byte Ed25519 public key as peer identifier
 pub type PeerId = [u8; 32];
 
+/// Canonical derivation of a 4-byte recipient hint from a 32-byte PeerId.
+/// Uses the first 4 bytes of blake3(raw_peer_id_bytes).
+pub fn derive_hint(peer_id: &PeerId) -> [u8; 4] {
+    let hash = blake3::hash(peer_id);
+    let mut hint = [0u8; 4];
+    hint.copy_from_slice(&hash.as_bytes()[0..4]);
+    hint
+}
+
+/// Derive a 4-byte recipient hint from a peer identifier string (e.g. 64-char hex)
+/// or raw string slice.
+/// If `peer_id_str` decodes to a 32-byte array, it computes `derive_hint(&arr)`.
+/// Otherwise, it falls back to computing the first 4 bytes of blake3(peer_id_str.as_bytes()).
+pub fn derive_hint_from_str(peer_id_str: &str) -> [u8; 4] {
+    if peer_id_str.len() == 64 {
+        if let Ok(bytes) = hex::decode(peer_id_str) {
+            if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                return derive_hint(&arr);
+            }
+        }
+    }
+    let hash = blake3::hash(peer_id_str.as_bytes());
+    let mut hint = [0u8; 4];
+    hint.copy_from_slice(&hash.as_bytes()[0..4]);
+    hint
+}
+
 /// Transport method used to reach a peer
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TransportType {
@@ -203,9 +230,11 @@ impl LocalCell {
         }
     }
 
-    /// Find peers that might be able to reach a recipient (by hint)
+    /// Find peers that might be able to reach a recipient (by hint),
+    /// sorted by reliability score (highest first).
     pub fn peers_for_hint(&self, hint: &[u8; 4]) -> Vec<&PeerInfo> {
-        self.peers
+        let mut peers: Vec<&PeerInfo> = self
+            .peers
             .values()
             .filter(|p| {
                 if let PeerStatus::Active { .. } = p.status {
@@ -214,7 +243,13 @@ impl LocalCell {
                     false
                 }
             })
-            .collect()
+            .collect();
+        peers.sort_by(|a, b| {
+            b.reliability_score
+                .partial_cmp(&a.reliability_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        peers
     }
 
     /// Get all active peers sorted by reliability (highest first)
@@ -253,7 +288,7 @@ impl LocalCell {
                         last_seen,
                         transport,
                     } => {
-                        if now - last_seen > self.active_timeout {
+                        if now.saturating_sub(*last_seen) > self.active_timeout {
                             let last_transport = *transport;
                             peer.status = PeerStatus::Stale {
                                 last_seen: *last_seen,
@@ -263,7 +298,7 @@ impl LocalCell {
                         }
                     }
                     PeerStatus::Stale { last_seen, .. } => {
-                        if now - last_seen > self.stale_timeout {
+                        if now.saturating_sub(*last_seen) > self.stale_timeout {
                             peer.status = PeerStatus::Dormant {
                                 last_seen: *last_seen,
                             };
@@ -653,5 +688,52 @@ mod tests {
         let local_id = make_peer_id(42);
         let cell = LocalCell::new(local_id);
         assert_eq!(cell.local_id(), local_id);
+    }
+
+    #[test]
+    fn test_derive_hint_and_derive_hint_from_str_consistency() {
+        let peer_pk = [0x5au8; 32];
+        let hint_raw = derive_hint(&peer_pk);
+        let peer_hex = hex::encode(peer_pk);
+        let hint_hex = derive_hint_from_str(&peer_hex);
+        assert_eq!(hint_raw, hint_hex);
+        assert_eq!(hint_raw, blake3::hash(&peer_pk).as_bytes()[0..4]);
+    }
+
+    #[test]
+    fn test_peers_for_hint_sorted_by_reliability() {
+        let local_id = make_peer_id(1);
+        let mut cell = LocalCell::new(local_id);
+        let peer1 = make_peer_id(10);
+        let peer2 = make_peer_id(20);
+        let hint = [1, 2, 3, 4];
+
+        cell.peer_seen(peer1, TransportType::BLE);
+        cell.update_peer_hints(&peer1, vec![hint]);
+        cell.peer_seen(peer2, TransportType::TCP);
+        cell.update_peer_hints(&peer2, vec![hint]);
+
+        // Increase peer2 reliability above peer1
+        cell.update_reliability(&peer2, true);
+        cell.update_reliability(&peer1, false);
+
+        let peers = cell.peers_for_hint(&hint);
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].peer_id, peer2);
+        assert_eq!(peers[1].peer_id, peer1);
+    }
+
+    #[test]
+    fn test_tick_clock_rollback_saturating_sub() {
+        let local_id = make_peer_id(1);
+        let mut cell = LocalCell::with_timeouts(local_id, 100, 200);
+        let peer_id = make_peer_id(2);
+
+        cell.peer_seen(peer_id, TransportType::BLE);
+        // If system clock stepped backwards (now < last_seen), saturating_sub should be 0 and not panic
+        let events = cell.tick(0);
+        assert!(events.is_empty());
+        let peer = cell.get_peer(&peer_id).unwrap();
+        assert!(matches!(peer.status, PeerStatus::Active { .. }));
     }
 }

@@ -718,9 +718,7 @@ impl IronCore {
             // Initialize routing engine with identity-derived peer id and hint.
             // If the swarm has already seeded the engine (via start_swarm_with_config),
             // keep it — the shared engine is already in use for message dispatch.
-            let hint = blake3::hash(&pk_bytes).as_bytes()[0..4]
-                .try_into()
-                .unwrap_or([0u8; 4]);
+            let hint = crate::routing::local::derive_hint(&pk_bytes);
             let mut routing = self.routing_engine.write();
             if routing.is_none() {
                 *routing = Some(OptimizedRoutingEngine::new(pk_bytes, hint));
@@ -936,9 +934,7 @@ impl IronCore {
         }
 
         // Check routing decision
-        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..4]
-            .try_into()
-            .unwrap_or([0u8; 4]);
+        let hint = crate::routing::local::derive_hint(&recipient_pk);
         let msg_id_bytes: [u8; 16] = *uuid::Uuid::parse_str(&message_id)
             .unwrap_or_else(|_| uuid::Uuid::nil())
             .as_bytes();
@@ -2927,9 +2923,7 @@ impl IronCore {
         let mut guard = self.routing_engine.write();
         match guard.as_mut() {
             Some(engine) => {
-                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..4]
-                    .try_into()
-                    .unwrap_or([0u8; 4]);
+                let hint = crate::routing::local::derive_hint_from_str(&target_peer_id);
                 let msg_id: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
                 let now = web_time::SystemTime::now()
                     .duration_since(web_time::UNIX_EPOCH)
@@ -3302,6 +3296,7 @@ impl IronCore {
         // handling.
         let sender_pubkey: Vec<u8>;
         let local_identity_id: Option<String>;
+        let is_authenticated: bool;
 
         let plaintext = if ratchet_disabled() {
             // LEGACY PATH (kill switch)
@@ -3314,6 +3309,9 @@ impl IronCore {
             local_identity_id = identity.identity_id();
             sender_pubkey = envelope.sender_public_key.clone();
             let signing_key = keys.signing_key.clone();
+            // Legacy V1 static-ECDH uses sender_public_key only as AAD, which does
+            // not prove possession of the sender private key. Not authenticated.
+            is_authenticated = false;
             decrypt_message(&signing_key, &envelope).map_err(|e| {
                 tracing::warn!("Failed to decrypt message: {:?}", e);
                 IronCoreError::CryptoError
@@ -3334,6 +3332,12 @@ impl IronCore {
             sender_pubkey = match &wire {
                 crate::message::WireEnvelope::V1(e) => e.sender_public_key.clone(),
                 crate::message::WireEnvelope::V2(e2) => e2.sender_public_key.clone(),
+            };
+            is_authenticated = match &wire {
+                crate::message::WireEnvelope::V1(e) => {
+                    crate::crypto::encrypt::is_ratcheted_envelope(e)
+                }
+                crate::message::WireEnvelope::V2(_) => true,
             };
             let sender_bundle = self
                 .contact_manager
@@ -3368,9 +3372,10 @@ impl IronCore {
         // and queried by IDENTITY_ID (block_peer stores by identity_id; history
         // recent/conversation query by identity_id EXACT match on peer_id), but
         // the plaintext sender_id is not trusted for ingress authorization.
-        // We derive the canonical identity_id from the AUTHENTICATED envelope
-        // public key (sender_pubkey, verified during receive / ratchet
-        // decryption), not from the unauthenticated plaintext sender_id field:
+        // We derive the canonical identity_id from the envelope public key
+        // (sender_pubkey). Note: on the V1 non-ratcheted branch, sender_pubkey
+        // is only AAD (binding ciphertext to the sender key but not proving
+        // possession); only ratcheted messages authenticate the sender key.
         // sender_pubkey is always a valid 32-byte Ed25519 key, so
         // identity_id_from_public_key_hex always hashes to the correct
         // identity_id. This is unambiguous (no double-hash risk on an
@@ -3379,18 +3384,6 @@ impl IronCore {
         let canonical_peer_id =
             crate::identity::keys::identity_id_from_public_key_hex(&sender_public_key_hex)
                 .ok_or(IronCoreError::CryptoError)?;
-
-        // Record peer sighting in routing engine on observed transport(s)
-        if let Ok(pk) = <[u8; 32]>::try_from(sender_pubkey.as_slice()) {
-            let active_transports = self.transport_manager.read().transports_for_peer(pk);
-            if active_transports.is_empty() {
-                self.routing_peer_seen(sender_public_key_hex.clone(), "ble".to_string());
-            } else {
-                for t in active_transports {
-                    self.routing_peer_seen(sender_public_key_hex.clone(), t.to_string());
-                }
-            }
-        }
 
         // Also check device-specific blocks using the sender's last known device ID
         // Try the authenticated public key and its canonical identity_id; first
@@ -3473,6 +3466,23 @@ impl IronCore {
                 }
             }
         };
+
+        // Record peer sighting in routing engine ONLY when:
+        // 1. The sender is genuinely authenticated (ratchet-verified), preventing
+        //    unauthenticated / spoofed envelopes from shaping or poisoning the routing table.
+        // 2. The sender is NOT blocked (fail-closed order matching notify_peer_discovered).
+        if !any_blocked && is_authenticated {
+            if let Ok(pk) = <[u8; 32]>::try_from(sender_pubkey.as_slice()) {
+                let active_transports = self.transport_manager.read().transports_for_peer(pk);
+                if active_transports.is_empty() {
+                    self.routing_peer_seen(sender_public_key_hex.clone(), "ble".to_string());
+                } else {
+                    for t in active_transports {
+                        self.routing_peer_seen(sender_public_key_hex.clone(), t.to_string());
+                    }
+                }
+            }
+        }
 
         // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
         if message.message_type == crate::MessageType::Receipt {
@@ -3942,20 +3952,15 @@ impl IronCore {
     /// Get all available transport types for a target peer from the routing engine.
     /// Returns the set of transports that the peer is known to be reachable on.
     pub fn get_available_paths(&self, peer_id_hex: &str) -> Vec<String> {
-        if let Ok(bytes) = hex::decode(peer_id_hex) {
-            if bytes.len() == 32 {
-                let arr: [u8; 32] = bytes.try_into().unwrap_or([0u8; 32]);
-                let guard = self.routing_engine.read();
-                if let Some(ref engine) = *guard {
-                    let peers = engine
-                        .base_engine()
-                        .local_cell()
-                        .peers_for_hint(&arr[0..4].try_into().unwrap_or([0u8; 4]));
-                    return peers
-                        .iter()
-                        .map(|p| format!("{:?}", p.transports))
-                        .collect();
-                }
+        if let Some(arr) = parse_peer_id_32(peer_id_hex) {
+            let guard = self.routing_engine.read();
+            if let Some(ref engine) = *guard {
+                let hint = crate::routing::local::derive_hint(&arr);
+                let peers = engine.base_engine().local_cell().peers_for_hint(&hint);
+                return peers
+                    .iter()
+                    .map(|p| format!("{:?}", p.transports))
+                    .collect();
             }
         }
         Vec::new()
@@ -4987,13 +4992,13 @@ mod tests {
 
         let peer_pk = [42u8; 32];
         let peer_hex = hex::encode(peer_pk);
-        let direct_hint: [u8; 4] = blake3::hash(&peer_pk).as_bytes()[0..4]
-            .try_into()
-            .expect("4 bytes hint");
+        let direct_hint = crate::routing::local::derive_hint(&peer_pk);
         let msg_id = [1u8; 16];
         let now = 1000u64;
 
-        // 1. Initially, no sighting has occurred. Decision must degrade to StoreAndCarry with 0.0 confidence.
+        // 1. Initially, no sighting has occurred. Real production send path must degrade to StoreAndCarry.
+        assert!(core.get_available_paths(&peer_hex).is_empty());
+
         let initial_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
@@ -5007,22 +5012,39 @@ mod tests {
         ));
         assert_eq!(initial_decision.confidence, 0.0);
 
+        // Production prepare_message with unsighted peer
+        let prep1 = core
+            .prepare_message(
+                peer_hex.clone(),
+                "initial message".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .expect("prepare_message");
+        assert!(
+            core.outbox_contains_for_recipient(&peer_hex, &prep1.message_id),
+            "unsighted peer send must enqueue in active outbox"
+        );
+
         // 2. Simulate peer observation on BLE transport
         core.routing_peer_seen(peer_hex.clone(), "ble".to_string());
+
+        // Assert production lookups find the sighting
+        let paths_ble = core.get_available_paths(&peer_hex);
+        assert_eq!(paths_ble.len(), 1);
+        assert!(paths_ble[0].contains("BLE"));
+
+        let best_paths_ble = core.swarm_get_best_paths(peer_hex.clone(), 1);
+        assert_eq!(best_paths_ble, vec![vec![peer_hex.clone()]]);
 
         let ble_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_ne!(
-            ble_decision.decided_by,
-            crate::routing::RoutingLayer::StoreAndCarry
-        );
         assert_eq!(ble_decision.decided_by, crate::routing::RoutingLayer::Local);
         assert!(
-            ble_decision.confidence > 0.0,
+            ble_decision.confidence >= 0.5,
             "confidence must be non-zero after peer_seen"
         );
-        assert!(ble_decision.confidence >= 0.5);
         match ble_decision.primary {
             crate::routing::NextHop::Direct { peer_id, transport } => {
                 assert_eq!(peer_id, peer_pk);
@@ -5034,13 +5056,13 @@ mod tests {
         // 3. Simulate peer observation on second transport: TCP / WiFi
         core.routing_peer_seen(peer_hex.clone(), "tcp".to_string());
 
+        let paths_tcp = core.get_available_paths(&peer_hex);
+        assert_eq!(paths_tcp.len(), 1);
+        assert!(paths_tcp[0].contains("BLE") && paths_tcp[0].contains("TCP"));
+
         let tcp_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_ne!(
-            tcp_decision.decided_by,
-            crate::routing::RoutingLayer::StoreAndCarry
-        );
         assert_eq!(tcp_decision.decided_by, crate::routing::RoutingLayer::Local);
         assert!(tcp_decision.confidence > 0.0);
         match tcp_decision.primary {
@@ -5085,6 +5107,71 @@ mod tests {
                 crate::routing::NextHop::Direct { peer_id, transport } if *peer_id == peer_pk && *transport == crate::routing::TransportType::TCP
             )),
             "TCP must be preserved in alternative hops for failover"
+        );
+    }
+
+    #[test]
+    fn test_blocked_peer_suppresses_routing_sighting() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().expect("init identity");
+
+        let peer_pk = [99u8; 32];
+        let peer_hex = hex::encode(peer_pk);
+
+        // Block peer before any sighting
+        core.block_peer(peer_hex.clone(), None, None)
+            .expect("block peer");
+
+        // notify_peer_discovered for blocked peer must NOT record sighting
+        core.notify_peer_discovered(peer_hex.clone());
+        assert!(
+            core.get_available_paths(&peer_hex).is_empty(),
+            "blocked peer discovery must not populate routing table"
+        );
+    }
+
+    #[test]
+    fn test_unauthenticated_v1_receive_does_not_record_routing_sighting() {
+        let bob = IronCore::new();
+        bob.grant_consent();
+        bob.initialize_identity().expect("init bob");
+
+        let alice = IronCore::new();
+        alice.grant_consent();
+        alice.initialize_identity().expect("init alice");
+
+        let alice_pk_hex = alice.public_key_hex().expect("alice pk");
+        let bob_pk_bytes =
+            hex::decode(bob.public_key_hex().expect("bob pk")).expect("decode bob pk");
+        let bob_pk_arr: [u8; 32] = bob_pk_bytes.try_into().expect("32 bytes bob pk");
+
+        // Craft a legacy unauthenticated V1 envelope (static ECDH)
+        let alice_signing_key = alice.test_only_identity_signing_key();
+        let message = crate::Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            sender_id: alice_pk_hex.clone(),
+            recipient_id: bob.public_key_hex().expect("bob pk"),
+            message_type: crate::MessageType::Text,
+            payload: b"unauthenticated v1".to_vec(),
+            timestamp: crate::util::unix_time_secs(),
+        };
+        let message_bytes = crate::message::encode_message(&message).expect("encode");
+        let envelope =
+            crate::crypto::encrypt_message(&alice_signing_key, &bob_pk_arr, &message_bytes)
+                .expect("encrypt legacy");
+        let wire = crate::message::WireEnvelope::V1(envelope);
+        let envelope_bytes =
+            crate::message::codec::encode_wire_envelope(&wire).expect("encode wire");
+
+        // Bob receives the legacy V1 message
+        let received = bob.receive_message(envelope_bytes).expect("bob receive");
+        assert_eq!(received.payload, b"unauthenticated v1");
+
+        // Assert that Bob did NOT record a routing sighting for Alice because V1 envelope is unauthenticated
+        assert!(
+            bob.get_available_paths(&alice_pk_hex).is_empty(),
+            "unauthenticated V1 envelope must not record a routing sighting"
         );
     }
 }
