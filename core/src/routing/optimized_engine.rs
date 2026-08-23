@@ -137,16 +137,24 @@ impl OptimizedRoutingEngine {
         // Phase 2: Hierarchical discovery with timeout budgeting (P0 optimization)
         self.start_discovery_if_needed();
 
-        let mut decision = self
-            .base_engine
-            .route_message(recipient_hint, message_id, priority, now);
+        let mut decision =
+            self.base_engine
+                .route_message(recipient_hint, message_id, priority, now);
 
         // If the decision is a direct local route, ensure the active transport
         // matches the peer's most recently observed status, and include any
         // other known transports as alternative hops for failover.
-        if let NextHop::Direct { peer_id, ref mut transport } = decision.primary {
+        if let NextHop::Direct {
+            peer_id,
+            ref mut transport,
+        } = decision.primary
+        {
             if let Some(peer) = self.base_engine.local_cell().get_peer(&peer_id) {
-                if let PeerStatus::Active { transport: active_t, .. } = peer.status {
+                if let PeerStatus::Active {
+                    transport: active_t,
+                    ..
+                } = peer.status
+                {
                     *transport = active_t;
                 }
                 for alt_t in &peer.transports {

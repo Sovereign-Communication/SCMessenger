@@ -3822,7 +3822,10 @@ impl IronCore {
             self.transport_manager
                 .read()
                 .record_reconnect_success(&peer_id_arr);
-            let transports = self.transport_manager.read().transports_for_peer(peer_id_arr);
+            let transports = self
+                .transport_manager
+                .read()
+                .transports_for_peer(peer_id_arr);
             if transports.is_empty() {
                 self.routing_peer_seen(peer_id_hex.to_string(), "tcp".to_string());
             } else {
@@ -4994,8 +4997,14 @@ mod tests {
         let initial_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_eq!(initial_decision.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
-        assert!(matches!(initial_decision.primary, crate::routing::NextHop::StoreAndCarry));
+        assert_eq!(
+            initial_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
+        assert!(matches!(
+            initial_decision.primary,
+            crate::routing::NextHop::StoreAndCarry
+        ));
         assert_eq!(initial_decision.confidence, 0.0);
 
         // 2. Simulate peer observation on BLE transport
@@ -5004,9 +5013,15 @@ mod tests {
         let ble_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_ne!(ble_decision.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
+        assert_ne!(
+            ble_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
         assert_eq!(ble_decision.decided_by, crate::routing::RoutingLayer::Local);
-        assert!(ble_decision.confidence > 0.0, "confidence must be non-zero after peer_seen");
+        assert!(
+            ble_decision.confidence > 0.0,
+            "confidence must be non-zero after peer_seen"
+        );
         assert!(ble_decision.confidence >= 0.5);
         match ble_decision.primary {
             crate::routing::NextHop::Direct { peer_id, transport } => {
@@ -5022,7 +5037,10 @@ mod tests {
         let tcp_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_ne!(tcp_decision.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
+        assert_ne!(
+            tcp_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
         assert_eq!(tcp_decision.decided_by, crate::routing::RoutingLayer::Local);
         assert!(tcp_decision.confidence > 0.0);
         match tcp_decision.primary {
@@ -5046,14 +5064,20 @@ mod tests {
         let failover_decision = core
             .make_routing_decision(direct_hint, msg_id, 50, now)
             .expect("decision");
-        assert_eq!(failover_decision.decided_by, crate::routing::RoutingLayer::Local);
+        assert_eq!(
+            failover_decision.decided_by,
+            crate::routing::RoutingLayer::Local
+        );
         assert!(failover_decision.confidence > 0.0);
         match failover_decision.primary {
             crate::routing::NextHop::Direct { peer_id, transport } => {
                 assert_eq!(peer_id, peer_pk);
                 assert_eq!(transport, crate::routing::TransportType::BLE);
             }
-            other => panic!("expected Direct hop with BLE transport after failover, got {:?}", other),
+            other => panic!(
+                "expected Direct hop with BLE transport after failover, got {:?}",
+                other
+            ),
         }
         assert!(
             failover_decision.alternatives.iter().any(|alt| matches!(
