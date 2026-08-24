@@ -36,7 +36,17 @@ jobs:
       
       - name: Run Clippy
         run: cargo clippy --workspace -- -D warnings -A clippy::empty_line_after_doc_comments
-      
+
+      # Blocking, not informational: no continue-on-error. Catches the class
+      # of bug behind the historical sender-impersonation hole (a real input
+      # silently discarded via `_name` in RatchetSession::init_as_*_hybrid).
+      # `unused_variables` (even at deny) cannot see this -- a leading
+      # underscore is rustc's own sanctioned way to silence that lint, so it
+      # needs a dedicated, AST-light scan. See the script's module docstring
+      # for the full rationale and the exact empirical proof.
+      - name: Check for ignored parameters in the merge-blocked perimeter
+        run: python3 scripts/check_perimeter_underscore_params.py
+
       - name: Check for unwrap() in library code
         run: |
           echo "Checking for unwrap() in library code (core/src, mobile/src)..."
