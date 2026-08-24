@@ -84,59 +84,10 @@ reasoning in §0-2026-08-23d.
 | A4 | #220 Android reachability | 2 known wiring findings | **Accept, do not fix** — the passphrase revert re-orphans SecurityUtils; record the acceptance |
 | A5 | #219 CLI identity persistence | **RED on Lint / Rust Linting** | **N3 is the Windows CLI and churns identity without this.** Either fix, or drop N3 from the gate. Check first whether #222 alone suffices |
 | A6 | POST_TAG_QUEUE §2 re-entry table | **DONE — 2 BLOCKS, 3 FIXED** | See §0-2026-08-23f. **Desktop panic can kill N3 mid-gate; relay fallback is unproven and fails silently.** Both need an operator ruling or work before the gate |
-| A7 | Clippy deny on ignored params + required negative-test job | **IN FLIGHT, UNCOMMITTED** | Worktree `_scm_wt/cihard`, branch `cto/ci-hardening-2026-08-23`. **Do not re-dispatch -- inspect first.** See the A7 note below |
+| A7 | Deny ignored params in the perimeter + required forgery-test gate | **DONE -- #228 (draft)** | See §0-2026-08-23g. **DO NOT MERGE BEFORE #221** -- the check fails on main today and would block every PR. Five untriaged candidates listed |
 
 **If an agent result was never read, its work is in the worktree.** Check
 `git -C _scm_wt/cihard status` and the branch log before re-dispatching anything.
-
-### A7 note -- work in flight at stand-down, DO NOT re-dispatch blind
-
-An agent was still working when this session stood down. Its output is
-**uncommitted in `_scm_wt/cihard`** (branch `cto/ci-hardening-2026-08-23`, based
-on `e5ff72cf`). It is real work, not scratch. Inspect before doing anything:
-
-```
-git -C _scm_wt/cihard status --short
-git -C _scm_wt/cihard diff
-```
-
-At stand-down the tree held:
-
-| File | What it means |
-|---|---|
-| `.github/workflows/lint.yml` | the CI wiring for the new gate |
-| `core/src/crypto/mod.rs` | module-root lint attribute (it chose `deny` at module roots over a Cargo lint table) |
-| `core/src/privacy/mod.rs` | same |
-| `core/src/routing/mod.rs` | same |
-| `core/src/transport/mod.rs` | same |
-| `core/src/transport/multiport.rs` | **an existing violation it had to resolve** |
-| `core/src/transport/wifi_aware.rs` | same |
-| `core/src/transport/wifi_direct.rs` | same |
-| `scripts/check_perimeter_underscore_params.py` | a helper it added |
-
-**The three transport files are the interesting part.** Those are pre-existing
-ignored parameters inside the merge-blocked perimeter -- the same shape as the
-defect that started all this (`_our_signing_key` and `_sender_bundle`,
-underscore-prefixed in a handshake function so the compiler would stop
-complaining about the two inputs providing sender authentication).
-
-**Review each one on its own merits.** The packet asked the agent to mark each
-either legitimate-with-reason (trait impl, `cfg` stub) or suspicious. **Do not
-accept a blanket `#[allow]` sweep.** If any of those three is a genuinely ignored
-input rather than a required-by-signature placeholder, it is a candidate second
-instance of the original bug, and that is worth more than the lint itself.
-
-Also outstanding from that packet, likely unfinished:
-
-- **Proof the lint fires.** It was told to introduce a deliberate violation,
-  paste the failure, remove it, paste the pass. A lint not proven to fire is not
-  a lint.
-- **The negative-test CI job** must fail loudly when it selects zero tests. The
-  three forgery tests are not on `main` yet, so a job matching a hardcoded list
-  would report green while running nothing -- worse than no job.
-- **The Docker required-check question**: green is honest (retraction in
-  §0-2026-08-23d), but whether the suite is a *required* check after PR #156
-  made it non-blocking is unconfirmed, and it belongs in the release notes.
 
 ### The two things most likely to bite you
 
@@ -211,6 +162,114 @@ CEO answers** — anchoring destroys the value. Two independent passes this
 session split on the audit question, which is exactly the signal you want. Opus
 for consensus passes. Include facts against yourself; a CEO briefing that omits
 the CTO's own errors is worthless.
+
+## 0-2026-08-23g. A7 COMPLETE -- the lint rediscovered the original bug, and found 5 more candidates
+
+Supersedes the "A7 IN FLIGHT" note. The agent died on the session limit; the CTO
+finished the verification it never reached.
+
+Branch `cto/ci-hardening-2026-08-23`, worktree `_scm_wt/cihard`, based on
+`e5ff72cf`.
+
+### The design is right, and it is honest about its own limits
+
+Two controls, because **one could not do the job**:
+
+1. `#![deny(unused_variables)]` at the four perimeter module roots.
+2. `scripts/check_perimeter_underscore_params.py`, run as a required CI step.
+
+**The reason there are two is the important part.** `deny(unused_variables)`
+**cannot** catch the historical bug. A leading underscore is rustc's own
+sanctioned way to silence that exact lint -- it is what the compiler *suggests
+you type*. So `_our_signing_key` produces zero diagnostics at any deny level.
+The script covers that half; the attribute covers the other (a truly unused,
+non-underscored parameter). Neither alone is sufficient and the code says so in
+its own comments rather than overclaiming.
+
+Policy: a bare `_: T` is fine (honest that the value is discarded); a named
+`_foo: T` fails unless the comment block directly above the `fn` carries the
+literal marker `PERIMETER-ALLOW-UNDERSCORE: <reason>`. That mirrors `#[allow]`
+semantics -- narrow, commented, greppable -- for a policy with no lint name to
+attach to.
+
+### PROOF -- better than the artificial violation the packet asked for
+
+Run against `main`, the script emits:
+
+```
+[FAIL] core/src/crypto/ratchet.rs:442: fn `init_as_sender_hybrid`   has ignored parameter `_our_signing_key`
+[FAIL] core/src/crypto/ratchet.rs:508: fn `init_as_receiver_hybrid` has ignored parameter `_our_signing_key`
+[FAIL] core/src/crypto/ratchet.rs:508: fn `init_as_receiver_hybrid` has ignored parameter `_sender_bundle`
+```
+
+**Those three ARE the P0.** This worktree is based on `main`, which does not yet
+carry the #221 fix, so the check independently rediscovered the exact
+sender-impersonation bug it was written to prevent -- from a cold start, by
+mechanism, with no knowledge of the incident. That is stronger evidence than
+introducing a synthetic violation would have been.
+
+`8 unjustified underscore-prefixed parameter(s) ... (61 files, 1766 fn items scanned)`
+
+### FIVE MORE CANDIDATES -- not triaged, do not assume benign
+
+The other five. **None is known to be a bug; none has been cleared either.**
+
+| Location | Ignored | Why it deserves a look |
+|---|---|---|
+| `transport/health.rs:592` `record_message_success` | `_latency_ms` | Callers **measure and pass** a latency that the struct then discards entirely -- it keeps `total_messages_sent` and `total_bytes_sent` and no latency at all. **If transport scoring is meant to prefer faster paths, it cannot.** Directly relevant to **D6 transport racing** |
+| `transport/manager.rs:897` `run_multi_hop_path_selection` | `_peer_id` | Path selection that never reads which peer it is selecting for |
+| `routing/negative_cache.rs:346` `should_exempt_from_negative_cache` | `_peer_id` | A predicate deciding whether to exempt **a peer**, that never reads which peer |
+| `routing/engine.rs:135` `route_message` | `_now` | Routing decision that ignores time |
+| `routing/neighborhood.rs:378` `evict_stalest_gateway` | `_now` | Eviction of the **stalest** gateway that ignores time |
+
+The last four are the same shape as the original defect: **a decision function
+handed the input that should drive the decision, discarding it.** Triage each
+before the gate, or annotate with a real reason. `health.rs` is the one to look
+at first because D6 depends on transport selection behaving sensibly.
+
+### Correctly annotated already (verified by the CTO, not taken on trust)
+
+- `multiport.rs:127` `requires_elevated_privileges(_port)` -- genuinely read
+  under `cfg(unix)`; compiles away elsewhere. Legitimate.
+- `wifi_aware.rs` `MockWifiAwareBridge` (6 sites) -- test-only mock. Legitimate.
+- `wifi_direct.rs:211` `PlatformWifiDirectBridge::set_on_message_received`
+  -- **production, not test**, and a silent no-op. The annotation cites
+  `HANDOFF/plans/P1-17_windows_wifi_direct_design.md`; I checked line 144, which
+  states verbatim: *"`set_on_message_received` is a no-op (211) -- data flows
+  over the IP link, not a callback."* Claim verified.
+  **And `grep` finds zero callers anywhere in `core/src` or `cli/src`**, so
+  nothing registers a callback that is silently dropped today. Harmless now, a
+  trap later: if anyone wires one up expecting messages, it will never fire.
+
+### The security-regression workflow -- two good decisions worth keeping
+
+`.github/workflows/security-regression-tests.yml`:
+
+- **Name-pattern selector, not a hardcoded list.** It matches any test whose
+  name contains `forg`. The justification is empirical: the names already
+  drifted once -- `test_v1_legacy_envelope_forgery_is_rejected.rs` contains a
+  function called `test_v1_legacy_forged_unsigned_envelope_is_rejected`. A
+  hardcoded list would have matched **zero** tests the moment that file landed
+  and reported green. **It fails loudly on zero matches.**
+- **No `paths:` filter, deliberately.** Branch protection here uses classic
+  required-status-check contexts, and a required context whose workflow is
+  path-filtered leaves unrelated PRs stuck on "Expected -- waiting for a status
+  to be reported" forever. Running unconditionally is a strict superset of the
+  requirement. No other required check in this repo uses path filters, for the
+  same reason.
+
+### MERGE ORDER -- this matters, do not land it first
+
+**The script fails on `main` today** (the three ratchet hits). If it becomes a
+required check before #221 lands, **it blocks every PR in the repo.**
+
+Correct order:
+
+1. Merge **#221** -- removes the three ratchet violations at the root
+2. Triage or annotate the **five candidates** above
+3. Only then merge this branch and mark the checks required
+
+Landing this branch first would be self-inflicted CI paralysis.
 
 ## 0-2026-08-23f. RE-ENTRY TABLE RE-RUN -- two BLOCKS, three FIXED
 
