@@ -1,8 +1,45 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (stand-down; four-node gate prep, two P0s closed)
+Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-2026-08-23y. VALIDATION PASS -- two handoff files authored, timer armed
+
+Interim CTO/CAO (Claude) session at operator direction. Read-only audit plus
+two authored documents; NO code changed. Full evidence:
+`HANDOFF/CTO_CAO_PRETAG_VALIDATION_AND_UNIFICATION_2026-08-23.md` (claim
+ledger V1-V17, stale-claim corrections, UNKNOWN list U1-U10, unification pass).
+Execution prep: `HANDOFF/plans/FOUR_NODE_GATE_EXECUTION_PLAN_2026-08-23.md`.
+
+Corrections to this file's stand-down table (do not re-read without these):
+
+- **A3/#227 is NO LONGER green**: `Android JVM Unit Tests` failing (run
+  32670592900, `MeshRepositoryTest > isStorageDegraded initial state is false`,
+  ClassCastException ConnectivityManager in JVM test). Fix before merge.
+- A5/#219 red-on-Lint RE-CONFIRMED today (`gh pr checks 219`).
+- A7 worktree is INTACT at `C:/Users/SCM/Documents/GitHub/_scm_wt/cihard`
+  (repo-SIBLING path, not under SCMessenger/) -- uncommitted, plus an extra
+  untracked `security-regression-tests.yml` that already implements both
+  stand-down traps (forg-pattern selector + zero-test loud failure).
+  Allowances reviewed: all legitimate. Missing: proof-of-fire, commit, push.
+- N4 AWS relay healthy but image STALE (6b2573fa); redeploy mechanics without
+  SSH key remain UNPROVEN -- prove before tag day.
+- N3 Windows relay running (PID 16156), multiport listening, ESTABLISHED to
+  N4 at validation time.
+- Four Aug-10 tickets (finite-retry abandonment, self-ratchet reset, inbound
+  CryptoError, async receipt convergence) still undispositioned vs current
+  main -- U1-U4, verify-or-disposition BEFORE the tag.
+
+Staffing change recorded (operator, 2026-08-23): GPT lapsed; CTO/CAO seat is
+Claude; antigravity may orchestrate OSX/iOS DEPLOYMENT ONLY (no code edits)
+per AW-BILAT-0003 steps, evidence = pasted command output.
+
+Wakeup tracker armed: scheduled task `SCM_4NodeWakeup`, every 30 min,
+L1-guarded (lock, 600s runner cap, 24h self-expiry, self-delete when
+`tmp/wakeup_4node/CONFIDENCE_99.reached` exists; heartbeat log
+`tmp/wakeup_4node/wakeup.log`; criteria in `tmp/wakeup_4node/CRITERIA.md`,
+gitignored). Manual removal: `schtasks /delete /tn SCM_4NodeWakeup /f`.
 
 ## 0-2026-08-23z. STAND-DOWN — READ THIS FIRST, THEN STOP READING
 
