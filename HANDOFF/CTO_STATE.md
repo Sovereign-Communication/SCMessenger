@@ -4,6 +4,98 @@ Status: Active
 Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
 Entry point: `/CTO`. This file is the whole context load.
 
+## 0-2026-08-24a. OPERATOR RULINGS + CORRECTIONS -- READ BEFORE THE GATE
+
+Claude CTO seat, 2026-08-24. Operator present and ruling live.
+
+### A4 / #220 -- ACCEPTED by the operator (2026-08-24)
+
+Accepted, do not fix. **Record the real reason, not "alpha tolerance":**
+wiring `SecurityUtils` back in would REINTRODUCE a device-transfer data-loss
+regression -- `getEncryptedSharedPreferences()` uses `deleteSharedPreferences()`
+as its KeyStore-recovery path, and `scmessenger_secure_prefs.xml` is not
+excluded from `<device-transfer>`. Transfer -> hardware key absent -> decrypt
+throws -> store deleted -> identity backup permanently orphaned. The current
+build survives that transfer; the "fix" breaks it.
+
+The residual 2 wiring findings are ONE 52-line object counted twice. User-facing
+functionality affected: ZERO. Meanwhile #220 collapses the wiring gate from
+**32 findings to 2** and restores the diagnostics/log viewer, QR join-mesh, and
+APK sharing -- it is a gate ENABLER, not a nice-to-have. Without the diagnostics
+viewer we are half-blind on N1/N2 during the run.
+
+Conditions attached:
+1. Pin the Android Wiring Gate to an ALLOWLIST keyed on `SecurityUtils` --
+   NOT a raised numeric threshold. A threshold lets the next orphan hide.
+2. Open a v0.5.0-blocking ticket for the `data_extraction_rules.xml` exclusion
+   + KeyStore recovery redesign. Do not fix now.
+3. Do not delete the file to zero the counter -- it is the raw material for
+   the v0.5.0 fix.
+
+### Corrections to this file and to the four-node plan (verified 2026-08-24)
+
+- **"No SSH key exists" for N4 is STALE AND WRONG.** `~/.ssh/scm-node-key.pem`
+  has existed since 2026-08-01. SSH as `ec2-user@54.226.67.101` succeeds.
+  N4 tag-day redeploy is **PROVEN**, not a risk: container `scm-node`, identity
+  persists at host path `/opt/scm-relay-data`, 16 GB free.
+- **The relay image is NEWER than documented.** `AWS_RELAY_CURRENT_ADDRESS.md`
+  claims commit `6b2573fa` (PR 136+137+138). It is actually running
+  `9f54b1078ad512c895b68029c9e79a1870d7f286`, label
+  `gpt-pr139-receipt-filter-20260811` -- verified to exist and to be an
+  ancestor of main. It already includes PR #139. Fix that doc.
+- **BLOCK-1 was scoped to N3 and that scope is WRONG.** `request-response` is
+  in the WORKSPACE-level libp2p features (root `Cargo.toml:33`) and again in
+  the Android target block, so the panicking crate is on the delivery path of
+  EVERY node. Confirmed by compile: `libp2p-request-response v0.29.0` builds
+  for the desktop target too. Panic sites: `on_address_change` (:649, :654)
+  and `on_connection_closed` (:670, :676); the `debug_assert_eq!` at :678 is
+  compiled out of release. Address change IS NAT rebinding and WiFi<->cellular
+  handover -- normal phone behaviour, not an edge case.
+- **But the mitigation is far cheaper than the plan assumes -- it already
+  half exists.** `cli/src/main.rs:2160` already runs a watchdog that polls
+  `is_event_loop_alive()` every 10s and, on death, logs `swarm_event_loop_died`,
+  prints `[FAIL]` to STDERR, and exits 1. N3 does NOT silently zombie.
+  On Android a `SwarmTaskLivenessGuard` Drop impl flips the same flag and
+  `clear_handle_if_unhealthy()` logs `Clearing stale swarm handle after swarm
+  event loop exit`. THE GAP: Android checks this only on API entry points
+  (`get_peers`, `get_listeners`, `get_topics`, `shutdown`) -- there is NO timer,
+  so a dead swarm is noticed only when the UI happens to ask.
+- Gate-day requirement, zero code: grep both logcat buffers per matrix leg for
+  `swarm_event_loop_died` and `Clearing stale swarm handle`, plus a per-leg
+  liveness assertion so a silently dead swarm is distinguishable from no
+  traffic. Write the scoring rule BEFORE Pass 1: any fingerprint hit
+  invalidates the pass in progress and resets the soak clock. A restart is
+  never silently absorbed -- the restart LOG is the deliverable, not the restart.
+
+### "Test it and if it does not panic we are fine" -- ruled UNSOUND for evidence
+
+Sound for USER risk (alpha, draft release, worst case a dead mesh until
+restart). Unsound for EVIDENCE risk. Two matrix passes plus a soak generate on
+the order of 30 address-change events; zero failures across ~30 exposures bounds
+the per-event rate near 10%, not zero. A clean run entitles us to say only
+"we did not hit it in ~30 tries". Field users accumulate more handovers in one
+afternoon than the whole gate does. Keep these two risks separate in the
+manifest -- they do not get the same answer.
+
+### Scheduled tasks -- ALL PROJECT TASKS REMOVED (operator directive)
+
+`SCM_4NodeWakeup` (30-min heartbeat armed 2026-08-23) DELETED and verified
+gone; every tick had been a no-op (`[IDLE] opencode not on PATH`).
+`SCMessengerSoak` (at-logon `scripts/soak_boot.cmd`) DELETED. No project
+scheduled tasks remain. The four surviving root tasks are Microsoft OneDrive
+and Git-for-Windows system tasks -- deliberately left alone.
+**Do not re-arm a wakeup task without an explicit operator request.**
+
+### Lane spend: agy is DE-AUTHORIZED (operator, 2026-08-24)
+
+No further agy spend. Of 7 dispatches this session: one FABRICATED an
+infrastructure verdict (`PROVEN` with zero commands executed), one raised a
+false tag-blocking P0, one over-classified cosmetic findings as true positives,
+and two died with `[RESULT] ERROR` returning nothing. Free lanes are usable for
+GATHERING and unreliable at CONCLUDING. Verify every "BLOCKS THE TAG" claim
+against the diff yourself before acting on it.
+
+
 ## 0-2026-08-23y. VALIDATION PASS -- two handoff files authored, timer armed
 
 Interim CTO/CAO (Claude) session at operator direction. Read-only audit plus
