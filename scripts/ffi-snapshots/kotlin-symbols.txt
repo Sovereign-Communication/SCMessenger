@@ -191,6 +191,8 @@ fun `isPeerBlocked`(`peerId`: kotlin.String, `deviceId`: kotlin.String?): kotlin
 fun `isPeerSuspicious`(`peerId`: kotlin.String): kotlin.Boolean {
 fun `isRunning`(): kotlin.Boolean
 fun `isRunning`(): kotlin.Boolean
+fun `isStorageDegraded`(): kotlin.Boolean
+fun `isStorageHealthy`(): kotlin.Boolean
 fun `listBlockedPeersBridge`(): List<BlockedIdentity>
 fun `listBlockedPeers`(): List<BlockedIdentity>
 fun `listBlocked`(): List<BlockedIdentity>
@@ -320,6 +322,7 @@ fun `start`()
 fun `stats`(): HistoryStats
 fun `stop`()
 fun `stop`()
+fun `storageError`(): kotlin.String?
 fun `summary`(): kotlin.String
 fun `swarmCanBootstrapOthers`(): kotlin.Boolean
 fun `swarmGetBestPaths`(`targetPeerId`: kotlin.String, `count`: kotlin.UInt): List<List<kotlin.String>>

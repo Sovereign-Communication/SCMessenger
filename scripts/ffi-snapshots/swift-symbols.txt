@@ -112,6 +112,8 @@ open func isConsentGranted() -> Bool  {
 open func isPeerBlocked(peerId: String, deviceId: String?)throws  -> Bool  {
 open func isRunning() -> Bool  {
 open func isRunning() -> Bool  {
+open func isStorageDegraded() -> Bool  {
+open func isStorageHealthy() -> Bool  {
 open func list()throws  -> [Contact]  {
 open func listBlocked()throws  -> [BlockedIdentity]  {
 open func listBlockedPeers()throws  -> [BlockedIdentity]  {
@@ -229,6 +231,7 @@ open func startSwarm(listenAddr: String, bootstrapAddrs: [String])throws   {try 
 open func stats()throws  -> HistoryStats  {
 open func stop()  {try! rustCall() {
 open func stop()  {try! rustCall() {
+open func storageError() -> String?  {
 open func subscribeTopic(topic: String)async throws   {
 open func summary() -> String  {
 open func swarmCanBootstrapOthers() -> Bool  {

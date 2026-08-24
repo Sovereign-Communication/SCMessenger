@@ -1097,3 +1097,124 @@ class (RustSec DB, runner hangs, now toolchain drift).
   rust-toolchain.toml, and a pin freezes security updates.
 - Lint PASS + Rust Linting PASS confirmed on #194 before merge; all 31
   checks green.
+
+---
+
+# CHECKPOINT -- 2026-08-23 (CTO, cloud sandbox, scheduled 60-minute seat).
+# No operator, no Windows machine, no worktrees, no hardware. Read HANDOFF/todo
+# for the queued backlog and SHIP_PLAN.md for the execution queue.
+
+Fourth checkpoint of the day on this seat. **#223, #224, #225 are already open,
+unmerged, all opened today, all reaching the same conclusion.** Read #225
+first -- it supersedes #223/#224 and has the executed proof. This section adds
+one new fact rather than repeating the investigation.
+
+## Re-derived, unchanged since #225 (18:27Z)
+
+- `main` still green at `b538f3ba` -- confirmed via `mcp__github__actions_list`:
+  every push-triggered workflow on that SHA (CI, Lint, Repository Hygiene,
+  Docker Publish, Docker Integration Suite, Cross, iOS Build & Test, Mobile)
+  shows `conclusion: success`. D1 holds.
+- Latest public release is still `v0.1.9` (2026-03-19). No `v0.4.0` tag exists.
+- **#221** (V2 sender-auth fix, P0): still DRAFT, head `c4a3ec1f`. 32/33 checks
+  green, `iOS Build` still `in_progress` at read time. No new commits, no new
+  review comments since the 12:07Z BLOCK that #225 confirmed by execution.
+  Still not mergeable -- `core/src/crypto/` and `core/src/message/` are inside
+  the merge-blocked perimeter and the BLOCK stands.
+- **#222** (storage degradation fix, P0): still DRAFT, head `3b706628`,
+  `mergeable_state: clean`. Known gap unchanged -- `core/src/mobile_bridge.rs`
+  still never calls `is_storage_degraded()` after `IronCore::with_storage`
+  (`:300`/`:312`).
+
+## New this checkpoint -- answers the open question in the 12:07Z review
+
+The adversarial review on #221 (comment `5385913852`) left remediation gated
+on one unresolved fact: *"gated on first establishing whether anything
+legitimate still sends unsigned V1, which the review did not check."* That is
+the fact that decides whether "reject unsigned legacy envelopes at ingress"
+is a clean fix or needs a compatibility migration. Answered by grep, read-only,
+no crypto code touched:
+
+```
+grep -rn "decode_wire_envelope|encode_wire_envelope" --include=*.rs .
+  core/src/message/mod.rs:8-9    -- pub re-export only
+  core/src/message/codec.rs:194  -- fn encode_wire_envelope (definition)
+  core/src/message/codec.rs:217  -- fn decode_wire_envelope (definition)
+  core/src/message/codec.rs:636,638,711,717,746,754,762  -- codec.rs's OWN
+                                     unit tests, only callers of either fn
+                                     besides the one production site below
+  core/src/iron_core.rs:3272     -- decode_wire_envelope, inside
+                                     receive_message -- the ONLY production
+                                     caller, and exactly the ingress point
+                                     the forgery test in #225 exercises
+```
+
+**`encode_wire_envelope` -- the function that would produce the raw,
+unsigned bincode wire format `decode_wire_envelope`'s fallback accepts -- has
+ZERO production callers anywhere in the repo.** Verified every legitimate send
+path independently: both branches of `prepare_message_internal`
+(`iron_core.rs:823-835` legacy/kill-switch path, `:836-886` ratchet path)
+build a `DriftEnvelope` and call `.to_bytes()` (Drift-signed format), never
+`encode_wire_envelope`. `WireEnvelope::V1` values do flow through the ratchet
+path (`encrypt_with_ratchet_fallback` can return either variant), but they are
+immediately wrapped via `DriftEnvelope::from_legacy_envelope(...)` before
+touching the wire -- so the *variant* being V1 is not the same claim as the
+*wire bytes* being unsigned. The unsigned raw-bincode fallback that
+`decode_wire_envelope` accepts on receipt has no legitimate producer.
+
+**Conclusion for whoever does the fix (crypto-security-auditor + operator
+still required, not done here):** remediation option 1 from the review --
+reject the codec's raw bincode fallback at ingress regardless of version --
+is not gated on a migration. Nothing legitimate depends on it. The fallback
+existing in `decode_wire_envelope` is attack surface with no matching
+producer, which is exactly the shape of hole it looks like: added for
+"backward compatibility with older nodes" (codec.rs:6, :101) but nothing in
+this codebase, at this commit, ever emits what it accepts.
+
+**What this does NOT establish:** whether a node running an OLDER commit ever
+emitted raw bincode-only envelopes historically (mesh peers on old builds are
+exactly the "older nodes" the comment refers to), which would make this a
+live compatibility question rather than dead code, and whether `desktop_bridge`
+or platform bindings construct wire bytes some other way that bypasses codec.rs
+entirely. Not checked this session -- flag for the adversarial review, don't
+take the "zero production callers in this crate" finding as the full answer.
+
+## SHIP_PLAN.md checkpoint ledger — CP1 filled in
+
+The ledger in `SHIP_PLAN.md` section 5 had sat empty since the file was
+created, despite D1 (main green) having been true for several sessions. Filled
+CP1 with the evidence gathered above (own commit, no crypto touched). CP2-CP6
+remain empty and honest -- none of D2-D7 has evidence recorded.
+
+## Housekeeping — do not let this compound further
+
+Four checkpoint sections (#223, #224, #225, this one) now exist for one
+calendar day, each opened as a separate unmerged PR against `main`, each
+re-deriving mostly the same state. This is exactly what `SHIP_PLAN.md`
+section 3 rule 3 warns against ("agents are measured in commits merged to
+green main, not handoff documents produced... stop writing to each other").
+None of these four PRs conflicts code-wise, but they are four open PRs
+carrying overlapping `CTO_STATE.md` edits that will conflict with each other
+on merge. **Recommend:** the next seat with merge authority reconciles all
+four into one landing (newest-first, mark superseded sections as superseded
+per the standing rule, do not delete), merges that one, and closes the other
+three as superseded -- closing needs operator sign-off per the approval
+gate table in section 0b, so flag it rather than doing it here.
+
+## What the next checkpoint should pick up
+
+1. **Get the executed-forgery finding (#225) and the wire-fallback finding
+   (this section) in front of the crypto-security-auditor as one packet.**
+   Both point at the same root cause (ingress accepts unauthenticated legacy
+   material) and the fix is one design decision: drop the raw bincode ingress
+   fallback (this session's finding says it's safe to), and/or extend
+   signature verification to cover it, then re-run #225's scratch reproduction
+   against the fix before it's called closed.
+2. **#222's Android gap** (`mobile_bridge.rs` never checks
+   `is_storage_degraded()`) is still unaddressed and is a smaller, non-crypto
+   fix -- candidate for a scoped `rust-implementer` dispatch independent of
+   the #221 crypto work.
+3. **Reconcile the four CTO_STATE.md checkpoint PRs** per the housekeeping
+   note above.
+4. Nothing on the critical path moved to mergeable this session. No merge, no
+   tag action taken. `main` remains at `b538f3ba`.

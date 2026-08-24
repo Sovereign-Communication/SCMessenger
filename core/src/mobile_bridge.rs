@@ -348,6 +348,25 @@ impl MeshService {
         #[cfg(target_arch = "wasm32")]
         let core = crate::IronCore::new();
 
+        // Persistent storage may have failed to open (lock contention, corruption,
+        // permission error, disk full) and fallen back to a DegradedStorage backend
+        // that fails loud on every read/write. Mirror the same fail-loud mechanism
+        // `IronCore::initialize_identity` already uses for this exact condition
+        // (see iron_core.rs) instead of silently continuing into `core.start()`,
+        // which previously produced an app that "started" and then did nothing.
+        if let Some(err) = core.storage_error() {
+            tracing::error!(
+                "MeshService::start: persistent storage is degraded at {:?}, refusing to start: {}",
+                self.storage_path,
+                err
+            );
+            *self.state.lock() = ServiceState::Stopped;
+            #[cfg(not(target_arch = "wasm32"))]
+            return Err(crate::iron_core::classify_storage_error(&err));
+            #[cfg(target_arch = "wasm32")]
+            return Err(crate::IronCoreError::StorageError);
+        }
+
         // Start the core
         if let Err(e) = core.start() {
             *self.state.lock() = ServiceState::Stopped;
@@ -2640,16 +2659,65 @@ impl HistoryManager {
     #[uniffi::constructor]
     pub fn new(storage_path: String) -> Result<Self, crate::IronCoreError> {
         let path = std::path::PathBuf::from(storage_path).join("history.db");
-        let db = sled::Config::default()
-            .path(path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .map_err(|_| crate::IronCoreError::StorageError)?;
 
-        Ok(Self {
-            db: Arc::new(Mutex::new(db)),
-        })
+        // A prior handle on this path can still be releasing sled's file lock
+        // and draining its background flusher when we get here -- an app
+        // restart reopening its own store, or a caller that just dropped a
+        // `HistoryManager`. That window is short but real, and it surfaced as
+        // a hard StorageError on macOS CI. Retry briefly before giving up: a
+        // handle mid-close is a transient, not a degraded store. An exhausted
+        // retry budget IS a degraded store, and still fails loud.
+        const OPEN_ATTEMPTS: u32 = 5;
+        let mut last_err: Option<sled::Error> = None;
+
+        for attempt in 0..OPEN_ATTEMPTS {
+            match sled::Config::default()
+                .path(&path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open()
+            {
+                Ok(db) => {
+                    if attempt > 0 {
+                        tracing::warn!(
+                            "HistoryManager::new: opened {:?} on attempt {} of {}",
+                            path,
+                            attempt + 1,
+                            OPEN_ATTEMPTS
+                        );
+                    }
+                    return Ok(Self {
+                        db: Arc::new(Mutex::new(db)),
+                    });
+                }
+                Err(err) => {
+                    if attempt + 1 < OPEN_ATTEMPTS {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            50 * u64::from(attempt + 1),
+                        ));
+                    }
+                    last_err = Some(err);
+                }
+            }
+        }
+
+        // Never discard the cause. This change exists to stop storage failing
+        // silently; a StorageError with no reason attached is only half of
+        // that, and it is what made this failure undiagnosable from CI logs.
+        match last_err {
+            Some(err) => tracing::error!(
+                "HistoryManager::new: sled failed to open {:?} after {} attempts: {}",
+                path,
+                OPEN_ATTEMPTS,
+                err
+            ),
+            None => tracing::error!(
+                "HistoryManager::new: sled failed to open {:?} after {} attempts",
+                path,
+                OPEN_ATTEMPTS
+            ),
+        }
+        Err(crate::IronCoreError::StorageError)
     }
 
     pub fn add(&self, record: MessageRecord) -> Result<(), crate::IronCoreError> {
@@ -3780,6 +3848,50 @@ mod tests {
             first_keypair.public().to_peer_id(),
             second_keypair.public().to_peer_id(),
             "headless key should be stable across restarts"
+        );
+    }
+
+    /// Mirrors the sled lock-contention technique used by
+    /// `core/tests/test_storage_fail_loud.rs` at the IronCore level, but
+    /// exercises it through the `MeshService::start` call site added by
+    /// this change. Before this change, `MeshService::start` never called
+    /// `is_storage_degraded()`/`storage_error()` after constructing
+    /// `IronCore`, so a locked/corrupt store produced a service that
+    /// reported `Ok(())` from `start()` and then silently did nothing.
+    #[test]
+    fn mesh_service_start_fails_loud_when_storage_is_lock_contended() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+
+        // Hold the sled lock directly, simulating another process (or a
+        // stale handle) already owning the database at this path.
+        let _held_sled = sled::Config::default()
+            .path(&path)
+            .mode(sled::Mode::LowSpace)
+            .use_compression(false)
+            .open()
+            .expect("held sled open");
+
+        let service = Arc::new(MeshService::with_storage(
+            MeshServiceConfig {
+                discovery_interval_ms: 5_000,
+                battery_floor_pct: 20,
+            },
+            path,
+        ));
+
+        let result = service.clone().start();
+        assert!(
+            result.is_err(),
+            "MeshService::start must fail loud when persistent storage is degraded, \
+             not silently continue as if it started successfully"
+        );
+
+        // The service must not be left claiming to be running/starting: a
+        // degraded-storage start must be a clean, retryable failure.
+        assert!(
+            !service.is_running(),
+            "a service that failed to start due to degraded storage must not report running"
         );
     }
 

@@ -175,7 +175,7 @@ Fill this in as the plan executes. Empty cells are the honest status.
 
 | Checkpoint | Criterion | Date | Evidence |
 |---|---|---|---|
-| CP1 | D1 -- main green | | |
+| CP1 | D1 -- main green | 2026-08-23 | `main`@`b538f3ba`: every push-triggered workflow (CI, Lint, Repository Hygiene, Docker Publish, Docker Integration Suite, Cross, iOS Build & Test, Mobile) reports `conclusion: success`, verified via the GitHub Actions API. Two P0 fixes (#221, #222) remain open and DRAFT, blocking the tag, not `main`'s own greenness -- see `HANDOFF/CTO_STATE.md` 2026-08-23 checkpoint sections. |
 | CP2 | D2 + D3 -- release published | | |
 | CP3 | D4 -- two-device proof | | |
 | CP4 | D5 -- #139 resolved | | |
