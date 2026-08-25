@@ -2508,20 +2508,50 @@ open class MeshRepository(
                         "msg=$normalizedMessageId sender=$senderId"
                     )
 
-                    // [CRITICAL] Step 1: Create Receipt struct with core types
-                    val receipt = uniffi.api.Receipt(
-                        messageId = normalizedMessageId,
-                        status = uniffi.api.DeliveryStatus.DELIVERED,
-                        timestamp = (System.currentTimeMillis() / 1000).toULong()
-                    )
+                    // [CRITICAL] Step 1: Normalize sender public key
+                    val keyHex = normalizePublicKey(senderPublicKeyHex)
+                    if (keyHex == null) {
+                        Timber.e("[ERROR] Receipt send FAILED: invalid sender public key msg=$normalizedMessageId")
+                        logDeliveryAttempt(
+                            messageId = normalizedMessageId,
+                            medium = "receipt",
+                            phase = "encode",
+                            outcome = "error",
+                            detail = "invalid_sender_key msg=$normalizedMessageId attempt=$attempt"
+                        )
+                        if (attempt < receiptSendMaxAttempts) {
+                            kotlinx.coroutines.delay(getRetryDelay(attempt - 1))
+                            continue
+                        } else {
+                            Timber.e(
+                                "[ERROR] Receipt prepare exhausted after $receiptSendMaxAttempts attempts: " +
+                                "msg=$normalizedMessageId sender=$senderId"
+                            )
+                            logDeliveryAttempt(
+                                messageId = normalizedMessageId,
+                                medium = "receipt",
+                                phase = "encode",
+                                outcome = "exhausted",
+                                detail = "invalid_sender_key_final msg=$normalizedMessageId attempts=$receiptSendMaxAttempts"
+                            )
+                            return@launch
+                        }
+                    }
 
-                    // [CRITICAL] Step 2: Encode Receipt to JSON bytes using core bindings
+                    // [CRITICAL] Step 2: Prepare signed+encrypted MessageType::Receipt envelope via FFI.
+                    // prepareReceipt constructs the Receipt internally (DELIVERED status, current timestamp)
+                    // and returns Drift-envelope bytes ready for transport. Mirrors iOS MeshRepository.swift
+                    // and CLI main.rs prepare_receipt usage.
+                    val core = ironCore ?: run {
+                        Timber.e("[ERROR] Receipt send FAILED: ironCore not initialized msg=$normalizedMessageId")
+                        throw IllegalStateException("ironCore not initialized")
+                    }
                     val receiptBytes = try {
                         Timber.d(
-                            "[RECEIPT-ENCODE] Encoding Receipt struct: " +
-                            "msg=$normalizedMessageId status=${receipt.status} ts=${receipt.timestamp}"
+                            "[RECEIPT-ENCODE] Preparing signed envelope via prepareReceipt: " +
+                            "msg=$normalizedMessageId sender=$senderId"
                         )
-                        uniffi.api.encodeReceipt(receipt)
+                        core.prepareReceipt(recipientPublicKeyHex = keyHex, messageId = normalizedMessageId)
                     } catch (e: Exception) {
                         Timber.e(
                             e,
@@ -2556,7 +2586,7 @@ open class MeshRepository(
 
                     Timber.i(
                         "[RECEIPT-ENCODE] SUCCESS: msg=$normalizedMessageId " +
-                        "bytes=${receiptBytes.size} status=${receipt.status}"
+                        "bytes=${receiptBytes.size} attempt=$attempt"
                     )
                     logDeliveryAttempt(
                         messageId = normalizedMessageId,
