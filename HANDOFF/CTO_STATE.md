@@ -1,7 +1,7 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
+Last updated: 2026-08-24 (tag cut; release pipeline building; MacBook lane deploying)
 Entry point: `/CTO`. This file is the whole context load.
 
 # ===== RESUME HERE (2026-08-24, written for a clean restart) =====
@@ -12,11 +12,12 @@ only to dispatch and to hold verdicts.**
 
 ## One-line state
 
-**PR #221 IS MERGED -- main `df0a322c` carries the P0 fix** (sender-auth root
-key 0x03, ingress signature enforcement, kill switch removed, suite bump).
-Integration PR **#230** lands the remaining three (#227 Android wiring+JVM
-fixes, #219 CLI identity persistence, #229 draft-release fix) as one reviewed
-union -- merge it green, then tag v0.4.0-rc.1 DRAFT and deploy N1-N4.
+**TAG IS FINAL: v0.4.0-rc.1 @ `134e06d2`** (operator-authorized re-cut from
+`4077bc39` after #231 fixed the release version gate). ALL PRs merged: #221
+P0 fix direct (df0a322c); #227+#219+#229 via integration PR #230 (4077bc39);
+docs + verify-fix via #231 (134e06d2). Release pipeline BUILDING the DRAFT
+release with assets. MacBook lane deploying iOS to Christy's device for a
+3-week trip test. Remaining: assets land, N1-N4 deploy per plan, formal gate.
 
 ## Session log 2026-08-24b (CAO validation -> execution)
 
@@ -55,6 +56,26 @@ DONE this session:
    conditions (fresh installs bound exposure; corrupted-message hit invalidates
    the leg; ticket stays v0.5.0-BLOCKING; fix must reconcile tests that assert
    the ceilings). OPERATOR MAY VETO THE U1 ACCEPTANCE.
+6. MERGE SEQUENCE EXECUTED: #221 direct (df0a322c) -> integration PR #230
+   (#227+#219+#229; disjoint scopes; ONE CI cycle instead of three serial
+   up-to-date cycles; 4077bc39) -> #231 (verify_versions.sh prerelease-tag
+   fix + handoff docs; 134e06d2).
+7. TAG-DAY TRAPS CAUGHT AND HANDLED:
+   - release.yml hardcoded draft:false -> rc tag would have PUBLISHED
+     publicly; #229 makes alpha/beta/rc tags draft+prerelease.
+   - verify_versions.sh --require-tag strict-compared 0.4.0-rc.1 vs Cargo
+     0.4.0 and failed the first tag's pipeline; #231 compares numeric cores
+     when a prerelease suffix is present (verified locally against the real
+     tagged commit before push).
+   - 14 stale dependabot runs clogged the 5-runner queue -> all cancelled.
+   - Tag moved 4077bc39 -> 134e06d2 with EXPLICIT OPERATOR AUTHORIZATION
+     (pre-push override is human-only; used as designed). Delta = docs + one
+     shell script; ZERO application-code delta -- the MacBook build already
+     in flight from 4077bc39 is binary-identical.
+8. MAC LANE DISPATCHED: HANDOFF/gpt/CTO_TO_ANTIGRAVITY_2026-08-24_IOS_DEPLOY_EXECUTION.md
+   (install-only mandate, anchor verification, evidence list, peer status).
+   Christy's device = early field-test node; FORMAL gate legs run on the
+   final anchor with all four gate nodes per the plan.
 
 POST-TAG QUEUE additions (do not lose):
 - Wire verify_bundle at contact-bundle ingestion BEFORE any bundle-import
@@ -67,23 +88,27 @@ POST-TAG QUEUE additions (do not lose):
 - MainViewModelTest/MeshRepositoryTest package/path mismatch (file under
   .../test/, package .../data) breaks --tests filters locally; cosmetic.
 - #228 merge AFTER #221 lands (check fails on main today by design).
+- Dependabot action-bump PRs keep re-clogging the 5-runner queue; cancel or
+  batch-merge them around gate work rather than letting them queue-block.
 
-## The critical path, in order
+## The critical path, in order (remaining)
 
-1. Merge **#230** (integration of #227 + #219 + #229) once green -- one CI
-   cycle instead of three serial up-to-date cycles; constituents are disjoint
-   (android/ vs cli/ vs .github/), union verified conflict-free, local
-   cargo check + fmt green on the tree.
-   NOTE: #221 merged directly (df0a322c); its crypto-gate blocker was
-   satisfied by the on-file 2026-08-24 adversarial re-review APPROVE.
-2. Tag `v0.4.0-rc.1` on the #230 merge commit. **#229's change is what makes
-   the release DRAFT** -- do not tag before it lands. Verify: draft=true,
-   prerelease=true, assets include signed APK/AAB + scm-windows-amd64.exe +
-   SHA256SUMS.txt.
-3. Deploy N1-N4 per HANDOFF/plans/FOUR_NODE_GATE_EXECUTION_PLAN_2026-08-23.md
-   (G5 liveness scoring rule now IN the plan; N4 redeploy PROVEN; AWS image
-   doc corrected).
-4. Apple joins as N5 via AW-BILAT-0003.
+1. **Release pipeline completes** on v0.4.0-rc.1 @ 134e06d2 -> DRAFT release
+   with signed APK/AAB, scm-windows-amd64.exe, WASM, SHA256SUMS. Verify
+   draft=true + prerelease=true + asset list when it lands.
+2. **N4 rebuild at tag SHA** -- proven path: ssh -i ~/.ssh/scm-node-key.pem
+   ec2-user@54.226.67.101, container scm-node, identity persists at
+   /opt/scm-relay-data; update AWS_RELAY_CURRENT_ADDRESS.md after.
+3. **N3 rebuild** from the tag checkout (Windows host, cargo build --release).
+4. **N1/N2** install signed APK/AAB from the release assets when ready
+   (in-place on the Pixel per plan; CI-signature upgrade caveat noted there).
+5. **Christy/Mac**: build already dispatched; if rebuilt after the tag move,
+   confirm anchor SHA 134e06d2 via git rev-parse before handoff.
+6. **Gate matrix** per HANDOFF/plans/FOUR_NODE_GATE_EXECUTION_PLAN_2026-08-23.md
+   -- G5 liveness scoring rule is IN the plan (write scoring BEFORE Pass 1);
+   every node reports the tag hash first; N3 stderr captured separately.
+7. Apple joins as N5 via AW-BILAT-0003 (Mac-lane install packet exists in
+   HANDOFF/gpt/CTO_TO_OPERATOR_2026-08-24_APPLE_INSTALL_PACKET.md).
 
 ## Apple / iOS / macOS -- CAO answer
 
@@ -135,6 +160,18 @@ redacted summaries only in PRs).
 - **The preflight hook will block `git checkout -- .` even in a worktree you
   just created.** It is right; do not use SCM_ALLOW_DESTRUCTIVE. Take a
   forward path (fresh worktree, explicit-path commits).
+- **Branch protection demands up-to-date branches AND PRs**: merging one PR
+  makes the siblings stale -> serial re-run cycles. Disjoint-scope PRs:
+  integrate into ONE PR (#230 pattern) to collapse N cycles into 1; verify
+  disjointness via scripts/pr_scope.sh first.
+- **Workflow assumptions are unproven until a real tag fires**: the draft
+  flag AND the version gate were both wrong in ways PR CI could never catch
+  (release workflows do not run on PRs). Budget one fix-forward cycle on
+  tag day.
+- **Tag deletion/move is hook-blocked**; the override (SCM_ALLOW_FORCE_PUSH)
+  is an OPERATOR decision only -- ask, never assume.
+- **PowerShell mangles git's ^{commit}** in rev-parse -- quote the argument
+  or use `git cat-file -p <tag>`.
 
 
 ## 0-2026-08-24b. #221 REJECTED BY ADVERSARIAL REVIEW -- the hole MOVED
