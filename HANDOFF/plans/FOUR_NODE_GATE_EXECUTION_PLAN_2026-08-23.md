@@ -28,7 +28,7 @@ tree, external audit COMMISSIONED, honest release body).
 | N1 | Pixel 6a (Android) | signed release APK | release assets on tag | last known install: b4ccd30a-era; reinstall from tag |
 | N2 | Second Android handset | signed release APK | same asset, same file | operator to confirm device availability |
 | N3 | Windows CLI | `scm-windows-amd64.exe` | release assets on tag | RUNNING (PID 16156, up since 08-22), listening multiport 9001/9002/9090/8080/80/443, ESTABLISHED to 54.226.67.101:9001 |
-| N4 | AWS headless relay | prebuilt image at tag SHA | Docker Publish output | LIVE and healthy (`HTTP 200 {"status":"healthy"}` at 54.226.67.101:9876/health) but image is STALE: built at 6b2573fa per `HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md`; must be rebuilt/redeployed at the tag SHA |
+| N4 | AWS headless relay | prebuilt image at tag SHA | Docker Publish output | LIVE and healthy (`HTTP 200 {"status":"healthy"}` at 54.226.67.101:9876/health). Image identity CORRECTED 2026-08-24: running `9f54b107...` label `gpt-pr139-receipt-filter-20260811` (includes PR #139; the earlier "6b2573fa, predates #139" claim was wrong) -- still OLDER than main; must be rebuilt/redeployed at the tag SHA |
 
 Apple (macOS CLI + iOS app) joins as N5 only through the AW-BILAT-0003 CI-green
 join point. It is not a blocker.
@@ -52,7 +52,7 @@ CHANGED vs CTO_STATE stand-down are marked **[DRIFT]**.
 
 | # | Item | PR | Validated state 2026-08-23 | Blocking action |
 |---|---|---|---|---|
-| A1 | V1+V2 sender auth | #221 | OPEN/DRAFT, MERGEABLE, BEHIND main | Close X25519 coverage-gap test; merge main in; clippy; FRESH adversarial review of merged tree |
+| A1 | V1+V2 sender auth + kill-switch removal + suite bump 0x02->0x03 | #221 | Fix LANDED 2026-08-24 (e2a1474e): `SCM_RATCHET_DISABLE` removed, suites now `[0x01, 0x03]`, ORIGINAL 0x02 derivation preserved for legacy peers, regression tests pin the split. FRESH adversarial re-review returned APPROVE (2026-08-24; held by CTO). See CTO_STATE 0-2026-08-24b | Green CI, then merge after A3. Post-tag follow-ups recorded: verify_bundle wiring (bundle-import blocker), stale-persisted-0x02-session drop-and-retry |
 | A2 | Storage fail-loud | #222 | OPEN/DRAFT, MERGEABLE, BEHIND main | Merge main in; land first so A3 stacks cleanly |
 | A3 | Android degraded-storage wiring | #227 | OPEN/DRAFT, UNSTABLE -- **[DRIFT] `Android JVM Unit Tests` FAILING**: `MeshRepositoryTest > isStorageDegraded initial state is false` (ClassCastException ConnectivityManager in JVM test); run 32670592900, 2026-08-23T22:47Z. CTO_STATE "verified green" is STALE | Fix the JVM test harness (Robolectric shadow or guard), re-run green, then merge after A2 |
 | A4 | Android reachability | #220 | OPEN, `Android Wiring Gate` fail = the 2 accepted findings | Operator records written ACCEPTANCE (accept, do not fix); then merge or close per ruling |
@@ -72,11 +72,13 @@ state only, not crate internals. Most likely during D6 transport-failover churn.
 Minimum handling:
 1. N3 stderr captured to its own file from process start (`... 2> n3_stderr.log`),
    separate from the tracing log -- the panic never reaches the rolling log.
-2. Operator ruling REQUIRED before the gate: (a) ACCEPT with workaround
-   "restart N3 promptly; mid-gate panic is a known-possible event, not a new
-   regression", recorded in the run manifest; or (b) extend the peer-level cap
-   into core/src/transport dial paths (merge-blocked perimeter, needs auditor).
-   This is an operator judgement call.
+2. **RULED 2026-08-24: option (a) ACCEPT** (CTO_STATE 0-2026-08-24a): restart N3
+   promptly; a mid-gate panic is a known-possible event, not a new regression.
+   Detection is already half-built -- `cli/src/main.rs:2168` watchdog logs
+   `swarm_event_loop_died` and exits 1 on stderr; Android logs `Clearing stale
+   swarm handle` (mobile_bridge.rs) but has NO timer, only API-entry checks.
+   The zero-code gate-day requirement below (item 5, Gate C scoring) closes
+   that gap. No transport-perimeter code change is pending.
 
 ### BLOCK 2 -- relay fallback for roamed peers (ladder check)
 
@@ -119,6 +121,26 @@ Qualification bar stays as locked: two complete matrix passes + one 60-minute
 soak on the frozen anchor (operator decision 2026-08-10, never rescinded).
 Soak clock-reset conditions inherit from field-gate reference section 10.3.
 
+### G5 liveness scoring rule -- WRITTEN BEFORE PASS 1 (CTO_STATE 0-2026-08-24a)
+
+Per matrix leg, per Android node (N1/N2), grep BOTH captured buffers
+(`n_crash.log` and the `-b main` file) for these fingerprints:
+
+    swarm_event_loop_died            (cli watchdog + core; exits 1 on stderr)
+    Clearing stale swarm handle      (Android SwarmTaskLivenessGuard Drop)
+
+Plus a per-leg liveness assertion: each node must answer at least one API-level
+probe (get_peers or equivalent) AFTER the leg's last message event, so a
+silently dead swarm is distinguishable from "no traffic this leg". Android has
+NO liveness timer -- death is noticed only when the UI asks -- which is exactly
+why this rule is written down before Pass 1 rather than improvised.
+
+SCORING: any fingerprint hit in ANY buffer invalidates the pass in progress
+and resets the soak clock to zero. The restart LOG is the deliverable, not the
+restart -- a restart that was silently absorbed never happened as far as
+qualification is concerned. N3 additionally: any line in `n3_stderr.log`
+(constitutes evidence of the BLOCK-1 panic class even without a fingerprint).
+
 ## 6. Log capture and live analysis (wire BEFORE deploy)
 
 | Node | Capture | Notes |
@@ -142,9 +164,11 @@ Live-analysis rules that have already paid off once each:
    baseline). Re-run at the release commit.
 3. Tag `v0.4.0-rc.1` on a green main SHA; confirm the draft release carries:
    signed AAB+APK, `scm-windows-amd64.exe`, checksums, provenance.
-4. Rebuild/redeploy N4 at the tag-SHA image (current image predates #139).
-   Confirm SSH-key situation first -- recorded 2026-08-05 that none exists;
-   teardown+rebuild path must be proven before tag day, not on it.
+4. Rebuild/redeploy N4 at the tag-SHA image (running image `9f54b107...` is
+    older than main). N4 REDEPLOY IS PROVEN: SSH key
+    `~/.ssh/scm-node-key.pem` exists (since 2026-08-01), `ec2-user@54.226.67.101`
+    succeeds, container `scm-node`, identity persists at `/opt/scm-relay-data`
+    (CTO_STATE 0-2026-08-24a; the earlier "no SSH key exists" note was wrong).
 5. Update `HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md` immediately after any N4
    rebuild (ephemeral-IP policy).
 6. Install the SAME APK file on N1 and N2 (in-place on the Pixel to preserve

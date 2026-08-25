@@ -1,6 +1,14 @@
 # Android drops SOME inbound messages with CryptoError -- 840 occurrences over 31 hours
 
-Status: Active
+Status: Active -- DISPOSITIONED 2026-08-24: measurement-pending, code causes absorbed
+Disposition: both code-level causes named in the revised hypothesis are FIXED
+on main ceabdbd4 -- self-ratchet reset guarded (see
+P0_ANDROID_SELF_RATCHET_RESET disposition) and the receipt loop now calls
+`mark_message_sent` (iron_core.rs:3533, see the P1 receipts ticket). Closure
+condition per this ticket's own text ("confirm the count actually drops") is a
+FIELD re-measurement, satisfiable only after the marker ticket closes and a
+gate soak runs. Reclassify OBSOLETE if the count collapses; reopen at P0 if
+CryptoErrors persist post-gate.
 Severity: P1 (was filed P0 -- see the correction immediately below)
 
 ## CORRECTION 2026-08-09, same session, before anyone acted on this

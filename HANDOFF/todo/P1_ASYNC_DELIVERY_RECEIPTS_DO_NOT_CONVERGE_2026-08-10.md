@@ -1,6 +1,13 @@
 # P1 -- async delivery receipts never converge; sender stays `pending` forever
 
-Status: Open -- queued BEHIND the five-node anchor rollout
+Status: FIXED -- dispositioned 2026-08-24 against main ceabdbd4
+Disposition: the receipt branch in IronCore::receive_message now calls
+`mark_message_sent(receipt.message_id)` (iron_core.rs:3533) gated on
+Delivered | Read (:3529-3532, NOT Sent -- the ticket's dequeuing caution is
+honored); `mark_message_sent` removes outbox + drift-store entries. Regression
+coverage: core/tests/integration_ironcore_roundtrip.rs:329-445
+`test_receipt_roundtrip_flips_state` asserts outbox cleared after a Delivered
+receipt and fails without the fix. Move to HANDOFF/done/ at next sweep.
 Filed: 2026-08-10 ~01:40Z (Windows lane)
 Ties into: the existing async receipt-convergence effort (`sc-receipt-convergence`)
 
