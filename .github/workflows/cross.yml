@@ -49,7 +49,7 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: cargo ndk -t ${{ matrix.abi }} build -p scmessenger-core --release
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-${{ matrix.abi }}
           path: target/${{ matrix.target }}/release/libscmessenger_core.a
@@ -70,12 +70,12 @@ jobs:
       - name: Build for aarch64-apple-ios-sim
         run: cargo build --target aarch64-apple-ios-sim -p scmessenger-core --release
       - name: Upload aarch64-apple-ios
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64
           path: target/aarch64-apple-ios/release/libscmessenger_core.a
       - name: Upload aarch64-apple-ios-sim
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64-sim
           path: target/aarch64-apple-ios-sim/release/libscmessenger_core.a
@@ -94,7 +94,7 @@ jobs:
       - name: Build for wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown -p scmessenger-wasm --release
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: target/wasm32-unknown-unknown/release/
@@ -119,7 +119,7 @@ jobs:
           SCMESSENGER_CDYLIB_PATH: target/aarch64-linux-android/release/libscmessenger_core.a
         run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
       - name: Upload Kotlin bindings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-kotlin
           path: core/target/generated-sources/uniffi/kotlin/
@@ -147,7 +147,7 @@ jobs:
           SCMESSENGER_CDYLIB_PATH: target/aarch64-apple-ios/release/libscmessenger_core.a
         run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
       - name: Upload Swift bindings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-swift
           path: core/target/generated-sources/uniffi/swift/

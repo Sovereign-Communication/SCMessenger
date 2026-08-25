@@ -139,7 +139,7 @@ jobs:
             run --rm rust-core-test
 
       - name: Upload Rust test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: rust-test-results
@@ -234,7 +234,7 @@ jobs:
           key: ${{ steps.gradle-cargo-cache.outputs.cache-primary-key }}
 
       - name: Upload Android test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: android-test-results
@@ -367,7 +367,7 @@ jobs:
           docker compose -f docker-compose.test.yml --profile test down
 
       - name: Upload integration test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: integration-test-results
@@ -442,7 +442,7 @@ jobs:
           ./run-all-tests.sh --verbose
 
       - name: Upload all test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: full-test-results
@@ -505,7 +505,7 @@ jobs:
           ./run-all-tests.sh --integration-only --with-nat --verbose
 
       - name: Upload NAT test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nat-test-results
