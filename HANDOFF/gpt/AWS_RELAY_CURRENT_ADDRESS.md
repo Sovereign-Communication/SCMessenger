@@ -33,4 +33,3 @@ other doc, ticket, or config.
 - 34.203.213.35 (2026-08-04 rebuild, pre-PR-137 image)
 - 54.242.56.150 (prior broken instance)
 - 100.56.248.69 (original docs IP; obsolete)
-
