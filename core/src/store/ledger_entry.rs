@@ -225,6 +225,10 @@ fn get_multiaddr_port(addr_str: &str) -> Option<u16> {
     None
 }
 
+// UNIFICATION_V2_TRANSPORT: nature-inspired eviction — only when at capacity.
+// Freshness decides victim (oldest last_seen first), unproven seeds evicted
+// before proven relays. Normal operation DEPRIORITIZES (sorting), not prunes;
+// this is the self-prune safety valve.
 fn evict_one_locked(entries: &mut Vec<LedgerEntry>) {
     if entries.len() < MAX_LEDGER_ENTRIES {
         return;
@@ -894,13 +898,45 @@ impl LedgerManager {
         let _ = self.save_with_entries(&snapshot);
     }
 
+    // UNIFICATION_V2_TRANSPORT: freshness + reliability ordering — nature-inspired
+    // deprioritize-and-self-prune (mycorrhizal). Stale links are NOT pruned
+    // eagerly; they sink by last_seen (freshness) and success_rate (stability:
+    // AWS 24/7 vs ephemeral phone). Stable nodes surface first; ephemeral
+    // phones remain dialable at tail. Failures accumulate via failure_count;
+    // eviction only on capacity pressure via evict_one_locked. This matches
+    // get_preferred_relays ranking and replaces the previous insertion-order.
     pub fn dialable_addresses(&self) -> Vec<LedgerEntry> {
         let entries = self.entries.lock();
-        entries
+        let mut out: Vec<LedgerEntry> = entries
             .iter()
             .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
             .cloned()
-            .collect()
+            .collect();
+        out.sort_by(|a, b| {
+            b.last_seen
+                .unwrap_or(0)
+                .cmp(&a.last_seen.unwrap_or(0))
+                .then_with(|| {
+                    let a_total = a.success_count as u64 + a.failure_count as u64;
+                    let b_total = b.success_count as u64 + b.failure_count as u64;
+                    let a_rate = if a_total > 0 {
+                        (a.success_count as f64) / (a_total as f64)
+                    } else {
+                        0.0
+                    };
+                    let b_rate = if b_total > 0 {
+                        (b.success_count as f64) / (b_total as f64)
+                    } else {
+                        0.0
+                    };
+                    b_rate
+                        .partial_cmp(&a_rate)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| b.success_count.cmp(&a.success_count))
+                .then_with(|| a.multiaddr.cmp(&b.multiaddr))
+        });
+        out
     }
 
     /// Addresses known only from an invite/QR seed: recorded, syntactically
@@ -1011,6 +1047,9 @@ impl LedgerManager {
         self.import_seed_entries_locked(entries, NetworkMode::Local)
     }
 
+    // UNIFICATION_V2_TRANSPORT: same freshness+reliability ordering as
+    // dialable_addresses — proven relays float by recency; deep deprioritize
+    // (not prune) keeps ephemeral peers tail-ranked until failure threshold.
     pub fn get_preferred_relays(&self, limit: u32) -> Vec<LedgerEntry> {
         let entries = self.entries.lock();
         let mut preferred: Vec<LedgerEntry> = entries
@@ -1018,7 +1057,8 @@ impl LedgerManager {
             .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
             .cloned() // Clone now so we can sort
             .collect();
-        // Sort by last_seen descending
+        // Sort by last_seen descending (freshness) — primary stability signal:
+        // a 24/7 AWS relay has a recent last_seen; a phone slept since yesterday.
         preferred.sort_by_key(|b| std::cmp::Reverse(b.last_seen.unwrap_or(0)));
         preferred.truncate(limit as usize);
         preferred

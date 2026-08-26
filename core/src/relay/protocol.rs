@@ -234,12 +234,13 @@ mod tests {
     #[test]
     fn test_capability_mobile() {
         let cap = RelayCapability::mobile();
-        assert!(!cap.can_relay);
-        assert!(!cap.can_store);
+        // UNIFICATION_V2: all nodes are relays — mobile now also relays
+        assert!(cap.can_relay);
+        assert!(cap.can_store);
         assert!(cap.has_internet);
         assert!(!cap.full_node);
-        assert!(!cap.is_relay());
-        assert!(!cap.is_store());
+        assert!(cap.is_relay());
+        assert!(cap.is_store());
     }
 
     #[test]

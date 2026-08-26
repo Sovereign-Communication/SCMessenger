@@ -366,6 +366,52 @@ fn build_seed_dial_candidates(
     candidates
 }
 
+/// UNIFICATION_V2_TRANSPORT: network-aware mode for seed dials. RFC1918
+/// relevance: dialing a 192.168.x.y peer when not on that subnet is pointless
+/// (no route, just a timeout + backoff). If none of our own bound/external
+/// addresses is RFC1918/ULA, we are not on a private LAN → use Public to skip
+/// those candidates. Ephemeral vs stable is handled by ledger freshness
+/// ordering, not by pruning — this only gates reachability.
+#[cfg(not(target_arch = "wasm32"))]
+fn infer_seed_network_mode(
+    my_addrs: &[String],
+) -> crate::transport::addr_filter::NetworkMode {
+    use crate::transport::addr_filter::NetworkMode;
+    for s in my_addrs {
+        if let Ok(addr) = s.parse::<Multiaddr>() {
+            for proto in addr.iter() {
+                match proto {
+                    libp2p::multiaddr::Protocol::Ip4(ip) => {
+                        if ip.is_private() {
+                            return NetworkMode::Local;
+                        }
+                    }
+                    libp2p::multiaddr::Protocol::Ip6(ip) => {
+                        // ULA fc00::/7 is the IPv6 RFC1918 analogue.
+                        if (ip.segments()[0] & 0xfe00) == 0xfc00 {
+                            return NetworkMode::Local;
+                        }
+                        if let Some(v4) = crate::transport::addr_filter::embedded_ipv4(&ip) {
+                            if v4.is_private() {
+                                return NetworkMode::Local;
+                            }
+                        }
+                        if let Some((srv, cli)) =
+                            crate::transport::addr_filter::teredo_ipv4s(&ip)
+                        {
+                            if srv.is_private() || cli.is_private() {
+                                return NetworkMode::Local;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    NetworkMode::Public
+}
+
 /// Filter mDNS-advertised addresses to exclude circuit addresses that are too long for TXT records.
 ///
 /// The libp2p mDNS implementation has a 1300-byte limit on TXT records. Circuit addresses
@@ -3304,7 +3350,10 @@ pub async fn start_swarm_with_config(
                     }
 
                     _ = backoff_prune_interval.tick() => {
-                        // P1 Item 3: Periodically prune old backoff entries to prevent memory leak
+                        // UNIFICATION_V2_TRANSPORT + P1 Item 3: self-prune stale backoff;
+                        // ledger itself deprioritizes (not prunes) — this tick reaps
+                        // dial-policy memory hygiene. Also wired on
+                        // ConnectionEstablished via reset_peer_backoff above.
                         dial_policy_manager.prune_old_entries(Duration::from_secs(3600)); // Prune entries older than 1 hour
                         tracing::debug!("[DIAL-POLICY] Pruned stale backoff entries");
                     }
@@ -6582,12 +6631,17 @@ pub async fn start_swarm_with_config(
                                     None => (Vec::new(), Vec::new()),
                                 };
 
+                                // UNIFICATION_V2_TRANSPORT: dynamic NetworkMode — RFC1918 only
+                                // when we ourselves are on a private LAN. Treat AWS etc as
+                                // regular node; reliability emerges from ledger freshness,
+                                // not node class.
+                                let seed_mode = infer_seed_network_mode(&my_addrs);
                                 let candidates = build_seed_dial_candidates(
                                     proven,
                                     seeds,
                                     &bootstrap_addrs_clone,
                                     &my_addrs,
-                                    crate::transport::addr_filter::NetworkMode::Local,
+                                    seed_mode,
                                 );
 
                                 // Dial the first candidate that the swarm accepts, then wait
