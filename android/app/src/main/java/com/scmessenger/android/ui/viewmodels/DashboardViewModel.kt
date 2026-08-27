@@ -184,12 +184,17 @@ class DashboardViewModel @Inject constructor(
                     ?: normalizePublicKey(entry.publicKey)?.let { canonicalByPublicKey[it] }
                     ?: rawPeerId
                 // Canonicalize libp2p -> hex so 12D3KooWD6... and 30d0fa... share one key (both hashes needed but not duplicate nodes)
-                val peerId = try {
-                    meshRepository.canonicalContactIdPublic(resolvedPeerId).takeIf { it.isNotEmpty() } ?: resolvedPeerId
-                } catch (_: Exception) { resolvedPeerId }
+                // Use robust helper with PeerKeyUtils fallback for cold-start (ironCore null) + verbose log
+                val peerId = canonicalHexForAnyId(resolvedPeerId, entry.publicKey)
+                    ?: try { meshRepository.canonicalContactIdPublic(resolvedPeerId).takeIf { it.isNotEmpty() } ?: resolvedPeerId } catch (_: Exception) { resolvedPeerId }
+                Timber.d("loadPeers ledger: $rawPeerId -> $peerId (via canonicalHex)")
                 // For lookup, also try canonical variant of existing keys (peerMap is keyed by canonical hex)
                 val lookupKey = peerId.trim().lowercase()
-                val existing = peerMap[lookupKey] ?: peerMap[peerId] ?: peerMap[resolvedPeerId]
+                val existing = peerMap[lookupKey] ?: peerMap[peerId] ?: peerMap[resolvedPeerId] ?: run {
+                    // Last resort: try canonical of rawPeerId
+                    val altKey = canonicalHexForAnyId(rawPeerId, entry.publicKey)?.lowercase()
+                    if (altKey != null) peerMap[altKey] else null
+                }
                 if (existing != null) {
                     val entryLastSeen = entry.lastSeen
                     val existingLastSeen = existing.lastSeen
@@ -290,6 +295,36 @@ class DashboardViewModel @Inject constructor(
     }
 
     // UNIFICATION: canonical dedup by public_key_hex — 12D3 (libp2p) and 30d0fa (hex) for same identity must merge.
+    private fun canonicalHexForAnyId(rawId: String, publicKeyHint: String?): String? {
+        // Strongest: explicit publicKey field
+        normalizePublicKey(publicKeyHint)?.let { return it }
+        // Try MeshRepository canonical (uses ironCore when available) — verbose log
+        try {
+            val viaRepo = meshRepository.canonicalContactIdPublic(rawId)
+            if (viaRepo.isNotEmpty() && viaRepo != rawId) {
+                Timber.d("canonicalHex: $rawId -> $viaRepo via repo")
+                normalizePublicKey(viaRepo)?.let { return it }
+                if (viaRepo.length == 64) return viaRepo.lowercase()
+            }
+            // Fallback: manual libp2p -> hex extraction (no ironCore needed, e.g., cold start or degraded)
+            if (com.scmessenger.android.utils.PeerIdValidator.isLibp2pPeerId(rawId)) {
+                com.scmessenger.android.utils.PeerKeyUtils.extractPublicKeyFromPeerId(rawId)?.let { hex ->
+                    normalizePublicKey(hex)?.let {
+                        Timber.d("canonicalHex: $rawId -> $it via PeerKeyUtils fallback")
+                        return it
+                    }
+                }
+            }
+            // If rawId itself is 64-hex public key, use it
+            normalizePublicKey(viaRepo)?.let { return it }
+            if (viaRepo.length == 64) return viaRepo.lowercase()
+        } catch (e: Exception) {
+            Timber.w(e, "canonicalHex failed for $rawId")
+        }
+        normalizePublicKey(rawId)?.let { return it }
+        return null
+    }
+
     private fun deduplicateDiscoveredPeers(
         discovered: Map<String, MeshRepository.PeerDiscoveryInfo>
     ): Map<String, MeshRepository.PeerDiscoveryInfo> {
@@ -297,24 +332,24 @@ class DashboardViewModel @Inject constructor(
         discovered.values.forEach { info ->
             val rawId = info.peerId.trim()
             if (rawId.isEmpty()) return@forEach
-            // Canonicalize: libp2p 12D3Koo... -> 64-hex public_key via MeshRepository, hex stays lowercased
-            val canonicalPeerId = try {
-                meshRepository.canonicalContactIdPublic(rawId).takeIf { it.isNotEmpty() } ?: rawId
-            } catch (_: Exception) { rawId }
-            // Also consider publicKey field as stronger canonical source
-            val canonicalByKey = normalizePublicKey(info.publicKey)?.let { it } ?: canonicalPeerId
+            // Canonicalize: libp2p 12D3Koo... -> 64-hex public_key, hex stays lowercased — both hashes unified
+            val canonicalByKey = canonicalHexForAnyId(rawId, info.publicKey) ?: rawId.lowercase()
             val mapKey = canonicalByKey.lowercase()
+            val canonicalPeerId = try {
+                meshRepository.canonicalContactIdPublic(rawId).takeIf { it.isNotEmpty() } ?: canonicalByKey
+            } catch (_: Exception) { canonicalByKey }
             val existing = merged[mapKey]
             if (existing == null) {
                 // Store with canonical peerId (public_key_hex) so UI shows correct hash (30d0fa...), not libp2p
-                merged[mapKey] = info.copy(peerId = canonicalPeerId)
+                merged[mapKey] = info.copy(peerId = canonicalPeerId.lowercase())
             } else {
                 val authoritativeNick = selectAuthoritativeNickname(existing.nickname, info.nickname)
                     ?: selectAuthoritativeNickname(info.nickname, existing.nickname)
                     ?: existing.nickname
                 val authoritativeLocal = selectAuthoritativeNickname(existing.localNickname, info.localNickname)
                     ?: existing.localNickname ?: info.localNickname
-                merged[canonicalPeerId] = existing.copy(
+                merged[mapKey] = existing.copy(
+                    peerId = canonicalPeerId.lowercase(),
                     publicKey = existing.publicKey ?: info.publicKey,
                     nickname = authoritativeNick,
                     localNickname = authoritativeLocal,

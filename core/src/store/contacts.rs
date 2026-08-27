@@ -87,6 +87,7 @@ impl ContactManager {
     pub fn new(backend: Arc<dyn StorageBackend>) -> Self {
         let manager = Self { backend };
         manager.migrate_unprefixed_contacts();
+        manager.migrate_libp2p_peer_ids_to_canonical_hex();
         manager
     }
 
@@ -148,6 +149,104 @@ impl ContactManager {
                 event = "contacts_key_prefix_migration",
                 migrated_count = migrated,
                 "migrated bare-keyed contacts to contact:-prefixed keys"
+            );
+        }
+    }
+
+    /// One-time migration: canonicalize peer_id from libp2p (12D3Koo...) to public_key_hex (64 hex).
+    /// Both hashes refer to same identity (libp2p for routing, hex for crypto) but must not spawn duplicate nodes.
+    /// Verbose log for verification. Idempotent via metadata_contacts_canonical_hex_migrated flag.
+    fn migrate_libp2p_peer_ids_to_canonical_hex(&self) {
+        if self
+            .backend
+            .get(b"metadata_contacts_canonical_hex_migrated")
+            .map(|opt| opt.is_some())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let Ok(contacts) = self.list() else {
+            let _ = self.backend.put(b"metadata_contacts_canonical_hex_migrated", b"true");
+            return;
+        };
+        let mut migrated = 0u32;
+        let mut deduped = 0u32;
+        for contact in contacts {
+            let peer_id_trimmed = contact.peer_id.trim();
+            if peer_id_trimmed.is_empty() {
+                continue;
+            }
+            // Determine canonical hex: publicKey if valid, else try derive from libp2p peerId
+            let canonical_hex = if contact.public_key.trim().len() == 64
+                && contact.public_key.chars().all(|c| c.is_ascii_hexdigit())
+                && hex::decode(contact.public_key.trim()).is_ok()
+            {
+                contact.public_key.trim().to_lowercase()
+            } else if let Ok(derived) = self.derive_public_key_from_peer_id(peer_id_trimmed) {
+                derived.to_lowercase()
+            } else {
+                continue;
+            };
+            if canonical_hex == peer_id_trimmed.to_lowercase() {
+                continue;
+            }
+            // Check if canonical already exists (avoid duplicate)
+            let canonical_key = contact_key(&canonical_hex);
+            let exists = self
+                .backend
+                .get(&canonical_key)
+                .map(|opt| opt.is_some())
+                .unwrap_or(false);
+            if exists {
+                // Merge nicknames into canonical, then remove libp2p duplicate
+                if let Ok(Some(mut canonical_contact)) = self.get(canonical_hex.clone()) {
+                    let mut changed = false;
+                    if canonical_contact.nickname.is_none() && contact.nickname.is_some() {
+                        canonical_contact.nickname = contact.nickname.clone();
+                        changed = true;
+                    }
+                    if canonical_contact.local_nickname.is_none() && contact.local_nickname.is_some() {
+                        canonical_contact.local_nickname = contact.local_nickname.clone();
+                        changed = true;
+                    }
+                    if changed {
+                        let _ = self.add(canonical_contact);
+                    }
+                }
+                let _ = self.backend.remove(&contact_key(peer_id_trimmed));
+                deduped += 1;
+                tracing::info!(
+                    event = "contacts_canonical_hex_dedup",
+                    from = %peer_id_trimmed,
+                    to = %canonical_hex,
+                    "deduped libp2p contact into canonical hex"
+                );
+            } else {
+                // Rename: create canonical, remove old
+                let mut new_contact = contact.clone();
+                new_contact.peer_id = canonical_hex.clone();
+                // Ensure publicKey is canonical hex
+                new_contact.public_key = canonical_hex.clone();
+                if self.add(new_contact).is_ok() {
+                    let _ = self.backend.remove(&contact_key(peer_id_trimmed));
+                    migrated += 1;
+                    tracing::info!(
+                        event = "contacts_canonical_hex_migration",
+                        from = %peer_id_trimmed,
+                        to = %canonical_hex,
+                        nickname = ?contact.nickname,
+                        "migrated libp2p peerId to canonical public_key_hex"
+                    );
+                }
+            }
+        }
+        let _ = self.backend.put(b"metadata_contacts_canonical_hex_migrated", b"true");
+        if migrated > 0 || deduped > 0 {
+            tracing::info!(
+                event = "contacts_canonical_hex_migration_done",
+                migrated_count = migrated,
+                deduped_count = deduped,
+                "contacts canonical hex migration completed"
             );
         }
     }
