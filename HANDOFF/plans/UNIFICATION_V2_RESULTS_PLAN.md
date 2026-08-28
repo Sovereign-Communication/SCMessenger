@@ -185,4 +185,3 @@ Rule: one theme = one branch = one revert; `main` stays green (`SHIP_PLAN.md:2:S
 - **Build provenance:** CLI `cargo build --release` exit=0 (10m10s; exe 22,068,736 B, `cli-artifact/` size match); APK `assembleDebug` exit=0 (54,808,544 B), `adb install -r` Success.
 
 **Pre-existing, out of scope (flagged):** CLI offline `send` cannot reach Android contacts — stored `contact.peer_id` is 64-hex while `libp2p::PeerId::from_str` needs base58 (`cli/src/main.rs:3981`).
-

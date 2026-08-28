@@ -373,9 +373,7 @@ fn build_seed_dial_candidates(
 /// those candidates. Ephemeral vs stable is handled by ledger freshness
 /// ordering, not by pruning — this only gates reachability.
 #[cfg(not(target_arch = "wasm32"))]
-fn infer_seed_network_mode(
-    my_addrs: &[String],
-) -> crate::transport::addr_filter::NetworkMode {
+fn infer_seed_network_mode(my_addrs: &[String]) -> crate::transport::addr_filter::NetworkMode {
     use crate::transport::addr_filter::NetworkMode;
     for s in my_addrs {
         if let Ok(addr) = s.parse::<Multiaddr>() {
@@ -396,9 +394,7 @@ fn infer_seed_network_mode(
                                 return NetworkMode::Local;
                             }
                         }
-                        if let Some((srv, cli)) =
-                            crate::transport::addr_filter::teredo_ipv4s(&ip)
-                        {
+                        if let Some((srv, cli)) = crate::transport::addr_filter::teredo_ipv4s(&ip) {
                             if srv.is_private() || cli.is_private() {
                                 return NetworkMode::Local;
                             }

@@ -4066,13 +4066,12 @@ async fn queue_message_for_later_delivery(
     // recipient carries the wire id, and `Outbox::remove` matches strictly on
     // `message_id`. Mismatching the two (previously a fresh UUID here) meant
     // the receipt never cleared the outbox entry -> infinite retry storm.
-    let prepared = core
-        .prepare_message(
-            contact.public_key.clone(),
-            message.to_string(),
-            scmessenger_core::MessageType::Text,
-            None,
-        )?;
+    let prepared = core.prepare_message(
+        contact.public_key.clone(),
+        message.to_string(),
+        scmessenger_core::MessageType::Text,
+        None,
+    )?;
     let envelope_bytes = prepared.envelope_data;
     let wire_message_id = prepared.message_id;
 

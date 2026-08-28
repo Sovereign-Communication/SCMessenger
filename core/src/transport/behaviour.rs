@@ -317,8 +317,8 @@ fn validate_identity_owner(
 ) -> Result<(), &'static str> {
     // UNIFICATION_V2_IDENTITY: Use single source of truth for identity_id derivation.
     let public_key_hex = hex::encode(public_key);
-    let derived_identity_id = crate::identity::identity_id_from_public_key_hex(&public_key_hex)
-        .ok_or(mismatch_error)?;
+    let derived_identity_id =
+        crate::identity::identity_id_from_public_key_hex(&public_key_hex).ok_or(mismatch_error)?;
     if !derived_identity_id.eq_ignore_ascii_case(claimed_identity_id) {
         return Err(mismatch_error);
     }

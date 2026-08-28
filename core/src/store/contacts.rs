@@ -202,7 +202,9 @@ impl ContactManager {
             .map(|opt| opt.is_some())
             .unwrap_or(false);
         let Ok(contacts) = self.list() else {
-            let _ = self.backend.put(b"metadata_contacts_canonical_hex_migrated", b"true");
+            let _ = self
+                .backend
+                .put(b"metadata_contacts_canonical_hex_migrated", b"true");
             return;
         };
         let mut migrated = 0u32;
@@ -227,8 +229,8 @@ impl ContactManager {
             };
             if canonical_hex == peer_id_trimmed.to_lowercase() {
                 // UNIFICATION: Already canonical hex but may need case normalization (30D0FA -> 30d0fa)
-                let needs_case_norm = contact.peer_id != canonical_hex
-                    || contact.public_key.trim() != canonical_hex;
+                let needs_case_norm =
+                    contact.peer_id != canonical_hex || contact.public_key.trim() != canonical_hex;
                 if needs_case_norm {
                     let mut norm = contact.clone();
                     norm.peer_id = canonical_hex.clone();
@@ -265,22 +267,29 @@ impl ContactManager {
                     let libp2p_local = contact.local_nickname.clone();
 
                     // UNIFICATION: authoritative nickname merge for federated nickname
-                    let authoritative_nick =
-                        select_authoritative_nickname(&contact.nickname, &canonical_contact.nickname);
+                    let authoritative_nick = select_authoritative_nickname(
+                        &contact.nickname,
+                        &canonical_contact.nickname,
+                    );
                     let canonical_is_synthetic =
                         is_synthetic_fallback_nickname(&canonical_contact.nickname);
                     let libp2p_is_synthetic = is_synthetic_fallback_nickname(&contact.nickname);
-                    let should_update_nick = match (&authoritative_nick, &canonical_contact.nickname) {
-                        (Some(auth), Some(curr)) => {
-                            // Only replace if canonical was synthetic/None; preserve real canonical when both real
-                            (is_synthetic_fallback_nickname(&Some(curr.clone()))
-                                || normalize_nickname(&Some(curr.clone())).is_none())
-                                && !is_synthetic_fallback_nickname(&Some(auth.clone()))
-                        }
-                        (Some(_), None) => true,
-                        (None, Some(curr)) if is_synthetic_fallback_nickname(&Some(curr.clone())) => true,
-                        _ => false,
-                    };
+                    let should_update_nick =
+                        match (&authoritative_nick, &canonical_contact.nickname) {
+                            (Some(auth), Some(curr)) => {
+                                // Only replace if canonical was synthetic/None; preserve real canonical when both real
+                                (is_synthetic_fallback_nickname(&Some(curr.clone()))
+                                    || normalize_nickname(&Some(curr.clone())).is_none())
+                                    && !is_synthetic_fallback_nickname(&Some(auth.clone()))
+                            }
+                            (Some(_), None) => true,
+                            (None, Some(curr))
+                                if is_synthetic_fallback_nickname(&Some(curr.clone())) =>
+                            {
+                                true
+                            }
+                            _ => false,
+                        };
                     // UNIFICATION verbose: log every deduplication nickname decision
                     if should_update_nick {
                         tracing::info!(
@@ -324,22 +333,29 @@ impl ContactManager {
                     }
 
                     // UNIFICATION: same authoritative logic for localNickname
-                    let authoritative_local =
-                        select_authoritative_nickname(&contact.local_nickname, &canonical_contact.local_nickname);
+                    let authoritative_local = select_authoritative_nickname(
+                        &contact.local_nickname,
+                        &canonical_contact.local_nickname,
+                    );
                     let canonical_local_is_synthetic =
                         is_synthetic_fallback_nickname(&canonical_contact.local_nickname);
                     let libp2p_local_is_synthetic =
                         is_synthetic_fallback_nickname(&contact.local_nickname);
-                    let should_update_local = match (&authoritative_local, &canonical_contact.local_nickname) {
-                        (Some(auth), Some(curr)) => {
-                            (is_synthetic_fallback_nickname(&Some(curr.clone()))
-                                || normalize_nickname(&Some(curr.clone())).is_none())
-                                && !is_synthetic_fallback_nickname(&Some(auth.clone()))
-                        }
-                        (Some(_), None) => true,
-                        (None, Some(curr)) if is_synthetic_fallback_nickname(&Some(curr.clone())) => true,
-                        _ => false,
-                    };
+                    let should_update_local =
+                        match (&authoritative_local, &canonical_contact.local_nickname) {
+                            (Some(auth), Some(curr)) => {
+                                (is_synthetic_fallback_nickname(&Some(curr.clone()))
+                                    || normalize_nickname(&Some(curr.clone())).is_none())
+                                    && !is_synthetic_fallback_nickname(&Some(auth.clone()))
+                            }
+                            (Some(_), None) => true,
+                            (None, Some(curr))
+                                if is_synthetic_fallback_nickname(&Some(curr.clone())) =>
+                            {
+                                true
+                            }
+                            _ => false,
+                        };
                     if should_update_local {
                         tracing::info!(
                             event = "contacts_canonical_hex_dedup_local_nickname_merge",
@@ -431,7 +447,9 @@ impl ContactManager {
                 }
             }
         }
-        let _ = self.backend.put(b"metadata_contacts_canonical_hex_migrated", b"true");
+        let _ = self
+            .backend
+            .put(b"metadata_contacts_canonical_hex_migrated", b"true");
         if migrated > 0 || deduped > 0 || normalized_case > 0 {
             tracing::info!(
                 event = "contacts_canonical_hex_migration_done",
@@ -1284,10 +1302,16 @@ mod tests {
             last_known_device_id: None,
         };
         backend
-            .put(&contact_key(&pubkey_hex), &serde_json::to_vec(&synthetic).unwrap())
+            .put(
+                &contact_key(&pubkey_hex),
+                &serde_json::to_vec(&synthetic).unwrap(),
+            )
             .unwrap();
         backend
-            .put(&contact_key(&libp2p_peer_id), &serde_json::to_vec(&real).unwrap())
+            .put(
+                &contact_key(&libp2p_peer_id),
+                &serde_json::to_vec(&real).unwrap(),
+            )
             .unwrap();
         let mgr = ContactManager::new(backend.clone());
         let result = mgr.get(pubkey_hex.clone()).unwrap().unwrap();
@@ -1302,7 +1326,10 @@ mod tests {
             "UNIFICATION dedup should replace synthetic localNickname with real"
         );
         assert!(
-            backend.get(&contact_key(&libp2p_peer_id)).unwrap().is_none(),
+            backend
+                .get(&contact_key(&libp2p_peer_id))
+                .unwrap()
+                .is_none(),
             "libp2p duplicate should be removed"
         );
         assert_eq!(mgr.count(), 1);
@@ -1339,10 +1366,16 @@ mod tests {
             last_known_device_id: None,
         };
         backend
-            .put(&contact_key(&pubkey_hex), &serde_json::to_vec(&real).unwrap())
+            .put(
+                &contact_key(&pubkey_hex),
+                &serde_json::to_vec(&real).unwrap(),
+            )
             .unwrap();
         backend
-            .put(&contact_key(&libp2p_peer_id), &serde_json::to_vec(&synthetic).unwrap())
+            .put(
+                &contact_key(&libp2p_peer_id),
+                &serde_json::to_vec(&synthetic).unwrap(),
+            )
             .unwrap();
         let mgr = ContactManager::new(backend.clone());
         let result = mgr.get(pubkey_hex.clone()).unwrap().unwrap();
@@ -1362,10 +1395,18 @@ mod tests {
     #[test]
     fn test_is_synthetic_and_authoritative_helpers() {
         // UNIFICATION helpers unit test
-        assert!(is_synthetic_fallback_nickname(&Some("peer-123".to_string())));
-        assert!(is_synthetic_fallback_nickname(&Some("PEER-abc".to_string())));
-        assert!(is_synthetic_fallback_nickname(&Some(" peer-xyz ".to_string())));
-        assert!(!is_synthetic_fallback_nickname(&Some("ChristyLove".to_string())));
+        assert!(is_synthetic_fallback_nickname(&Some(
+            "peer-123".to_string()
+        )));
+        assert!(is_synthetic_fallback_nickname(&Some(
+            "PEER-abc".to_string()
+        )));
+        assert!(is_synthetic_fallback_nickname(&Some(
+            " peer-xyz ".to_string()
+        )));
+        assert!(!is_synthetic_fallback_nickname(&Some(
+            "ChristyLove".to_string()
+        )));
         assert!(!is_synthetic_fallback_nickname(&None));
         assert!(!is_synthetic_fallback_nickname(&Some("".to_string())));
         assert_eq!(
@@ -1377,8 +1418,11 @@ mod tests {
             Some("ChristyLove")
         );
         assert_eq!(
-            select_authoritative_nickname(&Some("peer-abc".to_string()), &Some("ChristyLove".to_string()))
-                .as_deref(),
+            select_authoritative_nickname(
+                &Some("peer-abc".to_string()),
+                &Some("ChristyLove".to_string())
+            )
+            .as_deref(),
             Some("ChristyLove")
         );
         assert_eq!(
@@ -1386,7 +1430,10 @@ mod tests {
             None
         );
         assert_eq!(
-            select_authoritative_nickname(&Some("peer-abc".to_string()), &Some("peer-xyz".to_string())),
+            select_authoritative_nickname(
+                &Some("peer-abc".to_string()),
+                &Some("peer-xyz".to_string())
+            ),
             None
         );
     }
