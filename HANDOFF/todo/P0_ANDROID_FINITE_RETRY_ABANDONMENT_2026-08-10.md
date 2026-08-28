@@ -1,6 +1,6 @@
 # P0 -- Android abandons accepted undelivered messages (PF-1 / PF-12)
 
-Status: Active
+Status: Active -- DISPOSITIONED 2026-08-24: ACCEPTED FOR rc.1, remains v0.5.0-blocking (see disposition below)
 Severity: P0 (pre-freeze blocker; violates the durable-delivery philosophy)
 Filed: 2026-08-10
 Gate mapping: **PF-1** finite-attempt abandonment, **PF-12** accepted-work
@@ -8,6 +8,30 @@ capacity semantics, **G3** delivery truth
 Authority: `HANDOFF/plans/PR139_FIVE_NODE_FIELD_GATE_REFERENCE.md` Sections 3,
 3.3, 4
 Anchor observed: `68fcc3f1` (installed APK, versionCode 14, Pixel 6a)
+
+## DISPOSITION 2026-08-24 (interim CTO, verify-against-main pass; operator may veto)
+
+Re-verified against main `ceabdbd4`: Path 1 (expiry discard) is MITIGATED
+(`pendingOutboxExpiryReason` returns null, "Messages NEVER expire",
+MeshRepository.kt:7504). Paths 2/3/4 remain as filed: acked-without-receipt
+7-day age removal (:7083), frozen now+120 reschedule loop (:7091), and
+max-attempts -> `markMessageCorrupted` + removal (:7109-7119). Note:
+MeshRepositoryTest.kt:248-290 and ReceiptWindowTest.kt currently ASSERT the
+ceilings as intended behavior -- the fix must reconcile those tests, so this
+is NOT a mechanical pre-tag fix.
+
+ACCEPTED FOR v0.4.0-rc.1 with conditions:
+1. Gate-day exposure is bounded: all four gate nodes are FRESH installs
+   (empty outboxes) and matrix passes are hours, not days; the 7-day ceiling
+   cannot fire. The only reachable path mid-gate is max-attempts corruption
+   under D6 failover churn.
+2. Scoring rule: a message observed in `corrupted` state during any matrix leg
+   INVALIDATES that leg (same force as the G5 liveness fingerprints) -- it is
+   scored, never silently absorbed.
+3. This ticket stays OPEN and is v0.5.0-BLOCKING. Fix order when picked up:
+   delete the `markMessageCorrupted` call in the max-attempts path first
+   (acceptance-criterion violation), then reconcile the age-ceiling tests
+   against criterion 1 under an operator ruling.
 
 ## Why this is a freeze blocker
 

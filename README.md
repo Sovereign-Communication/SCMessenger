@@ -17,8 +17,9 @@ still talk.* The Rust core is shared by every client.
 private from a capable adversary.**
 
 The most recent published build is [`v0.1.9`](https://github.com/Sovereign-Communication/SCMessenger/releases)
-from March 2026, and it is well behind the current code. A `v0.4.0-alpha.1`
-Android build is the next release.
+from March 2026, and it is well behind the current code. A `v0.4.0-rc.1`
+Android build is the next release; final `v0.4.0` follows once device demos
+pass.
 
 Specifically, and deliberately stated up front:
 
@@ -100,6 +101,8 @@ build drives the Rust cross-compile and generates the UniFFI bindings. See
 | `android/` | Android client (Kotlin, Compose) |
 | `iOS/` | iOS client (Swift) |
 | `wasm/` | Browser UI for a local CLI daemon |
+| `mobile/` | UniFFI bindings glue shared by Android/iOS builds |
+| `desktop_bridge/` | Desktop bridge service crate |
 | `docs/` | Architecture, protocol, platform guides |
 
 ## Contributing
