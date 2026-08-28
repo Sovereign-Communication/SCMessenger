@@ -370,3 +370,5 @@ docker/test-results/
 # files must never be committed. See scripts/inbox_bridge.py.
 HANDOFF/todo/INBOX_*.md
 HANDOFF/logs/
+
+.qwen/worktrees/
