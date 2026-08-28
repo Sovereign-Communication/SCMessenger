@@ -39,10 +39,19 @@ HEAD_COMMIT="$(git rev-parse HEAD)"
 if "$REQUIRE_TAG"; then
     TAG="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
     [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || fail "HEAD must be checked out at a SemVer release tag"
-    [[ "${TAG#v}" == "$CARGO_VERSION" ]] || fail "Release tag $TAG differs from Cargo $CARGO_VERSION"
-    [[ "${TAG#v}" == "$CARGO_VERSION" && "${TAG#v}" == "$ANDROID_VERSION" && "${TAG#v}" == "$DESKTOP_VERSION" ]] || fail "Tag, Cargo, Android, and desktop must agree"
-    TAG_CORE="${TAG#v}"
-    TAG_CORE="${TAG_CORE%%[-+]*}"
+    # A prerelease tag (e.g. v0.4.0-rc.1) carries a suffix the package versions
+    # do not: compare numeric cores there, full versions otherwise. A genuinely
+    # wrong version still fails -- only the -suffix/-metadata difference is
+    # tolerated, mirroring how IOS_CORE is derived below.
+    TAG_VERSION="${TAG#v}"
+    TAG_CORE="${TAG_VERSION%%[-+]*}"
+    if [[ "$TAG_VERSION" == "$TAG_CORE" ]]; then
+        [[ "$TAG_VERSION" == "$CARGO_VERSION" ]] || fail "Release tag $TAG differs from Cargo $CARGO_VERSION"
+        [[ "$TAG_VERSION" == "$CARGO_VERSION" && "$TAG_VERSION" == "$ANDROID_VERSION" && "$TAG_VERSION" == "$DESKTOP_VERSION" ]] || fail "Tag, Cargo, Android, and desktop must agree"
+    else
+        [[ "$TAG_CORE" == "$CARGO_VERSION" ]] || fail "Release tag core $TAG_CORE ($TAG) differs from Cargo $CARGO_VERSION"
+        [[ "$TAG_CORE" == "$CARGO_VERSION" && "$TAG_CORE" == "${ANDROID_VERSION%%[-+]*}" && "$TAG_CORE" == "${DESKTOP_VERSION%%[-+]*}" ]] || fail "Tag core, Cargo, Android, and desktop must agree"
+    fi
     [[ "$TAG_CORE" == "$IOS_VERSION" ]] || fail "Tag numeric core $TAG_CORE differs from iOS marketing version $IOS_VERSION"
 fi
 
