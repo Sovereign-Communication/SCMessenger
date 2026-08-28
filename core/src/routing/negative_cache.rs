@@ -343,7 +343,14 @@ impl NegativeCache {
     /// # Returns
     /// `true` if the peer should be exempted from negative cache (trusted),
     /// `false` if normal caching rules apply.
-    pub fn should_exempt_from_negative_cache(&self, _peer_id: &str, reputation_score: f64) -> bool {
+    pub fn should_exempt_from_negative_cache(&self, peer_id: &str, reputation_score: f64) -> bool {
+        // A peer already negatively cached with repeated confirmations is a
+        // recurring (not transient) failure: reputation does not mask it.
+        if let Some(entry) = self.entries.get(peer_id) {
+            if entry.confirmation_count >= 2 {
+                return false;
+            }
+        }
         // Peers with overall_score >= 0.5 are considered trusted and exempted
         // This prevents marking good peers as unreachable due to transient issues
         reputation_score >= 0.5
@@ -530,5 +537,23 @@ mod tests {
         // Just below the boundary (0.49) should not be exempted
         let cached = cache.record_unreachable_with_reputation("just_below".to_string(), 0.49);
         assert!(cached, "Peer below 0.5 should be cached");
+    }
+
+    #[test]
+    fn test_reputation_exemption_recurring_failures() {
+        let mut cache = NegativeCache::with_defaults();
+
+        // Two consecutive low-reputation failures create a cache entry
+        // with confirmation_count == 2 (recurring confirmed unreachability)
+        assert!(cache.record_unreachable_with_reputation("flaky_peer".to_string(), 0.4));
+        assert!(cache.record_unreachable_with_reputation("flaky_peer".to_string(), 0.4));
+
+        // Reputation later recovers, but recurring confirmations stand:
+        // a peer with >= 2 confirmed failures is not masked by reputation.
+        assert!(
+            cache.record_unreachable_with_reputation("flaky_peer".to_string(), 0.9),
+            "recurring confirmations must override the reputation exemption"
+        );
+        assert!(cache.is_definitely_unreachable("flaky_peer"));
     }
 }

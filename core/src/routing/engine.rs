@@ -137,7 +137,7 @@ impl RoutingEngine {
         recipient_hint: &[u8; 4],
         message_id: &[u8; 16],
         priority: u8,
-        _now: u64,
+        now: u64,
     ) -> RoutingDecision {
         // Layer 1: Check local cell
         let local_peers = self.local.peers_for_hint(recipient_hint);
@@ -197,7 +197,8 @@ impl RoutingEngine {
 
         // Layer 4: No route known
         // Check if we should request a route or just store-and-carry
-        let should_request = !self.global.is_route_pending(recipient_hint) && priority >= 100;
+        let should_request =
+            !self.global.is_route_pending_fresh(recipient_hint, now) && priority >= 100;
 
         if should_request {
             RoutingDecision {
