@@ -5,7 +5,21 @@ This file is the ONE place the orchestrator updates immediately after every
 AWS node rebuild. Read it fresh at use time; never copy an IP from any
 other doc, ticket, or config.
 
-## Current (updated 2026-08-25; container rebuild, same IP)
+## Current (updated 2026-08-29; redeployed at main `419e9678`)
+
+- **Redeployed 2026-08-29T17:54Z at main `419e9678`** (carries PRs #236
+  custody split-brain + bounded retry + GET /api/history, and #239
+  routing_peer_seen transport failover). Image `testbotz/scmessenger:latest`
+  from Docker Publish success at that SHA. Health: healthy.
+- **Identity persistence ROOT CAUSE FOUND (2026-08-29):** the image set
+  `SCM_DATA_DIR` (consumed only by entrypoint mkdir) while the app reads
+  `SCMESSENGER_DATA_DIR`, so identity was written to the container's ephemeral
+  layer and regenerated on EVERY redeploy. Observed rotation across three
+  redeploys: `640c258b` -> `78869300` -> `417be00d`. Fix PR #240 points both
+  env vars at `/data` (bound to `/opt/scm-relay-data`). Until #240 merges and
+  the node is redeployed, expect the identity to keep rotating on redeploy.
+
+
 
 - Public IP: 54.226.67.101
 - Bootstrap multiaddr: /ip4/54.226.67.101/tcp/9001
