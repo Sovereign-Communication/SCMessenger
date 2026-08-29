@@ -3020,6 +3020,25 @@ pub async fn start_swarm_with_config(
             storage_path.as_deref(),
             &local_peer_id.to_string(),
         );
+        // Custody split-brain fix (v0.4.0 release gate): `IronCore` pre-populates
+        // `relay_custody_store` at construction time (`IronCore::new`/`with_storage*`)
+        // with a placeholder backed by the generic storage `backend` and a no-op
+        // disk-pressure probe. Nothing ever wrote to that placeholder, so every
+        // `IronCore` reader of custody state (`custody_audit_count`,
+        // `get_registration_state_info`, `enforce_storage_pressure`,
+        // `storage_pressure_state`, and the `/api/diagnostics` endpoint built on
+        // top of them) silently reported against a dead, empty store while this
+        // store — the one that actually runs `accept_custody`/`mark_delivered`/
+        // `mark_dispatch_failed` and the periodic audit logger below — accrued the
+        // real history. Publish this store back into `IronCore` (via the
+        // `core_handle` already threaded into this function) so both sides observe
+        // the same backend/registry/pressure-probe from here on. `RelayCustodyStore`
+        // is cheap to clone: every field is an `Arc` (or `Copy`), so this shares
+        // state rather than duplicating it, and does not change where the data on
+        // disk actually lives.
+        if let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) {
+            *core.relay_custody_store.write() = relay_custody_store.clone();
+        }
         let mut pending_custody_dispatches: HashMap<
             libp2p::request_response::OutboundRequestId,
             PendingCustodyDispatch,
