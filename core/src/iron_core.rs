@@ -105,7 +105,6 @@ pub enum ConsentState {
     Granted,
 }
 
-
 /// Map a transport string (as passed to `routing_peer_seen`) to a
 /// `TransportType` for the optimized routing engine.
 fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
