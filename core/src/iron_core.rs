@@ -152,7 +152,6 @@ fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
 }
 
 /// The main entry point for the SCMessenger core.
-
 /// Wraps all subsystems behind `Arc<RwLock<…>>` for safe concurrent access.
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Object))]
 pub struct IronCore {
