@@ -211,29 +211,60 @@ pub struct SledStorage {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SledStorage {
+    /// Total number of `open()` attempts made when the failure is lock
+    /// contention (a `flock` still held by a not-yet-released previous
+    /// handle to the same path). sled's `Drop` releases the OS file lock,
+    /// but the OS is not guaranteed to make that visible to a subsequent
+    /// `open()` instantly -- a close-then-reopen of the same path (a test
+    /// restart, or a fast Android process restart) can lose that race.
+    /// Bounded so a lock genuinely held by another process still fails
+    /// fast instead of hanging the caller.
+    const LOCK_RETRY_ATTEMPTS: u32 = 10;
+    /// Delay between attempts. `LOCK_RETRY_ATTEMPTS * LOCK_RETRY_DELAY` is
+    /// the worst case wait: 10 * 50ms = 450ms of retry sleep, well under a
+    /// second.
+    const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
     pub fn new(path: &str) -> std::result::Result<Self, String> {
-        let db = sled::Config::default()
-            .path(path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .map_err(|e| match e {
-                sled::Error::Corruption { at, .. } => {
-                    format!("corruption detected at {:?}: {}", at, e)
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let open_result = sled::Config::default()
+                .path(path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open();
+
+            match open_result {
+                Ok(db) => return Ok(Self { db }),
+                // Retry only lock contention, and only while attempts remain.
+                // Corruption and other IO errors fail on the first attempt --
+                // retrying those would just mask a real failure.
+                Err(sled::Error::Io(ref io_err))
+                    if is_lock_contention(io_err) && attempt < Self::LOCK_RETRY_ATTEMPTS =>
+                {
+                    std::thread::sleep(Self::LOCK_RETRY_DELAY);
                 }
-                sled::Error::Io(ref io_err) => {
-                    if is_lock_contention(io_err) {
-                        format!(
-                            "database locked by another process (lock contention): {}",
-                            io_err
-                        )
-                    } else {
-                        format!("io error: {}", io_err)
-                    }
+                Err(e) => {
+                    return Err(match e {
+                        sled::Error::Corruption { at, .. } => {
+                            format!("corruption detected at {:?}: {}", at, e)
+                        }
+                        sled::Error::Io(ref io_err) => {
+                            if is_lock_contention(io_err) {
+                                format!(
+                                    "database locked by another process (lock contention) after {} attempts: {}",
+                                    attempt, io_err
+                                )
+                            } else {
+                                format!("io error: {}", io_err)
+                            }
+                        }
+                        _ => e.to_string(),
+                    })
                 }
-                _ => e.to_string(),
-            })?;
-        Ok(Self { db })
+            }
+        }
     }
 }
 
