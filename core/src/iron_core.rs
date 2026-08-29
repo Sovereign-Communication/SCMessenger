@@ -105,8 +105,55 @@ pub enum ConsentState {
     Granted,
 }
 
+
+/// Map a transport string (as passed to `routing_peer_seen`) to a
+/// `TransportType` for the optimized routing engine.
+fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
+    match transport.trim().to_ascii_lowercase().as_str() {
+        "ble" | "bluetooth" | "ble_gatt" | "proximity" => crate::routing::TransportType::BLE,
+        "wifi_direct" | "wifidirect" | "p2p" => crate::routing::TransportType::WiFiDirect,
+        "wifi_aware" | "wifiaware" | "nan" => crate::routing::TransportType::WiFiAware,
+        "quic" => crate::routing::TransportType::QUIC,
+        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "relay" | "ip" | "local" => {
+            crate::routing::TransportType::TCP
+        }
+        _ => crate::routing::TransportType::BLE,
+    }
+}
+
+/// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
+/// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
+/// PeerId encoding.
+fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
+    let clean_str = peer_id_str.trim();
+    let unescaped = clean_str
+        .strip_prefix("public_key:")
+        .or_else(|| clean_str.strip_prefix("identity_id:"))
+        .or_else(|| clean_str.strip_prefix("0x"))
+        .unwrap_or(clean_str);
+
+    if let Ok(bytes) = hex::decode(unescaped) {
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            return Some(arr);
+        }
+    }
+
+    if let Ok(p) = clean_str.parse::<libp2p::PeerId>() {
+        let bytes = p.to_bytes();
+        if bytes.len() >= 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes[bytes.len() - 32..]);
+            return Some(arr);
+        }
+    }
+
+    None
+}
+
 /// The main entry point for the SCMessenger core.
-///
+
 /// Wraps all subsystems behind `Arc<RwLock<…>>` for safe concurrent access.
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Object))]
 pub struct IronCore {
@@ -2656,9 +2703,15 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Record that a peer was seen on a given transport.
-    pub fn routing_peer_seen(&self, peer_id_hex: String, _transport: String) {
+    pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.record_message_activity(&peer_id_hex);
+            let transport_type = parse_transport_type(&transport);
+            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
+                engine.peer_seen(peer_id, transport_type);
+            } else {
+                engine.record_message_activity(&peer_id_hex);
+                engine.clear_unreachable_peer(&peer_id_hex);
+            }
         }
     }
 

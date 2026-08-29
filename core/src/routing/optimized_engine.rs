@@ -11,7 +11,7 @@
 use super::adaptive_ttl::AdaptiveTTLManager;
 use super::engine::*;
 use super::global::RouteAdvertisement;
-use super::local::PeerId;
+use super::local::{PeerId, PeerStatus, TransportType};
 use super::multipath::MultiPathDelivery;
 use super::negative_cache::{NegativeCache, NegativeCacheStats};
 use super::resume_prefetch::{PrefetchStats, ResumePrefetchManager};
@@ -137,9 +137,41 @@ impl OptimizedRoutingEngine {
         // Phase 2: Hierarchical discovery with timeout budgeting (P0 optimization)
         self.start_discovery_if_needed();
 
-        let decision = self
-            .base_engine
-            .route_message(recipient_hint, message_id, priority, now);
+        let mut decision =
+            self.base_engine
+                .route_message(recipient_hint, message_id, priority, now);
+
+        // If the decision is a direct local route, ensure the active transport
+        // matches the peer's most recently observed status, and include any
+        // other known transports as alternative hops for failover.
+        if let NextHop::Direct {
+            peer_id,
+            ref mut transport,
+        } = decision.primary
+        {
+            if let Some(peer) = self.base_engine.local_cell().get_peer(&peer_id) {
+                if let PeerStatus::Active {
+                    transport: active_t,
+                    ..
+                } = peer.status
+                {
+                    *transport = active_t;
+                }
+                for alt_t in &peer.transports {
+                    if *alt_t != *transport {
+                        let alt_hop = NextHop::Direct {
+                            peer_id,
+                            transport: *alt_t,
+                        };
+                        if !decision.alternatives.iter().any(|h| {
+                            matches!(h, NextHop::Direct { peer_id: p, transport: t } if *p == peer_id && *t == *alt_t)
+                        }) {
+                            decision.alternatives.push(alt_hop);
+                        }
+                    }
+                }
+            }
+        }
 
         // Structured tracing: Log routing decision
         tracing::info!(
@@ -343,6 +375,30 @@ impl OptimizedRoutingEngine {
         neg_evicted + ttl_evicted
     }
 
+    /// Record a peer sighting on a specific transport.
+    /// Updates local cell topology, clears negative cache unreachable status,
+    /// records activity for adaptive TTL, and ensures direct hint reachability.
+    pub fn peer_seen(&mut self, peer_id: PeerId, transport: TransportType) {
+        let peer_id_hex = hex::encode(peer_id);
+        self.negative_cache.clear_unreachable(&peer_id_hex);
+        self.adaptive_ttl.record_activity(&peer_id_hex);
+
+        let cell = self.base_engine.local_cell_mut();
+        cell.peer_seen(peer_id, transport);
+
+        // Ensure peer's direct hint is reachable in local cell
+        let direct_hint: [u8; 4] = blake3::hash(&peer_id).as_bytes()[0..4]
+            .try_into()
+            .unwrap_or([0u8; 4]);
+        if let Some(peer) = cell.get_peer(&peer_id) {
+            if !peer.reachable_hints.contains(&direct_hint) {
+                let mut hints = peer.reachable_hints.clone();
+                hints.push(direct_hint);
+                cell.update_peer_hints(&peer_id, hints);
+            }
+        }
+    }
+
     /// Check whether a specific peer is reachable via any known route.
     /// Returns true if the peer exists in the local routing cell or
     /// is not in the negative cache (i.e., not definitely unreachable).
@@ -352,6 +408,24 @@ impl OptimizedRoutingEngine {
             return false;
         }
         // Otherwise check if we have any route to this peer.
+        if let Ok(bytes) = hex::decode(peer_id_hex) {
+            if bytes.len() == 32 {
+                let mut peer_id = [0u8; 32];
+                peer_id.copy_from_slice(&bytes);
+                if let Some(peer) = self.base_engine.local_cell().get_peer(&peer_id) {
+                    if matches!(peer.status, PeerStatus::Active { .. }) {
+                        return true;
+                    }
+                }
+                let hint: [u8; 4] = blake3::hash(&peer_id).as_bytes()[0..4]
+                    .try_into()
+                    .unwrap_or([0u8; 4]);
+                let peers = self.base_engine.local_cell().peers_for_hint(&hint);
+                if !peers.is_empty() {
+                    return true;
+                }
+            }
+        }
         let hint = if peer_id_hex.len() >= 8 {
             let bytes = hex::decode(&peer_id_hex[..8]).unwrap_or_default();
             let arr: [u8; 4] = bytes.try_into().unwrap_or([0u8; 4]);
@@ -566,5 +640,63 @@ mod tests {
 
         // Should have cleaned up appropriately
         assert_eq!(maint.adaptive_ttl_entries_cleaned, 0); // Nothing old enough to clean
+    }
+
+    #[test]
+    fn test_peer_seen_multi_transport_and_confidence() {
+        let local_id = make_peer_id(1);
+        let local_hint = make_hint(1);
+        let mut engine = OptimizedRoutingEngine::new(local_id, local_hint);
+
+        let peer = make_peer_id(42);
+        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+            .try_into()
+            .expect("4 byte hint");
+        let msg_id = make_message_id(1);
+
+        // Before sighting: StoreAndCarry with confidence 0.0
+        let dec0 = engine.route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+        assert_eq!(dec0.decided_by, RoutingLayer::StoreAndCarry);
+        assert_eq!(dec0.confidence, 0.0);
+
+        // Sighting on BLE
+        engine.peer_seen(peer, TransportType::BLE);
+        let dec1 = engine.route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+        assert_eq!(dec1.decided_by, RoutingLayer::Local);
+        assert!(dec1.confidence >= 0.5);
+        match dec1.primary {
+            NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(transport, TransportType::BLE);
+            }
+            other => panic!("expected Direct BLE, got {:?}", other),
+        }
+
+        // Sighting on TCP
+        engine.peer_seen(peer, TransportType::TCP);
+        let dec2 = engine.route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+        assert_eq!(dec2.decided_by, RoutingLayer::Local);
+        assert!(dec2.confidence >= 0.5);
+        match dec2.primary {
+            NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(transport, TransportType::TCP);
+            }
+            other => panic!("expected Direct TCP, got {:?}", other),
+        }
+        assert!(dec2.alternatives.iter().any(|h| matches!(h, NextHop::Direct { peer_id, transport } if *peer_id == peer && *transport == TransportType::BLE)));
+
+        // Sighting back on BLE
+        engine.peer_seen(peer, TransportType::BLE);
+        let dec3 = engine.route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+        assert_eq!(dec3.decided_by, RoutingLayer::Local);
+        match dec3.primary {
+            NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(transport, TransportType::BLE);
+            }
+            other => panic!("expected Direct BLE, got {:?}", other),
+        }
+        assert!(dec3.alternatives.iter().any(|h| matches!(h, NextHop::Direct { peer_id, transport } if *peer_id == peer && *transport == TransportType::TCP)));
     }
 }
