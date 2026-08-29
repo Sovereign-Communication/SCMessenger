@@ -128,3 +128,14 @@ Fill as evidence lands. Empty = honest unknown.
   agent-doable v0.4.0 code/config items are now either merged or in
   flight; remaining gates require the keystore (D2), the devices (D4/D6/D7),
   and the operator's tag execution.
+- **Windows node rebuilt at main `b2544d26` (19:30Z); 2-node mesh VERIFIED:**
+  AWS (DirectPreferred) <-> Windows (DirectPreferred) mutual peers at same
+  SHA. Third node (Pixel) is operator hardware.
+- **D2 exact blocker identified:** all four signing secrets exist in repo
+  settings, but the rc.1 release run failed at `packageRelease` with
+  `KeytoolException: No key with alias '***' found in keystore` -- the
+  `SCMESSENGER_KEY_ALIAS` secret does not match the actual alias in the
+  keystore. Fix (operator): run `keytool -list -v -keystore
+  scmessenger-release.jks` locally, then set `SCMESSENGER_KEY_ALIAS` to the
+  real alias (docs/ANDROID_RELEASE_SIGNING.md suggests `scmessenger`).
+  PR #238's preflight now fails fast on this instead of a 24-minute build.
