@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json as AxumJson, Path, State},
+    extract::{Json as AxumJson, Path, Query, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
@@ -22,6 +22,15 @@ use tower_http::cors::{Any, CorsLayer};
 
 pub const API_PORT: u16 = 9876;
 pub const API_ADDR: &str = "127.0.0.1:9876";
+
+/// Default number of messages `/api/history` returns when the caller omits
+/// `limit`. This is the primary operator-facing endpoint for verifying
+/// message receipt (see `scripts`/runbooks that `curl` it after a send), so
+/// the old default of 20 under-reported real verification runs. 100 is
+/// still a hard bound, not unbounded -- large enough for a manual check or
+/// a fleet-run verification pass without one query being able to force the
+/// server to serialize an entire history store.
+const DEFAULT_HISTORY_LIMIT: usize = 100;
 
 const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_GIT_HASH: &str = env!("SCM_GIT_HASH");
@@ -1070,15 +1079,20 @@ async fn handle_get_listeners(
     Ok(AxumJson(GetListenersResponse { listeners }))
 }
 
-async fn handle_get_history(
-    State(ctx): State<Arc<ApiContext>>,
-    AxumJson(request): AxumJson<GetHistoryRequest>,
+/// Shared implementation for both `/api/history` verbs. `request.limit`
+/// defaults to `DEFAULT_HISTORY_LIMIT` (not unbounded) when omitted.
+async fn history_response(
+    ctx: Arc<ApiContext>,
+    request: GetHistoryRequest,
 ) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
     let history = ctx.core.history_store_manager();
 
     let messages = if let Some(peer_id) = request.peer_id {
         history
-            .conversation(peer_id, request.limit.unwrap_or(20) as u32)
+            .conversation(
+                peer_id,
+                request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32,
+            )
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1087,7 +1101,7 @@ async fn handle_get_history(
             })?
     } else {
         history
-            .recent(None, request.limit.unwrap_or(20) as u32)
+            .recent(None, request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32)
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1114,6 +1128,27 @@ async fn handle_get_history(
     Ok(AxumJson(GetHistoryResponse {
         messages: history_messages,
     }))
+}
+
+/// `POST /api/history` with a JSON body. Kept for existing callers.
+async fn handle_get_history(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
+}
+
+/// `GET /api/history?peer_id=..&limit=..`, both optional. This is the
+/// operator-facing verification path: a bare `curl .../api/history` used to
+/// hit Axum's default 405 (POST-only route) with an empty body, which reads
+/// identically to a broken endpoint. `GetHistoryRequest` already derives
+/// `Deserialize` with both fields `Option`, so `Query` treats an absent key
+/// as `None` the same way the JSON body does.
+async fn handle_get_history_query(
+    State(ctx): State<Arc<ApiContext>>,
+    Query(request): Query<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
 }
 
 async fn handle_get_external_address(
@@ -1544,7 +1579,10 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .route("/api/peers", get(handle_get_peers))
         .route("/api/swarm/stats", get(handle_get_swarm_stats))
         .route("/api/listeners", get(handle_get_listeners))
-        .route("/api/history", post(handle_get_history))
+        .route(
+            "/api/history",
+            get(handle_get_history_query).post(handle_get_history),
+        )
         .route("/api/external-address", get(handle_get_external_address))
         .route(
             "/api/connection-path-state",
