@@ -44,18 +44,71 @@ re-prioritised accordingly:**
 | Defect | Why it is now gate-blocking, not backlog |
 |---|---|
 | `HANDOFF/in_progress/ANDROID_RELAY_INBOUND_EVIDENCE_2026-08-10_CELLULAR.md` | The cloud node reported delivery **success in 264ms while no circuit to the destination existed 20s earlier**. That is a store-and-forward custody correctness failure -- precisely what this gate tests. Highest priority of the three. |
-| `HANDOFF/todo/P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT_2026-08-10.md` | Same port advertised for TCP and WS; only one socket binds, so roughly **half the cloud node's advertised addresses are silently unreachable**. Directly degrades *connection assistance*: peers cannot reach the assistor. Needs the operator's a/b/c ruling. |
+| ~~`P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT`~~ **CLOSED 2026-08-29 -- already fixed in code** | `core/src/transport/multiport.rs:75-99` `generate_listen_addresses()` now emits exactly one transport per port (its own comment says so); the WS-on-same-port construction the ticket cited is gone. Live `/api/diagnostics.listeners` on both nodes confirms it: 9001 tcp-only, 9002 ws-only. **No operator ruling is needed.** Move the ticket to `HANDOFF/done/` -- a 7th stale-open ticket beyond the six listed below. |
+
+### CUSTODY SPLIT-BRAIN -- the actual parity wiring gap (found 2026-08-29)
+
+**Two independent `RelayCustodyStore` objects exist. The one the API reports is
+not the one doing the work.**
+
+- `core/src/iron_core.rs:347` (also `:475`, `:606`) builds
+  `RelayCustodyStore::persistent(backend.clone())`. This is what
+  `/api/diagnostics.custody_audit_count` reads (`iron_core.rs:2451` ->
+  `cli/src/api_axum.rs:618`).
+- `core/src/transport/swarm.rs:3019` builds a **separate local variable**, also
+  named `relay_custody_store`, via a *different constructor*
+  `RelayCustodyStore::for_service_storage(storage_path, local_peer_id)`, inside
+  `start_swarm_with_config` (`swarm.rs:2740`) -- **production path, not a test**.
+  This one performs every real operation: `accept_custody`, `mark_delivered`,
+  `mark_dispatch_failed`, and the periodic audit logger at `swarm.rs:3472`.
+
+Evidence both are live and disagreeing: the Windows node's own log shows
+`Relay custody audit log count: 4656` climbing in real time with
+`[OK] Custody ... delivered to ...` events against the AWS peer, while
+`/api/diagnostics.custody_audit_count` sat at **0** across 14 minutes of
+polling. **The same 0 appears on the AWS node** -- so this is systemic, not
+host-specific.
+
+This is not dead code under AGENTS.md rule 16; both sides are referenced and
+reachable. It is worse: a **silent observability lie on the exact metric the
+v0.4.0 gate is scored by.** Anyone measuring custody parity through the API
+would conclude store-and-forward is dormant when it is running.
+
+**Smallest fix:** thread the already-constructed
+`Arc<RwLock<RelayCustodyStore>>` from `IronCore` into the swarm spawn instead
+of letting `swarm.rs:3019` construct its own. This also stops
+`%LOCALAPPDATA%\scmessenger\relay_custody\<local_peer_id>\` accruing a fresh
+subdirectory per identity (stale ones already present).
+
+**Do not score the parity gate through `/api/diagnostics.custody_audit_count`
+until this is fixed.** Score from the swarm audit log.
 | `P1_ROUTING_ENGINE_NEVER_LEARNS_PEERS` / PR #215 | `routing_peer_seen` has zero callers, so path-selection confidence is 0.0 fleet-wide. Degrades assisted path selection and makes any racing claim unprovable. |
 
-**Immediate unblock, now available:** Docker Publish succeeded on the #234
-merge (run `33228663826`), so a fresh `testbotz/scmessenger:latest` carrying
-V2+V3 **now exists**. The live AWS node was last recorded running `9f54b107`
-(`gpt-pr139-receipt-filter-20260811`) -- which **predates all of the V2/V3
-convergence work**. It answers `/health` 200 but does not expose `/info`, so
-its SHA cannot be confirmed over HTTP; confirm on the box.
-**Redeploying that node at the current `main` SHA is the top task under this
-ruling** -- `scripts/aws_deploy.sh` exists for it. Testing custody parity
-against a pre-V3 image would measure the wrong build.
+**CORRECTED 2026-08-29 (live diagnosis, supersedes the paragraph this replaces):
+the AWS node is ALREADY redeployed at current `main`. Do not re-do it.**
+
+`sudo docker logs scm-node` reports `CLI Version: 0.4.0 (9ed3a28d148bc893...)`
+and `Core Provenance: 0.4.0 (9ed3a28d...:main:)` -- that is the PR #234 merge
+commit, carrying the full V2+V3 work. Container created `2026-08-29T02:43:05Z`,
+image digest `sha256:13c51ed5...`. An earlier draft of this section claimed the
+node was stale at `9f54b107`; **that was wrong** -- it was redeployed roughly an
+hour before the diagnosis, by an actor that did not record it here.
+
+**Identity persistence is working.** `/opt/scm-relay-data` -> `/data` bind mount
+confirmed via `docker inspect`; the key file `storage/relay_network_key.pb` has
+mtime `Aug 6 05:34`, unchanged across the Aug 29 redeploy. Live identity
+(`curl http://54.226.67.101:9876/api/identity`): `identity_id 640c258b...`,
+`libp2p 12D3KooWEsqCi9fnx2S5RMsjE5vqh1BEoKEzVbz6hNf8C57ok6ZL` -- matching what
+the Windows node sees. The `12D3KooWKMUX` / `0b332009` values in
+`UNIFICATION_V3_DELIVERY_CONVERGENCE_PLAN.md` are from that doc's 2026-08-27
+evidence block and are **stale documentation**; whether identity churned before
+Aug 6 is UNVERIFIED and not worth chasing.
+
+**Bidirectional relay is live at the reservation layer.** Windows holds a
+circuit through AWS, and AWS holds the reverse circuit through Windows
+(`/ip4/147.81.41.188/tcp/5049/p2p/12D3KooWD6vZQr.../p2p-circuit/p2p/12D3KooWEsqCi9fnx...`
+in the AWS node's own `/api/diagnostics.listeners`). Reservations exist in both
+directions. What is NOT yet proven is a peer actually moving data through one.
 
 **Scope note:** iOS/macOS is v0.5.0 by this ruling. It stays out of v0.4.0,
 consistent with `SHIP_PLAN.md` section 4. `HANDOFF/in_progress/A-05_IOS_RECEIPT_UNIFICATION.md`
