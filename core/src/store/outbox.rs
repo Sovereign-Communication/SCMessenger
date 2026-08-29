@@ -1116,6 +1116,14 @@ mod tests {
             outbox.enqueue(make_msg("msg1", "peer_a")).unwrap();
             outbox.record_attempt("msg1");
             outbox.record_attempt("msg1");
+            // Explicit drop (rather than relying on end-of-scope order) makes
+            // the close-then-reopen race this test exercises obvious: the
+            // second block below reopens the same sled path, which can race
+            // the OS releasing the file lock this `Outbox`'s `SledStorage`
+            // holds. `SledStorage::new`'s bounded lock-contention retry is
+            // what actually makes that reopen deterministic; this drop just
+            // documents which handle is being released.
+            drop(outbox);
         }
 
         {

@@ -1,10 +1,291 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
+Last updated: 2026-08-29 (post-#234-merge; rc.1 release failure root-caused)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-08-24, written for a clean restart) =====
+# ===== RESUME HERE (2026-08-29) =====
+
+Read this section, then `HANDOFF/API_RESET_EXECUTION_CHARTER_2026-08-28.md`
+(the live queue). Everything below section 0-2026-08-29 is history.
+
+## One-line state
+
+**`main` is green and carries the whole Unification V2+V3 body of work. The
+release pipeline is one wrong secret value away from producing a signed APK,
+and has been since 2026-08-24.**
+
+## OPERATOR RULING 2026-08-29 -- the v0.4.0 gate is CLOUD-NODE PARITY
+
+Stated by the operator directly, and it supersedes any narrower reading of
+D4/D6/D7:
+
+> **v0.4.0 gate:** the AWS/Ubuntu node performs **full-parity store-and-forward
+> / relay capability + direct connection assistance for peers.**
+> **v0.5.0:** the same, plus the iOS/macOS rollout, for full five-node parity.
+
+This is consistent with the `AGENTS.md` architecture doctrine ("there are NO
+standalone relays; only NODES exist, and EVERY node relays"), and it makes the
+gate sharper and more testable than "two devices exchange a message."
+
+**Verified in code -- the parity is real by construction, not aspiration:**
+`relay_server` (`relay::Behaviour`) and `dcutr` are constructed
+**unconditionally** in `core/src/transport/behaviour.rs:521,348` -- "all nodes
+act as relays for NAT traversal." The `headless` flag affects **only** the
+`identify` agent_version string (`behaviour.rs:508`); it gates no functionality.
+The cloud node runs the same node as a handset. `relay_client`, `autonat`, and
+`CircuitRelayLadder` are likewise present, and store-and-forward custody lives
+in `core/src/store/relay_custody.rs`.
+
+**So the gate is not "build it" -- it is "prove it, and fix what the proof
+breaks." Three known defects sit directly on this gate and must be
+re-prioritised accordingly:**
+
+| Defect | Why it is now gate-blocking, not backlog |
+|---|---|
+| `HANDOFF/in_progress/ANDROID_RELAY_INBOUND_EVIDENCE_2026-08-10_CELLULAR.md` | The cloud node reported delivery **success in 264ms while no circuit to the destination existed 20s earlier**. That is a store-and-forward custody correctness failure -- precisely what this gate tests. Highest priority of the three. |
+| ~~`P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT`~~ **CLOSED 2026-08-29 -- already fixed in code** | `core/src/transport/multiport.rs:75-99` `generate_listen_addresses()` now emits exactly one transport per port (its own comment says so); the WS-on-same-port construction the ticket cited is gone. Live `/api/diagnostics.listeners` on both nodes confirms it: 9001 tcp-only, 9002 ws-only. **No operator ruling is needed.** Move the ticket to `HANDOFF/done/` -- a 7th stale-open ticket beyond the six listed below. |
+
+### CUSTODY SPLIT-BRAIN -- the actual parity wiring gap (found 2026-08-29)
+
+**Two independent `RelayCustodyStore` objects exist. The one the API reports is
+not the one doing the work.**
+
+- `core/src/iron_core.rs:347` (also `:475`, `:606`) builds
+  `RelayCustodyStore::persistent(backend.clone())`. This is what
+  `/api/diagnostics.custody_audit_count` reads (`iron_core.rs:2451` ->
+  `cli/src/api_axum.rs:618`).
+- `core/src/transport/swarm.rs:3019` builds a **separate local variable**, also
+  named `relay_custody_store`, via a *different constructor*
+  `RelayCustodyStore::for_service_storage(storage_path, local_peer_id)`, inside
+  `start_swarm_with_config` (`swarm.rs:2740`) -- **production path, not a test**.
+  This one performs every real operation: `accept_custody`, `mark_delivered`,
+  `mark_dispatch_failed`, and the periodic audit logger at `swarm.rs:3472`.
+
+Evidence both are live and disagreeing: the Windows node's own log shows
+`Relay custody audit log count: 4656` climbing in real time with
+`[OK] Custody ... delivered to ...` events against the AWS peer, while
+`/api/diagnostics.custody_audit_count` sat at **0** across 14 minutes of
+polling. **The same 0 appears on the AWS node** -- so this is systemic, not
+host-specific.
+
+This is not dead code under AGENTS.md rule 16; both sides are referenced and
+reachable. It is worse: a **silent observability lie on the exact metric the
+v0.4.0 gate is scored by.** Anyone measuring custody parity through the API
+would conclude store-and-forward is dormant when it is running.
+
+**Smallest fix:** thread the already-constructed
+`Arc<RwLock<RelayCustodyStore>>` from `IronCore` into the swarm spawn instead
+of letting `swarm.rs:3019` construct its own. This also stops
+`%LOCALAPPDATA%\scmessenger\relay_custody\<local_peer_id>\` accruing a fresh
+subdirectory per identity (stale ones already present).
+
+**Do not score the parity gate through `/api/diagnostics.custody_audit_count`
+until this is fixed.** Score from the swarm audit log.
+| `P1_ROUTING_ENGINE_NEVER_LEARNS_PEERS` / PR #215 | `routing_peer_seen` has zero callers, so path-selection confidence is 0.0 fleet-wide. Degrades assisted path selection and makes any racing claim unprovable. |
+
+**CORRECTED 2026-08-29 (live diagnosis, supersedes the paragraph this replaces):
+the AWS node is ALREADY redeployed at current `main`. Do not re-do it.**
+
+`sudo docker logs scm-node` reports `CLI Version: 0.4.0 (9ed3a28d148bc893...)`
+and `Core Provenance: 0.4.0 (9ed3a28d...:main:)` -- that is the PR #234 merge
+commit, carrying the full V2+V3 work. Container created `2026-08-29T02:43:05Z`,
+image digest `sha256:13c51ed5...`. An earlier draft of this section claimed the
+node was stale at `9f54b107`; **that was wrong** -- it was redeployed roughly an
+hour before the diagnosis, by an actor that did not record it here.
+
+**Identity persistence is working.** `/opt/scm-relay-data` -> `/data` bind mount
+confirmed via `docker inspect`; the key file `storage/relay_network_key.pb` has
+mtime `Aug 6 05:34`, unchanged across the Aug 29 redeploy. Live identity
+(`curl http://54.226.67.101:9876/api/identity`): `identity_id 640c258b...`,
+`libp2p 12D3KooWEsqCi9fnx2S5RMsjE5vqh1BEoKEzVbz6hNf8C57ok6ZL` -- matching what
+the Windows node sees. The `12D3KooWKMUX` / `0b332009` values in
+`UNIFICATION_V3_DELIVERY_CONVERGENCE_PLAN.md` are from that doc's 2026-08-27
+evidence block and are **stale documentation**; whether identity churned before
+Aug 6 is UNVERIFIED and not worth chasing.
+
+**Bidirectional relay is live at the reservation layer.** Windows holds a
+circuit through AWS, and AWS holds the reverse circuit through Windows
+(`/ip4/147.81.41.188/tcp/5049/p2p/12D3KooWD6vZQr.../p2p-circuit/p2p/12D3KooWEsqCi9fnx...`
+in the AWS node's own `/api/diagnostics.listeners`). Reservations exist in both
+directions. What is NOT yet proven is a peer actually moving data through one.
+
+**Scope note:** iOS/macOS is v0.5.0 by this ruling. It stays out of v0.4.0,
+consistent with `SHIP_PLAN.md` section 4. `HANDOFF/in_progress/A-05_IOS_RECEIPT_UNIFICATION.md`
+is therefore correctly parked, not neglected.
+
+## What changed since the 2026-08-24 section
+
+- **PR #234 merged** (`9ed3a28d`, 2026-08-29T02:19:28Z) with **36/36 checks
+  SUCCESS, nothing bypassed** (`gh pr view 234 --json statusCheckRollup`). It
+  carries Unification V2 (identity canonicalization) and V3 (delivery/ack
+  convergence) -- 52 commits.
+- **V3 is a verified RESULT, not a plan.** Three independently root-caused
+  defects fixed and soak-verified on the live 3-node mesh: outbox keyed on a
+  different id than the wire envelope (`cli/src/main.rs:4045`), unconditional
+  receipt echo driving the Android `direction=missing` stampede
+  (`cli/src/main.rs:2694-2707`), and Android parking 55 transport-acked
+  messages forever (`MeshRepository.kt:8105-8119`). See
+  `HANDOFF/plans/UNIFICATION_V3_DELIVERY_CONVERGENCE_PLAN.md`.
+- **`main` health at `9ed3a28d`:** 8 of 9 lanes `success` (CI, Cross, Lint,
+  Repository Hygiene, Docker Publish, Mobile, iOS Build & Test, Push on main).
+  Docker Integration Suite was still `in_progress` at 58 minutes; that lane
+  normally runs 65-75 minutes, so it is **within normal range, not hung**
+  (`gh run list --workflow=docker-test-suite.yml`).
+
+## THE BLOCKER -- one secret value, five months of not shipping
+
+`v0.4.0-rc.1` is tagged at `134e06d2`. **No GitHub Release object exists for
+it**; the latest public release is still v0.1.9 from March (`gh release list`).
+
+Release run `32817839477` (2026-08-25): version verify PASSED, all four CLI
+targets PASSED, WASM PASSED, then `Build Android Release` FAILED and
+`Create GitHub Release` was **skipped**. Root cause, verbatim from
+`gh run view 32817839477 --log-failed`:
+
+```
+Execution failed for task ':app:packageRelease'.
+> com.android.ide.common.signing.KeytoolException: Failed to read key *** from
+  store ".../android/app/release.keystore": No key with alias '***' found in keystore
+```
+
+**All four signing secrets ARE configured**, since 2026-08-15
+(`gh secret list -R Sovereign-Communication/SCMessenger`). The keystore
+decodes. `SCMESSENGER_KEY_ALIAS` does not match an alias inside it. Two prior
+audit passes recorded this as "secrets unconfigured" -- that is **wrong**, and
+it changes the fix from an afternoon to two minutes.
+
+Most probable cause: `docs/ANDROID_RELEASE_SIGNING.md` documents
+`-storetype JKS` with alias `scmessenger`, but modern `keytool` writes PKCS12,
+and **PKCS12 alias lookup is case-sensitive where JKS was not.**
+
+Operator-only fix (touches the keystore):
+`keytool -list -v -keystore <jks> | grep -i "alias name"`, compare **including
+case**, then `gh secret set SCMESSENGER_KEY_ALIAS`.
+
+**Rehearsal path -- verified, use it before burning any tag.** `build-android`
+has no tag requirement and no `artifacts_only` gate; only `create-release` is
+gated. So `gh workflow run release.yml -f artifacts_only=true` runs the
+complete signed AAB+APK build and uploads the artifacts, creating no release.
+Zero risk.
+
+## New defects found this session (both real, both cited)
+
+1. **`Test (ubuntu-latest)` -- a REQUIRED check -- is nondeterministic.**
+   PR #235 is `main` + exactly one markdown file (parent `9ed3a28d`; verified
+   it contains `cd2375b7`, `c334bd8a`, `b6c35c89`) and its test job FAILED
+   where the identical job on identical code PASSED on `main`.
+   Root cause, from run `33228698078`: 1376 passed, **1 failed** --
+   `store::outbox::tests::test_persistent_attempts_survive_restart`, panic at
+   `core/src/store/outbox.rs:1122`:
+   `"database locked by another process (lock contention): could not acquire
+   lock on /tmp/.../outbox_store/db: Os { code: 11, kind: WouldBlock }"`.
+   The test opens a sled DB in one block, drops it, and reopens the same path
+   in the next; the flock has not always been released in time.
+   **`SledStorage::new` detects lock contention only to write a nicer error
+   message -- there is no retry** (`core/src/store/backend.rs:216-235`).
+   Not merge-blocked (`core/src/store/` is outside the Rule-8 perimeter).
+   Recommended: bounded retry-with-backoff in `SledStorage::new` **plus** an
+   explicit drop in the test. The backend retry is defensible for the product
+   too -- a fast Android restart can hit the same contention and today it is a
+   hard failure.
+
+2. **D6 is unprovable by construction.** `routing_peer_seen`
+   (`iron_core.rs:2571`) has **zero callers repo-wide**, so adaptive-routing
+   confidence is pinned at 0.0 fleet-wide. "The transport raced and selected a
+   working path" cannot be demonstrated until this is wired. Fix exists as
+   draft **PR #215**; it touches `core/src/routing/` and therefore needs a
+   fresh Rule-8 adversarial review before integration.
+
+## D1-D7 scoreboard (verified, not quoted from plans)
+
+| # | State | The one thing in the way |
+|---|---|---|
+| D1 main green | **[OK]** | Nothing. Keep it green. |
+| D2 signed APK downloadable | **[BLOCKED]** | The alias. Operator-only. |
+| D3 README | **[OK]** | Nothing. README is 4,309 bytes and honest. |
+| D4 two-device + receipt | **[PARTIAL]** | Proven on a 3-node dev-build soak; not scored on a released APK, cross-network. |
+| D5 no long-lived branch | **[OK]** | #139 merged 2026-08-17. |
+| D6 transport racing | **[BLOCKED]** | `routing_peer_seen` zero callers; PR #215. |
+| D7 offline proximity | **[NOT STARTED]** | Sequenced after D4/D6. |
+
+**Neither D6 blocker (`routing_peer_seen`) nor
+`P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT` is a named line item anywhere in
+`SHIP_PLAN.md`.** That is a gap in the canonical plan, not backlog noise.
+
+## Documents that are actively lying -- do not trust, fix at source
+
+- `SHIP_PLAN.md` S2-1: "README.md is currently 0 bytes." It is 4,309 bytes.
+- `SHIP_PLAN.md` CP1: "#221/#222 remain open and DRAFT." Both merged.
+- `SHIP_PLAN.md` S1-4: Docker Integration Suite is "a long-standing amber
+  lane." It passed on the last two pushes; PR #156 may be moot.
+- `docs/CURRENT_STATE.md`: "release line v0.3.5." `Cargo.toml` reads `0.4.0`.
+- `TRACKING_PRE_V040_TAG_WORK.md`, `_QUEUE.md`: "#139 open, gated on G1-G6."
+  Merged 2026-08-17.
+- Six `HANDOFF/todo/` tickets are resolved but never moved to `done/`
+  (self-ratchet reset, both async-receipt-convergence files, receipt-marker
+  flavor mismatch, RCA delivery-ack plan, deeplink-never-dials -- the last
+  verified resolved in source at `MainViewModel.kt:374` and `MeshApp.kt:412`).
+
+## Pickup point from the Freebuff/deepseek session (session ENDED clean)
+
+- Its deliverable -- the PR #234 Rule-8 adversarial review, verdict **APPROVE**
+  -- is committed as `c1c99a8e` and open as **PR #235**.
+- Its worktree
+  (`.freebuff/worktrees/245d21ce-450f-4f3b-90d5-eb6b7c119d89`) holds one
+  untracked copy of that same file, **verified byte-identical** to the
+  committed version (`diff` clean). Nothing is at risk; the copy is redundant.
+  Operator may discard it. Do not delete it on an agent's initiative.
+- Its `cargo build --release -p scmessenger-cli` finished. **No build is
+  running; the machine is free.**
+- Main checkout sits on `fix/android-receipt-envelope` @ `760d9184`, clean,
+  two commits behind `main` -- a fast-forward away, deliberately untouched.
+
+## Governance flag for the operator
+
+PR #235's Rule-8 review was authored by the same deepseek lane that drove the
+orchestration. It did not author the code, so it clears the letter of the gate.
+But ruling 0-2026-08-23d states plainly that self-review "has now failed twice
+and is not a credential." A second reviewer from a different model family is
+nearly free. **Recommend taking it before this review is used as publish-gate
+evidence.**
+
+## What blocks a PUBLIC release (ruling 0-2026-08-23d still binding)
+
+1. Both forgery tests on `main` shown failing-on-revert -- **the test files are
+   on `main`, but the CI gate `security-regression-tests.yml` is NOT; it exists
+   only in red draft PR #228** (`git ls-tree -r main --name-only`).
+2. One independent adversarial review of the merged tree, APPROVE -- **PR #235,
+   subject to the governance flag above.**
+3. External audit **COMMISSIONED** (firm, scope, price, dates) -- **board
+   decision, unstarted, money.**
+4. Release body states plainly there has been no external audit yet.
+
+Note: `release.yml` marks any tag containing `rc`/`alpha`/`beta` as a **draft**
+release, deliberately. A draft is not a public download. `verify_versions.sh`
+passes for a final `v0.4.0` tag (Cargo is already `0.4.0`).
+
+## Live queue
+
+`HANDOFF/API_RESET_EXECUTION_CHARTER_2026-08-28.md` -- six lanes, hard stops,
+evidence contract. It is a queue, not a record: delete it when empty, and land
+its L4-3 task, which amends SHIP_PLAN in place so the charter is not needed
+again.
+
+## Audit coverage gap (stated rather than papered over)
+
+Four audit subagents were dispatched; three reported. The fourth (a
+commit-by-commit narrative of the week) never returned. Its scope was covered
+natively from `git log --all --since` and from the commit timeline in the
+in-flight-session audit, so no finding above depends on it -- but this file
+should not be read as a complete per-commit review of the week.
+
+# ===== SUPERSEDED 2026-08-29: RESUME HERE (2026-08-24, written for a clean restart) =====
+
+> **SUPERSEDED.** Its "one-line state" (PR #221 merged, #230 lands the
+> remaining three, then tag rc.1) is fully executed. Retained for history and
+> for the still-binding rulings it references. Read the 2026-08-29 section
+> above instead.
 
 Read THIS section and section 0-2026-08-24b. Skip everything else on first
 pass. Operator is token-constrained: **delegate to FREE lanes, use native API

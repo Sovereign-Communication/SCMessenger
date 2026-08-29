@@ -86,3 +86,23 @@ Fill as evidence lands. Empty = honest unknown.
 3. **D5 sweep list**: 18+ dated `cto/*` branches from 08-21/22, plus ~40 undated stale refs (`test-merge`, `pr-*-head`, `subagent-*`).
 4. **README draft corrections ready**: stale alpha.1 claim -> rc.1 wording; layout table missing `mobile/` + `desktop_bridge/` rows; install-section APK line gated on D2-c landing.
 5. **Single largest blocker: D2 signing + publish** (operator secrets + hardware). Everything else is hours of mechanical work.
+
+## 6. Phase B progress (2026-08-25)
+
+- **CP1 remains green** — no regression since the Phase A evidence run.
+- **Receipt-convergence defect root-caused and FIXED live.** Android now
+  emits signed prepareReceipt envelopes (was bare JSON, rejected by the
+  receiver); send-status converges to `delivered:true` on the
+  Windows<->Pixel rig. Evidence: message ids
+  `4e693533-dbd6-4677-bde8-7ed89dc7e90b` and
+  `52a56a77-6f73-45a1-bf35-508aaf78a089` both `delivered:true`.
+  Regression guard test landed with the fix.
+- **Contact-unknown display bug fixed** — root cause was identity-cache
+  poisoning in `MeshRepository.getContact`; conversation names now resolve
+  for pubkey-canonical contacts.
+- **Three-node version parity achieved** — Windows / Pixel / AWS relay all
+  at `0064d49a` (AWS node rebuilt 2026-08-25; see
+  HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md).
+- **Formal D4/D6/D7 scoring still pending** released-APK demo day, per
+  SHIP_PLAN standard. The live receipt convergence above is rig evidence,
+  not CP3 credit.

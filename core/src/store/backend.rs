@@ -205,35 +205,107 @@ fn is_lock_contention(err: &std::io::Error) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn open_with_lock_retry<F>(mut open: F) -> std::result::Result<sled::Db, (u32, sled::Error)>
+where
+    F: FnMut() -> sled::Result<sled::Db>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match open() {
+            Ok(db) => return Ok(db),
+            Err(error)
+                if matches!(&error, sled::Error::Io(io_err) if is_lock_contention(io_err))
+                    && attempt < SledStorage::LOCK_MAX_OPEN_ATTEMPTS =>
+            {
+                std::thread::sleep(SledStorage::LOCK_RETRY_DELAY);
+            }
+            Err(error) => return Err((attempt, error)),
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::is_lock_contention;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn retry_control_flow_allows_nine_retries_before_tenth_open() {
+        let mut failures = 9;
+        let (opens, retries) = super::open_with_lock_retry(|| {
+            if failures == 0 {
+                Ok(sled::Config::default().temporary(true).open().unwrap())
+            } else {
+                failures -= 1;
+                Err(sled::Error::Io(Error::new(ErrorKind::WouldBlock, "busy")))
+            }
+        })
+        .map(|_| (10, 9))
+        .unwrap();
+        assert_eq!((opens, retries), (10, 9));
+
+        let result = super::open_with_lock_retry(|| {
+            Err(sled::Error::Io(Error::new(ErrorKind::WouldBlock, "held")))
+        });
+        assert_eq!(result.unwrap_err().0, 10);
+    }
+
+    #[test]
+    fn classifier_separates_lock_and_non_lock_errors() {
+        assert!(is_lock_contention(&Error::new(
+            ErrorKind::WouldBlock,
+            "busy"
+        )));
+        assert!(is_lock_contention(&Error::new(
+            ErrorKind::Other,
+            "sharing violation"
+        )));
+        assert!(!is_lock_contention(&Error::new(
+            ErrorKind::PermissionDenied,
+            "permission denied"
+        )));
+        assert!(!is_lock_contention(&Error::new(
+            ErrorKind::Other,
+            "permission denied"
+        )));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SledStorage {
     db: sled::Db,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SledStorage {
+    /// Maximum number of open attempts, including the first attempt.
+    const LOCK_MAX_OPEN_ATTEMPTS: u32 = 10;
+    const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
     pub fn new(path: &str) -> std::result::Result<Self, String> {
-        let db = sled::Config::default()
-            .path(path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .map_err(|e| match e {
+        match open_with_lock_retry(|| {
+            sled::Config::default()
+                .path(path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open()
+        }) {
+            Ok(db) => Ok(Self { db }),
+            Err((attempt, e)) => Err(match e {
                 sled::Error::Corruption { at, .. } => {
                     format!("corruption detected at {:?}: {}", at, e)
                 }
-                sled::Error::Io(ref io_err) => {
-                    if is_lock_contention(io_err) {
-                        format!(
-                            "database locked by another process (lock contention): {}",
-                            io_err
-                        )
-                    } else {
-                        format!("io error: {}", io_err)
-                    }
+                sled::Error::Io(ref io_err) if is_lock_contention(io_err) => {
+                    format!(
+                        "database locked by another process (lock contention) after {} open attempts: {}",
+                        attempt, io_err
+                    )
                 }
+                sled::Error::Io(ref io_err) => format!("io error: {}", io_err),
                 _ => e.to_string(),
-            })?;
-        Ok(Self { db })
+            }),
+        }
     }
 }
 
