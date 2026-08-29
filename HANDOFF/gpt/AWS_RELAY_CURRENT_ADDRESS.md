@@ -11,13 +11,15 @@ other doc, ticket, or config.
   custody split-brain + bounded retry + GET /api/history, and #239
   routing_peer_seen transport failover). Image `testbotz/scmessenger:latest`
   from Docker Publish success at that SHA. Health: healthy.
-- **Identity persistence ROOT CAUSE FOUND (2026-08-29):** the image set
-  `SCM_DATA_DIR` (consumed only by entrypoint mkdir) while the app reads
-  `SCMESSENGER_DATA_DIR`, so identity was written to the container's ephemeral
-  layer and regenerated on EVERY redeploy. Observed rotation across three
-  redeploys: `640c258b` -> `78869300` -> `417be00d`. Fix PR #240 points both
-  env vars at `/data` (bound to `/opt/scm-relay-data`). Until #240 merges and
-  the node is redeployed, expect the identity to keep rotating on redeploy.
+- **Identity persistence FIXED + VERIFIED (2026-08-29):** root cause was
+  image setting `SCM_DATA_DIR` (entrypoint-only) while the app reads
+  `SCMESSENGER_DATA_DIR`; identity was written to the container's ephemeral
+  layer and rotated on every redeploy (`640c258b` -> `78869300` ->
+  `417be00d`). PR #240 (merged, main `b2544d26`) points both env vars at
+  `/data` (bound to `/opt/scm-relay-data`). **Verified live:** after two
+  consecutive `docker rm -f` + `docker run` redeploys the identity stayed
+  `0b332009...` / `12D3KooWKMU...` unchanged -> identity now persists across
+  restarts. Node currently at main SHA carrying #236+#239+#240.
 
 
 
