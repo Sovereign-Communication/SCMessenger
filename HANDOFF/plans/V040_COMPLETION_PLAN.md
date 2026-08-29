@@ -106,3 +106,25 @@ Fill as evidence lands. Empty = honest unknown.
 - **Formal D4/D6/D7 scoring still pending** released-APK demo day, per
   SHIP_PLAN standard. The live receipt convergence above is rig evidence,
   not CP3 credit.
+
+## 7. 2026-08-29 CTO progress (API-reset session)
+
+- **D1/CP1 still green; four more PRs landed on main today:**
+  #236 custody split-brain + bounded sled retry + GET /api/history,
+  #237 PR #234 Rule-8 APPROVE verdict doc, #238 signing preflight
+  (fail fast when SCMESSENGER_KEY_ALIAS missing), #239 routing_peer_seen
+  transport failover (D6 unblock). main now at `419e9678`.
+- **AWS node redeployed twice today** at `1fff557d` (10:00Z) and
+  `419e9678` (17:54Z, Docker Publish success). Health healthy; custody
+  counter went live (3) after the #236 fix deploy.
+- **NEW BLOCKER FOUND + FIX PR #240:** node identity rotates on every
+  redeploy (`640c258b` -> `78869300` -> `417be00d`) because the image
+  sets `SCM_DATA_DIR` (entrypoint-only) while the app reads
+  `SCMESSENGER_DATA_DIR`, writing identity to the container's ephemeral
+  layer. PR #240 points both env vars at `/data` (bound to
+  `/opt/scm-relay-data`). Must merge + redeploy + verify identity
+  persists across a second restart before L0-1 is creditable.
+- **L0-2/L0-4 (two-device demos) still operator+hardware.** All
+  agent-doable v0.4.0 code/config items are now either merged or in
+  flight; remaining gates require the keystore (D2), the devices (D4/D6/D7),
+  and the operator's tag execution.
