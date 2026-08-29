@@ -547,10 +547,10 @@ impl ContactManager {
                     let pk_valid = contact.public_key.trim().len() == 64
                         && contact.public_key.chars().all(|c| c.is_ascii_hexdigit())
                         && hex::decode(contact.public_key.trim()).is_ok();
-                    if !pk_valid {
-                        contact.public_key = canonical.clone();
-                    } else if contact.public_key.trim().to_lowercase() == canonical
-                        && contact.public_key != canonical
+                    // Clippy: both arms set public_key to canonical; collapse.
+                    if !pk_valid
+                        || (contact.public_key.trim().to_lowercase() == canonical
+                            && contact.public_key != canonical)
                     {
                         contact.public_key = canonical.clone();
                     }

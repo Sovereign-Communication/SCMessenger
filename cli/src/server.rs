@@ -1502,8 +1502,12 @@ pub async fn handle_jsonrpc_request(
 
                 match public_key_hex {
                     Some(public_key) => {
+                        // UNIFICATION V2 P0: the canonical identifier is
+                        // public_key_hex. ContactsManager::add() canonicalizes
+                        // peer_id to the pubkey anyway; store it directly so
+                        // the contact is consistent with the canonical form.
                         let contact =
-                            scmessenger_core::store::Contact::new(request_id.clone(), public_key);
+                            scmessenger_core::store::Contact::new(public_key.clone(), public_key);
                         match core.contacts_store_manager().add(contact) {
                             Ok(()) => {
                                 let mut m = Map::new();

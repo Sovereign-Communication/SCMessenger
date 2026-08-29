@@ -436,10 +436,9 @@ fn annotate_identity_locked(
             peer_id = canonical.clone();
             // Ensure public_key is populated/normalized when peer_id was libp2p
             match &normalized_public_key {
-                Some(pk) if pk.trim().to_lowercase() == canonical => {
-                    if pk != &canonical {
-                        normalized_public_key = Some(canonical.clone());
-                    }
+                // Clippy: inner `if` collapsed into the guard.
+                Some(pk) if pk.trim().to_lowercase() == canonical && pk != &canonical => {
+                    normalized_public_key = Some(canonical.clone());
                 }
                 None => {
                     normalized_public_key = Some(canonical.clone());

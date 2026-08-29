@@ -160,8 +160,29 @@ Rule: one theme = one branch = one revert; `main` stays green (`SHIP_PLAN.md:2:S
 |---|---|---|
 | Mint V2 plan (this file) | done 2026-08-26 | `git diff HANDOFF/plans/UNIFICATION_V2_RESULTS_PLAN.md` |
 | S2 coalesce + online-authority + self-exclusion | done 2026-08-27 | `fb2bb3f6` dashboard peers = 2 online others (Win+AWS); phantoms offline; `UNIFICATION` logs on-device |
+| Verdict 4 (coalesce + online-authority) | done 2026-08-27 | `29d1acfd` docs; `fb2bb3f6` impl |
+| Verdict 5 (delivery/ack convergence R1+R2) | done 2026-08-28 | `6be72c82` docs; `0c75bf1a` impl (`mark_message_sent` on true swarm ACK) |
+| CI green on PR #234 (fmt, test fix, hygiene) | IN PROGRESS 2026-08-28 | 5 red lanes at `6be72c82`: fmt diffs (`cli/src/main.rs:4066`, `contacts.rs` x13, `behaviour.rs:317`), `message_request_lifecycle_accept` (handler passes identity_id but `ContactsManager::add` canonicalizes to pubkey), trailing whitespace. Fix + merge plan in `HANDOFF/ORCHESTRATOR_TAKEOVER_2026-08-28.md` |
+| Ratchet session-recovery verification | done 2026-08-28 | `decrypt_with_ratchet_fallback` (`core/src/crypto/encrypt.rs:663-832`) rebuilds the receiver session from static keys (V1) / bootstrap fields (V2) on decrypt divergence, retries, and only surfaces `Failed to decrypt ratchet message` (`iron_core.rs:3437`) after both attempts fail. Verdict: PASS — auto re-establishment verified at source (`306e3149`) |
 | Verifier-1: plan readiness | pending | subagent report |
 | Implement S2 de-split + P0 fail-closed | pending | branch + CI |
 | Verifier-2: post-impl re-audit | pending | `dup_index.json` + `cargo test` |
 | Deploy + 3-node rig (Windows/AWS/Pixel) | pending | `delivered:true` + `RECEIPT-ENCODE` bytes + `scm.log` `receipt_outbox_cleared` |
+| R1+R2 delivery/ACK convergence | done 2026-08-28 | `0c75bf1a` — see Verdict 5 |
+
+---
+
+## 9. Verdict 5 — delivery/ack convergence (R1+R2)  (confirmed 2026-08-28)
+
+**Result: PASS — the durable core outbox now clears only on a true swarm transport ACK; delivery-retry accumulations converge to zero on both nodes.** Commit `0c75bf1a` (`fix/mesh`) on `fix/android-receipt-envelope`, superseding V3 §3.6.
+
+**What R1+R2 do:** on Android (`MeshRepository.kt`) and Windows CLI (`api.rs`/`api_axum.rs`/`main.rs`), call `core.mark_message_sent(message_id)` immediately after `send_message(...) == Ok` — the swarm's true delivery ACK. BLE/WiFi-Direct writes (fire-and-forget) are explicitly **not** a clear; only the libp2p delivery layer is. `Outbox::remove` emits INFO `outbox_dequeue … reason="delivery_confirmed"` (outbox.rs:387-392), removing the entry from the outbox and drift store.
+
+**Live evidence (~25-min soak, both nodes rebuilt on the new SHA; Windows PID 3756/17076, Android Mesh tab + sync pipeline):**
+- **R1 (live, 5 events):** `R1: cleared history_sync core outbox on transport ACK` for IDs 8d6fbfb, ebbbd5c, 2b1ca3bf, b20af9be, 52027e00 — Android→Windows sync-family sends released from the core outbox strictly on real swarm delivery. Android outbox flat **23** (378d26f5:18, self:1, 4 stragglers), `outbox_retry_attempt … 30d0fa67` = 0.
+- **R2 (convergence-by-emptiness + structural):** 0 `outbox_enqueue`, 0 `outbox_retry_attempt`, 0 retry-climb, nothing accumulating on Windows (vs era run: 35 enqueues, 0 dequeues — the backlog that previously never cleared). The positive `outbox_dequeue … delivery_confirmed` line is wired at every send site (`main.rs:2912,3112,4003,4297`; `api.rs:880`; `api_axum.rs:292`) and needs a live Windows→Android send, which did not occur this window (Windows outbox was already empty — nothing to clear).
+- **Regressions:** V6/V7 `[RECEIPT-RX] IGNORING … direction=missing` = 0, INVALID = 0; V11 no retry storm either side; V12 Mesh online = exactly 2 others (30d0fa67 Windows, 8db1612a AWS), self excluded; AWS relay healthy.
+- **Build provenance:** CLI `cargo build --release` exit=0 (10m10s; exe 22,068,736 B, `cli-artifact/` size match); APK `assembleDebug` exit=0 (54,808,544 B), `adb install -r` Success.
+
+**Pre-existing, out of scope (flagged):** CLI offline `send` cannot reach Android contacts — stored `contact.peer_id` is 64-hex while `libp2p::PeerId::from_str` needs base58 (`cli/src/main.rs:3981`).
 

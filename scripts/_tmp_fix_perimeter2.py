@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Correct neighborhood eviction + add tests for the routing behavior changes."""
+import sys
+
+def patch(path, replacements):
+    with open(path, "rb") as f:
+        data = f.read().decode("utf-8")
+    for old, new in replacements:
+        if old not in data:
+            print(f"!! MISS in {path}: {old[:80]!r}")
+            sys.exit(1)
+        data = data.replace(old, new, 1)
+    with open(path, "wb") as f:
+        f.write(data.encode("utf-8"))
+    print(f"patched {path}")
+
+# ---- neighborhood.rs: genuine deferred-eviction semantics ----
+patch("core/src/routing/neighborhood.rs", [
+    (
+        "        // Prefer evicting a gateway that is actually stale (last_updated older\n"
+        "        // than the staleness window) so a burst of fresh updates never evicts\n"
+        "        // current information; among stale gateways, evict the stalest. If every\n"
+        "        // gateway is fresh, fall back to the stalest overall so the max_gateways\n"
+        "        // capacity invariant still holds.\n"
+        "        let gateway_to_evict = self\n"
+        "            .gateways\n"
+        "            .iter()\n"
+        "            .filter(|(_, g)| now.saturating_sub(g.last_updated) >= self.max_staleness)\n"
+        "            .min_by_key(|(_, g)| g.last_updated)\n"
+        "            .map(|(id, _)| *id)\n"
+        "            .or_else(|| {\n"
+        "                self.gateways\n"
+        "                    .iter()\n"
+        "                    .min_by_key(|(_, g)| g.last_updated)\n"
+        "                    .map(|(id, _)| *id)\n"
+        "            })\n"
+        "            .expect(\"checked gateways non-empty above\");\n"
+        "\n"
+        "        self.gateways.remove(&gateway_to_evict);\n"
+        "    }",
+        "        // Evict the gateway with the oldest last_updated timestamp, but only\n"
+        "        // when it is actually stale: a burst of fresh gossip that pushes the\n"
+        "        // table over max_gateways must not churn current routing information\n"
+        "        // (cleanup() removes entries older than max_staleness every tick,\n"
+        "        // which resolves the over-capacity table as entries age).\n"
+        "        let gateway_to_evict = *self\n"
+        "            .gateways\n"
+        "            .values()\n"
+        "            .min_by_key(|g| g.last_updated)\n"
+        "            .map(|g| &g.gateway_id)\n"
+        "            .expect(\"checked gateways non-empty above\");\n"
+        "\n"
+        "        if now.saturating_sub(self.gateways[&gateway_to_evict].last_updated)\n"
+        "            < MIN_GATEWAY_AGE_BEFORE_EVICT_SECS\n"
+        "        {\n"
+        "            return;\n"
+        "        }\n"
+        "\n"
+        "        self.gateways.remove(&gateway_to_evict);\n"
+        "    }",
+    ),
+    (
+        "/// Information about a gateway peer that connects to other cells",
+        "/// A gateway must be at least this old (seconds) before eviction will\n"
+        "/// consider it: freshly-learned gateways carry current routing info and\n"
+        "/// must not be churned by a gossip burst that exceeds max_gateways.\n"
+        "const MIN_GATEWAY_AGE_BEFORE_EVICT_SECS: u64 = 30;\n"
+        "\n"
+        "/// Information about a gateway peer that connects to other cells",
+    ),
+    (
+        "        assert_eq!(table.gateway_count(), 3);\n"
+        "        assert!(table\n"
+        "            .all_gateways()\n"
+        "            .iter()\n"
+        "            .any(|g| g.gateway_id == gateway4));\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_gossip_exchange_propagation() {",
+        "        assert_eq!(table.gateway_count(), 3);\n"
+        "        assert!(table\n"
+        "            .all_gateways()\n"
+        "            .iter()\n"
+        "            .any(|g| g.gateway_id == gateway4));\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_evict_stalest_skips_fresh_burst() {\n"
+        "        let mut table = NeighborhoodTable::new();\n"
+        "        table.max_gateways = 3;\n"
+        "\n"
+        "        let g1 = make_peer_id(1);\n"
+        "        let g2 = make_peer_id(2);\n"
+        "        let g3 = make_peer_id(3);\n"
+        "        let g4 = make_peer_id(4);\n"
+        "\n"
+        "        table.update_gateway(\n"
+        "            g1,\n"
+        "            make_cell_summary(vec![make_hint(1)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        // Backdate g1 past the minimum eviction age so it is genuinely stale\n"
+        "        if let Some(g) = table.gateways.get_mut(&g1) {\n"
+        "            g.last_updated -= MIN_GATEWAY_AGE_BEFORE_EVICT_SECS + 10;\n"
+        "        }\n"
+        "        table.update_gateway(\n"
+        "            g2,\n"
+        "            make_cell_summary(vec![make_hint(2)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        table.update_gateway(\n"
+        "            g3,\n"
+        "            make_cell_summary(vec![make_hint(3)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        assert_eq!(table.gateway_count(), 3);\n"
+        "\n"
+        "        // Adding a 4th evicts g1 -- it is genuinely stale\n"
+        "        table.update_gateway(\n"
+        "            g4,\n"
+        "            make_cell_summary(vec![make_hint(4)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        assert_eq!(table.gateway_count(), 3);\n"
+        "        assert!(!table\n"
+        "            .all_gateways()\n"
+        "            .iter()\n"
+        "            .any(|g| g.gateway_id == g1));\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_evict_stalest_defers_fresh_burst() {\n"
+        "        let mut table = NeighborhoodTable::new();\n"
+        "        table.max_gateways = 3;\n"
+        "\n"
+        "        let g1 = make_peer_id(1);\n"
+        "        let g2 = make_peer_id(2);\n"
+        "        let g3 = make_peer_id(3);\n"
+        "        let g4 = make_peer_id(4);\n"
+        "\n"
+        "        table.update_gateway(\n"
+        "            g1,\n"
+        "            make_cell_summary(vec![make_hint(1)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        table.update_gateway(\n"
+        "            g2,\n"
+        "            make_cell_summary(vec![make_hint(2)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        table.update_gateway(\n"
+        "            g3,\n"
+        "            make_cell_summary(vec![make_hint(3)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        assert_eq!(table.gateway_count(), 3);\n"
+        "\n"
+        "        // All gateways are fresh (recently learned): adding a 4th defers\n"
+        "        // eviction rather than churning current routing information.\n"
+        "        table.update_gateway(\n"
+        "            g4,\n"
+        "            make_cell_summary(vec![make_hint(4)]),\n"
+        "            1,\n"
+        "            TransportType::TCP,\n"
+        "        );\n"
+        "        assert_eq!(table.gateway_count(), 4);\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_gossip_exchange_propagation() {",
+    ),
+])
+
+# ---- global.rs: freshness test ----
+patch("core/src/routing/global.rs", [
+    (
+        "        assert_eq!(req.attempts, 0);\n"
+        "        assert!(table.is_route_pending(&hint));\n"
+        "    }\n",
+        "        assert_eq!(req.attempts, 0);\n"
+        "        assert!(table.is_route_pending(&hint));\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_route_request_pending_freshness() {\n"
+        "        let mut table = GlobalRoutes::new();\n"
+        "        let hint = make_hint(1);\n"
+        "\n"
+        "        table.request_route(hint, 1000);\n"
+        "\n"
+        "        // Fresh pending request blocks re-discovery\n"
+        "        assert!(table.is_route_pending_fresh(&hint, 1000));\n"
+        "        assert!(table.is_route_pending_fresh(\n"
+        "            &hint,\n"
+        "            1000 + MAX_ROUTE_REQUEST_AGE_SECS - 1\n"
+        "        ));\n"
+        "\n"
+        "        // Stale pending request (older than the window) must not block\n"
+        "        assert!(!table.is_route_pending_fresh(&hint, 1000 + MAX_ROUTE_REQUEST_AGE_SECS));\n"
+        "        // Raw entry is still pending until cleanup() runs\n"
+        "        assert!(table.is_route_pending(&hint));\n"
+        "    }\n",
+    ),
+])
+
+# ---- negative_cache.rs: recurring-confirmation test ----
+patch("core/src/routing/negative_cache.rs", [
+    (
+        "        // Just below the boundary (0.49) should not be exempted\n"
+        "        let cached = cache.record_unreachable_with_reputation(\"just_below\".to_string(), 0.49);\n"
+        "        assert!(cached, \"Peer below 0.5 should be cached\");\n"
+        "    }\n"
+        "}\n",
+        "        // Just below the boundary (0.49) should not be exempted\n"
+        "        let cached = cache.record_unreachable_with_reputation(\"just_below\".to_string(), 0.49);\n"
+        "        assert!(cached, \"Peer below 0.5 should be cached\");\n"
+        "    }\n"
+        "\n"
+        "    #[test]\n"
+        "    fn test_reputation_exemption_recurring_failures() {\n"
+        "        let mut cache = NegativeCache::with_defaults();\n"
+        "\n"
+        "        // Two consecutive low-reputation failures create a cache entry\n"
+        "        // with confirmation_count == 2 (recurring confirmed unreachability)\n"
+        "        assert!(cache.record_unreachable_with_reputation(\"flaky_peer\".to_string(), 0.4));\n"
+        "        assert!(cache.record_unreachable_with_reputation(\"flaky_peer\".to_string(), 0.4));\n"
+        "\n"
+        "        // Reputation later recovers, but recurring confirmations stand:\n"
+        "        // a peer with >= 2 confirmed failures is not masked by reputation.\n"
+        "        assert!(\n"
+        "            cache.record_unreachable_with_reputation(\"flaky_peer\".to_string(), 0.9),\n"
+        "            \"recurring confirmations must override the reputation exemption\"\n"
+        "        );\n"
+        "        assert!(cache.is_definitely_unreachable(\"flaky_peer\"));\n"
+        "    }\n"
+        "}\n",
+    ),
+])
+
+print("ALL CORRECTIVE PATCHES APPLIED")

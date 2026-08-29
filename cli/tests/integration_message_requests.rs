@@ -143,7 +143,12 @@ fn message_request_lifecycle_accept() {
         // looks at (T2).
         let contacts = bob.contacts_store_manager().list().expect("list contacts");
         assert_eq!(contacts.len(), 1);
-        assert_eq!(contacts[0].peer_id, alice_identity_id);
+        // UNIFICATION V2 P0: the canonical contact identifier is the Ed25519
+        // public_key_hex, not the derived identity_id. AcceptMessageRequest
+        // stores the pubkey as peer_id (matching ContactsManager::add()'s
+        // live canonicalization), so assert against Alice's public key.
+        let alice_pubkey = pubkey(&alice);
+        assert_eq!(contacts[0].peer_id, alice_pubkey);
         assert!(
             !contacts[0].public_key.is_empty(),
             "accepted contact must have a real public key"

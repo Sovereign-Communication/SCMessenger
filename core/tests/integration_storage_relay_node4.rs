@@ -55,11 +55,13 @@ fn node4_layer1_and_layer4_contact_serialization_disk_persistence() {
 
         assert_eq!(manager.count(), 2);
 
-        let alice = manager.get("peer-alice".to_string()).unwrap().unwrap();
+        // UNIFICATION_V2: add() canonicalizes peer_id to the public-key hex, so
+        // lookups must use the canonical hex form rather than the raw "peer-*" id.
+        let alice = manager.get(valid_pubkey_1.clone()).unwrap().unwrap();
         assert_eq!(alice.display_name(), "Alice");
         assert_eq!(alice.public_key, valid_pubkey_1);
 
-        let bob = manager.get("peer-bob".to_string()).unwrap().unwrap();
+        let bob = manager.get(valid_pubkey_2.clone()).unwrap().unwrap();
         assert_eq!(bob.display_name(), "Bobby");
         assert_eq!(
             bob.last_known_device_id.as_deref(),
@@ -68,7 +70,7 @@ fn node4_layer1_and_layer4_contact_serialization_disk_persistence() {
 
         // Lookup by public key
         let alice_by_pk = manager.get_by_public_key(&valid_pubkey_1).unwrap().unwrap();
-        assert_eq!(alice_by_pk.peer_id, "peer-alice");
+        assert_eq!(alice_by_pk.peer_id, valid_pubkey_1);
 
         // Identity ID index resolution (blake3 hash of raw 32 pubkey bytes)
         let pk_bytes = hex::decode(&valid_pubkey_1).unwrap();
