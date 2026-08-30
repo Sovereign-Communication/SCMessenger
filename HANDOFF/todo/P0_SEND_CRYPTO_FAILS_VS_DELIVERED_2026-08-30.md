@@ -45,11 +45,53 @@ signature path. This is a separate root-cause ticket.
 3. Confirm the identity_id vs public_key the Pixel currently advertises
    vs the one Windows has cached in contacts.
 
-## Fix direction (once root-caused)
+## CONFIRMED ROOT CAUSE (2026-08-30) -- BLE envelope truncation, not key divergence
 
-- On Drift signature failure for a peer whose identity envelope was recently
-  learned, re-resolve the peer's CURRENT public key (from the identity
-  envelope) and re-verify before rejecting, rather than failing against a
-  stale cached key.
-- Ensure a device's signing key and its advertised public-key/identity_id can
-  never diverge after reinstall/rotation (identity bookkeeping invariant).
+Live Windows-node capture (route `ble_gatt_ingress`, Pixel 6a as peripheral):
+
+```
+08:46:06  Received PeerJoined: 12D3KooWNkx3... (Pixel, via 192.168.0.129)
+08:46:09  WARN iron_core: Failed to decode drift envelope: BufferTooShort { need: 1358, got: 1173 }
+08:46:11  Peer left: 12D3KooWNkx3...
+08:46:38  WARN iron_core: Drift envelope signature verification failed:
+          IoError("Signature verification failed: ... Verification equation was not satisfied")
+          -- route=ble_gatt_ingress
+```
+
+Mechanism: the CLI's central GATT ingress decoded each BLE notify notification as a
+complete Drift envelope with NO fragment reassembly. The Android sender fragments
+messages >~508B into multiple notifications (4-byte `GattFragmentHeader` + chunk);
+Windows received the chunks and either failed `BufferTooShort` or verified a corrupt
+signature on the partial tail -- the reported "crypto fails". No key divergence on
+this path. Reproduces `P2_WIRE_ENVELOPE_TRUNCATION_2026-08-10`.
+
+## FIX LANDED (2026-08-30) -- ble_gatt_ingress reassembly
+
+`cli/src/ble_mesh.rs` (`subscribe_ingress_for_peripheral`) now buffers
+multi-notification fragments and reassembles via the core `GattReassembler` before
+decode, mirroring `ble_windows.rs`. Un-fragmented/legacy payloads pass through;
+single-fragment (total=1) headers are stripped; buffers are bounded (30s expiry,
+4096-fragment cap). Never decodes/verifies partial bytes.
+
+- Branch `fix/ble-gatt-ingress-reassembly`, commit `1831ca4e`, PR **#250**.
+- Verified: `cargo test -p scmessenger-cli --bin scmessenger-cli ble_mesh::` -> **6/6 pass**
+  (4 new reassembly/edge tests + 2 existing; no regression).
+- Windows node redeployed to PR merge build (Core Provenance 0.4.0 `9b3980b:HEAD`),
+  identity preserved (pubkey `30d0fa67` / peer `12D3KooWD6vZQrU`), meshed with AWS relay.
+
+### Remaining LGTM step (operator-gated)
+
+Pixel 6a in BLE range + foregrounded, then Pixel->Windows (contact add + message)
+over BLE to confirm a large fragmented envelope reassembles and verifies cleanly (no
+further `BufferTooShort` / `equation not satisfied` on `ble_gatt_ingress`).
+
+## Prior (key-divergence) fix direction -- only if truncation fix does not clear it
+
+The prior "post-rotation key divergence" (identity_ids `b6486de2`, `d01c3751`,
+`b46dcf21`; peer ids `12D3KooWJoW9r`/`12D3KooWNkx3`) is NOT refuted as a possible
+cause of some instance, but the live recurring symptom is truncation. If the
+truncation fix does not clear `ble_gatt_ingress`, then:
+- On Drift signature failure for a peer whose identity envelope was recently learned,
+  re-resolve the peer's CURRENT public key and re-verify before rejecting.
+- Ensure a device's signing key and its advertised public-key/identity_id can never
+  diverge after reinstall/rotation (identity bookkeeping invariant).

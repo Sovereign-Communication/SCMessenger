@@ -12,7 +12,7 @@ use btleplug::platform::{Manager, Peripheral};
 use futures_util::{FutureExt, StreamExt};
 use scmessenger_core::drift::frame::{DriftFrame, FrameType};
 use scmessenger_core::drift::DriftEnvelope;
-use scmessenger_core::transport::ble::GattFragmentHeader;
+use scmessenger_core::transport::ble::{GattFragmentHeader, GattReassembler};
 use scmessenger_core::wasm_support::rpc::{notif_message_received, MessageReceivedParams};
 use scmessenger_core::IronCore;
 use std::collections::HashMap;
@@ -106,6 +106,104 @@ fn fragment_metadata(data: &[u8]) -> (Option<usize>, Option<usize>) {
             )
         })
         .unwrap_or((None, None))
+}
+
+/// One peer's inbound GATT fragment buffer. A single BLE message may be split into
+/// `total_fragments` notify notifications (each: 4-byte `GattFragmentHeader` + payload
+/// chunk); collect them here and emit the reassembled envelope once all are present.
+struct PeerReassembly {
+    total_fragments: usize,
+    fragments: HashMap<u16, Vec<u8>>,
+    last_seen: std::time::Instant,
+}
+
+/// Drop a buffered stream that never completes this long after its last fragment — a
+/// lost mid-message fragment must not pin memory (or a stale buffer) indefinitely.
+const REASSEMBLY_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Upper bound on distinct retained fragments per peer (bounds a hostile/erroneous stream).
+const REASSEMBLY_MAX_FRAGMENTS: usize = 4096;
+
+impl PeerReassembly {
+    fn new(total_fragments: usize) -> Self {
+        Self {
+            total_fragments,
+            fragments: HashMap::new(),
+            last_seen: std::time::Instant::now(),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.last_seen.elapsed() > REASSEMBLY_MAX_AGE
+    }
+
+    /// Store one fragment; return the fully reassembled envelope once every fragment in
+    /// `0..total` is present (in index order), or `None` while still awaiting fragments.
+    fn insert(&mut self, index: u16, payload: Vec<u8>) -> Option<Vec<u8>> {
+        self.last_seen = std::time::Instant::now();
+        if self.fragments.len() >= REASSEMBLY_MAX_FRAGMENTS {
+            return None; // hostile/erroneous stream: give up cleanly
+        }
+        self.fragments.insert(index, payload);
+        if self.fragments.len() < self.total_fragments {
+            return None; // still awaiting more fragments
+        }
+
+        let mut ordered = Vec::with_capacity(self.total_fragments);
+        for i in 0..self.total_fragments as u16 {
+            // Reconstruct each stored chunk back into a headed fragment so the existing
+            // core reassembler (same convention as the write path and ble_windows.rs)
+            // verifies ordering and concatenates payloads.
+            let chunk = match self.fragments.remove(&i) {
+                Some(c) => c,
+                None => {
+                    self.fragments.clear();
+                    return None;
+                }
+            };
+            let mut full = GattFragmentHeader::new(self.total_fragments as u16, i)
+                .ok()?
+                .to_bytes()
+                .to_vec();
+            full.extend_from_slice(&chunk);
+            ordered.push(full);
+        }
+        GattReassembler::reassemble(&ordered).ok()
+    }
+}
+
+/// Route one raw GATT notification through reassembly, returning `Some(bytes)` when a
+/// complete message is ready to decode — never partial bytes. Senders that do not
+/// fragment (no parseable header) pass straight through unchanged.
+fn ingest_ble_notification(buffer: &mut Option<PeerReassembly>, value: &[u8]) -> Option<Vec<u8>> {
+    let header = match GattFragmentHeader::from_bytes(value) {
+        Ok(header) => header,
+        Err(_) => return Some(value.to_vec()), // unfragmented / legacy message
+    };
+    let payload = if value.len() > 4 {
+        value[4..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let total = header.total_fragments as usize;
+    if total == 1 {
+        // Single-fragment message: header + full envelope; supersedes a partial stream.
+        *buffer = None;
+        return Some(payload);
+    }
+
+    // Multi-fragment stream: reuse an active buffer, or restart when the declared
+    // partition changed or the prior stream went stale.
+    let needs_new = match buffer.as_ref() {
+        Some(b) => b.is_expired() || b.total_fragments != total,
+        None => true,
+    };
+    if needs_new {
+        *buffer = Some(PeerReassembly::new(total));
+    }
+    let b = buffer.as_mut()?;
+    b.insert(header.fragment_index, payload)
 }
 
 fn log_ble_payload_diagnostic(
@@ -298,10 +396,17 @@ async fn subscribe_ingress_for_peripheral(
         }
     };
 
+    // Buffer an inbound fragmented GATT message per peripheral until all its fragments
+    // arrive, so a truncated envelope is reassembled rather than decoded/verified against
+    // partial bytes (the P0 ble_gatt_ingress truncation bug).
+    let mut reassembly: Option<PeerReassembly> = None;
     while let Some(note) = stream.next().await {
+        let peer = guard.peer_id.as_deref().unwrap_or(&addr);
+
+        // Fast path: a complete, unfragmented envelope decodes directly.
         if let Some(params) = decode_ble_payload_for_ui(core.as_ref(), &note.value) {
+            reassembly = None; // a whole message supersedes any earlier partial stream
             let (fragment_index, fragment_count) = fragment_metadata(&note.value);
-            let peer = guard.peer_id.as_deref().unwrap_or(&addr);
             log_ble_payload_diagnostic(
                 "ble_gatt_ingress",
                 peer,
@@ -311,16 +416,44 @@ async fn subscribe_ingress_for_peripheral(
                 "received_and_decrypted",
             );
             push_message_to_ui(&ui_tx, params);
+            continue;
+        }
+
+        // Not a complete envelope: route through fragment reassembly so a truncated
+        // inbound message is reconstructed before decode, never verified on partial bytes.
+        if let Some(message) = ingest_ble_notification(&mut reassembly, &note.value) {
+            let (fragment_index, fragment_count) = fragment_metadata(&note.value);
+            if let Some(params) = decode_ble_payload_for_ui(core.as_ref(), &message) {
+                reassembly = None;
+                log_ble_payload_diagnostic(
+                    "ble_gatt_ingress",
+                    peer,
+                    &note.value,
+                    fragment_index,
+                    fragment_count,
+                    "received_and_decrypted",
+                );
+                push_message_to_ui(&ui_tx, params);
+            } else {
+                reassembly = None;
+                log_ble_payload_diagnostic(
+                    "ble_gatt_ingress",
+                    peer,
+                    &note.value,
+                    fragment_index,
+                    fragment_count,
+                    "decode_or_decrypt_error",
+                );
+            }
         } else {
             let (fragment_index, fragment_count) = fragment_metadata(&note.value);
-            let peer = guard.peer_id.as_deref().unwrap_or(&addr);
             log_ble_payload_diagnostic(
                 "ble_gatt_ingress",
                 peer,
                 &note.value,
                 fragment_index,
                 fragment_count,
-                "decode_or_decrypt_error",
+                "awaiting_fragments",
             );
         }
     }
@@ -869,6 +1002,91 @@ mod tests {
         let _ = core.start();
         let junk = [0u8; 4];
         assert!(decode_ble_payload_for_ui(&core, &junk).is_none());
+    }
+
+    #[test]
+    fn ingest_reassembles_fragmented_envelope() {
+        // Payload larger than a single 512-byte GATT characteristic write, so the
+        // sender would split it; verify reassembly reconstructs the original bytes
+        // even when fragments arrive out of order.
+        let original: Vec<u8> = (0..2000u32).map(|i| (i % 251) as u8).collect();
+        let fragments = scmessenger_core::transport::ble::GattFragmenter::fragment(&original)
+            .expect("fragment");
+        assert!(fragments.len() > 1);
+
+        let mut buffer = None;
+        let expected = fragments.len();
+        for (order, i) in [1usize, 0, 2, 3, 4, 5, 6]
+            .into_iter()
+            .take(expected)
+            .enumerate()
+        {
+            let out = ingest_ble_notification(&mut buffer, &fragments[i]);
+            if order + 1 == expected {
+                assert_eq!(out.expect("final fragment completes reassembly"), original);
+            } else {
+                assert!(out.is_none(), "should still be awaiting fragments");
+            }
+        }
+    }
+
+    #[test]
+    fn ingest_single_fragment_strips_header() {
+        let header = scmessenger_core::transport::ble::GattFragmentHeader::new(1, 0).unwrap();
+        let mut value = header.to_bytes().to_vec();
+        value.extend_from_slice(b"hello");
+        let mut buffer = None;
+        assert_eq!(
+            ingest_ble_notification(&mut buffer, &value),
+            Some(b"hello".to_vec())
+        );
+    }
+
+    #[test]
+    fn ingest_unfragmented_passthrough() {
+        // First 4 bytes encode total=0 (invalid fragment header), so the whole value
+        // must pass through unchanged rather than be swallowed into a fragment buffer.
+        let mut value = vec![0u8; 4];
+        value.extend_from_slice(b"envelope-tail");
+        let mut buffer = None;
+        assert_eq!(ingest_ble_notification(&mut buffer, &value), Some(value));
+    }
+
+    #[test]
+    fn ingest_partition_change_restarts_buffer() {
+        let mut buffer = None;
+        // A two-fragment stream starts but never completes.
+        let f1 = {
+            let h = scmessenger_core::transport::ble::GattFragmentHeader::new(2, 0).unwrap();
+            let mut v = h.to_bytes().to_vec();
+            v.extend_from_slice(&[0xAA; 200]);
+            v
+        };
+        assert!(ingest_ble_notification(&mut buffer, &f1).is_none());
+
+        // A differently-partitioned (total=3) stream begins -> buffer must restart.
+        let g0 = {
+            let h = scmessenger_core::transport::ble::GattFragmentHeader::new(3, 0).unwrap();
+            let mut v = h.to_bytes().to_vec();
+            v.extend_from_slice(&[0xBB; 200]);
+            v
+        };
+        assert!(ingest_ble_notification(&mut buffer, &g0).is_none());
+        let g1 = {
+            let h = scmessenger_core::transport::ble::GattFragmentHeader::new(3, 1).unwrap();
+            let mut v = h.to_bytes().to_vec();
+            v.extend_from_slice(&[0xBB; 200]);
+            v
+        };
+        let g2 = {
+            let h = scmessenger_core::transport::ble::GattFragmentHeader::new(3, 2).unwrap();
+            let mut v = h.to_bytes().to_vec();
+            v.extend_from_slice(&[0xBB; 200]);
+            v
+        };
+        assert!(ingest_ble_notification(&mut buffer, &g1).is_none());
+        let assembled = ingest_ble_notification(&mut buffer, &g2).expect("complete total=3");
+        assert_eq!(assembled, vec![0xBB; 600]);
     }
 
     #[test]
