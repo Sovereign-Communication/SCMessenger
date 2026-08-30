@@ -229,11 +229,17 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: match the peer by either id flavor, exactly like conversation()
+        // (derived once per call, never per record).
+        let filter_identity_id =
+            crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if record.hidden
+                && history_peer_matches(peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 record.hidden = false;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -253,11 +259,17 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: match the peer by either id flavor, exactly like conversation()
+        // (derived once per call, never per record).
+        let filter_identity_id =
+            crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if !record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if !record.hidden
+                && history_peer_matches(peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 record.hidden = true;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -305,12 +317,17 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: remove exactly the set conversation() returns for this peer, so a
+        // thread visible under the pubkey flavor is actually deletable (derived
+        // once per call, never per record).
+        let filter_identity_id =
+            crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
         for (key, value) in all {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
 
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref()) {
                 self.backend
                     .remove(&key)
                     .map_err(|_| IronCoreError::StorageError)?;
@@ -460,6 +477,37 @@ impl HistoryManager {
 mod tests {
     use super::*;
     use crate::store::backend::MemoryStorage;
+
+    #[test]
+    fn test_history_peer_matches_id_flavors() {
+        // Real keypair so the pubkey filter derives a genuine identity_id
+        // (same construction as crate::identity::keys::KeyPair::generate).
+        use ed25519_dalek::SigningKey;
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
+            .expect("valid pubkey must derive identity_id");
+
+        // Pubkey filter reaches BOTH the pubkey-keyed record and its derived identity_id record.
+        assert!(history_peer_matches(&pubkey_hex, &pubkey_hex, None));
+        assert!(history_peer_matches(&pubkey_hex, &identity_id, Some(&identity_id)));
+
+        // Identity_id filter: the one-way derivation returns None for an identity_id
+        // (not a valid curve point), so only the exact identity_id record matches.
+        assert!(history_peer_matches(&identity_id, &identity_id, None));
+        assert!(!history_peer_matches(&identity_id, &pubkey_hex, None));
+
+        // Empty and non-hex filters: exact match only, never a derived match.
+        assert!(!history_peer_matches("", &identity_id, None));
+        assert!(!history_peer_matches("12D3KooWNotHexId", &identity_id, None));
+        assert!(!history_peer_matches("not-hex!!!", &identity_id, None));
+
+        // Case-insensitive exact match is preserved.
+        assert!(history_peer_matches(&identity_id.to_uppercase(), &identity_id, None));
+    }
 
     #[test]
     fn test_case_insensitive_peer_id_matching() {

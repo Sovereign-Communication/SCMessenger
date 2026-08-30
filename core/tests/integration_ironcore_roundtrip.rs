@@ -497,4 +497,38 @@ fn test_history_conversation_coalesces_pubkey_and_identity_flavors() {
         by_identity.len(),
         "D4: a thread keyed by public_key_hex must coalesce exactly with the identity_id-keyed records"
     );
+
+    // No over-match: a THIRD party's public key must not reach Bob's records.
+    let carol = make_node();
+    let carol_thread = alice
+        .history_store_manager()
+        .conversation(pubkey(&carol), 50)
+        .expect("conversation by carol pubkey must not error");
+    assert!(
+        carol_thread.is_empty(),
+        "D4: a stranger's public key must not coalesce into Bob's thread"
+    );
+
+    // Delete symmetry: a thread visible under the pubkey flavor must be
+    // deletable by that flavor (regression for the remove_conversation hole).
+    alice
+        .history_store_manager()
+        .remove_conversation(pubkey(&bob))
+        .expect("remove_conversation by pubkey flavor must not error");
+    assert!(
+        alice
+            .history_store_manager()
+            .conversation(pubkey(&bob), 50)
+            .expect("conversation after removal must not error")
+            .is_empty(),
+        "D4: remove_conversation by pubkey flavor must delete the coalesced thread"
+    );
+    assert!(
+        alice
+            .history_store_manager()
+            .conversation(identity_id.clone(), 50)
+            .expect("conversation by identity_id after removal must not error")
+            .is_empty(),
+        "D4: removal by either flavor must empty the thread"
+    );
 }
