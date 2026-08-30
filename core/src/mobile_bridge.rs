@@ -2657,9 +2657,16 @@ pub struct HistoryStats {
 /// contact's peer_id is its public key), so an exact match would silently
 /// split one identity into two threads. The derivation is one-way, so
 /// identity_id-keyed lookups cannot invert back to a public key; that is fine
-/// because no pubkey-keyed history records exist to match. `filter_identity_id`
-/// is precomputed once per query (Ed25519 curve validation + blake3), never
-/// per record.
+/// In this store BOTH flavors genuinely coexist (sent records are written under
+/// the contact's public_key_hex peerId while received records use the canonical
+/// identity_id), so matching both flavors per record is required rather than
+/// decorative; Android canonicalizes reads to pubkey, which is why this was a
+/// split-thread symptom on the UI rather than an outright miss. The derivation
+/// is one-way, so identity_id-flavor lookups cannot invert back to a public
+/// key; pubkey-keyed records written under the contact peerId remain reachable
+/// only by pubkey queries (residual, matches the core store's behavior).
+/// `filter_identity_id` is precomputed once per query (Ed25519 curve validation
+/// + blake3), never per record.
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
@@ -2963,14 +2970,16 @@ impl HistoryManager {
     pub fn clear_conversation(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         let mut to_delete = Vec::new();
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
 
         for item in db.iter() {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
-            // P0_SECURITY_001: Case-insensitive peer ID matching to match generic HistoryManager behavior
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            // P0_SECURITY_001: Case-insensitive, flavor-coalesced peer ID matching
+            // to match generic HistoryManager behavior.
+            if history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref()) {
                 to_delete.push(key.to_vec());
             }
         }
@@ -4701,12 +4710,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_keypair_pubkey_and_identity_id() -> (String, String) {
-        use ed25519_dalek::SigningKey;
-        use rand::RngCore;
-        let mut secret = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut secret);
-        let sk = SigningKey::from_bytes(&secret);
-        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let keys = crate::identity::keys::IdentityKeys::generate();
+        let pubkey_hex = keys.public_key_hex();
         let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
             .expect("valid pubkey must derive identity_id");
         (pubkey_hex, identity_id)
@@ -4780,13 +4785,15 @@ mod tests {
 
         // remove_conversation by pubkey flavor removes the identity_id record.
         manager.remove_conversation(pubkey_hex.clone()).unwrap();
-        assert!(manager.recent(Some(pubkey_hex), 10).unwrap().is_empty());
+        assert!(manager
+            .recent(Some(pubkey_hex.clone()), 10)
+            .unwrap()
+            .is_empty());
         assert!(manager
             .recent(Some(identity_id.clone()), 10)
             .unwrap()
-            .is_empty());
-
-        // hide/unhide by pubkey flavor still affect the identity_id record.
+            .is_empty()); // hide/unhide via the PUBKEY flavor must still affect the identity_id
+                          // record (these queries exercise the coalesced branch, not exact match).
         let re_added = MessageRecord {
             id: "rec-2".to_string(),
             direction: MessageDirection::Received,
@@ -4799,8 +4806,11 @@ mod tests {
             hidden: false,
         };
         manager.add(re_added).unwrap();
-        let hidden = manager.hide_messages_for_peer(identity_id.clone()).unwrap();
-        assert_eq!(hidden, 1);
+        let hidden = manager.hide_messages_for_peer(pubkey_hex.clone()).unwrap();
+        assert_eq!(
+            hidden, 1,
+            "pubkey-flavor hide must reach the identity_id record"
+        );
         // hidden record is excluded from normal queries but visible to admin path.
         assert!(manager
             .recent(Some(identity_id.clone()), 10)
@@ -4808,10 +4818,31 @@ mod tests {
             .is_empty());
         assert_eq!(
             manager
-                .recent_including_hidden(Some(identity_id), 10)
+                .recent_including_hidden(Some(identity_id.clone()), 10)
                 .unwrap()
                 .len(),
             1
         );
+        let unhidden = manager
+            .unhide_messages_for_peer(pubkey_hex.clone())
+            .unwrap();
+        assert_eq!(
+            unhidden, 1,
+            "pubkey-flavor unhide must reach the identity_id record"
+        );
+        assert_eq!(
+            manager.recent(Some(identity_id.clone()), 10).unwrap().len(),
+            1
+        );
+        assert!(!manager.recent(Some(identity_id.clone()), 10).unwrap()[0].hidden);
+
+        // clear_conversation via the pubkey flavor deletes the identity_id record
+        // (the Android swipe-to-delete path passes a public key).
+        manager.clear_conversation(pubkey_hex.clone());
+        assert!(manager
+            .recent(Some(pubkey_hex.clone()), 10)
+            .unwrap()
+            .is_empty());
+        assert!(manager.recent(Some(identity_id), 10).unwrap().is_empty());
     }
 }
