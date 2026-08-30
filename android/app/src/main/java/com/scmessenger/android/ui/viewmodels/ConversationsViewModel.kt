@@ -450,13 +450,17 @@ class ConversationsViewModel @Inject constructor(
         message: uniffi.api.MessageRecord,
         nowEpochSec: Long = System.currentTimeMillis() / 1000
     ): DeliveryStatePresentation {
-        val pendingPair = meshRepository.getPendingDeliverySnapshot(message.id)
+        // One outbox read per pending row: getPendingDeliverySnapshot carries
+        // attemptCount, nextAttemptAtEpochSec AND the exhausted flag together,
+        // so composition never pays a second (or third) synchronous file read.
+        val info = meshRepository.getPendingDeliverySnapshot(message.id)
         val terminalFailureCode = meshRepository.getPendingTerminalFailureCode(message.id)
-        val pending = pendingPair?.let {
+        val pending = info?.let {
             PendingDeliverySnapshot(
-                attemptCount = it.first,
-                nextAttemptAtEpochSec = it.second,
-                terminalFailureCode = terminalFailureCode
+                attemptCount = it.attemptCount,
+                nextAttemptAtEpochSec = it.nextAttemptAtEpochSec,
+                terminalFailureCode = terminalFailureCode,
+                exhausted = it.exhausted
             )
         }
         return DeliveryStateMapper.resolve(
