@@ -9,6 +9,22 @@ use thiserror::Error;
 /// Maximum GATT characteristic write size (protocol limitation)
 pub const MAX_CHARACTERISTIC_SIZE: usize = 512;
 
+/// Upper bound on the number of fragments a single GATT message may declare.
+///
+/// A real envelope is at most a few KB (the Drift transport caps payloads at
+/// [`crate::drift::frame::FRAME_MAX_PAYLOAD`], 64 KB), and each fragment carries
+/// `MAX_CHARACTERISTIC_SIZE - 4` = 508 payload bytes, so a legitimate stream can
+/// never exceed ~130 fragments. Treating any larger `total_fragments` as a header
+/// lets an *unfragmented* envelope whose first four bytes happen to read as a
+/// plausible `[total][index]` pair be misclassified as a fragment stream. That
+/// misroute buffers a bogus stream that never completes (the real bytes are
+/// consumed as a fragment) and produces truncated-decode / signature-failure
+/// noise on `ble_gatt_ingress`. Rejecting impossible totals keeps the
+/// classification unambiguous: only a genuine sender fragment can declare a count
+/// this small. This bound is intentionally generous (512 >> 130) so no real
+/// sender is affected.
+pub const MAX_GATT_FRAGMENTS: usize = 512;
+
 /// Default maximum outstanding writes before backpressure
 pub const DEFAULT_MAX_OUTSTANDING_WRITES: usize = 10;
 
@@ -68,6 +84,11 @@ impl GattFragmentHeader {
 
     /// Create a new fragment header
     pub fn new(total_fragments: u16, fragment_index: u16) -> Result<Self, GattError> {
+        if total_fragments == 0 || total_fragments as usize > MAX_GATT_FRAGMENTS {
+            return Err(GattError::FragmentationError(format!(
+                "Fragment total out of plausible range: {total_fragments} > {MAX_GATT_FRAGMENTS}"
+            )));
+        }
         if fragment_index >= total_fragments {
             return Err(GattError::FragmentationError(
                 "Fragment index out of range".to_string(),
@@ -297,6 +318,41 @@ mod tests {
     fn test_gatt_fragment_header_invalid_index() {
         let result = GattFragmentHeader::new(5, 5);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gatt_fragment_header_zero_total_rejected() {
+        let result = GattFragmentHeader::new(0, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gatt_fragment_header_impossible_total_rejected() {
+        // A real GattFragmenter can never emit more than MAX_GATT_FRAGMENTS (512)
+        // fragments: a 64 KB envelope at 508 payload bytes/fragment is ~130. An
+        // unfragmented envelope whose first bytes read as a huge total (e.g. the
+        // observed 33025, with a lower index) must therefore not be accepted as a
+        // fragment header, else `ble_gatt_ingress` buffers it as a phantom stream.
+        assert!(GattFragmentHeader::new(MAX_GATT_FRAGMENTS as u16 + 1, 1).is_err());
+        assert!(GattFragmentHeader::new(33025, 17381).is_err());
+    }
+
+    #[test]
+    fn test_gatt_fragment_header_maximum_total_accepted() {
+        // The bound must remain permissive enough for any legitimate stream:
+        // exactly MAX_GATT_FRAGMENTS is accepted, with a valid in-range index.
+        assert!(
+            GattFragmentHeader::new(MAX_GATT_FRAGMENTS as u16, 0).is_ok(),
+            "exactly-at-bound total stays valid"
+        );
+    }
+
+    #[test]
+    fn test_gatt_fragment_header_from_bytes_rejects_impossible_total() {
+        let mut bytes = vec![0u8; 8];
+        bytes[0..2].copy_from_slice(&33025u16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&17381u16.to_le_bytes());
+        assert!(GattFragmentHeader::from_bytes(&bytes).is_err());
     }
 
     #[test]

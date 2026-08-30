@@ -1053,6 +1053,39 @@ mod tests {
     }
 
     #[test]
+    fn ingest_unfragmented_with_plausible_looking_header_passes_through() {
+        // Live regression (P0 send-crypto root cause / #251): an *unfragmented*
+        // Drift envelope whose first four bytes read as a plausible fragment header
+        // used to be misrouted into reassembly. On the wire this manifest as e.g.
+        // `fragment_index=17381, total_fragments=33025` — a pairing that satisfies
+        // the old `index < total` check but is an impossible total for any genuine
+        // GattFragmenter stream (a 64 KB envelope has ~130 fragments at most).
+        //
+        // A real observed ingress value carried these exact leading bytes followed
+        // by the unfragmented payload; the whole value must pass through unchanged
+        // and reach the direct-decode path, never be buffered as a pending stream.
+        let total = 33025u16; // 0x8101
+        let index = 17381u16; // 0x43E5 (index < total, so it passed the old parse)
+        let mut value = total.to_le_bytes().to_vec();
+        value.extend_from_slice(&index.to_le_bytes());
+        value.extend_from_slice(b"drift-envelope-payload-that-parsed-as-header-before");
+
+        // The plausible-looking header is no longer a valid one.
+        assert!(
+            GattFragmentHeader::from_bytes(&value).is_err(),
+            "impossible fragment total must be rejected"
+        );
+
+        // Unfragmented passthrough: the whole value emerges intact for direct decode.
+        let mut buffer = None;
+        assert_eq!(ingest_ble_notification(&mut buffer, &value), Some(value));
+        assert!(
+            buffer.is_none(),
+            "unfragmented envelope must not start a reassembly stream"
+        );
+    }
+
+    #[test]
     fn ingest_partition_change_restarts_buffer() {
         let mut buffer = None;
         // A two-fragment stream starts but never completes.
