@@ -231,8 +231,7 @@ impl HistoryManager {
 
         // D4: match the peer by either id flavor, exactly like conversation()
         // (derived once per call, never per record).
-        let filter_identity_id =
-            crate::identity::keys::identity_id_from_public_key_hex(peer_id);
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
@@ -261,8 +260,7 @@ impl HistoryManager {
 
         // D4: match the peer by either id flavor, exactly like conversation()
         // (derived once per call, never per record).
-        let filter_identity_id =
-            crate::identity::keys::identity_id_from_public_key_hex(peer_id);
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
@@ -320,8 +318,7 @@ impl HistoryManager {
         // D4: remove exactly the set conversation() returns for this peer, so a
         // thread visible under the pubkey flavor is actually deletable (derived
         // once per call, never per record).
-        let filter_identity_id =
-            crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
         for (key, value) in all {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
@@ -493,7 +490,11 @@ mod tests {
 
         // Pubkey filter reaches BOTH the pubkey-keyed record and its derived identity_id record.
         assert!(history_peer_matches(&pubkey_hex, &pubkey_hex, None));
-        assert!(history_peer_matches(&pubkey_hex, &identity_id, Some(&identity_id)));
+        assert!(history_peer_matches(
+            &pubkey_hex,
+            &identity_id,
+            Some(&identity_id)
+        ));
 
         // Identity_id filter: only the exact identity_id record matches. The
         // caller passes `None` here because a raw identity_id filter's
@@ -504,11 +505,19 @@ mod tests {
 
         // Empty and non-hex filters: exact match only, never a derived match.
         assert!(!history_peer_matches("", &identity_id, None));
-        assert!(!history_peer_matches("12D3KooWNotHexId", &identity_id, None));
+        assert!(!history_peer_matches(
+            "12D3KooWNotHexId",
+            &identity_id,
+            None
+        ));
         assert!(!history_peer_matches("not-hex!!!", &identity_id, None));
 
         // Case-insensitive exact match is preserved.
-        assert!(history_peer_matches(&identity_id.to_uppercase(), &identity_id, None));
+        assert!(history_peer_matches(
+            &identity_id.to_uppercase(),
+            &identity_id,
+            None
+        ));
     }
 
     #[test]
@@ -541,7 +550,10 @@ mod tests {
         // Hide by the PUBKEY flavor must reach the identity_id-keyed record.
         assert_eq!(history.hide_messages_for_peer(&pubkey_hex).unwrap(), 1);
         assert!(
-            history.conversation(pubkey_hex.clone(), 50).unwrap().is_empty(),
+            history
+                .conversation(pubkey_hex.clone(), 50)
+                .unwrap()
+                .is_empty(),
             "hidden record must disappear from normal queries"
         );
         assert_eq!(
