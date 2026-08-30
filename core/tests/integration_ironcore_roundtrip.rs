@@ -443,3 +443,92 @@ fn test_receipt_roundtrip_flips_state() {
         "a Delivered receipt must clear the matching sender outbox entry"
     );
 }
+
+/// D4 coalescing: inbound history is stored under the sender's canonical
+/// identity_id while a contact / thread lookup is often keyed by the same
+/// identity's public_key_hex flavor. Querying the conversation by EITHER form
+/// must return the same messages, so a single identity never appears as two
+/// split threads.
+#[test]
+fn test_history_conversation_coalesces_pubkey_and_identity_flavors() {
+    let alice = make_node();
+    let bob = make_node();
+
+    let bob_msg = bob
+        .prepare_message(
+            pubkey(&alice),
+            "hello from bob (D4 coalesce)".to_string(),
+            MessageType::Text,
+            None,
+        )
+        .expect("prepare must succeed");
+    let received = alice
+        .receive_message(bob_msg.envelope_data)
+        .expect("receive must succeed");
+
+    // The stored inbound record is keyed by Bob's canonical identity_id.
+    let record = alice
+        .history_store_manager()
+        .get(received.id.clone())
+        .expect("history get must not error")
+        .expect("inbound message must be recorded in history");
+    let identity_id = record.peer_id;
+
+    let by_identity = alice
+        .history_store_manager()
+        .conversation(identity_id.clone(), 50)
+        .expect("conversation by identity_id must not error");
+    assert_eq!(
+        by_identity.len(),
+        1,
+        "inbound message must coalesce under the identity_id it was stored with"
+    );
+
+    let by_pubkey = alice
+        .history_store_manager()
+        .conversation(pubkey(&bob), 50)
+        .expect("conversation by public key must not error");
+    assert!(
+        !by_pubkey.is_empty(),
+        "D4: the public_key_hex flavor must reach the identity_id-keyed records (no split thread)"
+    );
+    assert_eq!(
+        by_pubkey.len(),
+        by_identity.len(),
+        "D4: a thread keyed by public_key_hex must coalesce exactly with the identity_id-keyed records"
+    );
+
+    // No over-match: a THIRD party's public key must not reach Bob's records.
+    let carol = make_node();
+    let carol_thread = alice
+        .history_store_manager()
+        .conversation(pubkey(&carol), 50)
+        .expect("conversation by carol pubkey must not error");
+    assert!(
+        carol_thread.is_empty(),
+        "D4: a stranger's public key must not coalesce into Bob's thread"
+    );
+
+    // Delete symmetry: a thread visible under the pubkey flavor must be
+    // deletable by that flavor (regression for the remove_conversation hole).
+    alice
+        .history_store_manager()
+        .remove_conversation(pubkey(&bob))
+        .expect("remove_conversation by pubkey flavor must not error");
+    assert!(
+        alice
+            .history_store_manager()
+            .conversation(pubkey(&bob), 50)
+            .expect("conversation after removal must not error")
+            .is_empty(),
+        "D4: remove_conversation by pubkey flavor must delete the coalesced thread"
+    );
+    assert!(
+        alice
+            .history_store_manager()
+            .conversation(identity_id.clone(), 50)
+            .expect("conversation by identity_id after removal must not error")
+            .is_empty(),
+        "D4: removal by either flavor must empty the thread"
+    );
+}
