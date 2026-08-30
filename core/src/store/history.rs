@@ -90,6 +90,28 @@ pub struct HistoryManager {
     backend: Arc<dyn StorageBackend>,
 }
 
+/// D4 coalescing: history records are stored under the canonical identity_id
+/// (blake3 of the sender public key) while contacts and thread lookups are
+/// often keyed by the public_key_hex flavor on a different surface (e.g. a
+/// contact's stored `peer_id` is its public key). Match a record's peer
+/// against EITHER the queried value OR, when the query value is a public key,
+/// that key's derived identity_id, so a single identity's conversation is
+/// reachable from both forms instead of being silently split into two threads.
+/// `identity_id_from_public_key_hex` returns `None` for non-64-hex inputs
+/// (libp2p ids, already-identity_id values that are not valid curve points), in
+/// which case only the exact-match arm applies.
+fn history_peer_matches(filter: &str, record_peer: &str) -> bool {
+    if record_peer.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+    if let Some(identity_id) = crate::identity::keys::identity_id_from_public_key_hex(filter) {
+        if record_peer.eq_ignore_ascii_case(&identity_id) {
+            return true;
+        }
+    }
+    false
+}
+
 impl HistoryManager {
     pub fn new(backend: Arc<dyn StorageBackend>) -> Self {
         Self { backend }
@@ -165,7 +187,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if record.peer_id.eq_ignore_ascii_case(peer) {
+                if history_peer_matches(peer, &record.peer_id) {
                     records.push(record);
                 }
             } else {
