@@ -1,0 +1,203 @@
+package com.scmessenger.android.data
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import io.mockk.every
+import io.mockk.mockk
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import uniffi.api.Contact
+import uniffi.api.ContactManager
+import uniffi.api.IronCore
+
+/**
+ * REGRESSION GUARD for the D4 identity-split: ack messages from the Windows node
+ * arrived attributed to the identity_id (blake3 hash, e.g. `985a25f9...`) instead
+ * of the unified canonical public key (`30d0fa67...`), while the ledger merged the
+ * same pair to the public key. The message path and the ledger disagreed.
+ *
+ * Root cause (two compounding defects, confirmed from live device logs):
+ *  1. `resolveCanonicalPeerIdFromMessageHints` final fallback returned the hint's
+ *     identity_id whenever `resolvedCanonicalPeerId == senderId` — but when the
+ *     wire senderId IS already the canonical public key, that condition fires and
+ *     downgrades the canonical key to the derived hash.
+ *  2. The Pixel's contact record for `30d0fa67` had a BLANK publicKey, and
+ *     `upsertFederatedContact`'s auth guard treated blank as "key mismatch" and
+ *     rejected the fill — so the by-key lookup never matched and the fallback
+ *     fired on every inbound message.
+ *
+ * Hermetic: pure JVM + MockK. No native core library, no Robolectric.
+ */
+private class HermeticIdentityRepo(context: Context) : MeshRepository(context) {
+    override fun initializeManagers() { /* native managers unavailable on JVM */ }
+}
+
+class IdentityUnificationCanonicalIdTest {
+
+    companion object {
+        /** The Windows node's canonical public key (matches the live ledger). */
+        private val CANONICAL_PUBKEY =
+            "30d0fa678c218b225bd9c20c262b2aededc9e8cd5cd44c45187f8d71bf05967e"
+
+        /** The same node's derived identity_id (blake3 of the raw pubkey bytes). */
+        private val DERIVED_IDENTITY_ID =
+            "985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826"
+
+        private val LEGACY_LIBP2P_SENDER =
+            "12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw"
+    }
+
+    private val testRoot = File(System.getProperty("user.dir") ?: ".", "build/tmp/identity-unification-tests")
+
+    init {
+        testRoot.mkdirs()
+    }
+
+    private fun fakeContext(filesDir: File): Context =
+        mockk<Context>(relaxed = true) {
+            every { this@mockk.filesDir } returns filesDir
+            every { getSystemService(Context.CONNECTIVITY_SERVICE) } returns
+                mockk<ConnectivityManager>(relaxed = true)
+            every { getSharedPreferences(any(), any()) } returns
+                mockk<SharedPreferences>(relaxed = true)
+        }
+
+    private fun setField(target: Any, name: String, value: Any?) {
+        val field = MeshRepository::class.java.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+    }
+
+    /** Reflectively invokes the private resolveCanonicalPeerId entry point. */
+    private fun invokeResolveCanonicalPeerId(
+        repo: MeshRepository,
+        senderId: String,
+        senderPublicKeyHex: String
+    ): String {
+        val method = MeshRepository::class.java.getDeclaredMethod(
+            "resolveCanonicalPeerId",
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(repo, senderId, senderPublicKeyHex) as String
+    }
+
+    /** Reflectively invokes the private resolveCanonicalPeerIdFromMessageHints entry point. */
+    private fun invokeResolveCanonicalPeerIdFromMessageHints(
+        repo: MeshRepository,
+        resolvedCanonicalPeerId: String,
+        senderId: String,
+        senderPublicKeyHex: String,
+        hintedIdentityId: String?
+    ): String {
+        val method = MeshRepository::class.java.getDeclaredMethod(
+            "resolveCanonicalPeerIdFromMessageHints",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(
+            repo,
+            resolvedCanonicalPeerId,
+            senderId,
+            senderPublicKeyHex,
+            hintedIdentityId
+        ) as String
+    }
+
+    private fun repoWithBlankKeyContact(): Pair<MeshRepository, Contact> {
+        val repo = HermeticIdentityRepo(fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() }))
+
+        // Live defect: the Pixel's contact for the Windows node is keyed by the
+        // canonical pubkey but its publicKey field is BLANK (ledger/discovery-created
+        // before the key was known), so by-key lookups never match.
+        val blankKeyContact = Contact(
+            peerId = CANONICAL_PUBKEY,
+            nickname = null,
+            localNickname = null,
+            publicKey = "",
+            addedAt = 1u,
+            lastSeen = null,
+            notes = null,
+            lastKnownDeviceId = null,
+            verifiedAt = null,
+            isTombstone = false
+        )
+        val contactManager = mockk<ContactManager>(relaxed = true) {
+            every { list() } returns listOf(blankKeyContact)
+        }
+        val ironCore = mockk<IronCore>(relaxed = true) {
+            // resolveIdentity on a valid pubkey returns the pubkey itself.
+            every { resolveIdentity(CANONICAL_PUBKEY) } returns CANONICAL_PUBKEY
+        }
+        setField(repo, "contactManager", contactManager)
+        setField(repo, "ironCore", ironCore)
+        return repo to blankKeyContact
+    }
+
+    @Test
+    fun `message path keeps canonical pubkey when hint identity_id differs`() {
+        val (repo, _) = repoWithBlankKeyContact()
+
+        // Priority-1 resolution: senderId IS the canonical pubkey.
+        val resolved = invokeResolveCanonicalPeerId(repo, CANONICAL_PUBKEY, CANONICAL_PUBKEY)
+        assertEquals(CANONICAL_PUBKEY, resolved)
+
+        // Hint downgrade must NOT happen: identity_id hint != resolved canonical.
+        val finalCanonical = invokeResolveCanonicalPeerIdFromMessageHints(
+            repo,
+            resolvedCanonicalPeerId = CANONICAL_PUBKEY,
+            senderId = CANONICAL_PUBKEY,
+            senderPublicKeyHex = CANONICAL_PUBKEY,
+            hintedIdentityId = DERIVED_IDENTITY_ID
+        )
+        assertEquals(
+            "Canonical pubkey must not be downgraded to the hint identity_id",
+            CANONICAL_PUBKEY,
+            finalCanonical
+        )
+    }
+
+    @Test
+    fun `legacy libp2p sender still prefers hint identity_id`() {
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        setField(repo, "contactManager", mockk<ContactManager>(relaxed = true) {
+            every { list() } returns emptyList()
+        })
+
+        // Legacy behavior preserved: a libp2p routing ID is NOT a canonical 64-hex
+        // identity, so the hint identity_id remains the preferred canonical target.
+        val finalCanonical = invokeResolveCanonicalPeerIdFromMessageHints(
+            repo,
+            resolvedCanonicalPeerId = LEGACY_LIBP2P_SENDER,
+            senderId = LEGACY_LIBP2P_SENDER,
+            senderPublicKeyHex = CANONICAL_PUBKEY,
+            hintedIdentityId = DERIVED_IDENTITY_ID
+        )
+        assertEquals(DERIVED_IDENTITY_ID, finalCanonical)
+    }
+
+    @Test
+    fun `blank stored contact key is not a federated key conflict`() {
+        // Blank/null stored key = record predates the key; the verified incoming
+        // key must be allowed to fill it (previously rejected as "key mismatch").
+        assertFalse(MeshRepository.federatedKeyConflict("", CANONICAL_PUBKEY))
+        assertFalse(MeshRepository.federatedKeyConflict(null, CANONICAL_PUBKEY))
+        assertFalse(MeshRepository.federatedKeyConflict("  ", CANONICAL_PUBKEY))
+    }
+
+    @Test
+    fun `matching stored key is not a conflict and mismatching key is`() {
+        assertFalse(MeshRepository.federatedKeyConflict(CANONICAL_PUBKEY, CANONICAL_PUBKEY))
+        assertTrue(MeshRepository.federatedKeyConflict(CANONICAL_PUBKEY, DERIVED_IDENTITY_ID))
+    }
+}
