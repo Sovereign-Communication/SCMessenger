@@ -2649,6 +2649,29 @@ pub struct HistoryStats {
     pub undelivered_count: u32,
 }
 
+/// Match a history record's peer against EITHER the queried value OR, when the
+/// query value is a public key, that key's derived identity_id. Mirrors the
+/// core store's `history_peer_matches` (PR #244, D4 coalescing): history
+/// records are written under the canonical identity_id (blake3 of the sender
+/// public key) while mobile callers query by the public-key flavor (a
+/// contact's peer_id is its public key), so an exact match would silently
+/// split one identity into two threads. The derivation is one-way, so
+/// identity_id-keyed lookups cannot invert back to a public key; that is fine
+/// because no pubkey-keyed history records exist to match. `filter_identity_id`
+/// is precomputed once per query (Ed25519 curve validation + blake3), never
+/// per record.
+fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
+    if record_peer.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+    if let Some(identity_id) = filter_identity_id {
+        if record_peer.eq_ignore_ascii_case(identity_id) {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(uniffi::Object)]
 pub struct HistoryManager {
     db: Arc<Mutex<sled::Db>>,
@@ -2769,6 +2792,9 @@ impl HistoryManager {
     ) -> Result<Vec<MessageRecord>, crate::IronCoreError> {
         let db = self.db.lock();
         let mut records = Vec::new();
+        let filter_identity_id = peer_filter
+            .as_deref()
+            .and_then(crate::identity::keys::identity_id_from_public_key_hex);
 
         for item in db.iter() {
             let (_, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
@@ -2782,7 +2808,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if &record.peer_id == peer {
+                if history_peer_matches(peer, &record.peer_id, filter_identity_id.as_deref()) {
                     records.push(record);
                 }
             } else {
@@ -2811,6 +2837,7 @@ impl HistoryManager {
     pub fn remove_conversation(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         let mut keys_to_remove = Vec::new();
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
 
         for item in db.iter() {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
@@ -2818,7 +2845,7 @@ impl HistoryManager {
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
 
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref()) {
                 keys_to_remove.push(key);
             }
         }
@@ -2867,12 +2894,15 @@ impl HistoryManager {
     pub fn unhide_messages_for_peer(&self, peer_id: String) -> Result<u32, crate::IronCoreError> {
         let db = self.db.lock();
         let mut to_update: Vec<(Vec<u8>, MessageRecord)> = Vec::new();
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
 
         for item in db.iter() {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
-            if record.hidden && record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if record.hidden
+                && history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 to_update.push((key.to_vec(), record));
             }
         }
@@ -2892,12 +2922,15 @@ impl HistoryManager {
     pub fn hide_messages_for_peer(&self, peer_id: String) -> Result<u32, crate::IronCoreError> {
         let db = self.db.lock();
         let mut to_update: Vec<(Vec<u8>, MessageRecord)> = Vec::new();
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
 
         for item in db.iter() {
             let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| crate::IronCoreError::Internal)?;
-            if !record.hidden && record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if !record.hidden
+                && history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 to_update.push((key.to_vec(), record));
             }
         }
@@ -4661,5 +4694,124 @@ mod tests {
         fn wifi_direct_remove_group(&self) {
             self.0.wifi_direct_remove_group();
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // D4 follow-up: mobile_bridge history flavor coalescing
+    // -----------------------------------------------------------------------
+
+    fn make_keypair_pubkey_and_identity_id() -> (String, String) {
+        use ed25519_dalek::SigningKey;
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
+            .expect("valid pubkey must derive identity_id");
+        (pubkey_hex, identity_id)
+    }
+
+    #[test]
+    fn test_mobile_history_peer_matches_id_flavors() {
+        let (pubkey_hex, identity_id) = make_keypair_pubkey_and_identity_id();
+
+        // Pubkey filter reaches BOTH the pubkey-keyed record and its derived identity_id record.
+        assert!(history_peer_matches(&pubkey_hex, &pubkey_hex, None));
+        assert!(history_peer_matches(
+            &pubkey_hex,
+            &identity_id,
+            Some(&identity_id)
+        ));
+
+        // Identity_id filter: exact match only (no invert back to pubkey).
+        assert!(history_peer_matches(&identity_id, &identity_id, None));
+        assert!(!history_peer_matches(&identity_id, &pubkey_hex, None));
+
+        // Empty / non-hex filters: exact match only, never a derived match.
+        assert!(!history_peer_matches("", &identity_id, None));
+        assert!(!history_peer_matches("not-hex!!!", &identity_id, None));
+
+        // Case-insensitive exact match is preserved (was case-SENSITIVE before).
+        assert!(history_peer_matches(
+            &identity_id.to_uppercase(),
+            &identity_id,
+            None
+        ));
+    }
+
+    /// D4: a pubkey-flavor query must reach identity_id-keyed records through
+    /// the mobile_bridge HistoryManager, and remove/hide/unhide must hit the
+    /// same set. Before this fix `recent_internal` did a case-sensitive exact
+    /// match (`&record.peer_id == peer`), so a pubkey query never saw the
+    /// identity_id-keyed records of the same identity.
+    #[test]
+    fn test_mobile_history_pubkey_query_reaches_identity_id_records() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let manager = HistoryManager::new(path).unwrap();
+        let (pubkey_hex, identity_id) = make_keypair_pubkey_and_identity_id();
+
+        let record = MessageRecord {
+            id: "rec-1".to_string(),
+            direction: MessageDirection::Received,
+            peer_id: identity_id.clone(), // history is written under canonical identity_id
+            content: "hello across flavors".to_string(),
+            timestamp: 1000,
+            sender_timestamp: 1000,
+            delivered: true,
+            status: MessageStatus::Delivered,
+            hidden: false,
+        };
+        manager.add(record).unwrap();
+
+        // Pubkey-flavor query returns the identity_id-keyed record.
+        let hits = manager.recent(Some(pubkey_hex.clone()), 10).unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "pubkey query must reach identity_id-keyed record"
+        );
+        assert_eq!(hits[0].peer_id, identity_id);
+
+        // conversation() (the UI entry point) coalesces too.
+        let conv = manager.conversation(pubkey_hex.clone(), 10).unwrap();
+        assert_eq!(conv.len(), 1);
+
+        // remove_conversation by pubkey flavor removes the identity_id record.
+        manager.remove_conversation(pubkey_hex.clone()).unwrap();
+        assert!(manager.recent(Some(pubkey_hex), 10).unwrap().is_empty());
+        assert!(manager
+            .recent(Some(identity_id.clone()), 10)
+            .unwrap()
+            .is_empty());
+
+        // hide/unhide by pubkey flavor still affect the identity_id record.
+        let re_added = MessageRecord {
+            id: "rec-2".to_string(),
+            direction: MessageDirection::Received,
+            peer_id: identity_id.clone(),
+            content: "blocked".to_string(),
+            timestamp: 1001,
+            sender_timestamp: 1001,
+            delivered: true,
+            status: MessageStatus::Delivered,
+            hidden: false,
+        };
+        manager.add(re_added).unwrap();
+        let hidden = manager.hide_messages_for_peer(identity_id.clone()).unwrap();
+        assert_eq!(hidden, 1);
+        // hidden record is excluded from normal queries but visible to admin path.
+        assert!(manager
+            .recent(Some(identity_id.clone()), 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            manager
+                .recent_including_hidden(Some(identity_id), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
