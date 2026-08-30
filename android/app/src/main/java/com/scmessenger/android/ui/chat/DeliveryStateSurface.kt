@@ -41,6 +41,12 @@ data class DeliveryStatePresentation(
 )
 
 object DeliveryStateMapper {
+    // Contract (precedence, top to bottom): DELIVERED > REJECTED > QUEUED_DELIVERING
+    // > FORWARDING > STORED > PENDING. Deliberate: an at-cap retained entry shows
+    // queued/delivering even during the 60s window when a real attempt is in
+    // flight, because the message is not actively progressing -- it is waiting
+    // out the patient backoff of an exhausted entry. delivered always wins so a
+    // receipt never gets hidden behind a stale exhausted flag.
     fun resolve(
         delivered: Boolean,
         pending: PendingDeliverySnapshot?,

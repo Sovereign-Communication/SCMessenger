@@ -235,7 +235,7 @@ open class MeshRepository(
             item: PendingOutboundEnvelope,
             nowEpochSec: Long,
             isDeliveredLocally: Boolean,
-            shouldRetry: Boolean,
+            shouldRetry: () -> Boolean,
             maxAttempts: Int
         ): PendingOutboxFlushAction {
             if (isDeliveredLocally) return PendingOutboxFlushAction.REMOVE
@@ -256,7 +256,14 @@ open class MeshRepository(
                 }
             }
             if (item.nextAttemptAtEpochSec > nowEpochSec) return PendingOutboxFlushAction.SKIP
-            if (!shouldRetry) return PendingOutboxFlushAction.SKIP
+            // The shouldRetry gate is bypassed for ANY at-cap item (not just
+            // acked==0 retained ones): a transport-acked message that reached the
+            // cap must keep re-sending until a receipt arrives or the patient
+            // age-based acked-without-receipt ceiling above stops it. The
+            // in-memory tracker (which shouldRetry reads) can otherwise sit at
+            // >=12 and park the message forever with the UI claiming forwarding.
+            if (item.attemptCount >= maxAttempts) return PendingOutboxFlushAction.SEND
+            if (!shouldRetry()) return PendingOutboxFlushAction.SKIP
             return PendingOutboxFlushAction.SEND
         }
 
@@ -654,6 +661,17 @@ open class MeshRepository(
      * not yet due (or blocked by shouldRetry); REMOVE = locally delivered.
      */
     internal enum class PendingOutboxFlushAction { SEND, SKIP, DEFER, REMOVE }
+
+    /**
+     * Single-load snapshot of a pending outbox entry for the UI delivery
+     * surface. Carries the exhausted flag so the composition path never pays a
+     * second outbox file read per row.
+     */
+    data class PendingDeliveryInfo(
+        val attemptCount: Int,
+        val nextAttemptAtEpochSec: Long,
+        val exhausted: Boolean
+    )
 
     internal data class PendingOutboundEnvelope(
         val queueId: String,
@@ -6899,28 +6917,19 @@ open class MeshRepository(
         return loadPendingOutbox().size
     }
 
-    fun getPendingDeliverySnapshot(messageId: String): Pair<Int, Long>? {
+    fun getPendingDeliverySnapshot(messageId: String): PendingDeliveryInfo? {
         if (messageId.isBlank()) return null
         val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return null
-        return pending.attemptCount to pending.nextAttemptAtEpochSec
-    }
-
-    /**
-     * True when this send is still queued but has exhausted its wire-attempt
-     * ceiling without ever being transport-acked. The entry is intentionally
-     * RETAINED in the pending outbox (queued/delivering) rather than dropped, so
-     * the operator's message is never silently lost; this flag lets the UI show
-     * that persistent state.
-     */
-    fun isPendingDeliveryExhausted(messageId: String): Boolean {
-        if (messageId.isBlank()) return false
-        val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return false
-        // Single source of truth for the drop-at-cap decision; the UI surface
-        // must never drift from the flush-loop predicate.
-        return MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+        return PendingDeliveryInfo(
             attemptCount = pending.attemptCount,
-            ackedWithoutReceiptCount = pending.ackedWithoutReceiptCount,
-            maxAttempts = pendingOutboxMaxAttempts
+            nextAttemptAtEpochSec = pending.nextAttemptAtEpochSec,
+            // Single source of truth for the drop-at-cap decision; the UI
+            // surface must never drift from the flush-loop predicate.
+            exhausted = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                attemptCount = pending.attemptCount,
+                ackedWithoutReceiptCount = pending.ackedWithoutReceiptCount,
+                maxAttempts = pendingOutboxMaxAttempts
+            )
         )
     }
 
@@ -8260,11 +8269,15 @@ open class MeshRepository(
                     item = item,
                     nowEpochSec = now,
                     isDeliveredLocally = isDeliveredLocally,
-                    shouldRetry = shouldRetryMessage(item.historyRecordId),
+                    // Lazily evaluated by the decision function: the in-memory
+                    // tracker must not be materialized for non-due items.
+                    shouldRetry = { shouldRetryMessage(item.historyRecordId) },
                     maxAttempts = pendingOutboxMaxAttempts
                 )
-                if (retainedAtCap && item.attemptCount == pendingOutboxMaxAttempts && flushAction != MeshRepository.PendingOutboxFlushAction.REMOVE) {
-                    // First pass at the cap: record the visible transition once.
+                if (retainedAtCap && flushAction == MeshRepository.PendingOutboxFlushAction.SEND) {
+                    // Log once per real at-cap attempt (not per flush pass):
+                    // each retained SEND is a genuine retry of a message that
+                    // would previously have been silently dropped.
                     Timber.w("Retaining undelivered message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts): queued/delivering, NOT dropped")
                     logDeliveryState(
                         messageId = item.historyRecordId,
@@ -8451,7 +8464,7 @@ open class MeshRepository(
         }
     }
 
-    private fun enqueuePendingOutbound(
+    private suspend fun enqueuePendingOutbound(
         historyRecordId: String,
         peerId: String,
         routePeerId: String?,
@@ -8463,14 +8476,14 @@ open class MeshRepository(
         recipientIdentityId: String? = null,
         intendedDeviceId: String? = null,
         terminalFailureCode: String? = null
-    ) {
+    ) = pendingOutboxFlushMutex.withLock {
         if (isMessageDeliveredLocally(historyRecordId)) {
             logDeliveryState(
                 messageId = historyRecordId,
                 state = "delivered",
                 detail = "skip_enqueue_already_delivered"
             )
-            return
+            return@withLock
         }
         val now = System.currentTimeMillis() / 1000
         val queue = loadPendingOutbox().toMutableList()

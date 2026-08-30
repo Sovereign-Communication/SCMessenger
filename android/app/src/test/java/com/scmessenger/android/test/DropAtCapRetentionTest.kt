@@ -41,7 +41,7 @@ class DropAtCapRetentionTest {
             item = envelope(attemptCount = 12, nextAttemptAtEpochSec = 2000L),
             nowEpochSec = 1000L,
             isDeliveredLocally = false,
-            shouldRetry = false, // in-memory gate would block; retained items bypass it
+            shouldRetry = { false }, // in-memory gate would block; retained items bypass it
             maxAttempts = 12
         )
         assertEquals(PendingOutboxFlushAction.DEFER, action)
@@ -56,7 +56,28 @@ class DropAtCapRetentionTest {
             item = envelope(attemptCount = 12, nextAttemptAtEpochSec = 900L),
             nowEpochSec = 1000L,
             isDeliveredLocally = false,
-            shouldRetry = false, // at-cap retained items bypass the in-memory gate
+            shouldRetry = { false }, // at-cap retained items bypass the in-memory gate
+            maxAttempts = 12
+        )
+        assertEquals(PendingOutboxFlushAction.SEND, action)
+    }
+
+    @Test
+    fun `at-cap transport-acked entry is SENT again even when in-memory retry gate is blocked`() {
+        // Blocking re-review finding: one transport ack moves the entry out of
+        // the acked==0 retention branch; if the in-memory shouldRetry gate then
+        // applied, the message parked forever (UI showing forwarding while
+        // nothing retried). ANY at-cap item must keep sending until a receipt
+        // or the patient age-based acked-without-receipt ceiling.
+        val action = MeshRepository.Companion.decidePendingOutboxFlushAction(
+            item = envelope(
+                attemptCount = 12,
+                nextAttemptAtEpochSec = 900L,
+                ackedWithoutReceiptCount = 1
+            ),
+            nowEpochSec = 1000L,
+            isDeliveredLocally = false,
+            shouldRetry = { false },
             maxAttempts = 12
         )
         assertEquals(PendingOutboxFlushAction.SEND, action)
@@ -68,7 +89,7 @@ class DropAtCapRetentionTest {
             item = envelope(attemptCount = 12, nextAttemptAtEpochSec = 2000L),
             nowEpochSec = 1000L,
             isDeliveredLocally = true,
-            shouldRetry = false,
+            shouldRetry = { false },
             maxAttempts = 12
         )
         assertEquals(PendingOutboxFlushAction.REMOVE, action)
@@ -83,7 +104,7 @@ class DropAtCapRetentionTest {
                 item = envelope(attemptCount = 3, nextAttemptAtEpochSec = 900L),
                 nowEpochSec = 1000L,
                 isDeliveredLocally = false,
-                shouldRetry = true,
+                shouldRetry = { true },
                 maxAttempts = 12
             )
         )
@@ -94,7 +115,18 @@ class DropAtCapRetentionTest {
                 item = envelope(attemptCount = 3, nextAttemptAtEpochSec = 2000L),
                 nowEpochSec = 1000L,
                 isDeliveredLocally = false,
-                shouldRetry = true,
+                shouldRetry = { true },
+                maxAttempts = 12
+            )
+        )
+        // Due but in-memory gate blocks, BELOW the cap -> skip (normal gate applies).
+        assertEquals(
+            PendingOutboxFlushAction.SKIP,
+            MeshRepository.Companion.decidePendingOutboxFlushAction(
+                item = envelope(attemptCount = 3, nextAttemptAtEpochSec = 900L),
+                nowEpochSec = 1000L,
+                isDeliveredLocally = false,
+                shouldRetry = { false },
                 maxAttempts = 12
             )
         )
@@ -105,7 +137,7 @@ class DropAtCapRetentionTest {
                 item = envelope(attemptCount = 3, nextAttemptAtEpochSec = 2000L),
                 nowEpochSec = 1000L,
                 isDeliveredLocally = true,
-                shouldRetry = true,
+                shouldRetry = { true },
                 maxAttempts = 12
             )
         )
