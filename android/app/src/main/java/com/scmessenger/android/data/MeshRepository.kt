@@ -222,6 +222,45 @@ open class MeshRepository(
         }
 
         /**
+         * Per-item decision for flushPendingOutbox's main loop, kept pure so
+         * the retry-at-cap control flow is testable on the JVM tier (the loop
+         * itself cannot run there: android.util.Base64 is stubbed to return
+         * null, which routes every envelope to the undecodable-payload removal
+         * before the retain logic). The order mirrors the loop exactly:
+         * delivered/terminal cleanup first, then the at-cap queued/delivering
+         * deferral (never drop, but genuinely re-attempt once the patient
+         * backoff elapses), then the backoff and shouldRetry gates.
+         */
+        internal fun decidePendingOutboxFlushAction(
+            item: PendingOutboundEnvelope,
+            nowEpochSec: Long,
+            isDeliveredLocally: Boolean,
+            shouldRetry: Boolean,
+            maxAttempts: Int
+        ): PendingOutboxFlushAction {
+            if (isDeliveredLocally) return PendingOutboxFlushAction.REMOVE
+            if (retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = maxAttempts
+                )
+            ) {
+                // queued/delivering deferral: retained forever, never dropped.
+                // DEFER within the backoff window (no queue rewrite); once the
+                // backoff elapses, SEND -- the entry genuinely tries again on a
+                // patient cadence instead of parking at the cap forever.
+                return if (item.nextAttemptAtEpochSec > nowEpochSec) {
+                    PendingOutboxFlushAction.DEFER
+                } else {
+                    PendingOutboxFlushAction.SEND
+                }
+            }
+            if (item.nextAttemptAtEpochSec > nowEpochSec) return PendingOutboxFlushAction.SKIP
+            if (!shouldRetry) return PendingOutboxFlushAction.SKIP
+            return PendingOutboxFlushAction.SEND
+        }
+
+        /**
          * Map service TransportType to SmartTransportRouter TransportType for message deduplication.
          */
         internal fun mapToSmartTransportType(transport: TransportType): SmartTransportRouter.TransportType {
@@ -608,6 +647,14 @@ open class MeshRepository(
         val localNickname: String? = null
     )
 
+    /**
+     * What flushPendingOutbox should do with a pending entry this pass.
+     * SEND = fall through to the real delivery attempt; DEFER = at-cap
+     * retained entry waiting out its patient backoff; SKIP = below-cap entry
+     * not yet due (or blocked by shouldRetry); REMOVE = locally delivered.
+     */
+    internal enum class PendingOutboxFlushAction { SEND, SKIP, DEFER, REMOVE }
+
     internal data class PendingOutboundEnvelope(
         val queueId: String,
         val historyRecordId: String,
@@ -798,11 +845,6 @@ open class MeshRepository(
     // Maximum retry attempts before marking message as failed
     // Defined here for external references; also in MessageTracking.Companion for inner class access
     private val MAX_RETRY_ATTEMPTS: Int = 12
-
-    // Slow, patient backoff applied when an undelivered send reaches the retry
-    // cap but is retained in the queue (queued/delivering). Prevents a tight
-    // loop while the peer is unreachable; the entry is never silently dropped.
-    private val QUEUED_DELIVERING_RETRY_BACKOFF_SEC: Long = 300
 
     private val strictBleOnlyValidation = isEnabledFlag(System.getenv("SC_BLE_ONLY_VALIDATION"))
     private val bleRouteObservations = ConcurrentHashMap<String, BleRouteObservation>()
@@ -6873,7 +6915,13 @@ open class MeshRepository(
     fun isPendingDeliveryExhausted(messageId: String): Boolean {
         if (messageId.isBlank()) return false
         val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return false
-        return pending.attemptCount >= pendingOutboxMaxAttempts && pending.ackedWithoutReceiptCount == 0
+        // Single source of truth for the drop-at-cap decision; the UI surface
+        // must never drift from the flush-loop predicate.
+        return MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+            attemptCount = pending.attemptCount,
+            ackedWithoutReceiptCount = pending.ackedWithoutReceiptCount,
+            maxAttempts = pendingOutboxMaxAttempts
+        )
     }
 
     fun getPendingTerminalFailureCode(messageId: String): String? {
@@ -8193,38 +8241,46 @@ open class MeshRepository(
                 // Enforce a retry CEILING to avoid tight spinning, but NEVER silently
                 // discard an undelivered send. Store-and-forward is the product
                 // contract; an unreachable peer must not erase the sender's message.
-                // On attempt exhaustion we RETAIN the entry as a persistent, visible
-                // 'queued/delivering' state instead of removing it. shouldRetryMessage()
-                // (attemptCount < MAX_RETRY_ATTEMPTS) is false at the cap, so no further
-                // wire attempts fire -- the entry just stays queued for when a route
-                // exists, and ages out only via the bounded-expiry policy below.
-                if (item.attemptCount < pendingOutboxMaxAttempts) {
-                    // Normal path: keep retrying until the cap (existing behavior).
-                } else if (MeshRepository.Companion.retainUndeliveredAtAttemptCap(
-                        attemptCount = item.attemptCount,
-                        ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
-                        maxAttempts = pendingOutboxMaxAttempts
-                    )
-                ) {
+                // At the attempt ceiling an undelivered, never-acked send becomes a
+                // persistent, visible 'queued/delivering' state: it is DEFERRED on a
+                // patient backoff (the pending-outbox rewrite only happens when the
+                // send path itself advances the record), NEVER removed, and once the
+                // backoff elapses it falls through to the real send path below and
+                // genuinely tries again -- so it keeps retrying on a patient cadence
+                // until a route exists or delivery is confirmed. The delivered check
+                // runs FIRST (via decidePendingOutboxFlushAction) so a retained entry
+                // that later gets delivered is removed instead of parked forever.
+                val isDeliveredLocally = isMessageDeliveredLocally(item.historyRecordId)
+                val retainedAtCap = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                val flushAction = MeshRepository.Companion.decidePendingOutboxFlushAction(
+                    item = item,
+                    nowEpochSec = now,
+                    isDeliveredLocally = isDeliveredLocally,
+                    shouldRetry = shouldRetryMessage(item.historyRecordId),
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                if (retainedAtCap && item.attemptCount == pendingOutboxMaxAttempts && flushAction != MeshRepository.PendingOutboxFlushAction.REMOVE) {
+                    // First pass at the cap: record the visible transition once.
                     Timber.w("Retaining undelivered message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts): queued/delivering, NOT dropped")
                     logDeliveryState(
                         messageId = item.historyRecordId,
                         state = "queued_delivering",
                         detail = "retained_pending_outbox reason=max_attempts_reached_never_drop attempt=${item.attemptCount}"
                     )
-                    iterator.set(item.copy(nextAttemptAtEpochSec = now + QUEUED_DELIVERING_RETRY_BACKOFF_SEC))
-                    updated = true
-                    continue
                 }
-                if (item.nextAttemptAtEpochSec > now) continue
-                if (!shouldRetryMessage(item.historyRecordId)) {
-                    Timber.w("Skipping retry for ${item.historyRecordId}: shouldRetryMessage=false")
-                    continue
-                }
-                if (isMessageDeliveredLocally(item.historyRecordId)) {
-                    iterator.remove()
-                    updated = true
-                    continue
+                when (flushAction) {
+                    MeshRepository.PendingOutboxFlushAction.REMOVE -> {
+                        iterator.remove()
+                        updated = true
+                        continue
+                    }
+                    MeshRepository.PendingOutboxFlushAction.SKIP,
+                    MeshRepository.PendingOutboxFlushAction.DEFER -> continue
+                    MeshRepository.PendingOutboxFlushAction.SEND -> Unit
                 }
                 logDeliveryState(
                     messageId = item.historyRecordId,

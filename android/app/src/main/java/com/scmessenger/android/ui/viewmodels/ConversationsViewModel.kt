@@ -452,13 +452,15 @@ class ConversationsViewModel @Inject constructor(
     ): DeliveryStatePresentation {
         val pendingPair = meshRepository.getPendingDeliverySnapshot(message.id)
         val terminalFailureCode = meshRepository.getPendingTerminalFailureCode(message.id)
-        val exhausted = meshRepository.isPendingDeliveryExhausted(message.id)
         val pending = pendingPair?.let {
+            // Only load the exhausted flag for rows that are actually pending,
+            // so delivered messages never pay a third outbox read per row
+            // (isPendingDeliveryExhausted loads the pending outbox file).
             PendingDeliverySnapshot(
                 attemptCount = it.first,
                 nextAttemptAtEpochSec = it.second,
                 terminalFailureCode = terminalFailureCode,
-                exhausted = exhausted
+                exhausted = meshRepository.isPendingDeliveryExhausted(message.id)
             )
         }
         return DeliveryStateMapper.resolve(
