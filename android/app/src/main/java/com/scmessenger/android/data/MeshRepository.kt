@@ -206,6 +206,22 @@ open class MeshRepository(
         }
 
         /**
+         * Drop-at-cap decision (regression seam for the 'message vanished'
+         * defect). Returns true when an undelivered, NEVER transport-acked send
+         * has reached the retry ceiling and must be RETAINED in the pending
+         * outbox as a visible queued/delivering state instead of being silently
+         * removed. The old behavior removed it (markMessageCorrupted + drop),
+         * which is exactly how the operator's sends disappeared.
+         */
+        internal fun retainUndeliveredAtAttemptCap(
+            attemptCount: Int,
+            ackedWithoutReceiptCount: Int,
+            maxAttempts: Int
+        ): Boolean {
+            return attemptCount >= maxAttempts && ackedWithoutReceiptCount == 0
+        }
+
+        /**
          * Map service TransportType to SmartTransportRouter TransportType for message deduplication.
          */
         internal fun mapToSmartTransportType(transport: TransportType): SmartTransportRouter.TransportType {
@@ -782,6 +798,11 @@ open class MeshRepository(
     // Maximum retry attempts before marking message as failed
     // Defined here for external references; also in MessageTracking.Companion for inner class access
     private val MAX_RETRY_ATTEMPTS: Int = 12
+
+    // Slow, patient backoff applied when an undelivered send reaches the retry
+    // cap but is retained in the queue (queued/delivering). Prevents a tight
+    // loop while the peer is unreachable; the entry is never silently dropped.
+    private val QUEUED_DELIVERING_RETRY_BACKOFF_SEC: Long = 300
 
     private val strictBleOnlyValidation = isEnabledFlag(System.getenv("SC_BLE_ONLY_VALIDATION"))
     private val bleRouteObservations = ConcurrentHashMap<String, BleRouteObservation>()
@@ -6842,6 +6863,19 @@ open class MeshRepository(
         return pending.attemptCount to pending.nextAttemptAtEpochSec
     }
 
+    /**
+     * True when this send is still queued but has exhausted its wire-attempt
+     * ceiling without ever being transport-acked. The entry is intentionally
+     * RETAINED in the pending outbox (queued/delivering) rather than dropped, so
+     * the operator's message is never silently lost; this flag lets the UI show
+     * that persistent state.
+     */
+    fun isPendingDeliveryExhausted(messageId: String): Boolean {
+        if (messageId.isBlank()) return false
+        val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return false
+        return pending.attemptCount >= pendingOutboxMaxAttempts && pending.ackedWithoutReceiptCount == 0
+    }
+
     fun getPendingTerminalFailureCode(messageId: String): String? {
         if (messageId.isBlank()) return null
         return loadPendingOutbox()
@@ -8155,17 +8189,30 @@ open class MeshRepository(
                 // transport. We now fall through to the real send path below; the
                 // attempt-cap branch is additionally guarded so acked-without-receipt
                 // messages are never corrupted/dropped by the attempt count.
-                // AND-DELIVERY-001: Enforce maximum retry limit to prevent infinite retries
-                // Only applies to messages that have NOT been transport-acked
-                if (item.attemptCount >= pendingOutboxMaxAttempts && item.ackedWithoutReceiptCount == 0) {
-                    Timber.w("Dropping message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts) - NOT transport-acked")
-                    markMessageCorrupted(item.historyRecordId)
+                // AND-DELIVERY-001 REVISED (the operator's 'message vanished' defect):
+                // Enforce a retry CEILING to avoid tight spinning, but NEVER silently
+                // discard an undelivered send. Store-and-forward is the product
+                // contract; an unreachable peer must not erase the sender's message.
+                // On attempt exhaustion we RETAIN the entry as a persistent, visible
+                // 'queued/delivering' state instead of removing it. shouldRetryMessage()
+                // (attemptCount < MAX_RETRY_ATTEMPTS) is false at the cap, so no further
+                // wire attempts fire -- the entry just stays queued for when a route
+                // exists, and ages out only via the bounded-expiry policy below.
+                if (item.attemptCount < pendingOutboxMaxAttempts) {
+                    // Normal path: keep retrying until the cap (existing behavior).
+                } else if (MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                        attemptCount = item.attemptCount,
+                        ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                        maxAttempts = pendingOutboxMaxAttempts
+                    )
+                ) {
+                    Timber.w("Retaining undelivered message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts): queued/delivering, NOT dropped")
                     logDeliveryState(
                         messageId = item.historyRecordId,
-                        state = "failed",
-                        detail = "dropped_pending_outbox reason=max_attempts_exceeded attempt=${item.attemptCount}"
+                        state = "queued_delivering",
+                        detail = "retained_pending_outbox reason=max_attempts_reached_never_drop attempt=${item.attemptCount}"
                     )
-                    iterator.remove()
+                    iterator.set(item.copy(nextAttemptAtEpochSec = now + QUEUED_DELIVERING_RETRY_BACKOFF_SEC))
                     updated = true
                     continue
                 }

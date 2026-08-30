@@ -452,11 +452,13 @@ class ConversationsViewModel @Inject constructor(
     ): DeliveryStatePresentation {
         val pendingPair = meshRepository.getPendingDeliverySnapshot(message.id)
         val terminalFailureCode = meshRepository.getPendingTerminalFailureCode(message.id)
+        val exhausted = meshRepository.isPendingDeliveryExhausted(message.id)
         val pending = pendingPair?.let {
             PendingDeliverySnapshot(
                 attemptCount = it.first,
                 nextAttemptAtEpochSec = it.second,
-                terminalFailureCode = terminalFailureCode
+                terminalFailureCode = terminalFailureCode,
+                exhausted = exhausted
             )
         }
         return DeliveryStateMapper.resolve(
