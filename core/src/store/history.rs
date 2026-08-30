@@ -495,8 +495,10 @@ mod tests {
         assert!(history_peer_matches(&pubkey_hex, &pubkey_hex, None));
         assert!(history_peer_matches(&pubkey_hex, &identity_id, Some(&identity_id)));
 
-        // Identity_id filter: the one-way derivation returns None for an identity_id
-        // (not a valid curve point), so only the exact identity_id record matches.
+        // Identity_id filter: only the exact identity_id record matches. The
+        // caller passes `None` here because a raw identity_id filter's
+        // derivation, when it happens to be on-curve, is a double-hash that no
+        // record can match -- not a flavor discriminator.
         assert!(history_peer_matches(&identity_id, &identity_id, None));
         assert!(!history_peer_matches(&identity_id, &pubkey_hex, None));
 
@@ -507,6 +509,57 @@ mod tests {
 
         // Case-insensitive exact match is preserved.
         assert!(history_peer_matches(&identity_id.to_uppercase(), &identity_id, None));
+    }
+
+    #[test]
+    fn test_hide_and_unhide_by_pubkey_flavor() {
+        // Real keypair so the pubkey filter derives a genuine identity_id.
+        use ed25519_dalek::SigningKey;
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
+            .expect("valid pubkey must derive identity_id");
+
+        let backend = Arc::new(MemoryStorage::new());
+        let history = HistoryManager::new(backend);
+        history
+            .add(MessageRecord {
+                id: "msg1".to_string(),
+                peer_id: identity_id.clone(), // stored under the canonical flavor
+                direction: MessageDirection::Received,
+                content: "hide me".to_string(),
+                timestamp: 1000,
+                sender_timestamp: 1000,
+                delivered: true,
+                hidden: false,
+            })
+            .unwrap();
+
+        // Hide by the PUBKEY flavor must reach the identity_id-keyed record.
+        assert_eq!(history.hide_messages_for_peer(&pubkey_hex).unwrap(), 1);
+        assert!(
+            history.conversation(pubkey_hex.clone(), 50).unwrap().is_empty(),
+            "hidden record must disappear from normal queries"
+        );
+        assert_eq!(
+            history
+                .recent_including_hidden(Some(identity_id.clone()), 50)
+                .unwrap()
+                .len(),
+            1,
+            "hidden record must still exist for evidentiary retention"
+        );
+
+        // Unhide by the same flavor restores it.
+        assert_eq!(history.unhide_messages_for_peer(&pubkey_hex).unwrap(), 1);
+        assert_eq!(
+            history.conversation(pubkey_hex, 50).unwrap().len(),
+            1,
+            "unhidden record must be visible again under the pubkey flavor"
+        );
     }
 
     #[test]
