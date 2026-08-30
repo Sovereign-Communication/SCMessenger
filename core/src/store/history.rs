@@ -90,22 +90,24 @@ pub struct HistoryManager {
     backend: Arc<dyn StorageBackend>,
 }
 
-/// D4 coalescing: history records are stored under the canonical identity_id
-/// (blake3 of the sender public key) while contacts and thread lookups are
-/// often keyed by the public_key_hex flavor on a different surface (e.g. a
-/// contact's stored `peer_id` is its public key). Match a record's peer
-/// against EITHER the queried value OR, when the query value is a public key,
-/// that key's derived identity_id, so a single identity's conversation is
-/// reachable from both forms instead of being silently split into two threads.
-/// `identity_id_from_public_key_hex` returns `None` for non-64-hex inputs
-/// (libp2p ids, already-identity_id values that are not valid curve points), in
-/// which case only the exact-match arm applies.
-fn history_peer_matches(filter: &str, record_peer: &str) -> bool {
+/// D4 coalescing: history records are ALWAYS stored under the canonical
+/// identity_id (blake3 of the sender public key -- see receive_message's
+/// canonical_peer_id), while contacts and thread lookups are often keyed by
+/// the public_key_hex flavor on a different surface (e.g. a contact's stored
+/// `peer_id` is its public key). Match a record's peer against EITHER the
+/// queried value OR, when the query value is a public key, that key's derived
+/// identity_id, so a single identity's conversation is reachable from both
+/// forms instead of being silently split into two threads. The derivation is
+/// one-way, so identity_id-keyed lookups cannot invert back to a public key;
+/// that is fine because no pubkey-keyed history records exist to match (all
+/// records are written under identity_id). `filter_identity_id` is precomputed
+/// once per query (Ed25519 curve validation + blake3), never per record.
+fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
     }
-    if let Some(identity_id) = crate::identity::keys::identity_id_from_public_key_hex(filter) {
-        if record_peer.eq_ignore_ascii_case(&identity_id) {
+    if let Some(identity_id) = filter_identity_id {
+        if record_peer.eq_ignore_ascii_case(identity_id) {
             return true;
         }
     }
@@ -176,6 +178,13 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // Derive the identity_id for a pubkey filter ONCE per query; the
+        // derivation does Ed25519 curve validation + blake3 and must not run
+        // per record inside the scan loop below.
+        let filter_identity_id = peer_filter
+            .as_deref()
+            .and_then(crate::identity::keys::identity_id_from_public_key_hex);
+
         for (_, value) in all {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
@@ -187,7 +196,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if history_peer_matches(peer, &record.peer_id) {
+                if history_peer_matches(peer, &record.peer_id, filter_identity_id.as_deref()) {
                     records.push(record);
                 }
             } else {
