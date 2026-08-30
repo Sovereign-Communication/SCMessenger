@@ -2651,22 +2651,18 @@ pub struct HistoryStats {
 
 /// Match a history record's peer against EITHER the queried value OR, when the
 /// query value is a public key, that key's derived identity_id. Mirrors the
-/// core store's `history_peer_matches` (PR #244, D4 coalescing): history
-/// records are written under the canonical identity_id (blake3 of the sender
-/// public key) while mobile callers query by the public-key flavor (a
-/// contact's peer_id is its public key), so an exact match would silently
-/// split one identity into two threads. The derivation is one-way, so
-/// identity_id-keyed lookups cannot invert back to a public key; that is fine
-/// In this store BOTH flavors genuinely coexist (sent records are written under
+/// core store's `history_peer_matches` (PR #244, D4 coalescing).
+///
+/// In this store BOTH flavors genuinely coexist: sent records are written under
 /// the contact's public_key_hex peerId while received records use the canonical
-/// identity_id), so matching both flavors per record is required rather than
-/// decorative; Android canonicalizes reads to pubkey, which is why this was a
-/// split-thread symptom on the UI rather than an outright miss. The derivation
-/// is one-way, so identity_id-flavor lookups cannot invert back to a public
-/// key; pubkey-keyed records written under the contact peerId remain reachable
-/// only by pubkey queries (residual, matches the core store's behavior).
-/// `filter_identity_id` is precomputed once per query (Ed25519 curve validation
-/// + blake3), never per record.
+/// identity_id. Matching both flavors per record is therefore required rather
+/// than decorative; Android canonicalizes reads to pubkey, which is why this
+/// was a split-thread symptom on the UI rather than an outright miss. The
+/// derivation is one-way, so identity_id-flavor lookups cannot invert back to
+/// a public key; pubkey-keyed records written under the contact peerId remain
+/// reachable only by pubkey queries (residual, matches the core store's
+/// behavior). `filter_identity_id` is precomputed once per query (Ed25519
+/// curve validation + blake3), never per record.
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
@@ -4781,9 +4777,7 @@ mod tests {
 
         // conversation() (the UI entry point) coalesces too.
         let conv = manager.conversation(pubkey_hex.clone(), 10).unwrap();
-        assert_eq!(conv.len(), 1);
-
-        // remove_conversation by pubkey flavor removes the identity_id record.
+        assert_eq!(conv.len(), 1); // remove_conversation by pubkey flavor removes the identity_id record.
         manager.remove_conversation(pubkey_hex.clone()).unwrap();
         assert!(manager
             .recent(Some(pubkey_hex.clone()), 10)
@@ -4792,8 +4786,10 @@ mod tests {
         assert!(manager
             .recent(Some(identity_id.clone()), 10)
             .unwrap()
-            .is_empty()); // hide/unhide via the PUBKEY flavor must still affect the identity_id
-                          // record (these queries exercise the coalesced branch, not exact match).
+            .is_empty());
+
+        // hide/unhide via the PUBKEY flavor must still affect the identity_id
+        // record (these queries exercise the coalesced branch, not exact match).
         let re_added = MessageRecord {
             id: "rec-2".to_string(),
             direction: MessageDirection::Received,
@@ -4834,15 +4830,34 @@ mod tests {
             manager.recent(Some(identity_id.clone()), 10).unwrap().len(),
             1
         );
-        assert!(!manager.recent(Some(identity_id.clone()), 10).unwrap()[0].hidden);
-
-        // clear_conversation via the pubkey flavor deletes the identity_id record
-        // (the Android swipe-to-delete path passes a public key).
-        manager.clear_conversation(pubkey_hex.clone());
+        assert!(!manager.recent(Some(identity_id.clone()), 10).unwrap()[0].hidden); // clear_conversation via the pubkey flavor deletes the identity_id record
+                                                                                    // (the Android swipe-to-delete path passes a public key).
+        manager.clear_conversation(pubkey_hex.clone()).unwrap();
         assert!(manager
             .recent(Some(pubkey_hex.clone()), 10)
             .unwrap()
             .is_empty());
+        assert!(manager
+            .recent(Some(identity_id.clone()), 10)
+            .unwrap()
+            .is_empty());
+
+        // Negative direction: a query for this identity must never return another
+        // identity's records (guards against over-matching if the seam regresses).
+        let (other_pubkey, other_identity) = make_keypair_pubkey_and_identity_id();
+        let other_record = MessageRecord {
+            id: "rec-3".to_string(),
+            direction: MessageDirection::Received,
+            peer_id: other_identity,
+            content: "other peer".to_string(),
+            timestamp: 1002,
+            sender_timestamp: 1002,
+            delivered: true,
+            status: MessageStatus::Delivered,
+            hidden: false,
+        };
+        manager.add(other_record).unwrap();
         assert!(manager.recent(Some(identity_id), 10).unwrap().is_empty());
+        assert_eq!(manager.recent(Some(other_pubkey), 10).unwrap().len(), 1);
     }
 }
