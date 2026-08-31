@@ -85,6 +85,42 @@ Pixel 6a in BLE range + foregrounded, then Pixel->Windows (contact add + message
 over BLE to confirm a large fragmented envelope reassembles and verifies cleanly (no
 further `BufferTooShort` / `equation not satisfied` on `ble_gatt_ingress`).
 
+## RESIDUAL DEFECT FIXED (2026-08-30) -- impossible-fragment-total misclassification (#251)
+
+After #250, live Pixel->Windows sends still produced residual `BufferTooShort` /
+`signature verification failed` warnings on `ble_gatt_ingress` even though the
+message eventually decrypted. Root cause: `GattFragmentHeader::from_bytes` accepted
+ANY 4 bytes as `[total u16le][index u16le]` whenever `index < total`, so an
+*unfragmented* Drift envelope whose first four bytes read as a plausible pair
+(observed live: `total=33025, index=17381`) was misrouted into the reassembler as a
+phantom multi-fragment stream that never completes -- consuming the real bytes and
+emitting truncated-decode / corrupt-signature noise.
+
+A genuine `GattFragmenter` can emit at most ~130 fragments (64 KB envelope at 508
+payload bytes/fragment), so `GattFragmentHeader::new`/`from_bytes` now reject any
+`total_fragments` outside `1..=512` (`MAX_GATT_FRAGMENTS`). This keeps the
+fragmented-vs-unfragmented classification unambiguous with NO wire change.
+
+- Branch `fix/ble-impossible-fragment-classification`, commit `aa6afe31`, PR **#251**,
+  squash-merged as **`9ee2e042`** (main).
+- Adversarial Rule-8 re-gate: copilot CLI independent reviewer APPROVE
+  (Opus lane via agy was occupied/hung; verdict posted on the PR).
+- Regression coverage: `transport::ble::gatt` 24/24 (incl. reject zero/impossible
+  total, exact live `33025/17381` bytes, at-bound accept); `ble_mesh` 7/7
+  (incl. `ingest_unfragmented_with_plausible_looking_header_passes_through`).
+- Windows node redeployed to `9ee2e042` (Core Provenance 0.4.0 `9ee2e042:main`),
+  identity preserved (`30d0fa67` / `12D3KooWD6vZQrU`), meshed with parity
+  `12D3KooWMHuK5UA` and Pixel `12D3KooWG9ui`.
+
+### Live re-validation (2026-08-30, post-redeploy)
+
+Fresh Pixel-originated message `62cd3a30` "CTOrdeploy251test" (sender `cb18354d`,
+Lucas New) was sent from the foregrounded app and received on the `9ee2e042` node:
+`inbox_receive` logged, Windows-to-Pixel delivery also confirmed
+(`Message delivered successfully to 12D3KooWG9ui`). Post-redeploy window (19:23Z
+onward) shows **0 `BufferTooShort` / 0 `signature verification failed` / 0 BLE
+decode-or-decrypt errors** -- the round-trip is clean on the fixed build.
+
 ## Prior (key-divergence) fix direction -- only if truncation fix does not clear it
 
 The prior "post-rotation key divergence" (identity_ids `b6486de2`, `d01c3751`,
