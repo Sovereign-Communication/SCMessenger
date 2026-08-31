@@ -9790,6 +9790,38 @@ open class MeshRepository(
         return null
     }
 
+    /**
+     * UNIFICATION_DIAL: Resolve a route candidate to its dialable libp2p peer id.
+     *
+     * Dialing (swarm bridge, connectToPeer, core transport) requires a libp2p
+     * base58 peer id. Ledger/discovery may surface a contact bound to the
+     * canonical 64-hex public key (`peer_id == public_key`). When that binding
+     * is self-certifying for the given recipient key we derive its libp2p peer
+     * id via the repo-native helper; a real invalid id (or a hex id that does
+     * not certify against the recipient key) returns null so it stays rejected.
+     */
+    private fun toDialableRoutePeerId(peerId: String, recipientPublicKey: String?): String? {
+        val normalized = peerId.trim()
+        if (normalized.isEmpty()) return null
+        // Passthrough MUST precede the recipient-key guard: an already-libp2p
+        // candidate from cached/notes/discovery is dialable as-is and must not be
+        // dropped just because recipientPublicKey is null/empty (regression test
+        // `valid libp2p candidate passes through even with null recipient key`).
+        if (PeerIdValidator.isLibp2pPeerId(normalized)) return normalized
+        // Only accept the canonical hex form when it self-certifies against the
+        // recipient key (hex peer_id equal to the public key is self-certifying
+        // by construction — mirrors isSelfCertifyingKeyBinding form 1). A hex id
+        // unrelated to the recipient stays rejected.
+        val recipientKey = normalizePublicKey(recipientPublicKey)
+        if (recipientKey == null || !PeerKeyUtils.isValidPublicKey(normalized)) return null
+        if (!normalized.equals(recipientKey, ignoreCase = true)) return null
+        // Derive from the canonical recipient key (equal to the hex peer_id by
+        // the self-certificate check, but case-normalized) so derivation is
+        // immune to a case-sensitive hex decoder.
+        val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(recipientKey)
+        return if (PeerIdValidator.isLibp2pPeerId(derived)) derived else null
+    }
+
     private fun buildRoutePeerCandidates(
         peerId: String,
         cachedRoutePeerId: String?,
@@ -9833,11 +9865,28 @@ open class MeshRepository(
             diagSources.add("peer_id=valid")
             candidates.add(peerId)
         } else {
-            diagSources.add("peer_id=invalid_format")
+            // UNIFICATION_DIAL: a canonical 64-hex peer id that self-certifies
+            // against the recipient public key is dialable via its derived
+            // libp2p form (same repo-native helper the sanitizer/discovery use).
+            // Without this the hex-bound ledger contact (e.g. AWS parity) is
+            // rejected as invalid_format here and can never be dialed.
+            val dialable = toDialableRoutePeerId(peerId, recipientPublicKey)
+            if (dialable != null) {
+                diagSources.add("peer_id=canonical_hex_derived")
+                candidates.add(dialable)
+            } else {
+                diagSources.add("peer_id=invalid_format")
+            }
         }
 
         val filtered = candidates
             .map { it.trim() }
+            .mapNotNull { candidate ->
+                // Normalize any self-certifying canonical-hex candidate to its
+                // dialable libp2p form so downstream dial code (which expects a
+                // libp2p peer id) can actually connect to it.
+                toDialableRoutePeerId(candidate, recipientPublicKey)
+            }
             .filter { candidate ->
                 candidate.isNotEmpty() &&
                     PeerIdValidator.isLibp2pPeerId(candidate) &&
@@ -9882,7 +9931,7 @@ open class MeshRepository(
             .asSequence()
             .mapNotNull { entry ->
                 val candidate = entry.peerId?.trim().orEmpty()
-                if (candidate.isEmpty() || !PeerIdValidator.isLibp2pPeerId(candidate)) {
+                if (candidate.isEmpty()) {
                     return@mapNotNull null
                 }
                 // Identity-resolution hardening: a poisoned entry can claim the
@@ -9891,7 +9940,10 @@ open class MeshRepository(
                 val candidateKey = normalizePublicKey(entry.publicKey) ?: return@mapNotNull null
                 if (!isSelfCertifyingKeyBinding(candidate, candidateKey)) return@mapNotNull null
                 if (candidateKey != normalizedRecipientKey) return@mapNotNull null
-                candidate
+                // Emit the dialable libp2p form: a canonical 64-hex peer id that
+                // self-certifies is converted via the repo-native deriver (the
+                // hex form itself is not a dialable libp2p peer id).
+                toDialableRoutePeerId(candidate, candidateKey) ?: return@mapNotNull null
             }
             .toList()
 
