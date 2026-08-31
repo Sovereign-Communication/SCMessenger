@@ -200,4 +200,71 @@ class IdentityUnificationCanonicalIdTest {
         assertFalse(MeshRepository.federatedKeyConflict(CANONICAL_PUBKEY, CANONICAL_PUBKEY))
         assertTrue(MeshRepository.federatedKeyConflict(CANONICAL_PUBKEY, DERIVED_IDENTITY_ID))
     }
+
+    /** Reflectively invokes the private isSelfCertifyingKeyBinding entry point. */
+    private fun invokeIsSelfCertifyingKeyBinding(
+        repo: MeshRepository,
+        peerId: String,
+        publicKey: String
+    ): Boolean {
+        val method = MeshRepository::class.java.getDeclaredMethod(
+            "isSelfCertifyingKeyBinding",
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(repo, peerId, publicKey) as Boolean
+    }
+
+    @Test
+    fun `canonical hex peer_id bound to itself is self-certifying`() {
+        // REGRESSION (ledger-share of the AWS parity node): the ledger stores
+        // peer_id as the 64-hex canonical public key itself (e.g. 014b8105...),
+        // matching every Windows entry (30d0fa67...). isSelfCertifyingKeyBinding
+        // previously only accepted the base58-derived form, so the canonical hex
+        // binding was classified "poisoned" and stripped on every cold start —
+        // the app then had no AWS seed ("no proven ledger relay candidates").
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        assertTrue(
+            "hex peer_id == hex public_key must be self-certifying",
+            invokeIsSelfCertifyingKeyBinding(repo, CANONICAL_PUBKEY, CANONICAL_PUBKEY)
+        )
+    }
+
+    @Test
+    fun `genuinely unrelated binding stays poisoned`() {
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        // A different node's hex key bound as peer_id of this entry is NOT
+        // self-certifying and must keep being dropped (the poison path remains).
+        val unrelatedPeerId =
+            "014b81057387384c89570a652ea604967388b0f67573d9e31d5719aab3f58cc8"
+        assertFalse(
+            "mismatched hex binding must stay poisoned",
+            invokeIsSelfCertifyingKeyBinding(repo, unrelatedPeerId, CANONICAL_PUBKEY)
+        )
+        // A libp2p base58 peer id that does not derive from the key also stays poisoned.
+        assertFalse(
+            "unrelated base58 peer id must stay poisoned",
+            invokeIsSelfCertifyingKeyBinding(
+                repo,
+                "12D3KooWNkx3AjDmXDHpweEsnNm164MS23nuMRVLajgaASyxBrow",
+                CANONICAL_PUBKEY
+            )
+        )
+    }
+
+    @Test
+    fun `base58 peer id derived from key is still self-certifying`() {
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        assertTrue(
+            "base58-derived binding must remain self-certifying",
+            invokeIsSelfCertifyingKeyBinding(repo, LEGACY_LIBP2P_SENDER, CANONICAL_PUBKEY)
+        )
+    }
 }

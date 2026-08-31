@@ -9152,14 +9152,22 @@ open class MeshRepository(
     }
 
     /**
-     * A public key may only be bound to a libp2p peer id when the binding is
+     * A public key may only be bound to a peer id when the binding is
      * self-certifying (Ed25519 peer ids embed their key). Bindings learned from
      * transport routing hints — relay hops, /p2p-circuit dial candidates,
      * self-reported identity-sync hints — are rejected here so circuit-relay
      * route annotations can never poison ledger identity resolution.
+     *
+     * Two accepted forms:
+     *  1. Canonical hex form: the ledger stores peer_id as the 64-hex public key
+     *     itself (the unified canonical identity). A hex peer_id equal to the
+     *     public key is self-certifying by construction.
+     *  2. libp2p base58 form: the derived peer id must equal the stored peer id
+     *     (Ed25519 peer ids embed their key).
      */
     private fun isSelfCertifyingKeyBinding(peerId: String, publicKey: String): Boolean {
         if (!PeerKeyUtils.isValidPublicKey(publicKey)) return false
+        if (peerId.equals(publicKey, ignoreCase = true)) return true
         return PeerKeyUtils.extractPeerIdFromPublicKey(publicKey) == peerId
     }
 
