@@ -226,6 +226,23 @@ Dispatched and verified by an orchestrator on the Windows host. Rules:
 - Final message MUST start with `RESULT: DONE|BLOCKED|FAILED`, then at most 10
   lines: what changed, files touched, anything the verifier must know.
 
+### FREEBUFF LANE (DeepSeek V4 Flash / MiMo / GLM 5.3 Flash in Freebuff desktop)
+Unmetered implementation capacity, driven by the operator pasting a task file --
+the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
+`docs/rules/FREEBUFF.md`. Queue: `HANDOFF/freebuff/`. Rules:
+- You have the repo and a toolchain. You MAY run `cargo`/`gradlew`, but check
+  first that no other build is live -- this host serializes builds.
+- You MAY open a PR for your own work. You may NOT merge it: green CI is
+  necessary, not sufficient, and anything touching
+  `core/src/{crypto,transport,routing,privacy}` needs a recorded adversarial
+  APPROVE from a reviewer that did not author the change.
+- Do NOT revert, stash, delete, or commit a file you did not create. This
+  checkout is shared. A clean `git status` is not a goal.
+- Your task file is the whole brief. If its premise does not survive contact
+  with the code, STOP and say so in the PR rather than implementing a fix to a
+  problem that does not exist.
+- Every status line carries a command and its output, a run URL, or `UNVERIFIED`.
+
 ### MAC LANE (GPT / Codex on the operator's MacBook — iOS platform work + adversarial review)
 Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
 - You MAY and SHOULD commit, push, and open and manage your own pull
@@ -261,4 +278,5 @@ re-queued, not merged.
 - `CLAUDE.md` — Claude-session superset (subagents, skills, hooks)
 - `docs/CLAUDE_REFERENCE.md` — build commands, module map, test inventory
 - `HANDOFF/todo/_QUEUE.md` — live dispatch order
+- `HANDOFF/freebuff/` — Freebuff lane queue; `docs/rules/FREEBUFF.md` for its rules
 - `.claude/commands/orchestrate.md` + `docs/ORCHESTRATION.md` — the one unified orchestrator loop that verifies your work (the old per-backend commands are archived under `.claude/archive/commands/`)
