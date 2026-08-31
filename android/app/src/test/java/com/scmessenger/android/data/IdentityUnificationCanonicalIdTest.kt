@@ -332,4 +332,23 @@ class IdentityUnificationCanonicalIdTest {
         assertNull(invokeToDialableRoutePeerId(repo, "not-a-peer-id", CANONICAL_PUBKEY))
         assertNull(invokeToDialableRoutePeerId(repo, "", CANONICAL_PUBKEY))
     }
+
+    @Test
+    fun `valid libp2p candidate passes through even with null recipient key`() {
+        // The libp2p passthrough must fire BEFORE the recipient-key guard, so a
+        // pre-existing base58 candidate (from cached/notes/discovery) is never
+        // silently dropped just because the recipient public key is null/empty.
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        assertEquals(
+            LEGACY_LIBP2P_SENDER,
+            invokeToDialableRoutePeerId(repo, LEGACY_LIBP2P_SENDER, null)
+        )
+        // Same when the recipient key is present — passthrough is unconditional.
+        assertEquals(
+            LEGACY_LIBP2P_SENDER,
+            invokeToDialableRoutePeerId(repo, LEGACY_LIBP2P_SENDER, CANONICAL_PUBKEY)
+        )
+    }
 }
