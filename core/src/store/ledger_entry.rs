@@ -1008,7 +1008,6 @@ impl LedgerManager {
             }
         }
 
-        let canonical_peer = peer_id.clone();
         let snapshot = {
             let mut entries = self.entries.lock();
             let target_port = get_multiaddr_port(&multiaddr);
@@ -1066,20 +1065,6 @@ impl LedgerManager {
                     last_seen: Some(current_timestamp()),
                     topics: Vec::new(),
                 });
-            }
-
-            // A live connection to a peer proves the peer itself is reachable;
-            // reset the dead-tier failure counter on EVERY ledger entry of the
-            // same canonical peer (not just the exact multiaddr that succeeded).
-            // Without this, a relay/circuit-hop success records against the hop's
-            // multiaddr while the peer's primary address keeps accumulating
-            // failures and stays in the dead tier (dialable + ledger-exchange
-            // both gate on failure_count < 3) — the live-connected AWS parity node
-            // was observed stuck this way. Mirrors CLI DialPolicy::reset_peer_backoff.
-            for entry in entries.iter_mut() {
-                if entry.peer_id.as_deref() == Some(canonical_peer.as_str()) {
-                    entry.failure_count = 0;
-                }
             }
             (*entries).clone()
         };
@@ -1564,9 +1549,30 @@ impl LedgerManager {
         my_addrs: &[String],
     ) -> Vec<SharedPeerEntry> {
         let entries = self.entries.lock();
+        // Peer-liveness aware disclosure: an address whose own failure counter is
+        // in the dead tier (>= THRESHOLD) may still be shared when the PEER is
+        // reachable via another entry in this ledger (e.g. a live relay/circuit
+        // hop while the primary address accumulated stale failures). Per-address
+        // failure_count is left untouched so a genuinely dead address is never
+        // re-dialed as a retry path — eligibility for exchange is decided at the
+        // peer level, dialing stays per-address.
+        let mut live_peers = std::collections::HashSet::new();
+        for e in entries.iter() {
+            if let Some(pid) = e.peer_id.as_deref() {
+                if e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD {
+                    live_peers.insert(pid.to_string());
+                }
+            }
+        }
         entries
             .iter()
-            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
+            .filter(|e| {
+                e.success_count > 0
+                    && (e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD
+                        || e.peer_id
+                            .as_deref()
+                            .is_some_and(|pid| live_peers.contains(pid)))
+            })
             .filter(|e| e.peer_id.as_deref() != Some(requester_peer_id))
             .filter(|e| {
                 let addr = strip_peer_id_component(&e.multiaddr);
@@ -2286,55 +2292,42 @@ mod tests {
     }
 
     #[test]
-    fn live_connection_sweeps_dead_tier_across_same_peer_addresses() {
+    fn live_peer_disclosure_allows_dead_tier_sibling_addresses() {
         let (_dir, mgr) = manager();
         let p = peer();
         let primary_addr = "/ip4/54.235.20.24/tcp/9001";
-        let hop_addr = "/ip4/172.17.0.1/tcp/38969";
+        let hop_addr = "/ip4/148.64.77.201/tcp/9021"; // routable sibling address of the same peer
 
-        // Same peer, one entry already in the dead tier on the PRIMARY address
-        // (accumulated failures). The live connection then comes in over a
-        // DIFFERENT (relay/circuit-hop) address of the same peer — the exact AWS
-        // parity state observed on the Windows node, where the hop success would
-        // have recorded against the hop multiaddr and left the primary dead.
+        // Same peer, two addresses: the PRIMARY in the dead tier (accumulated
+        // failures) while a DIFFERENT hop address of the same peer is live — the
+        // exact AWS parity state observed on the Windows node, where the hop
+        // success recorded against the hop multiaddr and left the primary's
+        // failure counter high.
         mgr.record_connection(primary_addr.to_string(), p.clone());
         for _ in 0..LEDGER_DEAD_FAILURE_THRESHOLD {
             mgr.record_failure(primary_addr.to_string());
         }
+        // A live connection on the sibling address proves the peer is reachable.
+        mgr.record_connection(hop_addr.to_string(), p.clone());
         assert_eq!(
             mgr.dialable_addresses().len(),
-            0,
-            "primary address must be dead before the sweep"
+            1,
+            "per-address dialing must still exclude the dead primary"
         );
 
-        // A live connection on the OTHER address of the same peer must reset the
-        // PRIMARY address's failure counter too, reviving it and making it
-        // dialable and shareable again.
-        mgr.record_connection(hop_addr.to_string(), p.clone());
-        let dialable = mgr.dialable_addresses();
-        assert_eq!(
-            dialable.len(),
-            2,
-            "same-peer sweep must revive both entries"
-        );
-        for e in &dialable {
-            assert_eq!(
-                e.failure_count, 0,
-                "every same-peer entry resets on live connection"
-            );
-        }
-        // The PRIMARY (globally routable) address is the one that must become
-        // shareable again. The RFC1918 hop address is withheld without
-        // same-subnet evidence (is_disclosable_on_rfc1918_network), which is
-        // intended behaviour — the sweep's job is to revive the routable entry.
+        // Disclosure is peer-liveness aware: because the peer is live via the hop
+        // address, its primary address is shared too (a fresh install can learn
+        // and dial the parity node), WITHOUT resetting the dead address's failure
+        // counter (no retry loop — it is still excluded from dialing).
         let shared = mgr.exchange_response_entries(8, "some-peer", &[]);
         assert!(
             shared.iter().any(|s| s.multiaddr == primary_addr),
-            "sweep must make the primary address shareable again"
+            "live peer's dead-tier address must become exchange-shareable"
         );
+        let stored = mgr.dialable_addresses();
         assert!(
-            shared.iter().all(|s| s.multiaddr != hop_addr),
-            "RFC1918 hop address must remain undisclosed without same-subnet evidence"
+            stored.iter().all(|e| e.multiaddr != primary_addr),
+            "dead address must stay out of dialing even while shareable"
         );
     }
 
