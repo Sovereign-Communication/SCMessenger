@@ -33,6 +33,7 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 | T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Any time -- touches nothing T1/T2 touch | **Rule-8 mandatory** |
 | T6 | `V040_T6_TIER_A_CONFORMANCE_HARNESS.md` | No single command answers "are the two always-on nodes conformant right now?" -- which is how a 13-hour peer outage and a 7-hour dead watcher both went unnoticed | Any time -- read-only, no source changes | none |
 | T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | **1st** -- cheapest multiplier | none |
+| T8 | `V040_T8_RESTORE_DIAGNOSTICS_FORMATTER_TEST.md` | A WS11 test was deleted as "orphaned" but its class still exists and is used. `format()` has had no coverage since 2026-08-14 | Any time -- CI only, no handset | none |
 | T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
 
 T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
