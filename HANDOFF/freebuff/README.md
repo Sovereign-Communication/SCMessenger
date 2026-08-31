@@ -29,13 +29,42 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 | # | Task file | What it fixes | Order | Review gate |
 |---|---|---|---|---|
 | T1 | `V040_T1_NODE_BOOT_SEED_DIAL.md` | The CLI node never dials known peers on boot, and its seed list is empty anyway. A node that changed address can never rejoin | **First** | none if confined to `cli/` |
-| T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | After or alongside T1 | **Rule-8 mandatory** -- changes what the node discloses |
-| T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Independent | **Rule-8 mandatory** |
-| T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | Independent | none |
+| T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | **Second** | **Rule-8 mandatory** -- changes what the node discloses |
+| T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Any time -- touches nothing T1/T2 touch | **Rule-8 mandatory** |
+| T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | Any time -- docs only | none |
 
 T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
 a new IP rejoins the mesh with no human action, and its new address propagates by
 ledger gossip to nodes that never contacted it directly.
+
+### Order -- RULED 2026-08-31, revised after the lane's clarification
+
+**T5, then T2, then T1. T4 any time, in parallel.**
+
+This revises the earlier T1-first ruling. The lane reported that the rig no
+longer matched T1's filed regression state; that report was correct and it
+changed the answer. Full reasoning:
+`inbox/RULING_2026-08-31_clarification_response.md`.
+
+| Order | Task | Why here |
+|---|---|---|
+| 1 | **T5** | 5-30 LoC, no dependencies, un-breaks every agent's finalize gate. Cheapest multiplier available -- do it before anything long |
+| 2 | **T2** | Now the primary fix, not a follow-up. Making the gossiped store real is the only thing that gives a moved node a recovery path |
+| 3 | **T1, Half 2 only** | **Half 1 is WITHDRAWN** -- T2's migration replaces that bridge. The boot dial is worthless until the core ledger holds real content |
+| any | **T4** | Touches nothing T1/T2 touch |
+
+**Why the correction matters.** T1 as filed claimed the CLI never dials on boot.
+It does -- promiscuously, from the polluted `peers.json`, while
+`connect_to_seed_peers()` (which reads the clean *gossiped* ledger) never runs
+at all: zero occurrences in the node log. The two nodes did reconnect unaided,
+but only because a stale local entry happened to still be correct, after ~40
+minutes of grinding dead addresses. A genuinely changed address still has no
+recovery path, because a new address is only learnable via gossip and the
+gossiped store is the empty one.
+
+**Consequence for acceptance:** a live "we have peers" check would actively
+mislead on T1 -- the rig reconnects on its own regardless. The real gate is a
+`[SEED-DIAL]` line in the node log, which is checkable with no live rig.
 
 **Superseded, do not run:** the original `V040_T2_LEDGER_HYGIENE_EPHEMERAL_AND_SELF`
 and `V040_T3_ADDRESS_SUPERSESSION_ON_CHURN` were fixes to symptoms of the

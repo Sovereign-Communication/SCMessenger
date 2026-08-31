@@ -6,26 +6,56 @@ Lane: Freebuff / DeepSeek V4 Flash
 Scope: `cli/src/main.rs` (startup path). Do not modify `core/src/transport/swarm.rs`
 beyond adding a call site if one is genuinely required.
 
-## The defect, proven live
+## PREMISE CORRECTED 2026-08-31 -- read this, the original filing was too strong
 
-The AWS node (`54.235.20.24`) was redeployed 2026-08-31T17:20Z at `main`@`69a8ba57`
-with a persistent `/data` volume. Its ledger holds a real peer entry:
+The Freebuff lane reported that the rig no longer matched this ticket's filed
+regression state. That report was correct, and re-investigation sharpened the
+defect rather than dissolving it. **Credit where due: this is exactly the reply
+this lane exists to produce.**
 
-```json
-{"multiaddr":"/ip4/98.94.45.116/tcp/9001",
- "peer_id":"aa7e73ca4b471b09cf2bf5bccde1d6500744a97c4e017a318cc1cf4798f0ebf2",
- "success_count":1,"failure_count":0}
-```
-
-45 seconds after boot, `GET /api/diagnostics` reports:
+**What the original filing said:** "the CLI node never dials out on boot."
+**That is wrong.** It does dial. Windows connected to the AWS node roughly 40
+minutes after both started, unaided:
 
 ```
-state: Bootstrapping
-peers: []
-external_addrs: []
+Dialing 54.235.20.24:9001 (promiscuous)...
+Connected to 12D3KooW9uRMQTswPUjUn2YfTLx5sjH26v2AtjRfgiE73WLprBfD
+  via /ip4/54.235.20.24/tcp/9001/p2p/12D3KooW9uRM...
 ```
 
-It knows a peer. It never dials it.
+`/api/diagnostics` on the Windows node now reports
+`connection_path_state: DirectPreferred` with that peer.
+
+**What is actually broken, and it is worse than the original framing:**
+
+The CLI dials **promiscuously from `peers.json`** -- the uncapped, polluted,
+never-gossiped local store -- while `connect_to_seed_peers()`, which reads the
+clean, canonical, *gossiped* core ledger, never runs at all. Confirmed: the node
+log contains **zero** occurrences of `connect_to_seed_peers`, `SEED-DIAL`, or
+`ConnectToSeedPeers`.
+
+```bash
+grep -c "connect_to_seed_peers\|SEED-DIAL\|ConnectToSeedPeers" <node log>   # 0
+```
+
+Three consequences, all load-bearing for the v0.4.0 churn gate:
+
+1. **Reconnection is luck, not design.** It worked here only because a stale
+   local entry for `54.235.20.24:9001` happened to still be correct
+   (`fails=0`). It took ~40 minutes of grinding through thousands of entries.
+2. **A genuinely changed address has no recovery path at all.** A new address is
+   only learnable through ledger gossip, and the gossiped store is the empty
+   one. The same `peers.json` still holds `54.226.67.101` -- the address that
+   died when the instance was replaced -- at `fails=8`, `9`, `16`, `60`, never
+   retired.
+3. `DEFAULT_BOOTSTRAP_NODES` is `&[]` (`cli/src/bootstrap.rs:27`), so there is no
+   hardcoded fallback underneath this. Local store or nothing.
+
+**Effect on this task:** the boot dial (Half 2) is still required, but it is
+worthless until the core ledger has real content -- which is
+`V040_T2_UNIFY_PEER_LEDGER_STORES.md`'s job, done properly. **Half 1 of this
+ticket is therefore withdrawn**, and T2 now runs first. See the order ruling in
+`HANDOFF/freebuff/README.md`.
 
 ## Root cause
 
@@ -92,7 +122,13 @@ across five different peer ids -- while `ledger.json` sits at zero.
 
 This task has two halves. Both are needed or the node still cannot rejoin.
 
-### Half 1 -- give the seed list something real
+### Half 1 -- WITHDRAWN 2026-08-31, do not implement
+
+Superseded by `V040_T2_UNIFY_PEER_LEDGER_STORES.md`, which now runs first and
+performs a real migration instead of this bridge. Kept below only so the PR
+reviewer can see what was dropped and why.
+
+### Half 1 (withdrawn) -- give the seed list something real
 
 Provide a bootstrap source for the core ledger that does not depend on having
 already dialled out. Pick the smallest option that works and say which you chose:
@@ -109,7 +145,7 @@ Whichever you choose, the acceptance test is that a node restarted with a
 populated `peers.json` and an empty `ledger.json` ends up with a non-empty
 `seed_addresses()`.
 
-### Half 2 -- dial the seeds on boot
+### Half 2 -- dial the seeds on boot (THIS IS THE WHOLE TASK NOW)
 
 In the CLI node startup path (`cli/src/main.rs`), after the swarm is running and
 the ledger is loaded, call `connect_to_seed_peers()` and keep trying until the
@@ -126,15 +162,17 @@ node has at least one connected peer:
 
 ## Acceptance
 
-1. A test proving a node with a populated `peers.json` and an empty
-   `ledger.json` produces a non-empty `seed_addresses()` after startup (Half 1).
+1. ~~A test for Half 1's promotion~~ -- withdrawn, T2 covers this.
 2. A test proving the startup path issues a seed dial when the seed list is
-   non-empty and the peer count is zero (Half 2).
-3. Live evidence, reproducing the exact failure this ticket documents: start the
-   Windows node and the AWS node, touch nothing else, and confirm both report
-   `peers` non-empty and `connection_path_state` no longer `Bootstrapping`.
-   Today, both sit at `Bootstrapping` / `peers: []` indefinitely at identical
-   SHAs -- that is the regression case.
+   non-empty and the peer count is zero.
+3. Proof the seed dial actually runs: the node log contains a `[SEED-DIAL]`
+   line. Today it contains **zero** occurrences of `connect_to_seed_peers`,
+   `SEED-DIAL`, or `ConnectToSeedPeers` -- that absence is the regression this
+   task closes, and it is checkable without any live rig.
+4. Live evidence is **best-effort, not the gate**. The rig reconnects on its own
+   via promiscuous dialing from `peers.json`, so a green live check does NOT
+   prove this task worked -- only the `[SEED-DIAL]` log line does. Mark live
+   observations `UNVERIFIED` where the node is not reachable from your seat.
 3. `cargo test --workspace --no-run` passes. `cargo fmt --check` clean.
    Never read `$?` after a pipe -- capture to a file, then test the code.
 
