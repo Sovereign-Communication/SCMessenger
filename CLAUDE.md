@@ -18,8 +18,6 @@ No hook, CI job, or compiler catches these.
   cargo-ndk.
 - Never `cargo clean --target <triple>`: wipes ALL of `target/` (44.7 GB lost).
   Use `scripts/clean_target.sh`.
-- rustc crashes (`STATUS_STACK_BUFFER_OVERRUN`, "can't find crate") mean
-  resource exhaustion, not corruption. Retry lower `-j`; check `df -h /c`.
 
 **Shared checkout** -- other agents and the operator work here concurrently.
 
@@ -52,6 +50,7 @@ No hook, CI job, or compiler catches these.
 | Dispatch a worker | `docs/rules/DELEGATION.md` | timeouts, truncation, quota burn |
 | Dispatch to Freebuff | `docs/rules/FREEBUFF.md`, `HANDOFF/freebuff/` | wasted operator paste cycles |
 | Run a build or gate | deconflict, `df -h /c`, `build-verify` | concurrent builds corrupt `target/` |
+| Blocked, or the queue looks empty | `docs/rules/CONTINUOUS_EXECUTION.md` | idle on an absent node; silent monitor death |
 | Edit crypto/transport/routing/privacy | `docs/rules/SECURITY_PROTOCOL.md` + `crypto-security-auditor` | merge blocked |
 | Edit other Rust | `docs/rules/RUST_CONVENTIONS.md` | boundary violation caught late |
 | Android work | `docs/rules/ANDROID.md`, `android-qa` | hardcoded strings, missing FGS channel |
