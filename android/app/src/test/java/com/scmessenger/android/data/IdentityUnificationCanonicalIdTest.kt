@@ -9,7 +9,9 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
+import com.scmessenger.android.utils.PeerIdValidator
 import uniffi.api.Contact
 import uniffi.api.ContactManager
 import uniffi.api.IronCore
@@ -266,5 +268,68 @@ class IdentityUnificationCanonicalIdTest {
             "base58-derived binding must remain self-certifying",
             invokeIsSelfCertifyingKeyBinding(repo, LEGACY_LIBP2P_SENDER, CANONICAL_PUBKEY)
         )
+    }
+
+    /** Reflectively invokes the private toDialableRoutePeerId entry point. */
+    private fun invokeToDialableRoutePeerId(
+        repo: MeshRepository,
+        peerId: String,
+        recipientPublicKey: String?
+    ): String? {
+        val method = MeshRepository::class.java.getDeclaredMethod(
+            "toDialableRoutePeerId",
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(repo, peerId, recipientPublicKey) as String?
+    }
+
+    @Test
+    fun `hex canonical peer id is dialable via derived libp2p form`() {
+        // REGRESSION (dial-layer, ledger-share of the AWS parity node): the ledger
+        // stores peer_id as the 64-hex canonical public key (014b8105...). The
+        // route-candidate builder previously rejected it with
+        // `buildRoutePeerCandidates: peer_id=invalid_format`, so AWS could never be
+        // dialed even after the sanitizer/discovery fixes. Now the self-certifying
+        // hex form must yield the dialable libp2p peer id.
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        val awsHexKey =
+            "014b81057387384c89570a652ea604967388b0f67573d9e31d5719aab3f58cc8"
+        val dialable = invokeToDialableRoutePeerId(repo, awsHexKey, awsHexKey)
+        assertTrue(
+            "hex-bound self-certifying peer_id must derive to a libp2p peer id",
+            dialable != null && PeerIdValidator.isLibp2pPeerId(dialable)
+        )
+        // The derived id must re-extract back to the same canonical key (the
+        // recipient), proving it is the same node's dialable id.
+        val reRecipient = invokeToDialableRoutePeerId(repo, dialable!!, awsHexKey)
+        assertEquals(dialable, reRecipient)
+    }
+
+    @Test
+    fun `unrelated hex peer id stays un-dialable`() {
+        // A canonical hex id that does NOT certify against the recipient key must
+        // still yield null (dial rejection preserved, matching the poison path).
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        val unrelatedHex =
+            "f1c4f2aa5f3a47fbbc9f3b0a1d2c4e5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d"
+        assertNull(
+            "hex peer_id unrelated to the recipient must not become dialable",
+            invokeToDialableRoutePeerId(repo, unrelatedHex, CANONICAL_PUBKEY)
+        )
+    }
+
+    @Test
+    fun `random non-id string stays un-dialable`() {
+        val repo = HermeticIdentityRepo(
+            fakeContext(File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() })
+        )
+        assertNull(invokeToDialableRoutePeerId(repo, "not-a-peer-id", CANONICAL_PUBKEY))
+        assertNull(invokeToDialableRoutePeerId(repo, "", CANONICAL_PUBKEY))
     }
 }
