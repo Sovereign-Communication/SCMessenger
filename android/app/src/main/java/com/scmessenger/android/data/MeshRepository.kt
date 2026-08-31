@@ -9803,6 +9803,10 @@ open class MeshRepository(
     private fun toDialableRoutePeerId(peerId: String, recipientPublicKey: String?): String? {
         val normalized = peerId.trim()
         if (normalized.isEmpty()) return null
+        // Passthrough MUST precede the recipient-key guard: an already-libp2p
+        // candidate from cached/notes/discovery is dialable as-is and must not be
+        // dropped just because recipientPublicKey is null/empty (regression test
+        // `valid libp2p candidate passes through even with null recipient key`).
         if (PeerIdValidator.isLibp2pPeerId(normalized)) return normalized
         // Only accept the canonical hex form when it self-certifies against the
         // recipient key (hex peer_id equal to the public key is self-certifying
