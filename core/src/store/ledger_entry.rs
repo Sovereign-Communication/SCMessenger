@@ -1026,6 +1026,12 @@ impl LedgerManager {
             if let Some(idx) = found_dns_idx {
                 let entry = &mut entries[idx];
                 entry.success_count += 1;
+                // A live connection proves the address is not dead: reset the
+                // failure counter so a healthy node that once had transient
+                // failures is no longer stuck in the dead tier (dialable and
+                // ledger-exchange both gate on failure_count < 3). Mirrors the
+                // CLI DialPolicy::record_success reset.
+                entry.failure_count = 0;
                 // UNIFICATION: ensure existing DNS entry public_key is canonical if we derived one
                 if entry.public_key.is_none() {
                     if let Some(pk) = &canonical_public_key {
@@ -1036,6 +1042,8 @@ impl LedgerManager {
             } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
                 entry.success_count += 1;
                 entry.peer_id = Some(peer_id.clone());
+                // Same live-connection reset as the DNS branch above.
+                entry.failure_count = 0;
                 // UNIFICATION: populate public_key with canonical if missing (mirrors load migration)
                 if entry.public_key.is_none() {
                     if let Some(pk) = &canonical_public_key {
@@ -1793,7 +1801,10 @@ mod tests {
         assert!(relays
             .iter()
             .any(|e| e.multiaddr == "/ip4/10.0.0.4/tcp/9001"));
-        assert!(!relays
+        // A live connection proves the address is not dead: failure_count resets
+        // on success, so the previously-threshold-dead entry revives and is
+        // relay-ranked again (see record_connection_resets_failures_and_revives_dead_entry).
+        assert!(relays
             .iter()
             .any(|e| e.multiaddr == "/ip4/10.0.0.5/tcp/9001"));
     }
@@ -2203,6 +2214,59 @@ mod tests {
             after[0].peer_id.as_deref(),
             Some(proven_peer.as_str()),
             "known peer_id was disturbed by seed data"
+        );
+    }
+
+    /// REGRESSION (AWS parity ledger-share): a live successful connection must
+    /// lift an entry out of the dead tier. `record_connection` used to only
+    /// increment `success_count`, so an address that once had transient
+    /// failures stayed at `failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD`
+    /// forever — excluded from `dialable_addresses`, `get_preferred_relays`
+    /// and the ledger-exchange response — even while the node was actively
+    /// connected to it. This stranded healthy peers (e.g. the AWS parity node
+    /// at /ip4/54.235.20.24/tcp/9001, success=2 fail=3) so they were never
+    /// shared to the Android app via ledger exchange.
+    #[test]
+    fn record_connection_resets_failures_and_revives_dead_entry() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/54.235.20.24/tcp/9001";
+        let p = peer();
+
+        // Prove the entry, then push it into the dead tier.
+        mgr.record_connection(addr.to_string(), p.clone());
+        for _ in 0..LEDGER_DEAD_FAILURE_THRESHOLD {
+            mgr.record_failure(addr.to_string());
+        }
+        assert_eq!(mgr.dialable_addresses().len(), 0, "entry must be dead");
+        assert_eq!(
+            mgr.get_preferred_relays(8).len(),
+            0,
+            "dead entry must not be a preferred relay"
+        );
+        assert!(
+            mgr.exchange_response_entries(8, "some-peer", &[])
+                .is_empty(),
+            "dead entry must not be shared"
+        );
+
+        // A live connection revives it: failure_count resets, success bumps.
+        mgr.record_connection(addr.to_string(), p.clone());
+        let dialable = mgr.dialable_addresses();
+        assert_eq!(dialable.len(), 1, "live connection must revive the entry");
+        assert_eq!(
+            dialable[0].failure_count, 0,
+            "failure_count must reset on success"
+        );
+        assert_eq!(dialable[0].success_count, 2);
+        assert_eq!(
+            mgr.get_preferred_relays(8).len(),
+            1,
+            "revived entry must be a preferred relay"
+        );
+        assert_eq!(
+            mgr.exchange_response_entries(8, "some-peer", &[]).len(),
+            1,
+            "revived entry must be shareable in ledger exchange"
         );
     }
 
