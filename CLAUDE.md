@@ -20,8 +20,6 @@ No hook, CI job, or compiler catches these.
   Use `scripts/clean_target.sh`.
 - rustc crashes (`STATUS_STACK_BUFFER_OVERRUN`, "can't find crate") mean
   resource exhaustion, not corruption. Retry lower `-j`; check `df -h /c`.
-- Never read `$?` after a pipe -- it reports the last command, so a piped gate
-  can never fail.
 
 **Shared checkout** -- other agents and the operator work here concurrently.
 
@@ -52,6 +50,7 @@ No hook, CI job, or compiler catches these.
 | Clean or delete build artifacts | `scripts/clean_target.sh --dry-run` | 44.7 GB wiped |
 | Destructive git, `rm -rf`, force-push | `docs/rules/SECURITY_PROTOCOL.md` | operator approval; hook-blocked |
 | Dispatch a worker | `docs/rules/DELEGATION.md` | timeouts, truncation, quota burn |
+| Dispatch to Freebuff | `docs/rules/FREEBUFF.md`, `HANDOFF/freebuff/` | wasted operator paste cycles |
 | Run a build or gate | deconflict, `df -h /c`, `build-verify` | concurrent builds corrupt `target/` |
 | Edit crypto/transport/routing/privacy | `docs/rules/SECURITY_PROTOCOL.md` + `crypto-security-auditor` | merge blocked |
 | Edit other Rust | `docs/rules/RUST_CONVENTIONS.md` | boundary violation caught late |
