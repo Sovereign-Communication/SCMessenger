@@ -9815,7 +9815,10 @@ open class MeshRepository(
         val recipientKey = normalizePublicKey(recipientPublicKey)
         if (recipientKey == null || !PeerKeyUtils.isValidPublicKey(normalized)) return null
         if (!normalized.equals(recipientKey, ignoreCase = true)) return null
-        val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(normalized)
+        // Derive from the canonical recipient key (equal to the hex peer_id by
+        // the self-certificate check, but case-normalized) so derivation is
+        // immune to a case-sensitive hex decoder.
+        val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(recipientKey)
         return if (PeerIdValidator.isLibp2pPeerId(derived)) derived else null
     }
 
