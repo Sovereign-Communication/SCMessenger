@@ -78,6 +78,19 @@ open class MeshRepository(
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
 
+        /**
+         * UNIFICATION auth guard: only reject a federated contact update when the
+         * stored key is NON-BLANK and differs from the verified incoming key. A
+         * blank stored key (legacy/discovery-created record) is not a conflict —
+         * the incoming verified key should fill it.
+         */
+        internal fun federatedKeyConflict(storedPublicKey: String?, incomingPublicKey: String): Boolean {
+            val stored = storedPublicKey?.trim()?.lowercase() ?: return false
+            if (stored.isEmpty()) return false
+            val incoming = incomingPublicKey.trim().lowercase()
+            return stored != incoming
+        }
+
         internal fun resolvePlatformSecuredPassphrase(
             encryptedPrefs: SharedPreferences,
             legacyPrefsProvider: () -> SharedPreferences,
@@ -8792,7 +8805,15 @@ open class MeshRepository(
             if (keyMatches.isNotEmpty()) return resolvedCanonicalPeerId
         }
 
-        return if (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId)) {
+        // UNIFICATION: never let the message hint downgrade an already-canonical
+        // 64-hex identity (public key OR identity_id) to a derived hash. The hint
+        // identity_id is only preferred when the resolved/sender form is NOT already
+        // a 64-hex key (e.g. legacy libp2p routing ID or BLE UUID), where the hint
+        // is genuinely more canonical than the raw sender id.
+        return if (
+            !PeerIdValidator.isIdentityId(resolvedCanonicalPeerId) &&
+                (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId))
+        ) {
             normalizedHint
         } else {
             resolvedCanonicalPeerId
@@ -9516,7 +9537,10 @@ open class MeshRepository(
 
             // Auth guard: for an existing canonical peerId, only accept federated updates
             // when the source public key is consistent with the stored contact key.
-            if (existingById != null && normalizePublicKey(existingById.publicKey) != normalizedKey) {
+            // A BLANK stored key is not a conflict — it means the contact record predates
+            // the key (ledger/discovery-created); fill it with the verified incoming key.
+            // Only a non-empty MISMATCHING key is rejected.
+            if (existingById != null && federatedKeyConflict(existingById.publicKey, normalizedKey)) {
                 Timber.w(
                     "Rejected federated nickname update for $normalizedPeerId: key mismatch " +
                         "(stored=${existingById.publicKey.take(8)}..., incoming=${normalizedKey.take(8)}...)"
