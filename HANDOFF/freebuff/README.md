@@ -28,10 +28,12 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 
 | # | Task file | What it fixes | Order | Review gate |
 |---|---|---|---|---|
-| T1 | `V040_T1_NODE_BOOT_SEED_DIAL.md` | The CLI node never dials known peers on boot, and its seed list is empty anyway. A node that changed address can never rejoin | **First** | none if confined to `cli/` |
-| T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | **Second** | **Rule-8 mandatory** -- changes what the node discloses |
+| T1 | `V040_T1_NODE_BOOT_SEED_DIAL.md` | The CLI node never dials known peers on boot, and its seed list is empty anyway. A node that changed address can never rejoin | **3rd** (Half 2 only) | none if confined to `cli/` |
+| T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | **2nd** | **Rule-8 mandatory** -- changes what the node discloses |
 | T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Any time -- touches nothing T1/T2 touch | **Rule-8 mandatory** |
-| T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | Any time -- docs only | none |
+| T6 | `V040_T6_TIER_A_CONFORMANCE_HARNESS.md` | No single command answers "are the two always-on nodes conformant right now?" -- which is how a 13-hour peer outage and a 7-hour dead watcher both went unnoticed | Any time -- read-only, no source changes | none |
+| T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | **1st** -- cheapest multiplier | none |
+| T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
 
 T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
 a new IP rejoins the mesh with no human action, and its new address propagates by
@@ -70,6 +72,21 @@ mislead on T1 -- the rig reconnects on its own regardless. The real gate is a
 and `V040_T3_ADDRESS_SUPERSESSION_ON_CHURN` were fixes to symptoms of the
 duplication that T2 now removes at the root. Both are folded into
 `V040_T2_UNIFY_PEER_LEDGER_STORES.md`.
+
+## Never idle -- node availability tiers
+
+Operator directive 2026-08-31. Full policy: `docs/rules/CONTINUOUS_EXECUTION.md`.
+
+| Tier | Nodes | Obligation |
+|---|---|---|
+| **A** | AWS (Linux) + Windows CLI | Always available. Driven to **full v1.0.0 conformance**, continuously |
+| **B** | Android (Pixel 6a) | Intermittent. **Coded to parity now, verified later** -- device time is for verification and log capture, never for writing code |
+| **C** | iOS / macOS | v0.5.0 scope. Do not start |
+
+**"Blocked on hardware" is not a terminal state.** It means descend the ladder:
+restore Tier A -> v0.4.0 gate items -> Tier A v1.0.0 conformance -> Tier B parity
+coding -> owned-issue burn-down (`SHIP_PLAN.md` section 7) -> PR queue. Take the
+first item actionable right now.
 
 ## The live rig these tasks were written against
 

@@ -457,3 +457,46 @@ the largest row and still the only one that has ever been underestimated here.
 **What is genuinely close:** every remaining blocker is one operator command
 (G1-1), five specified and located code changes (T1-T5), or evidence-gathering on
 hardware. No architecture is missing and no feature is unbuilt.
+
+---
+
+## 6.6 Execution policy change -- 2026-08-31
+
+Operator directive: work never stops because a node is unavailable. Full policy:
+`docs/rules/CONTINUOUS_EXECUTION.md`. In short:
+
+- **Tier A** (AWS Linux + Windows) is always available and is driven to **full
+  v1.0.0 conformance**, continuously. This supersedes section 4's blanket
+  deferral of v1.0.0 scope for Tier A work; the tag still sets priority order,
+  but the queue may not run dry waiting on hardware.
+- **Tier B** (Android) is coded to parity now and verified later. Device time is
+  for verification and log capture, never for writing code.
+- **Tier C** (iOS/macOS) stays out of scope until v0.5.0.
+- "Blocked on hardware" is not a terminal state. It is a signal to descend the
+  never-idle ladder in that document.
+
+## 7. Discovered issue ledger
+
+Every defect found while doing something else, with a disposition. "Noted in
+passing" is not a disposition. Opened 2026-08-31; append, do not rewrite.
+
+| # | Issue | Evidence | Disposition |
+|---|---|---|---|
+| I-01 | AWS node ran with **no `/data` mount**; identity written to the ephemeral container layer and lost on every redeploy | `docker inspect scm-node --format '{{json .Mounts}}'` returned `[]`; startup log `No keys found in store` | **FIXED** -- PR #259. Identity persistence verified across a full restart |
+| I-02 | `scripts/aws_deploy.sh` hardcoded `54.226.67.101`, dead since the instance was replaced | `curl` timeout; EC2 API reports the instance at a different address | **FIXED** -- PR #259, now discovers the IP from the EC2 API |
+| I-03 | `.codebuff_deploy/aws/launch.py` userdata omits the `-v /opt/scm-relay-data:/data` mount. **This is what caused I-01**, and it is still live | The running container was created from it, without the mount | **OPEN -- ticketed T6.** Untracked file owned by another session; do not edit it silently. Until fixed, any instance replacement re-breaks identity persistence |
+| I-04 | Two peer stores that never converge; the gossiped one is empty, the local one is uncapped and polluted | Windows `ledger.json` 0 entries vs `peers.json` 4,678 | **TICKETED** -- `V040_T2_UNIFY_PEER_LEDGER_STORES.md` |
+| I-05 | Ephemeral source ports recorded as dialable addresses | 14 entries for one peer on AWS; thousands on Windows | **TICKETED** -- T2 (defect A) |
+| I-06 | Self-entries cause a continuous self-dial storm across the node's own listeners | `Dial error: Unexpected peer ID ... at /ip4/127.0.0.1/tcp/9001/...` on loop | **TICKETED** -- T2 (defect B) |
+| I-07 | One identity recorded at five unrelated networks | `12D3KooWD6vZQrUqpyGa` (the Windows node) recorded at residential, cellular, the AWS node's own address, and two IPv6 /64s | **TICKETED** -- T2 (defect C) |
+| I-08 | A dead address is never retired; PRs #256/#257 reset its failure counter on any success to the same peer | `54.226.67.101` still present at `fails=8, 9, 16, 60` | **TICKETED** -- T2 (supersession) |
+| I-09 | `connect_to_seed_peers()` is never called by the CLI, so the gossiped ledger never seeds any dial | Zero occurrences of `connect_to_seed_peers`/`SEED-DIAL` in the node log | **TICKETED** -- `V040_T1_NODE_BOOT_SEED_DIAL.md` (Half 2) |
+| I-10 | `routing_peer_seen` has zero callers; routing confidence pinned at 0.0, so D6 is unprovable | `grep -rn` across `.rs`/`.kt`/`.swift` excluding generated bindings | **TICKETED** -- `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` |
+| I-11 | `scripts/docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | Broken link to `DiagnosticsBundleFormatterTest.kt`, deleted in `149d3725` | **TICKETED** -- `V040_T5_DOCS_SYNC_GATE_IS_RED.md` |
+| I-12 | The AWS node binds **33 listeners** including 80/443/8080/9090 and cross-dials its own, producing sustained negotiation-failure warnings | `/api/diagnostics.listeners`; `WARN High rate of incoming negotiation failures from /ip4/172.31.31.151/tcp/9090 -> /ip4/172.17.0.1/tcp/9001` | **OPEN -- ticketed T6.** Partly a symptom of I-06; the listener surface itself is a separate question |
+| I-13 | The driver watcher died at 01:31 with `ERROR: bash not found` and stayed dead **7 hours**; nothing noticed | `watcher.log` last line before restart | **FIXED locally** -- `scratch/driver/watcher.ps1` now resolves bash from known install locations when `-NoProfile` strips PATH. Watcher restarted and logging. Untracked file, so not in PR #259 |
+| I-14 | `scratch/driver/watcher_run.cmd` claims persistence via a `SCMessengerDriverWatcher` ONLOGON scheduled task. **That task is not registered.** Persistence is actually a Startup-folder shortcut | `Get-ScheduledTask` -> not found; `SCMessengerDriverWatcher.lnk` present in Startup | **ACCEPTED** -- the Startup shortcut works and survives reboot. The stale comment is misleading but harmless; corrected if that file is ever edited for another reason |
+| I-15 | `HANDOFF_AUDIT/REPO_MAP.jsonl` contains stale AI-generated `calls` entries that assert call sites which do not exist in source. It misled an agent into believing `routing_peer_seen` had callers | Reported by the Freebuff lane, 2026-08-31; independently consistent with the zero-caller grep | **OPEN -- ticketed T6.** An artifact that lies about the codebase is worse than no artifact, because agents trust it |
+| I-16 | 27 open PRs; 212 remote refs, 18 provably merged | `gh pr list`; `git ls-remote` | **PLANNED** -- SHIP_PLAN G5 |
+| I-17 | `SCMESSENGER_KEY_ALIAS` does not match the keystore; `ANDROID_RELEASE_SIGNING.md` documented `-storetype JKS` while modern keytool writes PKCS12, which matches aliases case-sensitively | Release run `32817839477` failed at `packageRelease` | **DOC FIXED + PLANNED** -- PR #259 corrects the guidance and adds `scripts/verify_release_keystore.sh`; regeneration is G1, operator-only |
+| I-18 | No Android APK has ever been published, so no signing lineage exists -- the keystore can be regenerated for free, but only until the first release | `gh release view` on all four public releases: CLI binaries only | **PLANNED** -- G1. This is a deadline, not a defect |
