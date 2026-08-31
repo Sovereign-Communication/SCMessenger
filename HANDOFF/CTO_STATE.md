@@ -1,10 +1,26 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-29 (post-#234-merge; rc.1 release failure root-caused)
+Last updated: 2026-08-30 (recorded Android agent authorization scope; #251/#252 in flight)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-08-29) =====
+# ===== RESUME HERE (2026-08-30) =====
+
+## MESH HANDOFF 2026-08-30 — Android agent authorization scope (canonical)
+
+Relayed over the mesh from the Android agent (received cleanly on the Windows
+node from Pixel peer `cb18354d`, decrypted, 2026-08-30):
+
+- **Android agents are authorized ONLY for app updates and passive log
+  collection.**
+- **Active device/mesh driving is authorized ONLY for Windows, aidws, and
+  Ubuntu agents.**
+
+Canonical record: `docs/rules/ANDROID.md` (Agent Authorization Scope). This
+restriction supersedes any narrower per-session reading.
+
+Read the above, then `HANDOFF/API_RESET_EXECUTION_CHARTER_2026-08-28.md`
+(the live queue). Everything below section 0-2026-08-29 is history.
 
 Read this section, then `HANDOFF/API_RESET_EXECUTION_CHARTER_2026-08-28.md`
 (the live queue). Everything below section 0-2026-08-29 is history.

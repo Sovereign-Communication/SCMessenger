@@ -1,11 +1,26 @@
 # Android Development Rules
 
 Status: Active
-Last updated: 2026-08-08 (extracted from `.claude/rules/android.md` for Tier 1
-on-demand loading)
+Last updated: 2026-08-30 (recorded agent authorization scope per mesh handoff)
 
 Loaded on demand. The `android-qa` subagent carries an operational copy of the
 pre-merge checklist; this file is the reference.
+
+## Agent Authorization Scope (canonical, from mesh handoff 2026-08-30)
+
+Recorded per the explicit handoff request relayed from the Android agent over
+the mesh (Windows node received it cleanly from Pixel peer `cb18354d`, 2026-08-30):
+
+- **Android agents are authorized ONLY for: app updates and passive log
+  collection.**
+- **Active device/mesh driving is authorized ONLY for the Windows, aidws, and
+  Ubuntu agents.**
+- Android must NOT initiate active driving (device driving, mesh driving,
+  deploy orchestration) — it is limited to app updates + passive log
+  collection only.
+
+This restriction is canonical and supersedes any narrower per-session reading.
+See `HANDOFF/CTO_STATE.md` for the live handoff record.
 
 ## Build Environment
 
