@@ -1852,8 +1852,25 @@ impl LedgerManager {
                 match slot {
                     // Attach the advertised identity to the known address but
                     // do NOT mark it verified -- advertisement is hearsay.
+                    // V040-T13 F-DHT (Bypass-B fix, uniform with the wire-merge
+                    // and migration paths): an advertised pid is never written
+                    // into an entry's CURRENT-BINDING slot when that entry is
+                    // locally_verified. The DHT gate authorizes (identity,
+                    // address) PAIRS from our own store -- if an Identify
+                    // message could bind an attacker pid as the current
+                    // binding of a verified entry (e.g. an operator bootstrap
+                    // with an empty peer_id slot), the pair lookup would
+                    // authenticate it. Verified entries get their binding from
+                    // the dial that proved them.
+                    //
+                    // `observed_peer_ids` is still recorded on verified
+                    // entries: it is the P0 stale-identity signal the dial
+                    // guard needs (an address that served `a` is now claimed
+                    // by `b`), and the F-DHT predicate never consults it.
                     Some(entry) => {
-                        entry.peer_id.get_or_insert_with(|| peer_id.to_string());
+                        if !entry.locally_verified {
+                            entry.peer_id.get_or_insert_with(|| peer_id.to_string());
+                        }
                         record_observed_peer_id_locked(entry, peer_id);
                     }
                     None => {
