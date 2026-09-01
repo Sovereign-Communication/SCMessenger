@@ -1,5 +1,15 @@
 # _QUEUE -- Dispatch Order for the Full v1.0.0 Backlog
 
+## >> ACTIVE DISPATCH (2026-08-31) -- v0.4.0
+
+The v0.4.0 implementation queue lives in **`HANDOFF/freebuff/`** -- see its
+`README.md` for the ordered task list and `docs/rules/FREEBUFF.md` for how that
+lane is run. Do not duplicate the queue here; one doc per fact.
+
+Plan the queue executes: `SHIP_PLAN.md` section 6.
+
+Everything below this block predates the v0.4.0 ship plan.
+
 
 > **SUPERSEDED FOR EXECUTION until the v0.4.0 tag.** `SHIP_PLAN.md` is the only
 > execution queue; if a task is not on that page it is not being worked on.
