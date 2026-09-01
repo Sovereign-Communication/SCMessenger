@@ -52,3 +52,4 @@ runs:
         else
           echo "is_docs_only=false" >> "$GITHUB_OUTPUT"
         fi
+# T12 acceptance-4 verification: this comment-only change tests the concurrency group (two quick pushes -> one matrix)
