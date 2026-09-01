@@ -2457,6 +2457,7 @@ mod tests {
             known_topics: Vec::new(),
         }]);
         assert_eq!(merged, 1);
+        let now_ms = current_timestamp();
         let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
         assert!(
             stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,
@@ -2470,6 +2471,7 @@ mod tests {
             last_seen: u64::MAX,
             known_topics: Vec::new(),
         }]);
+        let now_ms = current_timestamp();
         let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
         assert!(
             stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,

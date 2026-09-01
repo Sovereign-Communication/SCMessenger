@@ -1248,6 +1248,24 @@ fn extract_peer_id_bytes(bytes: &[u8]) -> [u8; 32] {
     result
 }
 
+/// Map a connection's remote multiaddr to the transport string understood by
+/// `IronCore::routing_peer_seen` (which routes through `parse_transport_type`).
+/// A relayed circuit is reported as such even though it rides TCP physically:
+/// the routing engine must distinguish reachability-through-a-helper from a
+/// direct path so failover can prefer the direct ladder. Websockets ride TCP.
+fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
+    use libp2p::multiaddr::Protocol;
+    for proto in remote_addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => return "relay",
+            Protocol::Quic | Protocol::QuicV1 => return "quic",
+            Protocol::Ws(_) | Protocol::Wss(_) => return "ws",
+            _ => {}
+        }
+    }
+    "tcp"
+}
+
 fn verify_registration_message(
     peer: &PeerId,
     message: &RegistrationMessage,
@@ -1544,10 +1562,14 @@ fn routing_decision_to_ranked_routes(
         } => {
             // Direct route -- use target peer directly
             let mut score = transport_quality_score(decision.decided_by, decision.confidence);
-            // Factor transport type into score: BLE < WiFi < TCP < QUIC
+            // Factor transport type into score: BLE < WiFi < Circuit < TCP < QUIC
             let transport_bonus = match transport {
                 RoutingTransportType::QUIC => 0.15,
                 RoutingTransportType::TCP => 0.10,
+                // A relayed circuit rides TCP but adds a helper-node hop, so
+                // it ranks below a direct TCP path yet above the short-range
+                // wireless transports.
+                RoutingTransportType::Circuit => 0.07,
                 RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                 RoutingTransportType::BLE => 0.0,
             };
@@ -1575,6 +1597,10 @@ fn routing_decision_to_ranked_routes(
                 let transport_bonus = match transport {
                     RoutingTransportType::QUIC => 0.15,
                     RoutingTransportType::TCP => 0.10,
+                    // A relayed circuit rides TCP but adds a helper-node hop, so
+                    // it ranks below a direct TCP path yet above the short-range
+                    // wireless transports.
+                    RoutingTransportType::Circuit => 0.07,
                     RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                     RoutingTransportType::BLE => 0.0,
                 };
@@ -1636,6 +1662,10 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
+                        // A relayed circuit rides TCP but adds a helper-node hop, so
+                        // it ranks below a direct TCP path yet above the short-range
+                        // wireless transports.
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                         RoutingTransportType::BLE => 0.0,
                     };
@@ -1663,6 +1693,10 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
+                        // A relayed circuit rides TCP but adds a helper-node hop, so
+                        // it ranks below a direct TCP path yet above the short-range
+                        // wireless transports.
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                         RoutingTransportType::BLE => 0.0,
                     };
@@ -5524,6 +5558,26 @@ pub async fn start_swarm_with_config(
                                     );
                                 }
 
+                                // Feed the routing engine: a real connection now exists.
+                                // The ledger exchange above is deduped once per peer, but
+                                // every path sighting is meaningful here -- LocalCell
+                                // accumulates transports (direct + relayed circuit) and
+                                // peer_seen clears the peer's negative-cache entry, so a
+                                // reconnect after path loss restores routing confidence
+                                // immediately. Routing through the single
+                                // `IronCore::routing_peer_seen` code path keeps the
+                                // transport derivation and the engine's parser in lockstep.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
+                                }
+
                                 if reported_peer_discoveries.insert(peer_id) {
                                     let _ = event_tx.send(SwarmEvent2::PeerDiscovered(peer_id)).await;
 
@@ -7887,9 +7941,12 @@ pub async fn start_swarm_with_config(
                                 if endpoint.is_dialer() {
                                     dialed_peers.insert(peer_id);
                                 }
+                                // Clone the remote address before `endpoint` is consumed
+                                // (T4's routing feed uses it to classify the transport).
+                                let remote_addr = endpoint.get_remote_address().clone();
                                 connection_tracker.add_connection(
                                     peer_id,
-                                    endpoint.get_remote_address().clone(),
+                                    remote_addr.clone(),
                                     match endpoint {
                                         libp2p::core::ConnectedPoint::Listener { local_addr, .. } => local_addr.clone(),
                                         libp2p::core::ConnectedPoint::Dialer { .. } => "/ip4/0.0.0.0/tcp/0".parse().expect("static multiaddr parse cannot fail"),
@@ -7930,6 +7987,21 @@ pub async fn start_swarm_with_config(
                                         "Started core ledger exchange with newly connected peer {} (WASM)",
                                         peer_id
                                     );
+                                }
+
+                                // Feed the routing engine (see the native arm for the
+                                // rationale): every path sighting is meaningful, and the
+                                // empty-engine case is a no-op, so this is safe on nodes
+                                // where the optimized engine is not yet initialized.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
                                 }
 
                                 if reported_peer_discoveries.insert(peer_id) {
@@ -8257,9 +8329,9 @@ use libp2p::{gossipsub, request_response};
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mdns_dial_addr, build_routable_relay_addrs, extract_ed25519_public_key_from_peer_id,
-        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
-        resolve_dial_target, select_drift_fallback_carrier,
+        build_mdns_dial_addr, build_routable_relay_addrs, endpoint_transport_string,
+        extract_ed25519_public_key_from_peer_id, is_ledger_exchange_path_failure, peer_is_blocked,
+        rearm_ledger_exchange_after_failure, resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         try_envelope_hint_dial, validate_delivery_convergence_marker_shape,
         verify_registration_message, wrap_in_drift_frame, DeliveryConvergenceMarker,
@@ -8273,6 +8345,32 @@ mod tests {
     use libp2p::{Multiaddr, PeerId};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+
+    #[test]
+    fn endpoint_transport_string_classifies_endpoint_multiaddrs() {
+        // Direct TCP rides TCP; a websocket also rides TCP (same enum tier);
+        // a relayed circuit must NOT be reported as a plain TCP path -- the
+        // routing engine needs the direct-vs-helper distinction for failover.
+        let tcp: Multiaddr = "/ip4/1.2.3.4/tcp/9001".parse().unwrap();
+        let quic: Multiaddr = "/ip4/1.2.3.4/udp/4001/quic-v1".parse().unwrap();
+        let ws: Multiaddr = "/ip4/1.2.3.4/tcp/9001/ws".parse().unwrap();
+        let wss: Multiaddr = "/dns4/example.com/tcp/443/wss".parse().unwrap();
+        let circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
+            .parse()
+            .unwrap();
+
+        assert_eq!(endpoint_transport_string(&tcp), "tcp");
+        assert_eq!(endpoint_transport_string(&quic), "quic");
+        assert_eq!(endpoint_transport_string(&ws), "ws");
+        assert_eq!(endpoint_transport_string(&wss), "ws");
+        assert_eq!(endpoint_transport_string(&circuit), "relay");
+        // The distinction is what matters most: a circuit must never collapse
+        // into the plain-TCP classification.
+        assert_ne!(
+            endpoint_transport_string(&tcp),
+            endpoint_transport_string(&circuit)
+        );
+    }
 
     #[test]
     fn ledger_exchange_failure_rearms_only_the_current_request() {
