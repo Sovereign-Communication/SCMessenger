@@ -151,9 +151,13 @@ impl AddressObserver {
             *address_counts.entry(obs.address).or_insert(0) += obs.confirmation_count;
         }
 
-        // Sort by count (most observed first)
+        // Sort by count (most observed first). Equal counts resolve by address
+        // so the consensus is deterministic -- the previous sort left ties to
+        // HashMap iteration order, letting an attacker's permitted-port
+        // observation win promotion over an equally-voted legitimate one
+        // depending on the run (V040-T14 P0 audit).
         let mut addresses: Vec<(SocketAddr, u32)> = address_counts.into_iter().collect();
-        addresses.sort_by_key(|b| std::cmp::Reverse(b.1));
+        addresses.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
         // Cache the sorted addresses
         self.cached_external_addresses = addresses.into_iter().map(|(addr, _)| addr).collect();
@@ -375,6 +379,29 @@ mod tests {
             observer.primary_external_address(),
             Some("147.81.41.188:9001".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn test_consensus_tie_breaks_deterministically_by_address() {
+        let mut observer = AddressObserver::new();
+        // Two permitted-port addresses with EQUAL vote counts. The winner was
+        // previously HashMap-iteration order (nondeterministic); it must now be
+        // the deterministically-lower address regardless of insertion order.
+        let lower: SocketAddr = "203.0.113.5:9001".parse().unwrap();
+        let higher: SocketAddr = "203.0.113.9:9001".parse().unwrap();
+
+        // Insert higher first, lower second -- equal totals either way.
+        observer.record_observation(PeerId::random(), higher);
+        observer.record_observation(PeerId::random(), lower);
+
+        assert_eq!(observer.external_addresses().len(), 2);
+        assert_eq!(observer.primary_external_address(), Some(lower));
+
+        // And with insertion reversed, the same address still wins.
+        let mut observer2 = AddressObserver::new();
+        observer2.record_observation(PeerId::random(), lower);
+        observer2.record_observation(PeerId::random(), higher);
+        assert_eq!(observer2.primary_external_address(), Some(lower));
     }
 
     #[test]
