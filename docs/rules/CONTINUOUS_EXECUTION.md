@@ -119,6 +119,36 @@ seven hours precisely because liveness was assumed. Two rules:
 
 Silence from a monitor is not evidence of health. It is evidence of silence.
 
+## 6a. CI pacing -- the queue is a shared, finite resource
+
+Measured 2026-08-31 under load: 43 completed, 3 in progress, **14 queued**. More
+than half the unfinished runs belonged to one docs-only branch that had been
+pushed five times, because no workflow declares a concurrency group and nothing
+cancels a superseded run.
+
+The queue is shared by every lane and by `main` itself. A session that floods it
+does not just slow itself down -- it delays the trunk-health evidence everyone
+else is waiting on.
+
+**Rules for any agent committing here:**
+
+1. **Batch commits, push once.** Finish a coherent unit of work, then push. Do
+   not push after every commit. Five pushes to one PR is five full matrices
+   until T12 lands.
+2. **Never rebase a PR while the queue is deep.** A rebase re-runs everything.
+   Rebase when it is time to merge, not speculatively.
+3. **Cancel your own superseded runs** when you have pushed several times to one
+   branch: `gh run list --branch <b>`, keep the newest SHA, cancel older
+   unfinished runs on the same workflow. Only ever your own branch -- never
+   another lane's, and never `main`'s, whose runs are the trunk-health record.
+4. **Do not batch-rebase the PR queue.** `V040_T9` caps this at 3-5 branches at a
+   time for the same reason: twenty concurrent runs make queue starvation
+   indistinguishable from a real failure.
+5. **A green tick on a stale base proves nothing.** That is why rebasing is
+   necessary before merge -- but it is also why doing it early is waste.
+
+Structural fix: `HANDOFF/freebuff/queue/V040_T12_CI_CONCURRENCY_AND_PATH_FILTERS.md`.
+
 ## 7. Owning discovered issues
 
 When you find a defect that is not on the plan -- including one that predates
