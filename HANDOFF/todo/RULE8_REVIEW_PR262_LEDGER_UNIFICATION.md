@@ -1,4 +1,4 @@
-# Rule-8 adversarial review -- PR #262, peer ledger unification
+# Rule-8 adversarial review -- PR #262 (ledger unification) and #263 (routing feed)
 
 Status: OPEN (filed 2026-08-31)
 Priority: P0 -- #262 cannot merge without a recorded APPROVE
@@ -88,3 +88,53 @@ the latter `UNVERIFIED`.
 - No emojis. `[OK]`, `[FAIL]`, `[WARNING]`, `[INFO]`.
 - Read-only. Do not fix what you find -- report it.
 - Do not merge. Merge is the operator's call after the verdict.
+
+---
+
+# ADDENDUM -- PR #263 also needs this gate (added 2026-08-31)
+
+Same reviewer, same rules, second PR. `freebuff/v040-t4-routing-feed`,
++232/-6 across `core/src/transport/swarm.rs`, `core/src/iron_core.rs`,
+`core/src/routing/local.rs`. Two of those are in the merge-blocked set, and it
+lands in the **same `ConnectionEstablished` handler** that #262 touches -- so
+review them together and check they do not conflict.
+
+## Verified already (falsify, do not redo)
+
+`IronCore::routing_peer_seen` now has a production caller at
+`swarm.rs:5571`, inside `ConnectionEstablished`, guarded by `peer_is_blocked`
+and a weak-ref upgrade. Confirmed no `#[cfg(test)]` precedes it. That closes the
+D6 defect where the function had zero callers repo-wide.
+
+## What to attack
+
+1. **Is this a routing-poisoning vector?** Routing confidence is now fed on
+   *every* `ConnectionEstablished`. Can a peer that repeatedly connects and
+   disconnects inflate its own routing score, or evict honest peers from
+   LocalCell? The `peer_is_blocked` guard covers blocked peers; it does not
+   cover an unblocked hostile one. **This is the highest-value question here** --
+   the change converts inbound connection events into routing state, which is an
+   attacker-influenced input.
+2. **`TransportType::Circuit` and the new score rank**
+   (BLE < WiFi < Circuit < TCP < QUIC). Does inserting a variant renumber or
+   reorder anything persisted, compared, or serialized? Does any match become
+   non-exhaustive in a way the compiler did not catch (e.g. a `_ =>` arm that
+   now silently swallows Circuit)?
+3. **`parse_transport_type` extended for ws/wss/circuit.** The author reports WS
+   previously fell through to **BLE**, which if true means every WebSocket peer
+   has been scored as BLE. Confirm the old behaviour and that the fix does not
+   change scoring for some *other* address shape as a side effect.
+4. **Lock discipline.** Is the routing engine's write lock held across an
+   `await` anywhere in the new path? `parking_lot` guards are not async-aware
+   and this is inside the swarm event loop -- a held lock here stalls every
+   peer.
+5. **The WASM arm.** The author says the wasm32 check caught a real partial-move
+   of `endpoint` that no native gate would find. Verify the fix is correct and
+   that native and WASM arms now record the *same* transport for the same
+   endpoint -- a divergence would make D6 evidence platform-dependent.
+6. **Does it conflict with #262?** Both edit `ConnectionEstablished`. Whichever
+   merges second must still apply cleanly and preserve both behaviours.
+
+Verdict for #263 to `HANDOFF/freebuff/inbox/RULE8_PR263_VERDICT.md`, same
+standard: APPROVE only on positively checked items, `UNVERIFIED` for anything
+you could not reach.
