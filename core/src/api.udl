@@ -353,6 +353,11 @@ dictionary LedgerEntry {
     u32 failure_count;
     u64? last_seen;
     sequence<string> topics;
+    boolean locally_verified;
+    boolean is_bootstrap;
+    u64? first_seen;
+    sequence<string> observed_peer_ids;
+    string? label;
 };
 
 
