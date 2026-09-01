@@ -113,9 +113,13 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
         "wifi_direct" | "wifidirect" | "p2p" => crate::routing::TransportType::WiFiDirect,
         "wifi_aware" | "wifiaware" | "nan" => crate::routing::TransportType::WiFiAware,
         "quic" => crate::routing::TransportType::QUIC,
-        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "relay" | "ip" | "local" => {
+        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "ip" | "local" | "ws" | "wss" => {
             crate::routing::TransportType::TCP
         }
+        // A relayed circuit rides TCP physically but is a materially different
+        // path (reachability through a helper node) -- the engine must be able
+        // to distinguish it from a direct connection for failover decisions.
+        "circuit" | "p2p_circuit" | "relay" => crate::routing::TransportType::Circuit,
         _ => crate::routing::TransportType::BLE,
     }
 }
@@ -4087,6 +4091,7 @@ impl IronCore {
             "wifi_aware" => TransportType::WiFiAware,
             "tcp" => TransportType::TCP,
             "quic" => TransportType::QUIC,
+            "circuit" | "relay" | "p2p_circuit" => TransportType::Circuit,
             _ => return false,
         };
         let guard = self.routing_engine.read();
@@ -5068,6 +5073,126 @@ mod tests {
         assert!(after > before);
         assert!(core.get_forwarding_capability("ble"));
         assert!(!core.get_forwarding_capability("tcp"));
+    }
+
+    #[test]
+    fn routing_peer_seen_raises_confidence_after_connection_established() {
+        // D6 acceptance 1: routing confidence for a peer is zero before any
+        // sighting and non-zero after the swarm's ConnectionEstablished feed
+        // (routed through this exact IronCore entry point).
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [42u8; 32];
+        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+            .try_into()
+            .expect("4 byte hint");
+        let msg_id = [7u8; 16];
+
+        // Before the feed: unknown peer, StoreAndCarry fallback, zero confidence.
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
+            assert_eq!(dec.confidence, 0.0);
+        }
+
+        // A direct TCP ConnectionEstablished.
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::Local);
+            assert!(
+                dec.confidence >= 0.5,
+                "confidence must be non-zero after a connection sighting, got {}",
+                dec.confidence
+            );
+            match dec.primary {
+                crate::routing::NextHop::Direct { peer_id, transport } => {
+                    assert_eq!(peer_id, peer);
+                    assert_eq!(transport, crate::routing::TransportType::TCP);
+                }
+                other => panic!("expected Direct TCP, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn routing_peer_seen_distinguishes_circuit_from_direct_tcp() {
+        // D6 acceptance 2: a TCP endpoint and a relayed-circuit endpoint map to
+        // different recorded transports. Same peer, both paths -- the engine
+        // accumulates them, mirroring the swarm handler's multi-path reality.
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [43u8; 32];
+
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        core.routing_peer_seen(hex::encode(peer), "relay".to_string());
+
+        let engine = core.routing_engine.read();
+        let stored = engine
+            .as_ref()
+            .expect("engine set")
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .expect("peer must be recorded after the feed");
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::TCP),
+            "direct TCP sighting must be recorded, got {:?}",
+            stored.transports
+        );
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::Circuit),
+            "relayed-circuit sighting must be recorded distinctly, got {:?}",
+            stored.transports
+        );
+    }
+
+    #[test]
+    fn parse_transport_type_distinguishes_direct_from_circuit() {
+        // The string contract between endpoint_transport_string (swarm.rs) and
+        // the engine's parser must be pinned here so the two cannot drift.
+        assert_eq!(
+            parse_transport_type("tcp"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("ws"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("wss"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("quic"),
+            crate::routing::TransportType::QUIC
+        );
+        assert_eq!(
+            parse_transport_type("relay"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_eq!(
+            parse_transport_type("circuit"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_ne!(
+            parse_transport_type("tcp"),
+            parse_transport_type("relay"),
+            "a relayed circuit must never collapse into the direct-TCP tier"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
