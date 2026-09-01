@@ -22,6 +22,8 @@ pub enum TransportType {
     WiFiDirect,
     TCP,
     QUIC,
+    /// Relayed circuit (libp2p p2p-circuit through a helper node)
+    Circuit,
 }
 
 /// Status of a known peer in the local cell
