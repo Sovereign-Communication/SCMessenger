@@ -190,8 +190,10 @@ impl ConnectionLedger {
     /// If `data_dir/peers.json` exists, parse it in the legacy format, import
     /// the survivors into the core store via
     /// [`LedgerManager::import_legacy_cli_entries`] (which applies the same
-    /// dialability/self/port filters the node now enforces everywhere and
-    /// preserves `locally_verified`), then rename the file to
+    /// dialability/self/port filters the node now enforces everywhere; the
+    /// legacy `locally_verified` flag is NOT trusted -- only operator
+    /// bootstrap survives as verified, everything else is re-proven by the
+    /// first live dial), then rename the file to
     /// `peers.json.migrated-<ts>` so it cannot run again. Invoked once per
     /// node startup from the bootstrap-dial sweep, where the node's own
     /// acquired addresses are already known.

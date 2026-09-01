@@ -2696,19 +2696,25 @@ pub fn default_routing_engine_handle() -> Arc<parking_lot::RwLock<Option<Optimiz
     Arc::new(parking_lot::RwLock::new(None))
 }
 
-/// V040-T13 F-DHT: whether a peer may contribute addresses to our Kademlia
-/// DHT. Mirrors the ledger's disclosure predicate (#262): only peers this
-/// node has personally dialed and connected to (`locally_verified`) may be
-/// re-published to third parties via DHT queries, so hearsay never reaches
-/// the DHT. Fails closed when the core handle is gone.
+/// V040-T13 F-DHT (revised): whether the (identity, address) PAIR may be
+/// inserted into Kademlia. The address is the key, looked up in OUR OWN
+/// store: only a pair this node has personally proved -- a locally_verified
+/// entry for this exact address, bound to this peer id -- may be re-published
+/// to third parties via DHT queries. The wire may NAME the pair; our store
+/// must PROVE it. A peer being known-good is not enough: the specific
+/// address must be the one we dialed. Fails closed when the core handle is
+/// gone.
 #[cfg(not(target_arch = "wasm32"))]
-fn ledger_verified_peer(core_handle: &Option<Weak<crate::IronCore>>, peer_id: &PeerId) -> bool {
+fn ledger_verified_pair(
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: &PeerId,
+    addr: &str,
+) -> bool {
     let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
         return false;
     };
     core.ledger_manager
-        .find_by_peer_id(&peer_id.to_string())
-        .is_some_and(|e| e.locally_verified)
+        .is_locally_verified_pair(addr, &peer_id.to_string())
 }
 
 /// Build and start the libp2p swarm, returning a handle for communication.
@@ -4536,11 +4542,14 @@ pub async fn start_swarm_with_config(
                                                             entry.last_seen,
                                                         );
                                                         if let Ok(addr) = entry.multiaddr.parse::<Multiaddr>() {
-                                                            // V040-T13 F-DHT: this entry arrived over the
-                                                            // wire (hearsay). Only peers we have personally
-                                                            // dialed and connected to may reach the DHT.
+                                                            // V040-T13 F-DHT (revised): the wire may NAME
+                                                            // the (identity, address) pair, but only a pair
+                                                            // OUR OWN ledger proves -- this exact address
+                                                            // locally_verified and bound to this pid -- may
+                                                            // reach the DHT. A known-good peer id alone is
+                                                            // not enough; the address must be one we dialed.
                                                             if is_discoverable_multiaddr(&addr)
-                                                                && ledger_verified_peer(&core_handle, &pid)
+                                                                && ledger_verified_pair(&core_handle, &pid, &entry.multiaddr)
                                                             {
                                                                 swarm.behaviour_mut().kademlia.add_address(&pid, addr);
                                                                 new_count += 1;
@@ -4689,10 +4698,13 @@ pub async fn start_swarm_with_config(
                                                             entry.last_seen,
                                                         );
                                                         if let Ok(addr) = entry.multiaddr.parse::<Multiaddr>() {
-                                                            // V040-T13 F-DHT: response entries are the same
-                                                            // hearsay as the request side; same gate.
+                                                            // V040-T13 F-DHT (revised): response entries are
+                                                            // the same hearsay as the request side; the same
+                                                            // per-pair gate applies -- only pairs OUR OWN
+                                                            // ledger proves (this address locally_verified
+                                                            // and bound to this pid) reach the DHT.
                                                             if is_discoverable_multiaddr(&addr)
-                                                                && ledger_verified_peer(&core_handle, &pid)
+                                                                && ledger_verified_pair(&core_handle, &pid, &entry.multiaddr)
                                                             {
                                                                 swarm.behaviour_mut().kademlia.add_address(&pid, addr);
                                                             }
@@ -5166,28 +5178,28 @@ pub async fn start_swarm_with_config(
                                     );
                                 }
 
-                                // V040-T13 F-DHT: Identify listen addresses are
-                                // peer-advertised hearsay. Only peers this node
-                                // has personally dialed and connected to
-                                // (locally_verified in the ledger) may reach the
-                                // DHT -- an inbound-only peer loses DHT presence
-                                // until we dial out to it (accepted cost).
-                                if ledger_verified_peer(&core_handle, &peer_id) {
-                                    // Add only discoverable addresses to Kademlia.
-                                    // Loopback/unspecified addresses are excluded.
-                                    // Private/RFC1918/CGNAT are NOW allowed for local mesh.
-                                    for addr in &info.listen_addrs {
-                                        if is_discoverable_multiaddr(addr) {
-                                            swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                                        } else {
-                                            tracing::debug!("Skipping non-discoverable Kademlia addr for {}: {}", peer_id, addr);
-                                        }
+                                // V040-T13 F-DHT (revised): Identify listen
+                                // addresses are peer-advertised hearsay. Only an
+                                // (identity, address) pair OUR OWN ledger proves
+                                // -- this exact advertised address locally_verified
+                                // and bound to this peer -- may reach the DHT.
+                                // The peer's word is never enough: the address must
+                                // be one we personally dialed. Inbound-only peers
+                                // therefore lose DHT presence until we dial them
+                                // (accepted cost); advertised addresses we never
+                                // dialed are simply not inserted.
+                                for addr in &info.listen_addrs {
+                                    if is_discoverable_multiaddr(addr)
+                                        && ledger_verified_pair(&core_handle, &peer_id, &addr.to_string())
+                                    {
+                                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                                    } else {
+                                        tracing::debug!(
+                                            "F-DHT: not adding Identify addr {} for {} (not a proven pair)",
+                                            addr,
+                                            peer_id
+                                        );
                                     }
-                                } else {
-                                    tracing::debug!(
-                                        "F-DHT: not adding Identify addrs for unverified peer {}",
-                                        peer_id
-                                    );
                                 }
 
                                 // UNIFICATION_V2: All nodes are relays — per repo philosophy "A node is a node. All nodes are mandatory relays."
@@ -7001,12 +7013,6 @@ pub async fn start_swarm_with_config(
         let mut bootstrap_backoff: HashMap<Multiaddr, BootstrapBackoffEntry> = HashMap::new();
         let mut reported_peer_discoveries: HashSet<PeerId> = HashSet::new();
         let mut sync_sessions: HashMap<PeerId, SyncSession> = HashMap::new();
-        // V040-T13 F-DHT: browser nodes have no core ledger, so the
-        // "locally verified" predicate is expressed as the peers this node
-        // has personally dialed out to (the same semantic the native
-        // `record_connection` encodes). Only these peers may contribute
-        // addresses to the DHT.
-        let mut dialed_peers: HashSet<PeerId> = HashSet::new();
 
         wasm_bindgen_futures::spawn_local(async move {
             struct SwarmTaskLivenessGuard(Arc<AtomicBool>);
@@ -7901,20 +7907,18 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, info, .. }
                             )) => {
-                                // V040-T13 F-DHT: Identify listen addresses are
-                                // hearsay. Wasm has no ledger, so "locally
-                                // verified" is the set of peers we have dialed
-                                // out to (tracked on ConnectionEstablished where
-                                // endpoint.is_dialer()). Inbound-only peers lose
-                                // DHT presence until we dial them -- the same
-                                // accepted cost as native.
-                                if dialed_peers.contains(&peer_id) {
-                                    for addr in &info.listen_addrs {
-                                        if is_discoverable_multiaddr(addr) {
-                                            swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                                        }
-                                    }
-                                }
+                                // V040-T13 F-DHT (revised): wasm has no core
+                                // ledger, so it can never prove an (identity,
+                                // address) pair from OUR OWN store -- and the
+                                // ruling is explicit: "a feed that cannot
+                                // satisfy the predicate is a feed that should
+                                // not write to the DHT at all." The previous
+                                // dialed_peers proxy was vacuous (a browser
+                                // cannot listen, so every connection is a
+                                // dialer and the set admits everything). This
+                                // feed therefore inserts nothing.
+                                // (The earlier dialed_peers set was removed
+                                // entirely -- see the wasm loop declarations.)
                                 if let Some(observed_addr) =
                                     ConnectionTracker::extract_socket_addr(&info.observed_addr)
                                 {
@@ -7936,11 +7940,10 @@ pub async fn start_swarm_with_config(
                                     trigger = ?crate::routing::smart_retry::DeliveryTrigger::PeerDiscovered(peer_id.to_string()),
                                     peer = %peer_id
                                 );
-                                // V040-T13 F-DHT: a connection we initiated is
-                                // the wasm-observable "locally verified" signal.
-                                if endpoint.is_dialer() {
-                                    dialed_peers.insert(peer_id);
-                                }
+                                // V040-T13 F-DHT (revised): wasm has no ledger, so
+                                // no (identity, address) pair can be proven here and
+                                // the Identify feed inserts nothing -- there is no
+                                // dialed-set to maintain.
                                 // Clone the remote address before `endpoint` is consumed
                                 // (T4's routing feed uses it to classify the transport).
                                 let remote_addr = endpoint.get_remote_address().clone();

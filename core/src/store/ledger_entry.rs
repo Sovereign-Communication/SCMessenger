@@ -19,20 +19,16 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
-/// V040-T13 F2: how far a wire-supplied `last_seen` may exceed local time.
-/// Honest peers' clocks skew by seconds to minutes; beyond this the value is
-/// attacker-chosen. Mirrors the recency recorder's
-/// `RECENCY_MAX_CLOCK_SKEW_SECS` (mesh_routing.rs) -- one doctrine for
-/// wire-supplied timestamps.
-const LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS: u64 = 5 * 60 * 1000;
-
 /// Clamp a wire-supplied `last_seen` (seconds, as carried by
-/// `SharedPeerEntry`) into local millis. Never lets a remote value exceed
-/// local time plus the skew allowance; saturating so a hostile value cannot
-/// pin an entry at the head of the eviction or dial tier.
+/// `SharedPeerEntry`) into local millis. `last_seen` is a RANKING key:
+/// `seed_addresses` sorts descending, `evict_one_locked` picks the minimum.
+/// A ceiling of `now + allowance` would still let a hostile `u64::MAX` land
+/// strictly above every honest value forever (honest senders report a past
+/// observation), so the ceiling is plain local `now`: an attacker gains
+/// nothing, and an honest peer with a fast clock ties with local time
+/// instead of beating everyone.
 fn clamp_wire_last_seen_ms(wire_seconds: u64) -> u64 {
-    let ceiling = current_timestamp().saturating_add(LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS);
-    wire_seconds.saturating_mul(1000).min(ceiling)
+    wire_seconds.saturating_mul(1000).min(current_timestamp())
 }
 
 /// Whether a multiaddr carries a TCP/UDP port below the IANA dynamic range
@@ -2014,9 +2010,20 @@ impl LedgerManager {
                         .iter_mut()
                         .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
                     {
+                        // V040-T13 F-DHT (Bypass-B fix): a wire-supplied pid is
+                        // never written onto an entry this node has personally
+                        // verified. The DHT gate authorizes (identity, address)
+                        // PAIRS from our own store -- if a wire message could
+                        // bind an attacker pid to a locally_verified entry
+                        // (e.g. an operator bootstrap with an empty peer_id
+                        // slot), the pair lookup would authenticate it. Hearsay
+                        // entries may still learn identity from the wire; the
+                        // first successful dial overwrites it.
                         if let Some(pid) = shared.last_peer_id.as_deref() {
-                            entry.peer_id.get_or_insert_with(|| pid.to_string());
-                            record_observed_peer_id_locked(entry, pid);
+                            if !entry.locally_verified {
+                                entry.peer_id.get_or_insert_with(|| pid.to_string());
+                                record_observed_peer_id_locked(entry, pid);
+                            }
                         }
                         if entry.last_seen.map(|ls| ls / 1000).unwrap_or(0) < shared.last_seen {
                             // V040-T13 F2: wire `last_seen` is attacker-chosen;
@@ -2142,10 +2149,12 @@ impl LedgerManager {
     ///
     /// `local_peer_id` (own identity) and `my_addrs` (own listen/external
     /// addresses) exclude self-entries -- the migration must never import a
-    /// node's own address or identity. `locally_verified` is preserved from
-    /// the legacy file so genuinely verified history survives; everything
-    /// else imports as hearsay. `peers.json` is left in place; the caller
-    /// simply stops writing it.
+    /// node's own address or identity. The legacy `locally_verified` flag is
+    /// NOT trusted (V040-T13 F9): the pre-unification CLI marked every
+    /// advertised listen address as verified, so only `is_bootstrap`
+    /// (operator-configured by fiat) survives as verified; everything else
+    /// imports as hearsay and is re-proven by the first live dial.
+    /// `peers.json` is left in place; the caller simply stops writing it.
     pub fn import_legacy_cli_entries(
         &self,
         entries: Vec<LedgerMigrationEntry>,
@@ -2196,7 +2205,9 @@ impl LedgerManager {
                         .iter_mut()
                         .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
                     {
-                        if !e.locally_verified && entry.locally_verified {
+                        // V040-T13 F9: the legacy verified flag is not trusted.
+                        // Only operator bootstrap status may upgrade an entry.
+                        if !e.locally_verified && entry.is_bootstrap {
                             e.locally_verified = true;
                         }
                         if e.is_bootstrap {
@@ -2204,21 +2215,27 @@ impl LedgerManager {
                         } else if entry.is_bootstrap {
                             e.is_bootstrap = true;
                         }
-                        if let Some(pid) = entry.peer_id.as_deref() {
-                            e.peer_id.get_or_insert_with(|| pid.to_string());
-                            record_observed_peer_id_locked(e, pid);
-                        }
-                        for pid in &entry.observed_peer_ids {
-                            record_observed_peer_id_locked(e, pid);
+                        // V040-T13 F-DHT (Bypass-B fix, uniform with the wire
+                        // merge path): a legacy-supplied pid is never written
+                        // onto an entry this node has personally verified.
+                        if !e.locally_verified {
+                            if let Some(pid) = entry.peer_id.as_deref() {
+                                e.peer_id.get_or_insert_with(|| pid.to_string());
+                                record_observed_peer_id_locked(e, pid);
+                            }
+                            for pid in &entry.observed_peer_ids {
+                                record_observed_peer_id_locked(e, pid);
+                            }
                         }
                         if e.first_seen.is_none() {
                             e.first_seen = entry.first_seen.map(|s| s.saturating_mul(1000));
                         }
-                        if entry
-                            .last_seen
-                            .is_some_and(|ls| e.last_seen.unwrap_or(0) / 1000 < ls)
-                        {
-                            e.last_seen = entry.last_seen.map(|s| s.saturating_mul(1000));
+                        if let Some(ls) = entry.last_seen {
+                            if e.last_seen.unwrap_or(0) / 1000 < ls {
+                                // V040-T13 F6: legacy last_seen is the same
+                                // ranking-key hazard as the wire value -- clamp.
+                                e.last_seen = Some(clamp_wire_last_seen_ms(ls));
+                            }
                         }
                     }
                 } else {
@@ -2235,9 +2252,13 @@ impl LedgerManager {
                         // Legacy `consecutive_failures` maps onto the core
                         // dead-tier counter so a poisoned entry cannot
                         // masquerade as healthy.
-                        last_seen: entry.last_seen.map(|s| s.saturating_mul(1000)),
+                        // V040-T13 F6: legacy last_seen is the same
+                        // ranking-key hazard as the wire value -- clamp.
+                        last_seen: entry.last_seen.map(clamp_wire_last_seen_ms),
                         topics: Vec::new(),
-                        locally_verified: entry.locally_verified,
+                        // V040-T13 F9: the legacy verified flag is not
+                        // trusted -- only operator bootstrap survives.
+                        locally_verified: entry.is_bootstrap,
                         is_bootstrap: entry.is_bootstrap,
                         first_seen: entry.first_seen.map(|s| s.saturating_mul(1000)),
                         observed_peer_ids: entry
@@ -2311,6 +2332,33 @@ impl LedgerManager {
             .iter()
             .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
             .cloned()
+    }
+
+    /// V040-T13 F-DHT (revised): whether the (identity, address) PAIR is
+    /// proven in OUR OWN store. The address is the lookup key -- the same
+    /// per-entry granularity the export paths use
+    /// (`export_seed_entries_for`, `exchange_response_entries_for_request`,
+    /// both filtering per entry on `locally_verified`). An entry passes only
+    /// if it is locally verified (a dial WE completed), proven
+    /// (`success_count > 0`), not dead-tier, and bound to exactly this peer
+    /// identity as its CURRENT binding. Never consults `observed_peer_ids`
+    /// (wire-attacker-writable) and never accepts a wire-supplied peer id as
+    /// the key -- the wire may only NAME the pair; our store must PROVE it.
+    pub fn is_locally_verified_pair(&self, multiaddr: &str, peer_id: &str) -> bool {
+        let Some(entry) = self.entry_for_multiaddr(multiaddr) else {
+            return false;
+        };
+        if !entry.locally_verified
+            || entry.success_count == 0
+            || entry.failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD
+        {
+            return false;
+        }
+        let Some(bound) = entry.peer_id.as_deref() else {
+            return false;
+        };
+        let canonical = canonical_ledger_peer_id(peer_id, None);
+        bound == peer_id || canonical.as_deref() == Some(bound)
     }
 
     /// Number of stored entries that carry at least one known gossipsub topic.
@@ -2438,18 +2486,21 @@ mod tests {
         libp2p::PeerId::random().to_string()
     }
 
-    /// V040-T13 F2: a wire-supplied `last_seen` must never exceed local time
-    /// (plus the skew allowance). In a capped store `last_seen` selects
-    /// eviction victims and the dial tier, so an unclamped u64::MAX would
-    /// make an attacker's entries eviction-immune and top-ranked.
+    /// V040-T13 F2 (revised per Rule-8 F-5): `last_seen` is a RANKING key --
+    /// `seed_addresses` sorts descending, `evict_one_locked` picks the
+    /// minimum. A ceiling of `now + allowance` would still let a hostile
+    /// u64::MAX land strictly above every honest value forever (honest
+    /// senders report a PAST observation), so the clamp is plain
+    /// `min(wire, now)`: an attacker can never exceed what a fresh local
+    /// observation produces, and an honest peer with a fast clock ties with
+    /// local time instead of beating everyone.
     #[test]
-    fn wire_last_seen_cannot_be_in_the_future() {
+    fn wire_last_seen_cannot_outrank_honest_entries() {
         let (_dir, mgr) = manager();
         let pid = peer();
         let addr = "/ip4/198.51.100.200/tcp/9001".to_string();
-        let now_ms = current_timestamp();
 
-        // New-entry branch: u64::MAX clamps to now + skew.
+        // Attacker: u64::MAX. Clamps to exactly local now.
         let merged = mgr.merge_shared_entries(&[SharedPeerEntry {
             multiaddr: addr.clone(),
             last_peer_id: Some(pid.clone()),
@@ -2457,11 +2508,36 @@ mod tests {
             known_topics: Vec::new(),
         }]);
         assert_eq!(merged, 1);
-        let now_ms = current_timestamp();
         let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
+        let now_ms = current_timestamp();
         assert!(
-            stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,
-            "wire last_seen must be clamped to local time + skew"
+            stored.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "attacker last_seen must clamp to local now, not now + allowance"
+        );
+
+        // Honest peer with a fast clock: reports now + 30s. Under the old
+        // +5min ceiling this landed below the attacker; with min(wire, now)
+        // it ties at local time. THE ORDERING PROPERTY: the attacker must
+        // never sort strictly above an honest peer.
+        let honest_addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let fast_clock = (current_timestamp() / 1000) + 30;
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: honest_addr.clone(),
+            last_peer_id: Some(peer()),
+            last_seen: fast_clock,
+            known_topics: Vec::new(),
+        }]);
+        let honest = mgr
+            .entry_for_multiaddr(&honest_addr)
+            .expect("honest stored");
+        let now_ms = current_timestamp();
+        assert!(
+            honest.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "honest fast-clock value must clamp to local now"
+        );
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= honest.last_seen.unwrap_or(u64::MAX),
+            "attacker must not outrank an honest peer"
         );
 
         // Exists-branch (update): re-merging the hostile value stays clamped.
@@ -2471,26 +2547,13 @@ mod tests {
             last_seen: u64::MAX,
             known_topics: Vec::new(),
         }]);
+        let remerged = mgr.entry_for_multiaddr(&addr).expect("remerged");
         let now_ms = current_timestamp();
-        let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
         assert!(
-            stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,
+            remerged.last_seen.unwrap_or(u64::MAX) <= now_ms,
             "update branch must re-clamp the hostile value"
         );
 
-        // A modest honest clock skew is preserved, not truncated to now.
-        let honest_addr = "/ip4/198.51.100.201/tcp/9001".to_string();
-        let slightly_ahead = (now_ms / 1000) + 30;
-        mgr.merge_shared_entries(&[SharedPeerEntry {
-            multiaddr: honest_addr.clone(),
-            last_peer_id: Some(peer()),
-            last_seen: slightly_ahead,
-            known_topics: Vec::new(),
-        }]);
-        let honest = mgr
-            .entry_for_multiaddr(&honest_addr)
-            .expect("honest stored");
-        assert_eq!(honest.last_seen, Some(slightly_ahead * 1000));
         // V040-T13 F-DHT: merged entries are hearsay, never locally verified --
         // the exact property the Kademlia disclosure gate checks before
         // re-publishing an address.
@@ -4810,6 +4873,10 @@ mod tests {
         let remote_verified = peer();
         let remote_hearsay = peer();
 
+        // V040-T13 F9: legacy `locally_verified: true` is NOT trusted -- the
+        // pre-unification CLI marked every advertised listen address as
+        // verified. Only `is_bootstrap` (operator-configured by fiat) survives
+        // as verified; this fixture imports as hearsay.
         let good_verified = LedgerMigrationEntry {
             multiaddr: "/ip4/98.94.45.116/tcp/9001".to_string(),
             peer_id: Some(remote_verified.clone()),
@@ -4818,6 +4885,19 @@ mod tests {
             first_seen: Some(1_700_000_000),
             last_seen: Some(1_700_000_100),
             observed_peer_ids: vec![remote_verified.clone()],
+            label: None,
+            consecutive_failures: 0,
+        };
+        // Operator bootstrap: verified by fiat even though the legacy flag
+        // says otherwise -- the only trusted verified input.
+        let good_bootstrap = LedgerMigrationEntry {
+            multiaddr: "/ip4/198.51.100.250/tcp/9001".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: false,
+            is_bootstrap: true,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
             label: None,
             consecutive_failures: 0,
         };
@@ -4880,6 +4960,7 @@ mod tests {
         let result = mgr.import_legacy_cli_entries(
             vec![
                 good_verified,
+                good_bootstrap,
                 good_hearsay,
                 ephemeral,
                 self_by_identity,
@@ -4889,8 +4970,8 @@ mod tests {
             Some(&my_peer),
             &my_addrs,
         );
-        assert_eq!(result.offered, 6);
-        assert_eq!(result.imported, 2);
+        assert_eq!(result.offered, 7);
+        assert_eq!(result.imported, 3);
         assert_eq!(result.rejected, 4);
 
         let entries = mgr.entries.lock().clone();
@@ -4906,11 +4987,23 @@ mod tests {
         assert!(entries
             .iter()
             .all(|e| e.multiaddr != "/ip4/10.32.4.5/tcp/9001"));
+        // V040-T13 F9: the legacy verified flag is NOT trusted -- this entry
+        // imports as hearsay despite `locally_verified: true` in the file.
         let verified = entries
             .iter()
             .find(|e| e.multiaddr == "/ip4/98.94.45.116/tcp/9001")
-            .expect("verified survivor imported");
-        assert!(verified.locally_verified);
+            .expect("legacy verified survivor imported");
+        assert!(
+            !verified.locally_verified,
+            "legacy locally_verified flag must not survive migration"
+        );
+        // Operator bootstrap survives as verified by fiat.
+        let bootstrap = entries
+            .iter()
+            .find(|e| e.multiaddr == "/ip4/198.51.100.250/tcp/9001")
+            .expect("bootstrap survivor imported");
+        assert!(bootstrap.locally_verified);
+        assert!(bootstrap.is_bootstrap);
         let hearsay = entries
             .iter()
             .find(|e| e.multiaddr == "/ip4/203.0.113.50/tcp/9002")
