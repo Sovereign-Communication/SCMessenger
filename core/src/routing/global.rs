@@ -21,7 +21,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RouteAdvertisement {
     /// The destination hint this route reaches
-    pub destination_hint: [u8; 4],
+    pub destination_hint: [u8; 8],
     /// The next hop peer to forward through
     pub next_hop: PeerId,
     /// Total hops to destination (via this route)
@@ -43,7 +43,7 @@ pub struct RouteAdvertisement {
 #[derive(Debug, Clone)]
 pub struct RouteRequest {
     /// The destination hint we're looking for
-    pub hint: [u8; 4],
+    pub hint: [u8; 8],
     /// When the request was initiated
     pub requested_at: u64,
     /// How many times we've re-requested this route
@@ -60,7 +60,7 @@ pub struct RouteRequest {
 #[derive(Debug, Clone)]
 pub struct GlobalRoutes {
     /// hint → Vec<RouteAdvertisement> (multiple routes per destination for redundancy)
-    routes: HashMap<[u8; 4], Vec<RouteAdvertisement>>,
+    routes: HashMap<[u8; 8], Vec<RouteAdvertisement>>,
     /// Maximum routes per destination (we keep the N best routes)
     max_routes_per_hint: usize,
     /// Maximum total routes (hard limit to prevent memory bloat)
@@ -69,7 +69,7 @@ pub struct GlobalRoutes {
     /// (What this cell can reach via its local network + gateways)
     local_advertisements: Vec<RouteAdvertisement>,
     /// Pending route requests (hints we're looking for)
-    pending_requests: HashMap<[u8; 4], RouteRequest>,
+    pending_requests: HashMap<[u8; 8], RouteRequest>,
 }
 
 impl GlobalRoutes {
@@ -166,7 +166,7 @@ impl GlobalRoutes {
     }
 
     /// Find all routes to a destination hint
-    pub fn routes_for_hint(&self, hint: &[u8; 4]) -> Vec<&RouteAdvertisement> {
+    pub fn routes_for_hint(&self, hint: &[u8; 8]) -> Vec<&RouteAdvertisement> {
         self.routes
             .get(hint)
             .map(|routes| routes.iter().collect())
@@ -179,7 +179,7 @@ impl GlobalRoutes {
     /// 1. Fewest hops
     /// 2. Highest reliability
     /// 3. Most recently confirmed
-    pub fn best_route_for_hint(&self, hint: &[u8; 4]) -> Option<&RouteAdvertisement> {
+    pub fn best_route_for_hint(&self, hint: &[u8; 8]) -> Option<&RouteAdvertisement> {
         self.routes.get(hint).and_then(|routes| {
             if routes.is_empty() {
                 return None;
@@ -212,7 +212,7 @@ impl GlobalRoutes {
     /// Request a route for an unknown destination
     ///
     /// Creates a pending route request that should be disseminated to internet-connected peers.
-    pub fn request_route(&mut self, hint: [u8; 4], now: u64) -> RouteRequest {
+    pub fn request_route(&mut self, hint: [u8; 8], now: u64) -> RouteRequest {
         let request = RouteRequest {
             hint,
             requested_at: now,
@@ -225,14 +225,14 @@ impl GlobalRoutes {
     }
 
     /// Check if a route request is pending for a hint
-    pub fn is_route_pending(&self, hint: &[u8; 4]) -> bool {
+    pub fn is_route_pending(&self, hint: &[u8; 8]) -> bool {
         self.pending_requests.contains_key(hint)
     }
 
     /// Increment attempts for a pending route request
     ///
     /// Returns true if the request is still active, false if max attempts exceeded.
-    pub fn increment_route_request_attempts(&mut self, hint: &[u8; 4]) -> bool {
+    pub fn increment_route_request_attempts(&mut self, hint: &[u8; 8]) -> bool {
         if let Some(req) = self.pending_requests.get_mut(hint) {
             req.attempts += 1;
             req.attempts < req.max_attempts
@@ -242,7 +242,7 @@ impl GlobalRoutes {
     }
 
     /// Remove a route request after it's been resolved or abandoned
-    pub fn resolve_route_request(&mut self, hint: &[u8; 4]) {
+    pub fn resolve_route_request(&mut self, hint: &[u8; 8]) {
         self.pending_requests.remove(hint);
     }
 
@@ -252,7 +252,7 @@ impl GlobalRoutes {
     /// Typically called after local cell or neighborhood state changes.
     pub fn update_local_advertisements(
         &mut self,
-        reachable_hints: Vec<[u8; 4]>,
+        reachable_hints: Vec<[u8; 8]>,
         local_id: &PeerId,
         now: u64,
     ) {
@@ -332,7 +332,7 @@ impl GlobalRoutes {
     }
 
     /// Check if we have any route for a destination hint
-    pub fn has_route_for(&self, hint: &[u8; 4]) -> bool {
+    pub fn has_route_for(&self, hint: &[u8; 8]) -> bool {
         self.routes.get(hint).is_some_and(|r| !r.is_empty())
     }
 
@@ -368,12 +368,12 @@ mod tests {
         peer
     }
 
-    fn make_hint(id: u8) -> [u8; 4] {
+    fn make_hint(id: u8) -> [u8; 8] {
         [id, 0, 0, 0]
     }
 
     fn make_route(
-        hint: [u8; 4],
+        hint: [u8; 8],
         next_hop: PeerId,
         hops: u8,
         reliability: f64,

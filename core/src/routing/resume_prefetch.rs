@@ -127,7 +127,7 @@ impl Default for PrefetchConfig {
 #[derive(Debug)]
 pub struct ResumePrefetchManager {
     /// Prefetched routes by destination hint
-    routes: HashMap<[u8; 4], PrefetchedRoute>,
+    routes: HashMap<[u8; 8], PrefetchedRoute>,
     /// Peers we frequently message (candidates for prefetch)
     frequent_peers: Vec<FrequentPeer>,
     /// Whether prefetch is currently in progress
@@ -137,7 +137,7 @@ pub struct ResumePrefetchManager {
     /// Configuration
     config: PrefetchConfig,
     /// Queue of hints waiting for refresh
-    refresh_queue: VecDeque<[u8; 4]>,
+    refresh_queue: VecDeque<[u8; 8]>,
     /// Number of currently active refreshes
     active_refreshes: usize,
 }
@@ -148,7 +148,7 @@ pub struct FrequentPeer {
     /// The peer's ID
     pub peer_id: PeerId,
     /// The peer's destination hint
-    pub hint: [u8; 4],
+    pub hint: [u8; 8],
     /// Number of messages exchanged recently
     pub message_count: u32,
     /// Last message timestamp
@@ -158,7 +158,7 @@ pub struct FrequentPeer {
 }
 
 impl FrequentPeer {
-    fn new(peer_id: PeerId, hint: [u8; 4]) -> Self {
+    fn new(peer_id: PeerId, hint: [u8; 8]) -> Self {
         FrequentPeer {
             peer_id,
             hint,
@@ -207,7 +207,7 @@ impl ResumePrefetchManager {
     /// Saves current routes for later refresh.
     pub fn on_app_background(
         &mut self,
-        current_routes: Vec<(PeerId, [u8; 4], RouteAdvertisement)>,
+        current_routes: Vec<(PeerId, [u8; 8], RouteAdvertisement)>,
     ) {
         // Clear old routes
         self.routes.clear();
@@ -230,13 +230,13 @@ impl ResumePrefetchManager {
     /// Called when app resumes from background
     ///
     /// Returns hints that need immediate refresh, sorted by priority.
-    pub fn on_app_resume(&mut self) -> Vec<[u8; 4]> {
+    pub fn on_app_resume(&mut self) -> Vec<[u8; 8]> {
         self.prefetch_in_progress = true;
         self.prefetch_started = Some(Instant::now());
         self.active_refreshes = 0;
 
         // Build refresh queue sorted by priority (highest first)
-        let mut hints: Vec<([u8; 4], u32)> = self
+        let mut hints: Vec<([u8; 8], u32)> = self
             .routes
             .iter()
             .map(|(&hint, route)| (hint, route.priority))
@@ -258,7 +258,7 @@ impl ResumePrefetchManager {
     /// Get a route immediately if available (even if slightly stale)
     ///
     /// This provides fast access while refresh is in progress.
-    pub fn get_route_early(&self, hint: &[u8; 4]) -> Option<&RouteAdvertisement> {
+    pub fn get_route_early(&self, hint: &[u8; 8]) -> Option<&RouteAdvertisement> {
         self.routes.get(hint).and_then(|prefetched| {
             if prefetched.is_usable(self.config.max_stale_age) {
                 Some(&prefetched.route)
@@ -269,7 +269,7 @@ impl ResumePrefetchManager {
     }
 
     /// Update a route after successful refresh
-    pub fn update_route(&mut self, hint: [u8; 4], route: RouteAdvertisement) {
+    pub fn update_route(&mut self, hint: [u8; 8], route: RouteAdvertisement) {
         if let Some(prefetched) = self.routes.get_mut(&hint) {
             prefetched.route = route;
             prefetched.complete_refresh();
@@ -281,7 +281,7 @@ impl ResumePrefetchManager {
     }
 
     /// Mark a route refresh as failed
-    pub fn mark_refresh_failed(&mut self, hint: &[u8; 4]) {
+    pub fn mark_refresh_failed(&mut self, hint: &[u8; 8]) {
         if let Some(prefetched) = self.routes.get_mut(hint) {
             prefetched.fail_refresh();
         }
@@ -289,14 +289,14 @@ impl ResumePrefetchManager {
     }
 
     /// Start a route refresh
-    pub fn start_route_refresh(&mut self, hint: &[u8; 4]) {
+    pub fn start_route_refresh(&mut self, hint: &[u8; 8]) {
         if let Some(prefetched) = self.routes.get_mut(hint) {
             prefetched.start_refresh();
         }
     }
 
     /// Get the next hint that needs refresh
-    pub fn next_refresh_hint(&mut self) -> Option<[u8; 4]> {
+    pub fn next_refresh_hint(&mut self) -> Option<[u8; 8]> {
         self.refresh_queue.pop_front()
     }
 
@@ -348,7 +348,7 @@ impl ResumePrefetchManager {
     /// Record a message exchange with a peer
     ///
     /// Updates the frequent peers list for future prefetch prioritization.
-    pub fn record_message(&mut self, peer_id: PeerId, hint: [u8; 4]) {
+    pub fn record_message(&mut self, peer_id: PeerId, hint: [u8; 8]) {
         // Decay old peers first so accumulated inactivity is properly applied
         // before recording the new message (which resets last_message to now).
         let half_life = Duration::from_secs(3600); // 1 hour half-life
@@ -436,7 +436,7 @@ mod tests {
         id
     }
 
-    fn create_test_route(hint: [u8; 4], hop_count: u8) -> RouteAdvertisement {
+    fn create_test_route(hint: [u8; 8], hop_count: u8) -> RouteAdvertisement {
         RouteAdvertisement {
             destination_hint: hint,
             next_hop: create_test_peer_id(),

@@ -2991,9 +2991,9 @@ pub async fn start_swarm_with_config(
         // peer ID so routing can begin immediately.
         let local_peer_id_bytes_raw = local_peer_id.to_bytes();
         let local_peer_id_bytes: [u8; 32] = extract_peer_id_bytes(&local_peer_id_bytes_raw);
-        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..4]
+        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..8]
             .try_into()
-            .expect("blake3 hash should be at least 4 bytes");
+            .expect("blake3 hash should be at least 8 bytes");
         {
             let mut guard = routing_engine_handle.write();
             if guard.is_none() {
@@ -5094,9 +5094,9 @@ pub async fn start_swarm_with_config(
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                let _peer_hint: [u8; 4] = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                let _peer_hint: [u8; 8] = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
                                 // When identity protocol confirms a peer, use the Kademlia server
                                 // mode as the transport type basis since identity requires a
                                 // server-capable connection.
@@ -5946,15 +5946,15 @@ pub async fn start_swarm_with_config(
                                 // MYCORRHIZAL ROUTING: Use routing engine to determine path
                                 // Convert libp2p PeerId to routing module format
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                // Get recipient hint from peer_id (first 4 bytes of blake3 hash)
-                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                // Get recipient hint from peer_id (first 8 bytes of blake3 hash)
+                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
 
                                 // Route message using mycorrhizal routing engine.
                                 //
                                 // CRITICAL BYPASS: the mycorrhizal engine only ever sees a
-                                // 4-byte hint -- it has no way to know we already hold an
+                                // hint -- it has no way to know we already hold an
                                 // active libp2p connection to this exact peer_id right now,
                                 // and its layers (negative cache/prefetch/multipath/base
                                 // discovery) are designed for *indirect* routing when the

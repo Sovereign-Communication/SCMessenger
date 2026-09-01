@@ -24,12 +24,12 @@ fn pubkey(node: &IronCore) -> String {
 }
 
 /// Mirror `prepare_message_internal`'s recipient-hint derivation
-/// (`blake3::hash(recipient_id.as_bytes())[0..4]`, hex-encoded) so tests can
+/// (`blake3::hash(recipient_id.as_bytes())[0..8]`, hex-encoded) so tests can
 /// mark/clear the same hint the routing engine's negative cache keys on.
 fn recipient_hint_hex(recipient_pubkey_hex: &str) -> String {
-    let hint: [u8; 4] = blake3::hash(recipient_pubkey_hex.as_bytes()).as_bytes()[0..4]
+    let hint: [u8; 8] = blake3::hash(recipient_pubkey_hex.as_bytes()).as_bytes()[0..8]
         .try_into()
-        .unwrap_or([0u8; 4]);
+        .unwrap_or([0u8; 8]);
     hex::encode(hint)
 }
 
