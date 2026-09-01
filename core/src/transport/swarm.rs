@@ -31,7 +31,7 @@ use crate::store::ledger_entry::{LedgerExchangeRequest, LedgerExchangeResponse, 
 use super::multiport::MultiPortConfig;
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiport::{self, BindResult, MultiPortConfig};
-use super::observation::{AddressObserver, ConnectionTracker};
+use super::observation::{listen_ports_from_multiaddrs, AddressObserver, ConnectionTracker};
 use super::reflection::{AddressReflectionRequest, AddressReflectionService};
 #[cfg(not(target_arch = "wasm32"))]
 use super::routing::local::TransportType as RoutingTransportType;
@@ -4051,14 +4051,30 @@ pub async fn start_swarm_with_config(
                                             address_observer.record_observation(peer, observed_addr);
 
                                             if let Some(primary) = address_observer.primary_external_address() {
-                                                tracing::info!("Consensus external address: {}", primary);
-                                                // Convert SocketAddr to Multiaddr and add to swarm
-                                                let (ip, port) = (primary.ip(), primary.port());
-                                                let maddr: Multiaddr = match ip {
-                                                    std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                                    std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                                };
-                                                swarm.add_external_address(maddr);
+                                                // V040-T14 P0 (defense-in-depth on the
+                                                // publication path): never advertise an
+                                                // address whose port we do not listen on.
+                                                // The observer already refuses such
+                                                // observations; this guard holds even if a
+                                                // future path builds an un-filtered observer.
+                                                let listen_ports =
+                                                    listen_ports_from_multiaddrs(&bound_addresses);
+                                                if listen_ports.contains(&primary.port()) {
+                                                    tracing::info!("Consensus external address: {}", primary);
+                                                    // Convert SocketAddr to Multiaddr and add to swarm
+                                                    let (ip, port) = (primary.ip(), primary.port());
+                                                    let maddr: Multiaddr = match ip {
+                                                        std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                        std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                                    };
+                                                    swarm.add_external_address(maddr);
+                                                } else if !listen_ports.is_empty() {
+                                                    tracing::warn!(
+                                                        "Refusing to advertise observed address {}: port {} is not a listen port",
+                                                        primary,
+                                                        primary.port()
+                                                    );
+                                                }
                                             }
                                         }
 
@@ -5161,13 +5177,27 @@ pub async fn start_swarm_with_config(
                                     );
 
                                     if let Some(primary) = address_observer.primary_external_address() {
-                                        // Convert SocketAddr to Multiaddr and add to swarm
-                                        let (ip, port) = (primary.ip(), primary.port());
-                                        let maddr: Multiaddr = match ip {
-                                            std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                            std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                        };
-                                        swarm.add_external_address(maddr);
+                                        // V040-T14 P0 (defense-in-depth on the
+                                        // publication path): never advertise an address
+                                        // whose port we do not listen on (the observer
+                                        // already refuses such observations).
+                                        let listen_ports =
+                                            listen_ports_from_multiaddrs(&bound_addresses);
+                                        if listen_ports.contains(&primary.port()) {
+                                            // Convert SocketAddr to Multiaddr and add to swarm
+                                            let (ip, port) = (primary.ip(), primary.port());
+                                            let maddr: Multiaddr = match ip {
+                                                std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                            };
+                                            swarm.add_external_address(maddr);
+                                        } else if !listen_ports.is_empty() {
+                                            tracing::warn!(
+                                                "Refusing to advertise observed address {}: port {} is not a listen port",
+                                                primary,
+                                                primary.port()
+                                            );
+                                        }
                                     }
                                 } else {
                                     tracing::trace!(
@@ -5305,6 +5335,14 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::NewListenAddr { address, .. } => {
                                 tracing::info!("Listening on {}", address);
                                 bound_addresses.push(address.clone());
+                                // V040-T14 P0: the external-address consensus may only
+                                // accept observations whose port we actually listen on.
+                                // An observed address with any other port is the
+                                // NAT-mapped source port of an outbound flow (ephemeral,
+                                // never dialable) and must not be advertised.
+                                address_observer.set_listen_ports(listen_ports_from_multiaddrs(
+                                    &bound_addresses,
+                                ));
                                 let _ = event_tx.send(SwarmEvent2::ListeningOn(address)).await;
                             }
 
@@ -6992,6 +7030,10 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // wasm/browser transport has no TCP/UDP listeners, so the observer
+        // keeps its accept-all default here: there is no listen-port set to
+        // filter against (V040-T14 P0 does not apply to a node that cannot
+        // listen).
         let mut address_observer = AddressObserver::new();
         let mut relay_budget: u32 = 200;
         let mut relay_count_this_hour: u32 = 0;
