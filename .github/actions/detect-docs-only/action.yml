@@ -1,0 +1,54 @@
+name: Detect docs-only change
+description: >-
+  Determines whether a pull request changes only documentation (markdown,
+  HANDOFF/, docs/). Required checks use this to short-circuit their expensive
+  steps so the check still reports success without running a build, instead of
+  skipping the check entirely (a skipped required check leaves the PR waiting
+  forever on a status that never arrives).
+
+outputs:
+  is_docs_only:
+    description: "true when the PR changes only documentation; false otherwise (and always false on push/main or when the diff cannot be computed, so the check fails open and runs everything)"
+    value: ${{ steps.detect.outputs.is_docs_only }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute docs-only flag
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          # Push to main and manual dispatch always run everything: main's runs
+          # are the trunk-health record, and there is no base to diff against
+          # cheaply. Fail open.
+          echo "is_docs_only=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        BASE_SHA="${{ github.event.pull_request.base.sha }}"
+        # The default shallow checkout does not carry the base commit. Fetch it
+        # (depth 1) so the diff is against the true base, not FETCH_HEAD.
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          git fetch --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 || true
+        fi
+
+        CHANGED="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || true)"
+        if [ -z "$CHANGED" ]; then
+          # Diff unavailable (shallow edge cases). Fail open: run everything.
+          echo "is_docs_only=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Docs-only means every changed path is markdown, HANDOFF/, or docs/.
+        # Same three classes as cross.yml's paths-ignore ('**.md', 'HANDOFF/**',
+        # 'docs/**') so the required-check short-circuit and the non-required
+        # skip agree exactly. Never read $? after a pipe: capture the match
+        # and test the value.
+        NON_DOCS="$(printf '%s\n' "$CHANGED" | grep -vE '^docs/|^HANDOFF/|\.md$' || true)"
+        if [ -z "$NON_DOCS" ]; then
+          echo "is_docs_only=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "is_docs_only=false" >> "$GITHUB_OUTPUT"
+        fi
