@@ -1,6 +1,10 @@
 # V040-T13 -- Rule-8 follow-ups from the #262 / #263 adversarial review
 
-Status: OPEN (filed 2026-08-31)
+Status: OPEN -- **F7 and F-DHT are RULED 2026-08-31**, see
+        `inbox/RULING_2026-08-31_T13_FDHT_A_and_F7_B.md`.
+        F-DHT: Option A (gate all four hearsay feeds, incl. the wasm arm).
+        F7: **Option B** (widen hint to [u8;8]) PLUS C (ordering defect).
+        B is a WIRE-FORMAT change -- it must land before the v0.4.0 tag.
 Priority: P1 -- none is exploitable today; each erodes a primitive the mesh
 depends on, and F1's fix is one line
 Lane: Freebuff / DeepSeek V4 Flash
