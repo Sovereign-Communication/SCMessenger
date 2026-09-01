@@ -38,6 +38,7 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 | T10 | `V040_T10_FFI_SURFACE_GATE_PASSES_VACUOUSLY.md` | The FFI Surface Contract check runs on every PR and exits 0 when the bindings are missing, verifying nothing | Any time -- CI only | none |
 | T11 | `V040_T11_CANONICAL_DOC_RECONCILE.md` | Canonical docs contradict each other and the code; a reader following DOCUMENTATION.md meets false claims | Any time -- docs only | none |
 | T12 | `V040_T12_CI_CONCURRENCY_AND_PATH_FILTERS.md` | No concurrency groups anywhere, so every push queues a fresh matrix and nothing cancels the superseded one; a one-file docs change runs 27 checks | Any time -- CI config only | none, but read its section 3 trap |
+| T14 | `V040_T14_EPHEMERAL_PORT_ADVERTISED_AS_EXTERNAL.md` | **P0.** The node advertises an ephemeral NAT source port as its external address, so peers dial a port where nothing listens. Observed live the moment the seed dial went in | Ahead of T13 rework | **Rule-8** |
 | T13 | `V040_T13_RULE8_FOLLOWUPS_262_263.md` | Rule-8 follow-ups: the `locally_verified` primitive is seeded from a legacy flag that meant the opposite; wire-supplied `last_seen` steers eviction in the now-capped store; the DHT bypasses the disclosure rule entirely | After #262/#263 merge | **Rule-8 again** |
 | T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
 
