@@ -19,6 +19,22 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
+/// V040-T13 F2: how far a wire-supplied `last_seen` may exceed local time.
+/// Honest peers' clocks skew by seconds to minutes; beyond this the value is
+/// attacker-chosen. Mirrors the recency recorder's
+/// `RECENCY_MAX_CLOCK_SKEW_SECS` (mesh_routing.rs) -- one doctrine for
+/// wire-supplied timestamps.
+const LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS: u64 = 5 * 60 * 1000;
+
+/// Clamp a wire-supplied `last_seen` (seconds, as carried by
+/// `SharedPeerEntry`) into local millis. Never lets a remote value exceed
+/// local time plus the skew allowance; saturating so a hostile value cannot
+/// pin an entry at the head of the eviction or dial tier.
+fn clamp_wire_last_seen_ms(wire_seconds: u64) -> u64 {
+    let ceiling = current_timestamp().saturating_add(LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS);
+    wire_seconds.saturating_mul(1000).min(ceiling)
+}
+
 /// Whether a multiaddr carries a TCP/UDP port below the IANA dynamic range
 /// (49152). Ephemeral source ports (>= 49152) are dead the instant the
 /// connection closes and are the bulk of the legacy CLI store's pollution.
@@ -2003,7 +2019,11 @@ impl LedgerManager {
                             record_observed_peer_id_locked(entry, pid);
                         }
                         if entry.last_seen.map(|ls| ls / 1000).unwrap_or(0) < shared.last_seen {
-                            entry.last_seen = Some(shared.last_seen.saturating_mul(1000));
+                            // V040-T13 F2: wire `last_seen` is attacker-chosen;
+                            // never let a remote value exceed local time (plus
+                            // the skew allowance). In a capped store this value
+                            // selects eviction victims and the dial tier.
+                            entry.last_seen = Some(clamp_wire_last_seen_ms(shared.last_seen));
                         }
                         for topic in &shared.known_topics {
                             if !entry.topics.iter().any(|t| t == topic)
@@ -2024,7 +2044,7 @@ impl LedgerManager {
                         nickname: None,
                         success_count: 0,
                         failure_count: 0,
-                        last_seen: Some(shared.last_seen.saturating_mul(1000)),
+                        last_seen: Some(clamp_wire_last_seen_ms(shared.last_seen)),
                         topics: shared.known_topics.clone(),
                         locally_verified: false,
                         is_bootstrap: false,
@@ -2416,6 +2436,63 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    /// V040-T13 F2: a wire-supplied `last_seen` must never exceed local time
+    /// (plus the skew allowance). In a capped store `last_seen` selects
+    /// eviction victims and the dial tier, so an unclamped u64::MAX would
+    /// make an attacker's entries eviction-immune and top-ranked.
+    #[test]
+    fn wire_last_seen_cannot_be_in_the_future() {
+        let (_dir, mgr) = manager();
+        let pid = peer();
+        let addr = "/ip4/198.51.100.200/tcp/9001".to_string();
+        let now_ms = current_timestamp();
+
+        // New-entry branch: u64::MAX clamps to now + skew.
+        let merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid.clone()),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        assert_eq!(merged, 1);
+        let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,
+            "wire last_seen must be clamped to local time + skew"
+        );
+
+        // Exists-branch (update): re-merging the hostile value stays clamped.
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= now_ms + LAST_SEEN_WIRE_SKEW_ALLOWANCE_MS,
+            "update branch must re-clamp the hostile value"
+        );
+
+        // A modest honest clock skew is preserved, not truncated to now.
+        let honest_addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let slightly_ahead = (now_ms / 1000) + 30;
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: honest_addr.clone(),
+            last_peer_id: Some(peer()),
+            last_seen: slightly_ahead,
+            known_topics: Vec::new(),
+        }]);
+        let honest = mgr
+            .entry_for_multiaddr(&honest_addr)
+            .expect("honest stored");
+        assert_eq!(honest.last_seen, Some(slightly_ahead * 1000));
+        // V040-T13 F-DHT: merged entries are hearsay, never locally verified --
+        // the exact property the Kademlia disclosure gate checks before
+        // re-publishing an address.
+        assert!(!honest.locally_verified, "merged entries are hearsay");
     }
 
     /// A (peer_id, public_key_hex) pair that genuinely self-certifies: the
