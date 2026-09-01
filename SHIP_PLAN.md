@@ -12,9 +12,15 @@ If a task is not on this page, it is not being worked on.
 
 ## 0. North star
 
-> Two people who have never met, on two phones, with no shared network,
-> exchange a message and both see a delivery receipt -- using a build a
+> Two people who have never met, on two independent devices, with no shared
+> network, exchange a message and both see a delivery receipt -- using a build a
 > stranger downloaded from the GitHub releases page.
+>
+> **Test fleet (operator ruling, restated 2026-08-31): the two endpoints are the
+> Windows CLI node and the Android handset. The always-on AWS node is the third
+> node and carries the mesh / store-and-forward relay role.** This is NOT two
+> phones. Earlier wording implied a second handset and was wrong; only the
+> Android side needs the released APK, the Windows side is the CLI.
 
 **Definition of done for v0.4.0:**
 
@@ -23,10 +29,10 @@ If a task is not on this page, it is not being worked on.
 | D1 | `main` is green | All CI lanes pass on a push to `main`, run URL recorded |
 | D2 | Signed APK is downloadable | `gh release view v0.4.0-alpha.1` lists an APK asset |
 | D3 | README explains the product and how to install | File is non-empty, links resolve |
-| D4 | Two-device message + receipt | Receiver-side decrypt + durable history + receipt, per `project_fleet_run_scoring_evidence` -- NOT transport ACKs |
+| D4 | Message + receipt between the two endpoints (Android handset <-> Windows CLI node) | Receiver-side decrypt + durable history + receipt, per `project_fleet_run_scoring_evidence` -- NOT transport ACKs |
 | D5 | No long-lived integration branch | PR #139 merged or closed; `main` is trunk |
 | D6 | Transport racing demonstrated | Message delivered when first-choice transport is unavailable, proving fallback selects a working path. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
-| D7 | Offline proximity messaging demonstrated | Two devices exchanging a message with no internet available. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
+| D7 | Offline proximity messaging demonstrated | The Android handset and the Windows node exchanging a message with no internet available. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
 
 Anything that does not move D1-D7 is deferred. No exceptions until tag.
 
@@ -124,7 +130,7 @@ and confirm the download path works end to end.
 | S3-2 | Run the two-device test on the **released APK**, not a dev build. Cross-network: one on cellular, one on WiFi. | Operator + agy | Receiver decrypt + durable history + receipt |
 | S3-3 | If it fails, the failure becomes the only ticket. Do not open a workstream -- fix and re-run. | Qwen impl | Re-run passes |
 | S3-4 | Transport racing gate: message delivered when first-choice transport is unavailable, proving fallback selects a working path. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
-| S3-5 | Offline proximity gate: two devices exchange a message with no internet available. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
+| S3-5 | Offline proximity gate: the Android handset and the Windows node exchange a message with no internet available. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
 
 **S3 exit: native verdict checkpoint 3** -- score the run on receiver-side
 evidence only. Transport ACKs, UI counters, and BLE local acceptance do not
@@ -398,9 +404,9 @@ Task files live in `HANDOFF/freebuff/queue/`; the lane's rules are
 | ID | Gate | Evidence standard |
 |---|---|---|
 | G3-0 | **Churn gate.** Redeploy the AWS node so it takes a new public IP, change nothing on Windows or Android, and confirm all three re-mesh unaided | Windows and Android both reach the node at its new address with zero manual re-seeding. This is the operator's stated model, tested directly |
-| G3-1 | D4: two devices, released APK, cross-network (one cellular, one WiFi) | Receiver decrypt + durable history + receipt. NOT transport ACKs, UI counters, or BLE local acceptance |
+| G3-1 | D4: Android handset (released APK) <-> Windows CLI node, cross-network -- handset on cellular, Windows on WiFi/wired | Receiver decrypt + durable history + receipt. NOT transport ACKs, UI counters, or BLE local acceptance |
 | G3-2 | D6: first-choice transport unavailable, fallback delivers | Same, plus non-zero routing confidence from T4 |
-| G3-3 | D7: two devices, no internet | Same |
+| G3-3 | D7: Android handset <-> Windows node, no internet on either | Same |
 | G3-4 | Cloud-node parity: store-and-forward custody + connection assistance. Re-run `ANDROID_RELAY_INBOUND_EVIDENCE_2026-08-10_CELLULAR.md` as the regression case | Receiver-side custody delivery scored from the swarm audit log. `/api/diagnostics.custody_audit_count` now reads live post-#236 and post-mount -- but confirm it is moving before trusting it |
 | G3-5 | Any failure becomes the single ticket. Fix, re-run. No new workstream | Re-run passes |
 
