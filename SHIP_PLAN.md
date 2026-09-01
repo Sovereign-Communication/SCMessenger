@@ -380,9 +380,25 @@ adds zero incremental cost **provided it happens before the fleet migrates.**
 | G1-3 | Set the four secrets, then dress rehearsal with no tag burned: `gh workflow run release.yml -f artifacts_only=true`. `build-android` has no tag requirement, so this is a full signed build at zero risk | Operator sets, agent runs |
 | G1-4 | Record the cert SHA-256 in the password manager and in `HANDOFF/CTO_STATE.md` (fingerprint only -- never the password). It is how a future build is proven to come from this key | Operator |
 
-**Nothing downstream of G1 can be scored.** D4/D6/D7 all require a released APK
-by this plan's own evidence standard, and no GitHub release exists for any
-v0.4.0 tag.
+**CORRECTED 2026-08-31: G1 does NOT gate the D4/D6/D7 functional work.** An
+earlier revision of this section said nothing downstream of G1 could be scored.
+That was too strong, and it parked the demo work behind a keystore for no reason.
+
+What the production keystore actually gates is **D2** (a published, downloadable,
+correctly-signed APK) and the **final** scored run on that published artifact.
+
+The functional gates can be exercised now. `android/app/build.gradle:103-113`
+takes the signing config from `SCMESSENGER_KEYSTORE_PATH/_PASSWORD/_ALIAS/_KEY_PASSWORD`
+and accepts **any** keystore, so a throwaway locally-generated key produces a
+genuine release-configured APK -- R8, minification, release manifest -- which is
+what catches the class of bug release config introduces. (`build.gradle:127`
+deliberately refuses to fall back to the *debug* key for a release task, which is
+correct and is not a blocker: supply a throwaway release key instead.)
+
+So the sequencing is: **prove D4/D6/D7 now on a release-configured build with a
+throwaway key; re-run once on the published artifact to close the gates.** The
+fleet's uninstall-and-reinstall happens once, when it moves to the real
+release-signed build -- a throwaway test key does not change that.
 
 ### G2 -- Automatic rejoin (Freebuff / DeepSeek V4 Flash)
 
@@ -509,6 +525,7 @@ passing" is not a disposition. Opened 2026-08-31; append, do not rewrite.
 | I-22 | **`docs/CURRENT_STATE.md` asserted release line v0.3.5** while `Cargo.toml` reads `0.4.0` -- in the document nominally canonical for project state | `grep -m1 '^version' Cargo.toml` -> `0.4.0`; `CURRENT_STATE.md:18,26,40,44` said v0.3.5 | **FIXED 2026-08-31.** Version corrected, the "cut but not released" distinction made explicit, and the v0.3.5-era verification snapshot relabelled as not re-verified rather than silently re-dated |
 | I-23 | **`SHIP_PLAN.md` contradicted itself about the README.** S2-1 (line 111) instructed writing a README "currently 0 bytes"; 6.1/6.3 refuted it 90 lines later. A reader hitting S2-1 first acts on a false claim | `wc -c README.md` -> 4,309 | **FIXED 2026-08-31** -- struck at the source with the correction inline, retained for history. This is charter task L4-2 ("correct the false claims at their source"), which had never been done |
 | I-24 | Canonical docs are internally inconsistent as a set: `FEATURE_PARITY.md` self-labels MATRIX STALE, `REMAINING_WORK_TRACKING.md` is superseded-for-execution, and `CURRENT_STATE.md`'s section 2 snapshot predates four weeks of merges. A reader following DOCUMENTATION.md -> execution queue meets contradictions | Haiku canonical audit, 2026-08-31 | **TICKETED** -- `V040_T11_CANONICAL_DOC_RECONCILE.md`. Note `FEATURE_PARITY.md` is handled correctly already: it warns about itself in its own header, which is the right pattern for a doc that cannot be re-audited yet |
+| I-25 | **The plan blocked all demo work behind the keystore for no reason.** G1 was written as "nothing downstream can be scored", parking D4/D6/D7 behind a production signing key. The keystore gates D2 and the final published-artifact run only | `android/app/build.gradle:103-113` -- the env-driven signing path accepts any keystore, so a throwaway key yields a real release-configured APK | **FIXED 2026-08-31** -- G1 corrected; demo work can start now on a throwaway-signed release build |
 | I-16 | 27 open PRs; 212 remote refs, 18 provably merged | `gh pr list`; `git ls-remote` | **PLANNED** -- SHIP_PLAN G5 |
 | I-17 | `SCMESSENGER_KEY_ALIAS` does not match the keystore; `ANDROID_RELEASE_SIGNING.md` documented `-storetype JKS` while modern keytool writes PKCS12, which matches aliases case-sensitively | Release run `32817839477` failed at `packageRelease` | **DOC FIXED + PLANNED** -- PR #259 corrects the guidance and adds `scripts/verify_release_keystore.sh`; regeneration is G1, operator-only |
 | I-18 | No Android APK has ever been published, so no signing lineage exists -- the keystore can be regenerated for free, but only until the first release | `gh release view` on all four public releases: CLI binaries only | **PLANNED** -- G1. This is a deadline, not a defect |
