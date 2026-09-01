@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn make_hint(id: u8) -> [u8; 8] {
-        [id, 0, 0, 0]
+        [id, 0, 0, 0, 0, 0, 0, 0]
     }
 
     fn make_route(

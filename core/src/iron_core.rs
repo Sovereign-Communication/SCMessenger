@@ -5009,7 +5009,7 @@ mod tests {
         let core = IronCore::new();
         *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [7u8; 32];
-        let hint = [1u8, 2u8, 3u8, 4u8];
+        let hint = [1u8, 2u8, 3u8, 4u8, 0u8, 0u8, 0u8, 0u8];
         {
             let mut engine = core.routing_engine.write();
             engine
@@ -5081,11 +5081,11 @@ mod tests {
         // sighting and non-zero after the swarm's ConnectionEstablished feed
         // (routed through this exact IronCore entry point).
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [42u8; 32];
-        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
             .try_into()
-            .expect("4 byte hint");
+            .expect("8 byte hint");
         let msg_id = [7u8; 16];
 
         // Before the feed: unknown peer, StoreAndCarry fallback, zero confidence.
@@ -5130,7 +5130,7 @@ mod tests {
         // different recorded transports. Same peer, both paths -- the engine
         // accumulates them, mirroring the swarm handler's multi-path reality.
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [43u8; 32];
 
         core.routing_peer_seen(hex::encode(peer), "tcp".to_string());

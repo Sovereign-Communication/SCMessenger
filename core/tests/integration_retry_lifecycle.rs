@@ -13,7 +13,7 @@ fn make_core_with_routing() -> IronCore {
     core.grant_consent();
     core.initialize_identity()
         .expect("identity initialization must succeed");
-    *core.routing_engine_handle().write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+    *core.routing_engine_handle().write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
     core
 }
 

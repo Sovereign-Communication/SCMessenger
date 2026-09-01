@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_prefetch_basic() {
         let mut manager = ResumePrefetchManager::with_defaults();
-        let hint = [1, 2, 3, 4];
+        let hint = [1, 2, 3, 4, 0, 0, 0, 0];
         let route = create_test_route(hint, 2);
 
         // Simulate going to background with a route
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn test_get_route_early() {
         let mut manager = ResumePrefetchManager::with_defaults();
-        let hint = [1, 2, 3, 4];
+        let hint = [1, 2, 3, 4, 0, 0, 0, 0];
         let route = create_test_route(hint, 2);
 
         manager.on_app_background(vec![(create_test_peer_id(), hint, route.clone())]);
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn test_update_route() {
         let mut manager = ResumePrefetchManager::with_defaults();
-        let hint = [1, 2, 3, 4];
+        let hint = [1, 2, 3, 4, 0, 0, 0, 0];
         let route = create_test_route(hint, 2);
 
         manager.on_app_background(vec![(create_test_peer_id(), hint, route)]);
@@ -504,7 +504,7 @@ mod tests {
     fn test_frequent_peer_tracking() {
         let mut manager = ResumePrefetchManager::with_defaults();
         let peer_id = create_test_peer_id();
-        let hint = [1, 2, 3, 4];
+        let hint = [1, 2, 3, 4, 0, 0, 0, 0];
 
         // Record multiple messages
         for _ in 0..10 {
@@ -519,8 +519,8 @@ mod tests {
     #[test]
     fn test_prefetch_stats() {
         let mut manager = ResumePrefetchManager::with_defaults();
-        let hint1 = [1, 2, 3, 4];
-        let hint2 = [5, 6, 7, 8];
+        let hint1 = [1, 2, 3, 4, 0, 0, 0, 0];
+        let hint2 = [5, 6, 7, 8, 0, 0, 0, 0];
         let route1 = create_test_route(hint1, 2);
         let route2 = create_test_route(hint2, 3);
 
@@ -537,7 +537,7 @@ mod tests {
     fn test_frequent_peer_decay() {
         let mut manager = ResumePrefetchManager::with_defaults();
         let peer_id = create_test_peer_id();
-        let hint = [1, 2, 3, 4];
+        let hint = [1, 2, 3, 4, 0, 0, 0, 0];
 
         // Record messages
         manager.record_message(peer_id, hint);

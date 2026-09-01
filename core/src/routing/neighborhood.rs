@@ -417,7 +417,9 @@ mod tests {
     }
 
     fn make_hint(n: u32) -> [u8; 8] {
-        n.to_le_bytes()
+        let mut hint = [0u8; 8];
+        hint[..4].copy_from_slice(&n.to_le_bytes());
+        hint
     }
 
     fn make_cell_summary(hint_list: Vec<[u8; 8]>) -> CellSummary {

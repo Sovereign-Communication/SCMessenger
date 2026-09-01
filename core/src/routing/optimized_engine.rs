@@ -532,7 +532,7 @@ mod tests {
     }
 
     fn make_hint(id: u8) -> [u8; 8] {
-        [id, 0, 0, 0]
+        [id, 0, 0, 0, 0, 0, 0, 0]
     }
 
     #[test]
@@ -651,7 +651,7 @@ mod tests {
         let peer = make_peer_id(42);
         let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
             .try_into()
-            .expect("4 byte hint");
+            .expect("8 byte hint");
         let msg_id = make_message_id(1);
 
         // Before sighting: StoreAndCarry with confidence 0.0
