@@ -78,3 +78,65 @@ The reviewer was instructed not to treat my ruling as authority. This is the
 second time today that instruction caught something -- and the first time it
 caught *me* writing the defect rather than missing one. Keep rejecting rulings
 that do not survive the code.
+
+---
+
+## ADDENDUM -- the full verdict is worse, and three items change the rework
+
+### 1. Bypass B is a COMPLETE defeat, not a weakness
+
+`add_bootstrap` (`ledger_entry.rs:2070`) ships every production node an entry
+with `locally_verified: true, success_count: 0, peer_id: None` at a **publicly
+known** address (`cli/src/main.rs:3412`). Combined with `merge_shared_entries`
+writing wire-supplied pids into `peer_id`/`observed_peer_ids` of existing entries
+with no hearsay check, and `find_by_peer_id` matching that field:
+
+**Two ledger-exchange messages give an attacker arbitrary `(peer_id, address)`
+insertion into our Kademlia table.** `libp2p-kad 0.48.0` `Addresses::insert` has
+no cap, so it is unbounded. That is precisely the primitive the PR was written to
+remove, handed over in two messages.
+
+### 2. The predicate you want ALREADY EXISTS
+
+`is_peer_known_good` (`ledger_entry.rs:1956`) is the export-equivalent predicate:
+`locally_verified && success_count > 0 && failure_count < THRESHOLD`. The gate
+used `locally_verified` alone, and `add_bootstrap` proves that does not imply
+`success_count > 0`. Use the existing predicate rather than writing a third one
+-- and note this is the same "two implementations of one concept" shape T2
+existed to remove.
+
+### 3. Your wasm gate is vacuous, and I was wrong to praise it
+
+I called `dialed_peers` a thoughtful adaptation. The reviewer is right and I was
+wrong: a browser cannot listen, so **every** wasm connection is a dialer. The set
+therefore admits everything, is never cleared, and grows without bound in a
+long-lived event loop. It is a no-op and a leak. Replace it; do not keep it
+because it reads well.
+
+### Also in the rework
+
+- **Six feeds, and two of the ungated ones are pre-existing bugs on `main`.**
+  mDNS (`swarm.rs:5009`) lets an unauthenticated LAN broadcaster inject any peer
+  id at any **public** address, since `is_discoverable_multiaddr` permits them.
+  DCUtR (`swarm.rs:4885`) inserts `swarm.external_addresses()` -- **our own
+  addresses** -- under `remote_peer_id`, while its comment claims it inserts the
+  peer's. Ticket those separately; do not fold pre-existing bugs into this PR.
+- **F-5:** the `now + 5min` clamp leaves the ordering inversion. Honest senders
+  report a *past* observation, so an attacker pinned at the ceiling still sorts
+  first, permanently, in `seed_addresses`, `evict_one_locked` and load
+  truncation. **Your new test asserts the bound, not the property its own
+  docstring claims** -- fix the test as well as the code.
+- **F-6:** the clamp is missing on the migration ingest path
+  (`ledger_entry.rs:2221`, `:2238`) -- the one path carrying pre-fix poisoned
+  data.
+- **UNVERIFIED, check it:** `core/src/mobile_bridge.rs:803` also starts the
+  swarm. Confirm what `core_handle` it passes; if `None`, the gate fails open on
+  mobile.
+
+### What held up -- do not re-derive
+
+No fail-closed regression (all three CLI call sites pass a live weak ref);
+`record_connection` is dialer-only; removing the two dead `SwarmCommand`s breaks
+no callers; no #256/#257 dead-tier regression; F1's CLI-side change is sound;
+and libp2p-kad already refuses inbound-learned addresses internally, so these
+explicit call sites really are the whole surface.
