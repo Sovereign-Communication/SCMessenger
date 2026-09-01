@@ -9085,6 +9085,11 @@ mod ledger_seeding_hardening_tests {
             failure_count: 0,
             last_seen: None,
             topics: Vec::new(),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         }
     }
 

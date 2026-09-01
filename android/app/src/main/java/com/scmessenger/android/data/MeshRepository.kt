@@ -6415,6 +6415,21 @@ open class MeshRepository(
                             }
                         }
                     }
+                    val locallyVerified = obj.optBoolean("locally_verified", false)
+                    val isBootstrap = obj.optBoolean("is_bootstrap", false)
+                    val firstSeenRaw = obj.optLong("first_seen", 0L)
+                    val firstSeen = if (firstSeenRaw > 0) firstSeenRaw.toULong() else null
+                    val observedIdsJson = obj.optJSONArray("observed_peer_ids")
+                    val observedPeerIds = buildList {
+                        if (observedIdsJson != null) {
+                            for (j in 0 until observedIdsJson.length()) {
+                                val p = observedIdsJson.optString(j, "").trim()
+                                if (p.isNotEmpty()) add(p)
+                            }
+                        }
+                    }
+                    val labelRaw = obj.optString("label", "")
+                    val label = labelRaw.takeIf { it.isNotEmpty() }
                     val entry = uniffi.api.LedgerEntry(
                         multiaddr = multiaddr,
                         peerId = peerId,
@@ -6423,7 +6438,12 @@ open class MeshRepository(
                         successCount = successCount,
                         failureCount = failureCount,
                         lastSeen = lastSeen,
-                        topics = topics
+                        topics = topics,
+                        locallyVerified = locallyVerified,
+                        isBootstrap = isBootstrap,
+                        firstSeen = firstSeen,
+                        observedPeerIds = observedPeerIds,
+                        label = label
                     )
                     val pid = entry.peerId?.trim().orEmpty()
                     val key = entry.publicKey?.trim().orEmpty()
