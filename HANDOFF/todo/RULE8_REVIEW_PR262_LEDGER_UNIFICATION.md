@@ -1,8 +1,8 @@
 # Rule-8 adversarial review -- PR #262 (ledger unification) and #263 (routing feed)
 
 Status: OPEN (filed 2026-08-31)
-Priority: P0 -- #262 cannot merge without a recorded APPROVE
-**Lane: NOT Freebuff.** Freebuff authored #262; Rule-8 requires a reviewer that
+Priority: P0 -- neither #262 nor #263 can merge without a recorded APPROVE
+**Lane: NOT Freebuff.** Freebuff authored both #262 and #263; Rule-8 requires a reviewer that
 did not author the change. Route to the DashScope/Qwen lane (reasoning tier:
 `qwq-plus`, 906k remaining, or `deepseek-v4-pro-0813`, 1M) per
 `docs/QWEN_QUOTA_LEDGER.md`, or to a native seat that did not write the spec.
@@ -15,8 +15,15 @@ to other peers**, which is why it is gated.
 
 ```bash
 git fetch origin freebuff/v040-t2-unify-peer-ledgers
-git diff origin/main...FETCH_HEAD -- core/src/store/ledger_entry.rs cli/src/ledger.rs
+git diff origin/main...origin/freebuff/v040-t2-unify-peer-ledgers     -- core/src/store/ledger_entry.rs cli/src/ledger.rs
 ```
+
+**Do not use `FETCH_HEAD`.** It is overwritten by the next fetch of any ref, so
+a later command can silently read a different tree than the one you fetched.
+This bit the CEO seat during this very review: a `git grep` found the new call
+site, and the immediately following `git show FETCH_HEAD:...` returned a file
+without it, because `FETCH_HEAD` had moved to `main`. Always name the branch:
+`origin/<branch>`.
 
 ## Already verified by the CEO seat -- do not redo, do try to break
 

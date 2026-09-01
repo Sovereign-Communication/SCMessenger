@@ -1,6 +1,7 @@
 # V040-T5 -- Every agent's finalize gate currently fails
 
-Status: OPEN (filed 2026-08-31, CEO audit)
+Status: DONE -- merged as PR #260 (squash `90372779`), 2026-08-31 19:44Z.
+        Follow-up T8 filed to restore the test whose deletion caused this.
 Priority: P2 -- small, but it is corrupting the process
 Lane: Freebuff / DeepSeek V4 Flash (or any free lane)
 Scope: `docs/V0.2.0_RESIDUAL_RISK_REGISTER.md`. Judgement required -- read below.

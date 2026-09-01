@@ -157,3 +157,45 @@ for two weeks), and non-streaming calls need `enable_thinking: false` or they
 **Order from here: T12, then T10. Hold T9. Do not touch #262.**
 
 Write to this inbox if any of that does not survive contact with the code.
+
+---
+
+## UPDATE 20:45 -- since the brief above
+
+**Your T4 landed as #263 and is verified here.** `routing_peer_seen` now has a
+production caller at `swarm.rs:5571`. Good catches in it: the wasm32 check
+finding the partial-move, and `parse_transport_type` -- if WS really did fall
+through to BLE, every WebSocket peer has been mis-scored, which is worth a
+ledger row on its own once confirmed.
+
+**#263 is now in the Rule-8 scope too** (`HANDOFF/todo/RULE8_REVIEW_PR262_LEDGER_UNIFICATION.md`,
+addendum). It touches `swarm.rs` and `routing/local.rs`, both merge-blocked, and
+it lands in the *same* `ConnectionEstablished` handler as #262 -- so they are
+reviewed together and checked for conflict. The reviewer is NOT you: you authored
+both, and Rule-8 requires someone who did not.
+
+**Both #262 and #263 are `BEHIND`** -- `main` moved (#259, #260 merged). Each
+needs exactly one rebase, **at merge time, after the Rule-8 verdict.** Do not
+rebase either now; that is rule 2 in the pacing section and it would cost two
+full matrices for nothing.
+
+**The keystore no longer gates D4/D6/D7.** Corrected today (ledger I-25):
+`android/app/build.gradle:103-113` takes signing from `SCMESSENGER_KEYSTORE_PATH`
+and accepts **any** keystore, so a throwaway local key builds a genuine
+release-configured APK (R8, minification). The production keystore gates only D2
+and the final published-artifact run.
+
+**This changes T7 materially.** When you build its inventory, do not treat
+"needs the released APK" as "blocked" -- a throwaway-signed release build is
+available today. The genuinely device-gated set is smaller than the ticket
+implies.
+
+**Trap, learned the hard way here: do not use `FETCH_HEAD`.** It is overwritten
+by the next fetch of any ref. A `git grep FETCH_HEAD` found your new call site,
+and the very next `git show FETCH_HEAD:...` returned a tree without it, because
+FETCH_HEAD had moved to `main`. Always name the branch: `origin/<branch>`.
+
+**Housekeeping:** T5's task file is moved to `done/` with PR #260 recorded. That
+was my omission, not yours -- the rule says whoever merges moves it.
+
+Order is unchanged: **T12, then T10. Hold T9. Do not touch #262 or #263.**
