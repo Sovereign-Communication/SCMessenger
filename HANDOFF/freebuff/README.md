@@ -78,6 +78,16 @@ and `V040_T3_ADDRESS_SUPERSESSION_ON_CHURN` were fixes to symptoms of the
 duplication that T2 now removes at the root. Both are folded into
 `V040_T2_UNIFY_PEER_LEDGER_STORES.md`.
 
+## >> READ FIRST: `inbox/BRIEF_2026-08-31_state_pacing_and_next.md`
+
+Carries the CI pacing rules (the queue is deep -- batch pushes, do not rebase
+speculatively, **hold T9**), the corrected test fleet (Windows CLI + Android
+handset + AWS relay -- there is no second phone), and the current order.
+
+**Order: T12, then T10. Hold T9 until T12 lands. Do not touch #262** -- it is
+awaiting a Rule-8 decision and one rebase at merge time, neither of which is the
+lane's call.
+
 ## Never idle -- node availability tiers
 
 Operator directive 2026-08-31. Full policy: `docs/rules/CONTINUOUS_EXECUTION.md`.
