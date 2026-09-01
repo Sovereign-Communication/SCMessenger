@@ -1,10 +1,83 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-30 (recorded Android agent authorization scope; #251/#252 in flight)
+Last updated: 2026-09-01 (v0.4.0 endgame session: ledger unification + D6 merged, Freebuff lane established)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-08-30) =====
+# ===== RESUME HERE (2026-09-01) =====
+
+## Read these three, in this order
+
+1. `SHIP_PLAN.md` **section 6** -- the corrected D1-D7 scoreboard, the sprint to
+   the tag, and **section 7, the 30-row discovered-issue ledger**. Section 6.3
+   lists claims this repo makes about itself that are false; do not trust an
+   older section over it.
+2. `docs/rules/CONTINUOUS_EXECUTION.md` -- node availability tiers and the
+   never-idle ladder. "Blocked on hardware" is not a terminal state.
+3. `HANDOFF/freebuff/README.md` -- the implementation lane, its queue, and the
+   rules in `docs/rules/FREEBUFF.md`.
+
+## One-line state (2026-09-01)
+
+**The two defects that made the mesh unable to heal itself are fixed and on
+`main`. Three things stand between here and a public v0.4.0: one operator
+command, one wire-format change, and an afternoon with the Pixel.**
+
+## What merged this session
+
+| PR | What |
+|---|---|
+| #259 | v0.4.0 endgame plan, Freebuff lane, continuous-execution policy, keystore correction |
+| #260 | docs-sync gate repaired -- it had been red on clean `main`, so every agent's finalize gate failed |
+| #261 | Rule-8 verdicts, Qwen quota ledger, canonical-doc corrections |
+| #262 | **Peer-store unification.** Two stores became one; `peers.json` retired; `locally_verified` disclosure rule enforced on all four egress paths. Rule-8 APPROVE |
+| #263 | **D6 unblocked.** `routing_peer_seen` had zero callers since it was written; now fed from `ConnectionEstablished`, with relayed circuits recorded distinctly from direct TCP. Rule-8 APPROVE |
+
+In flight: **#266** (T1 boot seed dial -- the last piece of automatic rejoin),
+**#264** (T12 CI concurrency, 27/27 green, `BEHIND`).
+
+## The three remaining blockers
+
+1. **Keystore (operator, ~15 min).** Generate per `docs/ANDROID_RELEASE_SIGNING.md`
+   (now corrected to `-storetype PKCS12`; the old JKS guidance caused the
+   case-sensitivity failure), verify with `scripts/verify_release_keystore.sh`
+   BEFORE setting secrets. **D2 also needs a final `v0.4.0` tag** -- an `rc` tag
+   produces a draft release, which is not a public download.
+   It does **not** gate D4/D6/D7: a throwaway key builds a real
+   release-configured APK (ledger I-25).
+2. **F7 Option B -- a wire-format change that must land BEFORE the tag** (I-30).
+   Widening the routing hint to `[u8; 8]` changes `NeighborhoodSummary`, which
+   is gossiped. Cheap only while there is no installed base; the moment v0.4.0
+   reaches a stranger it becomes a compatibility matrix.
+3. **The demo.** Test fleet is **Windows CLI + Android handset**, with the AWS
+   node as the third node carrying store-and-forward relay. **There is no second
+   phone** -- earlier plan wording said otherwise and was wrong.
+
+## Live rig
+
+| Node | Address | Identity |
+|---|---|---|
+| AWS (Amazon Linux, Docker) | discovered by `scripts/aws_deploy.sh`; do not hardcode | `640a5dc8...` / pubkey `014b8105...` |
+| Windows CLI | `127.0.0.1:9876` | `985a25f9...` / pubkey `30d0fa67...` |
+
+Both `DirectPreferred` with custody climbing, but **both run pre-#262 code** --
+redeploy at current `main` before scoring anything. `scripts/aws_deploy.sh` now
+discovers the IP from the EC2 API and **fails if the `/data` mount is missing**;
+that mount's absence silently destroyed node identity on every redeploy until
+this session.
+
+## Traps this session cost real time on
+
+- **A gate that cannot fail.** `ffi_surface.sh` exits 0 when bindings are absent
+  (I-21, T10). The same shape appeared twice more: a docs-only PR that verified
+  nothing, and four separate monitor bugs in this seat's own tooling.
+- **`FETCH_HEAD` is not stable.** It is overwritten by the next fetch of any ref.
+  Name `origin/<branch>`.
+- **The orchestrator-to-lane channel is `main`, not the working tree** (I-29).
+  Rulings left on an unmerged branch are undelivered, and the failure is
+  asymmetric: the lane's replies keep arriving, so the channel looks healthy.
+
+# ===== ARCHIVE: 2026-08-30 and earlier =====
 
 ## MESH HANDOFF 2026-08-30 — Android agent authorization scope (canonical)
 
