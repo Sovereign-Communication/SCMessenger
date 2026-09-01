@@ -14,24 +14,39 @@ wire are inserted into the DHT routing table, from which the node answers other
 peers' queries. `kademlia.add_address` is the egress that does not pass the
 `locally_verified` filter.
 
-Full inventory of the eight `add_address` sites in
-`core/src/transport/swarm.rs` (line numbers in this worktree, post-#263):
+## Inventory -- CORRECTED and CONFIRMED 2026-08-31
 
-| Site | Source of address | Trust class |
-|---|---|---|
-| 4559, 4707 | ledger-exchange request/response entries (`entry.multiaddr`) | **HEARSAY** |
-| 5184 | Identify `info.listen_addrs` (remote-advertised) | **HEARSAY** |
-| 5019 | mDNS discovery | LAN-local (same-subnet by protocol) |
-| 4895 | own `swarm.external_addresses()` for a connected peer | own addresses |
-| 6542, 7178 | `SwarmCommand::AddKadAddress` | **dead path -- zero callers** |
-| 6677 | `SwarmCommand::RegisterEndpoint` | **dead path -- zero callers** |
+Per `RULING_2026-08-31_FDHT_inventory_correction.md`, the classification was
+re-run by tracing every `add_address` call to the SOURCE of its address. Four
+live hearsay feeds confirmed, against `origin/freebuff/v040-t2-unify-peer-ledgers`
+(this tree's line numbers):
 
-Two live hearsay feeds exist: the ledger exchange (4559/4707) and Identify
-(5184). The review cited only the ledger path (`:4526` in its tree); the
-Identify feed at 5184 is the same class and was already feeding the DHT before
-#262. mDNS is a separate question: the address is not hearsay from the mesh,
-but it is also not locally verified -- it is a LAN-broadcast self-claim, and
-same-subnet reachability is the trust bound.
+| Site | Source of address | Trust class | Verified by |
+|---|---|---|---|
+| 4525 | ledger-exchange request entry (`entry.multiaddr`) | **HEARSAY** | trace |
+| 4673 | ledger-exchange request entry (`entry.multiaddr`) | **HEARSAY** | trace |
+| 5150 | Identify `info.listen_addrs` (native arm, line 5063) | **HEARSAY** | trace |
+| 7865 | Identify `info.listen_addrs` (wasm arm, line 7860) | **HEARSAY** | trace |
+| 4861 | own `swarm.external_addresses()` | own addresses | trace |
+| 4985 | mDNS discovery (`cfg all(not wasm32, not android)`) | LAN-local | trace |
+| 6488, 7124 | `SwarmCommand::AddKadAddress` | dead path | zero producers tree-wide |
+| 6623 | `SwarmCommand::RegisterEndpoint` | dead path | zero producers tree-wide |
+
+Correction details: the Identify feed is TWO sites, not one -- a native
+`Identify(Received)` arm at swarm.rs:5063 and a second, wasm-gated arm at
+:7860 inside the `#[cfg(target_arch = "wasm32")]` block (starts :6779). Both
+insert `info.listen_addrs` into Kademlia; both are production (no `cfg(test)`
+between them). They do not shadow each other -- one compiles only on native,
+the other only on wasm -- so any gate must cover both or the wasm arm stays
+open. The two `SwarmCommand` paths are confirmed dead: `AddKadAddress` and
+`RegisterEndpoint` have no producers anywhere in core/cli/mobile/desktop_bridge
+(enum declarations and match arms only). mDNS (4985) is LAN-local by protocol;
+the address is a same-subnet self-claim, not mesh hearsay.
+
+Historical note: this lane's original proposal listed the ledger-exchange and
+the native Identify feed, and missed the wasm Identify arm -- the CEO's
+grep-with-context read caught it. The review's original `:4526` cite covered
+only the first ledger-exchange path.
 
 ## Options
 
