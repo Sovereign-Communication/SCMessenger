@@ -15,18 +15,21 @@ Last verified: **2026-07-21** (Workspace build gates clean on host; re-run gates
 
 ## 1. Executive Summary & Release Roadmap
 
-SCMessenger is on release line **v0.3.5** (`Cargo.toml`). **v0.4.0** (Josh alpha) is the
-in-flight milestone. Long-horizon sequencing remains the two-phase DAG in
+SCMessenger is on release line **v0.4.0** (`Cargo.toml:9` -- verified 2026-08-31),
+which is also the in-flight milestone: the version is cut but **not yet
+released**. `v0.4.0-rc.1` is tagged; no GitHub Release object exists for it and
+the latest public release is still `v0.1.9` from March 2026. The gates and the
+remaining work are in `SHIP_PLAN.md` section 6. Long-horizon sequencing remains the two-phase DAG in
 `HANDOFF/V1_0_0_EXECUTION_PLAN.md` (**Section 0A** = current operator truth).
 
 **Planning entrypoints:** `_QUEUE.md` (dispatch) -> `MILESTONE_RELEASE_PLAN.md` (releases)
 -> `V1_0_0_EXECUTION_PLAN.md` (v1.0.0 scope) -> `FARM_FINAL_PLAN.md` (validator).
 
 ```
-  v0.3.5 (Active Codebase)
-     |
+  v0.4.0 (Active Codebase -- Cargo version cut, NOT yet released)
+     |                      rc.1 tagged; no Release object; latest public is v0.1.9 (March)
      v
-  v0.4.0 [NEXT RELEASE] -- Josh alpha: relay E2E, receipts, CI tag v0.4.0-alpha.1
+  v0.4.0 [NEXT RELEASE] -- Josh alpha: relay E2E, receipts, signed APK
      |                      (E-00 done 2026-07-17; outbox Sites 2+3 done 2026-07-17)
      v
   v0.5.0 [FEATURE COMPLETE] -- PQC-14 close-out, farm drills, KMP/meeting mode depth
@@ -37,11 +40,11 @@ in-flight milestone. Long-horizon sequencing remains the two-phase DAG in
 
 ---
 
-## 2. Active System Verification Snapshot (v0.3.5 Baseline)
+## 2. Active System Verification Snapshot (baseline captured under v0.3.5; version corrected 2026-08-31, contents NOT re-verified since)
 
 | Subsystem / Layer | Current Status | Primary Architectural Entry / Contract | Verified Evidence |
 | :--- | :--- | :--- | :--- |
-| **Rust Core (`core/`)** | **v0.3.5 Verified** | `IronCore` (`core/src/iron_core.rs`) | Cargo workspace compiles cleanly (`cargo check --workspace`). 1100+ lib unit tests pass. |
+| **Rust Core (`core/`)** | **verified under v0.3.5, not re-verified since** | `IronCore` (`core/src/iron_core.rs`) | Cargo workspace compiles cleanly (`cargo check --workspace`). 1100+ lib unit tests pass. |
 | **Transport Layer** | **v0.3.5 / v0.4.0 Prep** | `SwarmBridge` (`core/src/transport/swarm.rs`) | Phase 1 parity signed off; mDNS/TCP/QUIC/WS/BLE paths landed. Re-verify bootstrap relay dial semantics (2026-07-25 handoff). |
 | **PQC & Ratchet** | **v0.5.0 / Verified** | `DoubleRatchet` & `IdentityKeys` | PQC-01..14 **COMPLETE** (2026-07-29). Hybrid suite `0x02` (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65) active. Protocol spec published (`docs/PQC_HYBRID_PROTOCOL.md`). Note: Envelope relay transit signatures (Ed25519) and Noise transport layer remain classical for network efficiency and standard libp2p compatibility. |
 | **Android Client** | **v0.3.5 Active** | `MeshRepository.kt` (`android/app/...`) | Kotlin UniFFI async bindings active. Pre-built APK installer ([install-apk.bat](../android/install-apk.bat)) verified. |

@@ -12,9 +12,15 @@ If a task is not on this page, it is not being worked on.
 
 ## 0. North star
 
-> Two people who have never met, on two phones, with no shared network,
-> exchange a message and both see a delivery receipt -- using a build a
+> Two people who have never met, on two independent devices, with no shared
+> network, exchange a message and both see a delivery receipt -- using a build a
 > stranger downloaded from the GitHub releases page.
+>
+> **Test fleet (operator ruling, restated 2026-08-31): the two endpoints are the
+> Windows CLI node and the Android handset. The always-on AWS node is the third
+> node and carries the mesh / store-and-forward relay role.** This is NOT two
+> phones. Earlier wording implied a second handset and was wrong; only the
+> Android side needs the released APK, the Windows side is the CLI.
 
 **Definition of done for v0.4.0:**
 
@@ -23,10 +29,10 @@ If a task is not on this page, it is not being worked on.
 | D1 | `main` is green | All CI lanes pass on a push to `main`, run URL recorded |
 | D2 | Signed APK is downloadable | `gh release view v0.4.0-alpha.1` lists an APK asset |
 | D3 | README explains the product and how to install | File is non-empty, links resolve |
-| D4 | Two-device message + receipt | Receiver-side decrypt + durable history + receipt, per `project_fleet_run_scoring_evidence` -- NOT transport ACKs |
+| D4 | Message + receipt between the two endpoints (Android handset <-> Windows CLI node) | Receiver-side decrypt + durable history + receipt, per `project_fleet_run_scoring_evidence` -- NOT transport ACKs |
 | D5 | No long-lived integration branch | PR #139 merged or closed; `main` is trunk |
 | D6 | Transport racing demonstrated | Message delivered when first-choice transport is unavailable, proving fallback selects a working path. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
-| D7 | Offline proximity messaging demonstrated | Two devices exchanging a message with no internet available. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
+| D7 | Offline proximity messaging demonstrated | The Android handset and the Windows node exchanging a message with no internet available. Receiver-side decrypt + durable history + receipt -- NOT transport ACKs, NOT UI counters, NOT BLE local acceptance |
 
 Anything that does not move D1-D7 is deferred. No exceptions until tag.
 
@@ -108,7 +114,7 @@ This is **native verdict checkpoint 1**, and it satisfies D1.
 
 | ID | Task | Lane | Done when |
 |---|---|---|---|
-| S2-1 | Write `README.md`. It is currently 0 bytes. Use the existing repo description as the opening line; sections: what it is, threat model in three sentences, install (Android APK, CLI), build from source, project status honesty note. | Qwen drafts, **native edits** | File is non-empty and accurate |
+| S2-1 | ~~Write `README.md`. It is currently 0 bytes.~~ **DONE / CLAIM FALSE (verified 2026-08-31: 4,309 bytes, accurate -- see 6.1 D3).** Retained for history; do not action. Use the existing repo description as the opening line; sections: what it is, threat model in three sentences, install (Android APK, CLI), build from source, project status honesty note. | Qwen drafts, **native edits** | File is non-empty and accurate |
 | S2-2 | Wire release signing (depends on S1-1) and produce a signed APK from a tagged commit with `SCM_GIT_HASH` embedded -- `816422fc` already exports it. | Operator + agy | APK installs on the Pixel 6a |
 | S2-3 | Tag `v0.4.0-alpha.1` and publish a release with the APK attached and real release notes drawn from `CHANGELOG.md`. Latest public release is v0.1.9 from March -- close that five-month gap. | Operator | D2 + D3 satisfied |
 | S2-4 | Set the repo homepage URL to the install guide. Enable Discussions as the inbound channel. | Operator | Repo metadata updated |
@@ -124,7 +130,7 @@ and confirm the download path works end to end.
 | S3-2 | Run the two-device test on the **released APK**, not a dev build. Cross-network: one on cellular, one on WiFi. | Operator + agy | Receiver decrypt + durable history + receipt |
 | S3-3 | If it fails, the failure becomes the only ticket. Do not open a workstream -- fix and re-run. | Qwen impl | Re-run passes |
 | S3-4 | Transport racing gate: message delivered when first-choice transport is unavailable, proving fallback selects a working path. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
-| S3-5 | Offline proximity gate: two devices exchange a message with no internet available. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
+| S3-5 | Offline proximity gate: the Android handset and the Windows node exchange a message with no internet available. | Operator + agy | Receiver-side decrypt + durable history + receipt (NOT transport ACKs, UI counters, or BLE local acceptance) |
 
 **S3 exit: native verdict checkpoint 3** -- score the run on receiver-side
 evidence only. Transport ACKs, UI counters, and BLE local acceptance do not
@@ -374,9 +380,25 @@ adds zero incremental cost **provided it happens before the fleet migrates.**
 | G1-3 | Set the four secrets, then dress rehearsal with no tag burned: `gh workflow run release.yml -f artifacts_only=true`. `build-android` has no tag requirement, so this is a full signed build at zero risk | Operator sets, agent runs |
 | G1-4 | Record the cert SHA-256 in the password manager and in `HANDOFF/CTO_STATE.md` (fingerprint only -- never the password). It is how a future build is proven to come from this key | Operator |
 
-**Nothing downstream of G1 can be scored.** D4/D6/D7 all require a released APK
-by this plan's own evidence standard, and no GitHub release exists for any
-v0.4.0 tag.
+**CORRECTED 2026-08-31: G1 does NOT gate the D4/D6/D7 functional work.** An
+earlier revision of this section said nothing downstream of G1 could be scored.
+That was too strong, and it parked the demo work behind a keystore for no reason.
+
+What the production keystore actually gates is **D2** (a published, downloadable,
+correctly-signed APK) and the **final** scored run on that published artifact.
+
+The functional gates can be exercised now. `android/app/build.gradle:103-113`
+takes the signing config from `SCMESSENGER_KEYSTORE_PATH/_PASSWORD/_ALIAS/_KEY_PASSWORD`
+and accepts **any** keystore, so a throwaway locally-generated key produces a
+genuine release-configured APK -- R8, minification, release manifest -- which is
+what catches the class of bug release config introduces. (`build.gradle:127`
+deliberately refuses to fall back to the *debug* key for a release task, which is
+correct and is not a blocker: supply a throwaway release key instead.)
+
+So the sequencing is: **prove D4/D6/D7 now on a release-configured build with a
+throwaway key; re-run once on the published artifact to close the gates.** The
+fleet's uninstall-and-reinstall happens once, when it moves to the real
+release-signed build -- a throwaway test key does not change that.
 
 ### G2 -- Automatic rejoin (Freebuff / DeepSeek V4 Flash)
 
@@ -398,9 +420,9 @@ Task files live in `HANDOFF/freebuff/queue/`; the lane's rules are
 | ID | Gate | Evidence standard |
 |---|---|---|
 | G3-0 | **Churn gate.** Redeploy the AWS node so it takes a new public IP, change nothing on Windows or Android, and confirm all three re-mesh unaided | Windows and Android both reach the node at its new address with zero manual re-seeding. This is the operator's stated model, tested directly |
-| G3-1 | D4: two devices, released APK, cross-network (one cellular, one WiFi) | Receiver decrypt + durable history + receipt. NOT transport ACKs, UI counters, or BLE local acceptance |
+| G3-1 | D4: Android handset (released APK) <-> Windows CLI node, cross-network -- handset on cellular, Windows on WiFi/wired | Receiver decrypt + durable history + receipt. NOT transport ACKs, UI counters, or BLE local acceptance |
 | G3-2 | D6: first-choice transport unavailable, fallback delivers | Same, plus non-zero routing confidence from T4 |
-| G3-3 | D7: two devices, no internet | Same |
+| G3-3 | D7: Android handset <-> Windows node, no internet on either | Same |
 | G3-4 | Cloud-node parity: store-and-forward custody + connection assistance. Re-run `ANDROID_RELAY_INBOUND_EVIDENCE_2026-08-10_CELLULAR.md` as the regression case | Receiver-side custody delivery scored from the swarm audit log. `/api/diagnostics.custody_audit_count` now reads live post-#236 and post-mount -- but confirm it is moving before trusting it |
 | G3-5 | Any failure becomes the single ticket. Fix, re-run. No new workstream | Re-run passes |
 
@@ -498,6 +520,16 @@ passing" is not a disposition. Opened 2026-08-31; append, do not rewrite.
 | I-14 | `scratch/driver/watcher_run.cmd` claims persistence via a `SCMessengerDriverWatcher` ONLOGON scheduled task. **That task is not registered.** Persistence is actually a Startup-folder shortcut | `Get-ScheduledTask` -> not found; `SCMessengerDriverWatcher.lnk` present in Startup | **ACCEPTED** -- the Startup shortcut works and survives reboot. The stale comment is misleading but harmless; corrected if that file is ever edited for another reason |
 | I-15 | `HANDOFF_AUDIT/REPO_MAP.jsonl` contains stale AI-generated `calls` entries that assert call sites which do not exist in source. It misled an agent into believing `routing_peer_seen` had callers | Reported by the Freebuff lane, 2026-08-31; independently consistent with the zero-caller grep | **OPEN -- ticketed T6.** An artifact that lies about the codebase is worse than no artifact, because agents trust it |
 | I-19 | A WS11 unit test was deleted on a **false rationale**: `149d3725` removed `DiagnosticsBundleFormatterTest.kt` as "orphaned (class deleted by iterations)", but `DiagnosticsBundleFormatter.kt` still exists and is consumed by `DiagnosticsScreen.kt`. Coverage of `format()` has been absent since 2026-08-14 | `find android -name DiagnosticsBundleFormatter.kt` finds it; `grep -rln` across `src/test` finds nothing | **TICKETED** -- `V040_T8_RESTORE_DIAGNOSTICS_FORMATTER_TEST.md`. Found by the Freebuff lane while doing T5; the register entry is `UNVERIFIED` until restored (PR #260) |
+| I-20 | **RESOLVED 2026-08-31** -- C: hit **100% full (51 MB free)** during the T2 build; `SCMessenger/target` alone is **41 GB** on a 237 GB disk. Build failures presented as `LNK1318` linker errors and `os error 112`, which read as toolchain faults rather than disk exhaustion | `df -h /c`; `du -sm target` -> 41128 | **ACCEPTED with a standing remedy.** `scripts/clean_target.sh --all` reclaims most of it scoped, keeping built binaries and protecting `core/target/generated-sources/`. Ruled 2026-08-31 in `HANDOFF/freebuff/inbox/RULING_2026-08-31_T2_disk_space.md`; no `rm -rf target`, ever. Executed: `clean_target.sh --all` reclaimed 36 GB; verified `target` 41 GB -> 4.2 GB, disk 51 MB -> 42 GB free (83%), generated-sources intact |
+| I-21 | **`scripts/ffi_surface.sh` passes when it checks nothing.** If `core/target/generated-sources/` is absent, `KT_FILE`/`SWIFT_FILE` are empty, both comparison blocks are skipped, and the script exits 0. "FFI Surface Contract" runs on every PR, so a clean checkout, fresh runner, or build that died before binding generation yields a green tick over an unverified surface | `ffi_surface.sh:49-58`; `scm-t1-boot-seed-dial/core/target/generated-sources` absent today, so a gate run there passes vacuously | **TICKETED** -- `V040_T10_FFI_SURFACE_GATE_PASSES_VACUOUSLY.md`. Surfaced because the Freebuff lane disclosed an unasked-for deviation |
+| I-22 | **`docs/CURRENT_STATE.md` asserted release line v0.3.5** while `Cargo.toml` reads `0.4.0` -- in the document nominally canonical for project state | `grep -m1 '^version' Cargo.toml` -> `0.4.0`; `CURRENT_STATE.md:18,26,40,44` said v0.3.5 | **FIXED 2026-08-31.** Version corrected, the "cut but not released" distinction made explicit, and the v0.3.5-era verification snapshot relabelled as not re-verified rather than silently re-dated |
+| I-23 | **`SHIP_PLAN.md` contradicted itself about the README.** S2-1 (line 111) instructed writing a README "currently 0 bytes"; 6.1/6.3 refuted it 90 lines later. A reader hitting S2-1 first acts on a false claim | `wc -c README.md` -> 4,309 | **FIXED 2026-08-31** -- struck at the source with the correction inline, retained for history. This is charter task L4-2 ("correct the false claims at their source"), which had never been done |
+| I-24 | Canonical docs are internally inconsistent as a set: `FEATURE_PARITY.md` self-labels MATRIX STALE, `REMAINING_WORK_TRACKING.md` is superseded-for-execution, and `CURRENT_STATE.md`'s section 2 snapshot predates four weeks of merges. A reader following DOCUMENTATION.md -> execution queue meets contradictions | Haiku canonical audit, 2026-08-31 | **TICKETED** -- `V040_T11_CANONICAL_DOC_RECONCILE.md`. Note `FEATURE_PARITY.md` is handled correctly already: it warns about itself in its own header, which is the right pattern for a doc that cannot be re-audited yet |
+| I-25 | **The plan blocked all demo work behind the keystore for no reason.** G1 was written as "nothing downstream can be scored", parking D4/D6/D7 behind a production signing key. The keystore gates D2 and the final published-artifact run only | `android/app/build.gradle:103-113` -- the env-driven signing path accepts any keystore, so a throwaway key yields a real release-configured APK | **FIXED 2026-08-31** -- G1 corrected; demo work can start now on a throwaway-signed release build |
+| I-26 | **The `locally_verified` primitive is seeded with values that violate its own definition.** The legacy CLI set the flag on peer-*advertised* addresses this node never dialed (`record_identified_peer` -> `record_connection` -> `cli/src/ledger.rs:449`), and #262's migration preserves it | Rule-8 review of #262; verified on `main` | **TICKETED** -- T13/F1, one-line fix. Contained today only because migrated entries land `success_count: 0` and both export paths require `> 0` -- a coincidence of a second gate, not a designed property |
+| I-27 | **The T2 spec's "hearsay is never re-published" is false for the DHT.** `swarm.rs:4524` feeds wire-received addresses into `kademlia.add_address`, and Kademlia answers other peers' queries -- an egress channel that bypasses the `locally_verified` filter entirely | Rule-8 review; verified at `swarm.rs:4518-4528` | **TICKETED** -- T13/F-DHT. Pre-existing, not introduced by #262. This was a gap in the CEO seat's specification, found because the reviewer was told not to treat the spec as authority |
+| I-28 | **#263 widens hint-collision route injection from BLE-only to the whole internet.** `peer_seen` registers `blake3(peer_id)[0..4]` as a routing hint; before #263 that path was proximity-gated, now any peer completing a handshake reaches it. ~2^32 grinding makes an attacker a Direct next-hop | Rule-8 review of #263 | **TICKETED** -- T13/F7. E2E encryption bounds this to metadata exposure and delivery denial, not plaintext |
+| I-29 | **The orchestrator-to-lane channel was broken for hours and looked healthy.** Rulings, the Rule-8 verdict and four queue tickets were committed to an unmerged branch; the lane reads `HANDOFF/freebuff/` as it exists on `main`, which had 3 of 13 inbox files. The lane sat idle waiting for a verdict that already existed | `git ls-tree origin/main --name-only HANDOFF/freebuff/inbox/` -> 3 files; same listing on the working branch -> 13 | **FIXED 2026-08-31** -- rule added to `docs/rules/FREEBUFF.md`: anything the lane must act on gets merged to `main`, and verify with that `ls-tree` before claiming it is unblocked. The asymmetry is what hid it: the lane's writes land in the shared checkout and arrived normally, so replies kept coming and the channel looked fine |
 | I-16 | 27 open PRs; 212 remote refs, 18 provably merged | `gh pr list`; `git ls-remote` | **PLANNED** -- SHIP_PLAN G5 |
 | I-17 | `SCMESSENGER_KEY_ALIAS` does not match the keystore; `ANDROID_RELEASE_SIGNING.md` documented `-storetype JKS` while modern keytool writes PKCS12, which matches aliases case-sensitively | Release run `32817839477` failed at `packageRelease` | **DOC FIXED + PLANNED** -- PR #259 corrects the guidance and adds `scripts/verify_release_keystore.sh`; regeneration is G1, operator-only |
 | I-18 | No Android APK has ever been published, so no signing lineage exists -- the keystore can be regenerated for free, but only until the first release | `gh release view` on all four public releases: CLI binaries only | **PLANNED** -- G1. This is a deadline, not a defect |

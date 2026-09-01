@@ -58,6 +58,31 @@ not spending operator paste cycles implementing fixes to problems that do not
 exist -- so "this function has three callers, not zero" is a success, not a
 failure.
 
+### The outbound path only works if it reaches `main`
+
+**A ruling on an unmerged branch has not been delivered.** The lane works from
+`main`-based worktrees, so it sees `HANDOFF/freebuff/` as it exists on `main` --
+not the orchestrator's working tree, and not an open PR.
+
+This failed silently on 2026-08-31. Thirteen inbox files existed on the
+orchestrator's branch; `main` had three. The lane sat idle waiting for a Rule-8
+verdict that had already been written, approved, and committed -- to a branch it
+could not see. The return path worked the whole time (the lane writes into the
+shared checkout, so its messages arrived), which made the break asymmetric and
+hard to notice: replies kept coming, so the channel looked healthy.
+
+Rules that follow:
+
+1. **Merge anything the lane must act on.** A ruling, a green light, a verdict,
+   a new queue ticket -- if the lane needs it, it goes to `main`, not a PR that
+   sits open for hours. Batch them, but land them.
+2. **When you tell the lane something is unblocked, verify it can see the
+   evidence:** `git ls-tree origin/main --name-only HANDOFF/freebuff/inbox/`.
+   If the file is not in that listing, the lane does not have it.
+3. **Silence from the lane is a symptom to investigate, not idleness.** "It
+   stopped and said it got nothing from you" was the operator noticing this
+   before the orchestrator did.
+
 Do not add a task to `queue/` without also adding its row to
 `HANDOFF/freebuff/README.md`. An unindexed task file is invisible.
 
