@@ -627,6 +627,12 @@ impl ConnectionLedger {
         }
     }
 
+    // Review triage (qwen3.8-max-0902, finding 4): this bar is intentionally
+    // STRICTER than the DHT disclosure gate (`failure_count <
+    // LEDGER_DEAD_FAILURE_THRESHOLD`). The dial scheduler conservatively
+    // avoids peers with ANY recorded failure; the gate's < 3 expresses
+    // publishability-until-dead, a different decision. Documented, not
+    // aligned -- widening the dial set to include flaky peers has no benefit.
     fn is_known_good_key(&self, key: &DialKey) -> bool {
         match key {
             DialKey::Peer(pid) => self

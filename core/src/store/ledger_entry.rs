@@ -2039,8 +2039,16 @@ impl LedgerManager {
                         if let Some(pid) = shared.last_peer_id.as_deref() {
                             if !entry.locally_verified {
                                 entry.peer_id.get_or_insert_with(|| pid.to_string());
-                                record_observed_peer_id_locked(entry, pid);
                             }
+                            // Review triage (qwen3.8-max-0902, finding 3),
+                            // uniform with record_identified_peer: the
+                            // wire-merge path also records the observed pid on
+                            // verified entries -- it is the P0 stale-identity
+                            // signal (an address that served `a` is now claimed
+                            // by `b`), it is never consulted by the F-DHT
+                            // predicate, and it never touches the verified
+                            // entry's current-binding slot (dial-proven only).
+                            record_observed_peer_id_locked(entry, pid);
                         }
                         if entry.last_seen.map(|ls| ls / 1000).unwrap_or(0) < shared.last_seen {
                             // V040-T13 F2: wire `last_seen` is attacker-chosen;
@@ -2091,6 +2099,14 @@ impl LedgerManager {
 
     /// Mark an operator-configured bootstrap address: locally verified,
     /// never evicted, labelled.
+    ///
+    /// Review triage (qwen3.8-max-0902, finding 2): an entry added without a
+    /// peer_id binding (and with success_count 0) can never satisfy
+    /// `is_locally_verified_pair` until a completed dial fills the binding
+    /// via `record_connection`. That is INTENTIONAL and is the doctrine: a
+    /// bootstrap address is operator hearsay, not a proven (address,
+    /// identity) pair, so it must not be DHT-published until our store has
+    /// proved it. The entry remains fully usable for seeding/dialing.
     pub fn add_bootstrap(&self, multiaddr: &str, label: Option<&str>) {
         let stripped = strip_peer_id_component(multiaddr);
         if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
@@ -2375,7 +2391,15 @@ impl LedgerManager {
             return false;
         };
         let canonical = canonical_ledger_peer_id(peer_id, None);
-        bound == peer_id || canonical.as_deref() == Some(bound)
+        // Review triage (qwen3.8-max-0902, V040-T13): the raw arm
+        // (`bound == peer_id`) was dead for the live caller (libp2p
+        // PeerId.to_string() is base58; the stored bound is canonical
+        // lowercase hex) and fragile for any other caller form. Compare
+        // case-insensitively instead: case cannot change identity, so this
+        // can never admit a pair our store did not prove. The canonical arm
+        // covers base58 and mixed-case hex via canonical_ledger_peer_id;
+        // both arms fail closed on garbage (canonical -> None).
+        bound.eq_ignore_ascii_case(peer_id.trim()) || canonical.as_deref() == Some(bound)
     }
 
     /// Number of stored entries that carry at least one known gossipsub topic.
@@ -5125,5 +5149,91 @@ mod tests {
         );
         mgr.record_connection("/ip4/198.51.100.70/tcp/9001".to_string(), p.clone());
         assert!(mgr.find_by_peer_id(&p).expect("entry").locally_verified);
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 1): the pair predicate must
+    /// accept the stored hex binding in ANY case (case cannot change
+    /// identity) and must keep failing closed on a wrong or garbage pid.
+    #[test]
+    fn pair_gate_matches_mixed_case_hex_and_rejects_others() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.71/tcp/9001".to_string();
+        // Ed25519-derived pid: record_connection's live canonicalization
+        // stores the bound as lowercase hex (PeerId::random() is not
+        // Ed25519-derived, so canonical_ledger_peer_id would return None).
+        let (p, _key_hex) = self_certifying_pair();
+        let bound_hex = canonical_ledger_peer_id(&p, None).expect("base58 -> hex");
+        assert_eq!(bound_hex, bound_hex.to_lowercase());
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        // Same identity, any presentation: base58 (the live caller form) and
+        // the stored hex in UPPERCASE both match.
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "base58 caller form must match"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex.to_uppercase()),
+            "uppercase hex caller form must match (case-insensitive arm)"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex),
+            "lowercase hex caller form must match"
+        );
+
+        // Wrong identity and garbage fail closed.
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &peer()),
+            "different pid must not match"
+        );
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, "not-a-peer-id"),
+            "garbage pid must fail closed"
+        );
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 3): the wire-merge path must
+    /// record the heard pid in observed_peer_ids even on a locally_verified
+    /// entry (stale-identity signal), while the current binding and the
+    /// verified flag stay untouched.
+    #[test]
+    fn wire_merge_records_observed_pid_on_verified_entry() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.72/tcp/9001".to_string();
+        let proven = peer();
+        let heard = peer();
+        mgr.record_connection(addr.clone(), proven.clone());
+        let before = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(before.locally_verified);
+        assert_eq!(before.peer_id.as_deref(), Some(proven.as_str()));
+
+        // Update branch (entry exists): merge returns the added-count, which
+        // is 0 for an update -- the observable state is what we assert on.
+        let _merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(heard.clone()),
+            last_seen: current_timestamp() / 1000,
+            known_topics: Vec::new(),
+        }]);
+
+        let after = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(
+            after.locally_verified,
+            "verified flag must survive the merge"
+        );
+        assert_eq!(
+            after.peer_id.as_deref(),
+            Some(proven.as_str()),
+            "current binding must stay dial-proven, never overwritten by wire"
+        );
+        assert!(
+            after.observed_peer_ids.iter().any(|id| id == &heard),
+            "heard pid must land in observed_peer_ids on a verified entry"
+        );
     }
 }
