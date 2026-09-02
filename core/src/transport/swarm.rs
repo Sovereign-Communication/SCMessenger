@@ -4057,6 +4057,11 @@ pub async fn start_swarm_with_config(
                                                 // The observer already refuses such
                                                 // observations; this guard holds even if a
                                                 // future path builds an un-filtered observer.
+                                                // Empty listen set (no dialable listener
+                                                // bound) means there is nothing to advertise
+                                                // -- refuse, never accept-any: any observed
+                                                // port outside our listen set is the
+                                                // ephemeral-source-port class this P0 removes.
                                                 let listen_ports =
                                                     listen_ports_from_multiaddrs(&bound_addresses);
                                                 if listen_ports.contains(&primary.port()) {
@@ -5180,7 +5185,12 @@ pub async fn start_swarm_with_config(
                                         // V040-T14 P0 (defense-in-depth on the
                                         // publication path): never advertise an address
                                         // whose port we do not listen on (the observer
-                                        // already refuses such observations).
+                                        // already refuses such observations). Empty
+                                        // listen set (no dialable listener bound)
+                                        // means there is nothing to advertise --
+                                        // refuse, never accept-any: any observed port
+                                        // outside our listen set is the
+                                        // ephemeral-source-port class this P0 removes.
                                         let listen_ports =
                                             listen_ports_from_multiaddrs(&bound_addresses);
                                         if listen_ports.contains(&primary.port()) {
@@ -7964,6 +7974,11 @@ pub async fn start_swarm_with_config(
                                 if let Some(observed_addr) =
                                     ConnectionTracker::extract_socket_addr(&info.observed_addr)
                                 {
+                                    // WASM: diagnostics-only observation recording.
+                                    // No external-address promotion exists in the
+                                    // wasm event loop (browser cannot listen; the
+                                    // native promotion sites are cfg'd to non-wasm).
+                                    // Residual-2 in PR #270 documents this parity.
                                     address_observer.record_observation(peer_id, observed_addr);
                                 }
 
