@@ -2391,15 +2391,22 @@ impl LedgerManager {
             return false;
         };
         let canonical = canonical_ledger_peer_id(peer_id, None);
-        // Review triage (qwen3.8-max-0902, V040-T13): the raw arm
-        // (`bound == peer_id`) was dead for the live caller (libp2p
-        // PeerId.to_string() is base58; the stored bound is canonical
-        // lowercase hex) and fragile for any other caller form. Compare
-        // case-insensitively instead: case cannot change identity, so this
-        // can never admit a pair our store did not prove. The canonical arm
-        // covers base58 and mixed-case hex via canonical_ledger_peer_id;
-        // both arms fail closed on garbage (canonical -> None).
-        bound.eq_ignore_ascii_case(peer_id.trim()) || canonical.as_deref() == Some(bound)
+        // Review triage (qwen3.8-max-0902, V040-T13) + hostile re-review
+        // (2026-09-01): the raw arm is LOAD-BEARING for stored bounds that
+        // canonical_ledger_peer_id cannot convert (non-Ed25519 pids are
+        // stored as base58 and the canonical arm returns None for them).
+        // Case-insensitivity is safe ONLY for hex: hex digits are a
+        // case-insensitive spelling of the same bytes, so a case-variant of
+        // a 64-hex bound is the same identity and can never admit an
+        // unproven pair. Base58 is a case-SENSITIVE encoding: a hand-crafted
+        // case-variant decodes to different bytes, so the exact arm must
+        // stay exact for non-hex bounds (the live caller passes canonical
+        // PeerId::to_string(), which is base58 in canonical case). The
+        // canonical arm covers key-derived base58 and mixed-case hex; all
+        // arms fail closed on garbage (canonical -> None).
+        let trimmed = peer_id.trim();
+        let hex_casefold = trimmed.len() == 64 && trimmed.eq_ignore_ascii_case(bound);
+        trimmed == bound || hex_casefold || canonical.as_deref() == Some(bound)
     }
 
     /// Number of stored entries that carry at least one known gossipsub topic.
@@ -5194,6 +5201,50 @@ mod tests {
         assert!(
             !mgr.is_locally_verified_pair(&addr, "not-a-peer-id"),
             "garbage pid must fail closed"
+        );
+    }
+
+    /// Hostile re-review (2026-09-01): a stored BASE58 bound (a pid the
+    /// canonicalizer cannot convert to hex, e.g. non-Ed25519) must match its
+    /// canonical base58 string exactly -- base58 is case-sensitive, so a
+    /// hand-crafted case-variant decodes to a DIFFERENT peer id and must
+    /// fail closed even though it case-folds to the bound.
+    #[test]
+    fn pair_gate_rejects_base58_case_variants() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.73/tcp/9001".to_string();
+        let p = peer(); // PeerId::random() is not Ed25519-derived
+        assert!(
+            canonical_ledger_peer_id(&p, None).is_none(),
+            "fixture must be un-canonicalizable so the bound stays base58"
+        );
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "canonical base58 must match the stored bound exactly"
+        ); // Flip one letter's case: same string modulo case, different bytes
+           // when read as base58. Must fail closed.
+        let mut mangled = p.clone();
+        let flip = mangled
+            .find(|c: char| c.is_ascii_alphabetic())
+            .expect("base58 pid has letters");
+        let ch = mangled[flip..flip + 1].chars().next().expect("char");
+        let toggled = if ch.is_ascii_lowercase() {
+            ch.to_ascii_uppercase()
+        } else {
+            ch.to_ascii_lowercase()
+        };
+        mangled.replace_range(flip..flip + 1, &toggled.to_string());
+        assert_ne!(mangled, p, "fixture must actually differ");
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &mangled),
+            "base58 case-variant must fail closed"
         );
     }
 
