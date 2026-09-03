@@ -558,6 +558,98 @@ fn resolve_dial_target(
     Ok(explicit_peer_id.or(embedded_peer_id))
 }
 
+/// Extract the first IP:TCP-port pair from a multiaddr, if any.
+fn addr_ip_tcp_port(addr: &Multiaddr) -> Option<(std::net::IpAddr, u16)> {
+    let mut ip = None;
+    let mut port = None;
+    for p in addr.iter() {
+        match p {
+            libp2p::multiaddr::Protocol::Ip4(a) => ip = Some(std::net::IpAddr::V4(a)),
+            libp2p::multiaddr::Protocol::Ip6(a) => ip = Some(std::net::IpAddr::V6(a)),
+            libp2p::multiaddr::Protocol::Tcp(a) => port = Some(a),
+            _ => {}
+        }
+    }
+    ip.zip(port)
+}
+
+/// Pure self-address predicate: would a socket dial of `addr` land on one of
+/// the addresses in `own` (our listeners / external addresses)?
+///
+/// Rules (all require the TCP port to match one of ours):
+/// - loopback IP + our port: we bound that port, so loopback reaches us;
+/// - concrete own IP (listener or confirmed external) + our port: us;
+/// - an UNSPECIFIED own listener (0.0.0.0/::) does NOT name the peer's IP,
+///   so it never matches on its own (a remote host on the same port is
+///   remote; only loopback or a named own IP is self).
+fn addr_targets_self(addr: &Multiaddr, own: &[Multiaddr]) -> bool {
+    let Some((ip, port)) = addr_ip_tcp_port(addr) else {
+        return false;
+    };
+    for o in own {
+        let Some((own_ip, own_port)) = addr_ip_tcp_port(o) else {
+            continue;
+        };
+        if own_port != port {
+            continue;
+        }
+        if ip.is_loopback() {
+            return true;
+        }
+        if !own_ip.is_unspecified() && own_ip == ip {
+            return true;
+        }
+    }
+    false
+}
+
+/// SINGLE OWNER of the "should we even attempt this dial?" decision at the
+/// dispatch site (used by both the native and wasm `SwarmCommand::Dial` arms,
+/// through which every CLI/seed/scheduler dial funnels).
+///
+/// Returns a skip reason when the dial is pointless or self-inflicted:
+/// 1. The target is ourselves.
+/// 2. The target peer already has a live connection -- respond over the
+///    existing link instead of dialing (the user-visible half of the
+///    5-minute cycle: periodic re-dials of a connected peer).
+/// 3. The address resolves to one of OUR OWN listeners / loopback / external
+///    addresses (the other half of the cycle: poisoned ledger entries from
+///    the pre-#267 mDNS/DCUtR misattribution era attribute our own addresses
+///    to other peers, so the CLI's periodic re-dial loop dials OURSELVES;
+///    the connection opens, negotiation fails with "Unexpected peer ID" /
+///    "Local peer ID", and the socket aborts -- the yamux 10053 closes seen
+///    every 300s in 3-node validation, 2026-09-03).
+///
+/// `trusted` dials (the Wi-Fi Aware loopback proxy) are exempt from rule 3:
+/// the caller deliberately dials OUR OWN loopback proxy, so the address check
+/// would block a legitimate path.
+fn dial_skip_reason(
+    swarm: &libp2p::swarm::Swarm<IronCoreBehaviour>,
+    addr: &Multiaddr,
+    target_peer_id: Option<PeerId>,
+    trusted: bool,
+) -> Option<&'static str> {
+    if let Some(pid) = target_peer_id {
+        if pid == *swarm.local_peer_id() {
+            return Some("target is self (local peer id)");
+        }
+        if swarm.is_connected(&pid) {
+            return Some("peer already connected -- respond over existing link");
+        }
+    }
+    if !trusted {
+        let own: Vec<Multiaddr> = swarm
+            .listeners()
+            .cloned()
+            .chain(swarm.external_addresses().cloned())
+            .collect();
+        if addr_targets_self(addr, &own) {
+            return Some("address is our own listener/external addr -- self-dial");
+        }
+    }
+    None
+}
+
 /// Direct port-ladder synthesis is only valid before a relay circuit marker.
 /// Once `/p2p-circuit` is present, appending another transport component after
 /// it produces an invalid multiaddr (`.../p2p-circuit/tcp/...`) and libp2p
@@ -6369,6 +6461,23 @@ pub async fn start_swarm_with_config(
                                         continue;
                                     }
                                 };
+                                if let Some(reason) =
+                                    dial_skip_reason(&swarm, &addr, target_peer_id, trusted)
+                                {
+                                    tracing::info!(
+                                        "[DIAL-SKIP] {}: {} (target {:?})",
+                                        addr,
+                                        reason,
+                                        target_peer_id
+                                    );
+                                    // A skipped dial is not a failure: the peer is
+                                    // connected (nothing to do) or the address is
+                                    // ours (never a valid target). Reply Ok so the
+                                    // caller's ledger state does not burn backoff on
+                                    // a dial we deliberately did not dispatch.
+                                    let _ = reply.send(Ok(())).await;
+                                    continue;
+                                }
                                 let mut base_prefix = Multiaddr::empty();
                                 let mut found_ip = false;
 
@@ -7261,8 +7370,20 @@ pub async fn start_swarm_with_config(
                                     let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
                                     continue;
                                 }
-                                let dial_result = match resolve_dial_target(&addr, requested_peer_id) {
-                                    Ok(Some(target_peer_id)) => {
+                                let resolved_target = match resolve_dial_target(&addr, requested_peer_id) {
+                                    Ok(t) => t,
+                                    Err(error) => {
+                                        let _ = reply.send(Err(error)).await;
+                                        continue;
+                                    }
+                                };
+                                if let Some(reason) = dial_skip_reason(&swarm, &addr, resolved_target, trusted) {
+                                    tracing::info!("[DIAL-SKIP] (wasm) {}: {}", addr, reason);
+                                    let _ = reply.send(Ok(())).await;
+                                    continue;
+                                }
+                                let dial_result = match resolved_target {
+                                    Some(target_peer_id) => {
                                         let dial_opts = libp2p::swarm::dial_opts::DialOpts::peer_id(target_peer_id)
                                             .addresses(vec![addr])
                                             .condition(
@@ -7271,11 +7392,7 @@ pub async fn start_swarm_with_config(
                                             .build();
                                         swarm.dial(dial_opts)
                                     }
-                                    Ok(None) => swarm.dial(addr),
-                                    Err(error) => {
-                                        let _ = reply.send(Err(error)).await;
-                                        continue;
-                                    }
+                                    None => swarm.dial(addr),
                                 };
                                 match dial_result {
                                     Ok(_) => { let _ = reply.send(Ok(())).await; }
@@ -8455,9 +8572,10 @@ use libp2p::{gossipsub, request_response};
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mdns_dial_addr, build_routable_relay_addrs, endpoint_transport_string,
-        extract_ed25519_public_key_from_peer_id, is_ledger_exchange_path_failure, peer_is_blocked,
-        rearm_ledger_exchange_after_failure, resolve_dial_target, select_drift_fallback_carrier,
+        addr_targets_self, build_mdns_dial_addr, build_routable_relay_addrs,
+        endpoint_transport_string, extract_ed25519_public_key_from_peer_id,
+        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
+        resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         validate_delivery_convergence_marker_shape, verify_registration_message,
         wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
@@ -8470,6 +8588,69 @@ mod tests {
     use libp2p::{Multiaddr, PeerId};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+
+    #[test]
+    fn addr_targets_self_detects_own_listeners_and_loopback_only() {
+        // The self-dial storm (3-node validation 2026-09-03): poisoned ledger
+        // entries attribute OUR OWN listeners to other peers, so the periodic
+        // re-dial loop dialed ourselves every ~300s (yamux 10053 closes +
+        // "Unexpected peer ID" negotiation failures). The predicate must catch
+        // loopback + our port and concrete own IPs, while NOT blocking a
+        // remote host that happens to use one of our ports.
+        let own: Vec<Multiaddr> = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse().unwrap(), // unspecified bind
+            "/ip4/172.31.31.151/tcp/9002/ws".parse().unwrap(), // concrete listener
+            "/ip4/54.235.20.24/tcp/9001".parse().unwrap(), // confirmed external
+        ];
+
+        // Loopback + our port: us (the observed Windows storm).
+        assert!(addr_targets_self(
+            &"/ip4/127.0.0.1/tcp/9001".parse().unwrap(),
+            &own
+        ));
+        // IPv6 loopback + our port: us (the observed AWS storm).
+        assert!(addr_targets_self(
+            &"/ip6/::1/tcp/9001".parse().unwrap(),
+            &own
+        ));
+        // Concrete own IP + our port: us.
+        assert!(addr_targets_self(
+            &"/ip4/172.31.31.151/tcp/9002".parse().unwrap(),
+            &own
+        ));
+        assert!(addr_targets_self(
+            &"/ip4/54.235.20.24/tcp/9001/p2p/12D3KooW9uRMQTswPUjUn2YfTLx5sjH26v2AtjRfgiE73WLprBfD"
+                .parse()
+                .unwrap(),
+            &own
+        ));
+        // Loopback with a port we do NOT listen on: NOT us (legitimate local
+        // service dial, e.g. the Wi-Fi Aware proxy path is trusted and exempt,
+        // but other local listeners must stay reachable).
+        assert!(!addr_targets_self(
+            &"/ip4/127.0.0.1/tcp/12345".parse().unwrap(),
+            &own
+        ));
+        // Remote host using one of our ports: NOT us (the unspecified
+        // 0.0.0.0 listener does not name the remote IP).
+        assert!(!addr_targets_self(
+            &"/ip4/203.0.113.7/tcp/9001".parse().unwrap(),
+            &own
+        ));
+        // A DNS address cannot be resolved statically: never self.
+        assert!(!addr_targets_self(
+            &"/dns4/example.com/tcp/9001".parse().unwrap(),
+            &own
+        ));
+        // Circuit address whose relay HOP is our own listener: us (a node
+        // never needs to relay through itself).
+        assert!(addr_targets_self(
+            &"/ip4/172.31.31.151/tcp/9002/p2p/12D3KooW9uRMQTswPUjUn2YfTLx5sjH26v2AtjRfgiE73WLprBfD/p2p-circuit/p2p/12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw"
+                .parse()
+                .unwrap(),
+            &own
+        ));
+    }
 
     #[test]
     fn endpoint_transport_string_classifies_endpoint_multiaddrs() {
