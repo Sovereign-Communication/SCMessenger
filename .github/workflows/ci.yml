@@ -113,7 +113,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "git-sha: $sha", "cli-version: $ver" | Set-Content .\target\release\cli-provenance.txt
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-cli-${{ github.sha }}
           path: |
