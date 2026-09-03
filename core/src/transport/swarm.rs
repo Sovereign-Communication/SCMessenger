@@ -649,6 +649,50 @@ fn addr_targets_self(
 /// `trusted` dials (the Wi-Fi Aware loopback proxy) are exempt from rule 3:
 /// the caller deliberately dials OUR OWN loopback proxy, so the address check
 /// would block a legitimate path.
+/// Would a socket dial of `addr` land on one of OUR OWN sockets? Shared by
+/// the `SwarmCommand::Dial` guard and the seed-dial candidate loop.
+///
+/// Own sockets are: concrete listeners + confirmed external addresses (minus
+/// /p2p-circuit forms -- a circuit address names the RELAY's socket, not one
+/// we own -- review F1); the machine's interface IPs on our LISTENER ports
+/// (covers the unspecified 0.0.0.0/:: bind, review F2); and loopback on our
+/// listener ports. Listen ports come from ACTUAL listeners only: an external
+/// address's port may not be locally bound, so pairing it with a local
+/// interface IP would falsely classify another local service on that port as
+/// self (review C5). The concrete own-address match below still lets a
+/// confirmed external (ip, port) pair count as self.
+fn addr_is_our_socket(swarm: &libp2p::swarm::Swarm<IronCoreBehaviour>, addr: &Multiaddr) -> bool {
+    let own: Vec<Multiaddr> = swarm
+        .listeners()
+        .cloned()
+        .chain(swarm.external_addresses().cloned())
+        .filter(|a| {
+            !a.iter()
+                .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+        })
+        .collect();
+    let listen_ports: Vec<u16> = swarm
+        .listeners()
+        .filter_map(addr_ip_port)
+        .map(|(_, port)| port)
+        .collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let local_ips: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
+        .map(|ifaces| {
+            ifaces
+                .into_iter()
+                .map(|iface| iface.ip())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // Browser nodes cannot open listeners, so no interface enumeration
+    // exists there; the own-listeners/external checks above are moot too
+    // (empty sets), and the only live guards are the peer-id ones.
+    #[cfg(target_arch = "wasm32")]
+    let local_ips: Vec<std::net::IpAddr> = Vec::new();
+    addr_targets_self(addr, &own, &local_ips, &listen_ports)
+}
+
 fn dial_skip_reason(
     swarm: &libp2p::swarm::Swarm<IronCoreBehaviour>,
     addr: &Multiaddr,
@@ -663,43 +707,8 @@ fn dial_skip_reason(
             return Some("peer already connected -- respond over existing link");
         }
     }
-    if !trusted {
-        // Own sockets: concrete listeners + confirmed external addresses, minus
-        // /p2p-circuit forms (a circuit address names the RELAY's socket, not
-        // one we own -- review finding F1). An unspecified 0.0.0.0/:: bind does
-        // not name the interface, so the machine's interface IPs are combined
-        // with our listen ports to cover that case (review finding F2).
-        let own: Vec<Multiaddr> = swarm
-            .listeners()
-            .cloned()
-            .chain(swarm.external_addresses().cloned())
-            .filter(|a| {
-                !a.iter()
-                    .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
-            })
-            .collect();
-        let listen_ports: Vec<u16> = own
-            .iter()
-            .filter_map(addr_ip_port)
-            .map(|(_, port)| port)
-            .collect();
-        #[cfg(not(target_arch = "wasm32"))]
-        let local_ips: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
-            .map(|ifaces| {
-                ifaces
-                    .into_iter()
-                    .map(|iface| iface.ip())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        // Browser nodes cannot open listeners, so no interface enumeration
-        // exists there; the own-listeners/external checks above are moot too
-        // (empty sets), and the only live guards are the peer-id ones.
-        #[cfg(target_arch = "wasm32")]
-        let local_ips: Vec<std::net::IpAddr> = Vec::new();
-        if addr_targets_self(addr, &own, &local_ips, &listen_ports) {
-            return Some("address is our own listener/external/interface addr -- self-dial");
-        }
+    if !trusted && addr_is_our_socket(swarm, addr) {
+        return Some("address is our own listener/external/interface addr -- self-dial");
     }
     None
 }
@@ -7056,6 +7065,19 @@ pub async fn start_swarm_with_config(
                                     if connected_addrs.contains(candidate) {
                                         tracing::debug!(
                                             "[DIAL-SKIP] seed candidate {}: peer already connected -- respond over existing link",
+                                            candidate
+                                        );
+                                        continue;
+                                    }
+                                    // Same self-address guard as the Dial arm:
+                                    // candidate-level filtering rejects OUR
+                                    // listeners/external addrs, but poisoned
+                                    // entries naming an interface IP on one of
+                                    // our listen ports (unspecified-bind case)
+                                    // need the full socket check (review C2).
+                                    if addr_is_our_socket(&swarm, candidate) {
+                                        tracing::debug!(
+                                            "[DIAL-SKIP] seed candidate {}: address is our own socket -- self-dial",
                                             candidate
                                         );
                                         continue;
