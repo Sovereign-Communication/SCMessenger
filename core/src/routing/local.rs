@@ -340,10 +340,13 @@ impl LocalCell {
             return;
         }
 
-        let peer_to_evict = *self
-            .peers
-            .values()
-            .min_by(|a, b| a.reliability_score.total_cmp(&b.reliability_score))
+        // Same ordering as sort_by_reliability: lowest score first, peer-id
+        // tie-break, so equal-score eviction is deterministic, not
+        // HashMap-iteration-order dependent.
+        let mut ranked: Vec<&PeerInfo> = self.peers.values().collect();
+        Self::sort_by_reliability(&mut ranked);
+        let peer_to_evict = *ranked
+            .last()
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 

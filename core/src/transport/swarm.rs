@@ -432,15 +432,43 @@ fn infer_seed_network_mode(my_addrs: &[String]) -> crate::transport::addr_filter
 /// direct path so failover can prefer the direct ladder. Websockets ride TCP.
 fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
     use libp2p::multiaddr::Protocol;
+    // Scan the WHOLE address for a circuit hop before classifying: a circuit
+    // riding a websocket or QUIC path (e.g. /tcp/4001/ws/.../p2p-circuit)
+    // must be reported as relay, not as its underlying transport -- the
+    // engine needs the direct-vs-helper distinction for failover.
+    let mut quic = false;
+    let mut ws = false;
     for proto in remote_addr.iter() {
         match proto {
             Protocol::P2pCircuit => return "relay",
-            Protocol::Quic | Protocol::QuicV1 => return "quic",
-            Protocol::Ws(_) | Protocol::Wss(_) => return "ws",
+            Protocol::Quic | Protocol::QuicV1 => quic = true,
+            Protocol::Ws(_) | Protocol::Wss(_) => ws = true,
             _ => {}
         }
     }
-    "tcp"
+    if quic {
+        "quic"
+    } else if ws {
+        "ws"
+    } else {
+        "tcp"
+    }
+}
+
+/// The listen-port allowlist admits only TCP-based listeners. A websocket
+/// rides TCP underneath and a p2p-circuit path resolves to its TCP hop, so
+/// those multiaddrs are fine; UDP/QUIC sockets are structurally excluded
+/// because observations carry no transport and promotion always reconstructs
+/// /tcp/ -- admitting a UDP port could otherwise advertise a TCP endpoint for
+/// a listener that never speaks TCP.
+fn listen_port_from_bound_addr(addr: &Multiaddr) -> Option<u16> {
+    use libp2p::multiaddr::Protocol;
+    for proto in addr.iter() {
+        if matches!(proto, Protocol::Udp(_) | Protocol::Quic | Protocol::QuicV1) {
+            return None;
+        }
+    }
+    ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5310,9 +5338,9 @@ pub async fn start_swarm_with_config(
                                 tracing::info!("Listening on {}", address);
                                 bound_addresses.push(address.clone());
                                 address_observer.set_listen_ports(
-                                    bound_addresses.iter().filter_map(|addr| {
-                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
-                                    }),
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
                                 );
                                 let _ = event_tx.send(SwarmEvent2::ListeningOn(address)).await;
                             }
@@ -5969,9 +5997,9 @@ pub async fn start_swarm_with_config(
                                 tracing::info!("Listen address expired: {}", address);
                                 bound_addresses.retain(|bound| bound != &address);
                                 address_observer.set_listen_ports(
-                                    bound_addresses.iter().filter_map(|addr| {
-                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
-                                    }),
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
                                 );
                                 sync_external_address(&mut swarm, &address_observer);
                             }
@@ -5985,9 +6013,9 @@ pub async fn start_swarm_with_config(
                                 );
                                 bound_addresses.retain(|bound| !addresses.contains(bound));
                                 address_observer.set_listen_ports(
-                                    bound_addresses.iter().filter_map(|addr| {
-                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
-                                    }),
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
                                 );
                                 sync_external_address(&mut swarm, &address_observer);
                                 if reason.is_err() {
@@ -8250,9 +8278,9 @@ pub async fn start_swarm_with_config(
                                 );
                                 bound_addresses.retain(|bound| !addresses.contains(bound));
                                 address_observer.set_listen_ports(
-                                    bound_addresses.iter().filter_map(|addr| {
-                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
-                                    }),
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
                                 );
                                 if reason.is_err() {
                                     let _ = event_tx.send(SwarmEvent2::ListenerFailed {
@@ -8364,9 +8392,9 @@ use libp2p::{gossipsub, request_response};
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mdns_dial_addr, build_routable_relay_addrs, extract_ed25519_public_key_from_peer_id,
-        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
-        resolve_dial_target, select_drift_fallback_carrier,
+        build_mdns_dial_addr, build_routable_relay_addrs, endpoint_transport_string,
+        extract_ed25519_public_key_from_peer_id, is_ledger_exchange_path_failure, peer_is_blocked,
+        rearm_ledger_exchange_after_failure, resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         validate_delivery_convergence_marker_shape, verify_registration_message,
         wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
@@ -8379,6 +8407,38 @@ mod tests {
     use libp2p::{Multiaddr, PeerId};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+
+    #[test]
+    fn endpoint_transport_string_classifies_endpoint_multiaddrs() {
+        // Direct TCP rides TCP; a websocket also rides TCP (same enum tier);
+        // a relayed circuit must NOT be reported as a plain TCP path -- the
+        // routing engine needs the direct-vs-helper distinction for failover.
+        let tcp: Multiaddr = "/ip4/1.2.3.4/tcp/9001".parse().unwrap();
+        let quic: Multiaddr = "/ip4/1.2.3.4/udp/4001/quic-v1".parse().unwrap();
+        let ws: Multiaddr = "/ip4/1.2.3.4/tcp/9001/ws".parse().unwrap();
+        let wss: Multiaddr = "/dns4/example.com/tcp/443/wss".parse().unwrap();
+        let circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
+            .parse()
+            .unwrap();
+        let ws_circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/ws/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
+            .parse()
+            .unwrap();
+
+        assert_eq!(endpoint_transport_string(&tcp), "tcp");
+        assert_eq!(endpoint_transport_string(&quic), "quic");
+        assert_eq!(endpoint_transport_string(&ws), "ws");
+        assert_eq!(endpoint_transport_string(&wss), "ws");
+        assert_eq!(endpoint_transport_string(&circuit), "relay");
+        assert_eq!(
+            endpoint_transport_string(&ws_circuit),
+            "relay",
+            "a circuit riding a websocket must still be a relay, not ws"
+        );
+        assert_ne!(
+            endpoint_transport_string(&tcp),
+            endpoint_transport_string(&circuit)
+        );
+    }
 
     #[test]
     fn ledger_exchange_failure_rearms_only_the_current_request() {

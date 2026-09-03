@@ -4097,6 +4097,7 @@ impl IronCore {
             "wifi_aware" => TransportType::WiFiAware,
             "tcp" => TransportType::TCP,
             "quic" => TransportType::QUIC,
+            "circuit" | "relay" | "p2p_circuit" => TransportType::Circuit,
             _ => return false,
         };
         let guard = self.routing_engine.read();
@@ -5036,6 +5037,55 @@ mod tests {
             .get_peer(&peer)
             .unwrap();
         assert_eq!(stored.reachable_hints, vec![hint]);
+    }
+
+    #[test]
+    fn routing_peer_seen_raises_confidence_after_connection_established() {
+        // D6 acceptance 1: routing confidence for a peer is zero before any
+        // sighting and non-zero after the swarm's ConnectionEstablished feed
+        // (routed through this exact IronCore entry point).
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [42u8; 32];
+        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+            .try_into()
+            .expect("4 byte hint");
+        let msg_id = [7u8; 16];
+
+        // Before the feed: unknown peer, StoreAndCarry fallback, zero confidence.
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
+            assert_eq!(dec.confidence, 0.0);
+        }
+
+        // A direct TCP ConnectionEstablished.
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::Local);
+            assert!(
+                dec.confidence >= 0.5,
+                "confidence must be non-zero after a connection sighting, got {}",
+                dec.confidence
+            );
+            match dec.primary {
+                crate::routing::NextHop::Direct { peer_id, transport } => {
+                    assert_eq!(peer_id, peer);
+                    assert_eq!(transport, crate::routing::TransportType::TCP);
+                }
+                other => panic!("expected Direct TCP, got {:?}", other),
+            }
+        }
     }
 
     #[test]
