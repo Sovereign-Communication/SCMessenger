@@ -350,6 +350,46 @@ pub(crate) fn classify_storage_error(err: &str) -> IronCoreError {
     }
 }
 
+fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
+    match transport.trim().to_ascii_lowercase().as_str() {
+        "ble" | "bluetooth" | "ble_gatt" | "proximity" => crate::routing::TransportType::BLE,
+        "wifi_direct" | "wifidirect" | "p2p" => crate::routing::TransportType::WiFiDirect,
+        "wifi_aware" | "wifiaware" | "nan" => crate::routing::TransportType::WiFiAware,
+        "quic" => crate::routing::TransportType::QUIC,
+        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "relay" | "ip" | "local" => {
+            crate::routing::TransportType::TCP
+        }
+        _ => crate::routing::TransportType::BLE,
+    }
+}
+
+fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
+    let clean_str = peer_id_str.trim();
+    let unescaped = clean_str
+        .strip_prefix("public_key:")
+        .or_else(|| clean_str.strip_prefix("identity_id:"))
+        .or_else(|| clean_str.strip_prefix("0x"))
+        .unwrap_or(clean_str);
+
+    if let Ok(bytes) = hex::decode(unescaped) {
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            return Some(arr);
+        }
+    }
+
+    if let Ok(p) = clean_str.parse::<libp2p::PeerId>() {
+        let bytes = p.to_bytes();
+        if bytes.len() >= 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes[bytes.len() - 32..]);
+            return Some(arr);
+        }
+    }
+
+    None
+}
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 impl IronCore {
     /// Create an in-memory IronCore with no persistent storage.
@@ -1284,6 +1324,7 @@ impl IronCore {
         if blocked {
             return;
         }
+        self.routing_peer_seen(peer_id.clone(), "tcp".to_string());
         if let Some(delegate) = self.delegate.read().as_ref() {
             delegate.on_peer_discovered(peer_id.clone());
         }
@@ -2722,34 +2763,29 @@ impl IronCore {
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
             engine.record_message_activity(&peer_id_hex);
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    let parsed_hints: Vec<[u8; 4]> = hints
-                        .into_iter()
-                        .filter_map(|hint| <[u8; 4]>::try_from(hint.as_slice()).ok())
-                        .collect();
-                    // LocalCell intentionally updates only peers already known to
-                    // the local topology; an announcement cannot create a peer.
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_peer_hints(&peer_id, parsed_hints);
-                }
+            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
+                let parsed_hints: Vec<[u8; 4]> = hints
+                    .into_iter()
+                    .filter_map(|hint| <[u8; 4]>::try_from(hint.as_slice()).ok())
+                    .collect();
+                // LocalCell intentionally updates only peers already known to
+                // the local topology; an announcement cannot create a peer.
+                engine
+                    .base_engine_mut()
+                    .local_cell_mut()
+                    .update_peer_hints(&peer_id, parsed_hints);
             }
         }
     }
 
     /// Mark a peer as a gateway (relay-capable) or not.
     pub fn routing_mark_gateway(&self, peer_id_hex: String, is_gateway: bool) {
-        if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-            if peer_id_bytes.len() == 32 {
-                let peer_id: crate::routing::PeerId = peer_id_bytes.try_into().unwrap_or([0u8; 32]);
-                if let Some(engine) = self.routing_engine.write().as_mut() {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .mark_as_gateway(&peer_id, is_gateway);
-                }
+        if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
+            if let Some(engine) = self.routing_engine.write().as_mut() {
+                engine
+                    .base_engine_mut()
+                    .local_cell_mut()
+                    .mark_as_gateway(&peer_id, is_gateway);
             }
         }
     }
@@ -2757,13 +2793,11 @@ impl IronCore {
     /// Update reliability score for a peer based on success/failure.
     pub fn routing_update_reliability(&self, peer_id_hex: String, success: bool) {
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_reliability(&peer_id, success);
-                }
+            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
+                engine
+                    .base_engine_mut()
+                    .local_cell_mut()
+                    .update_reliability(&peer_id, success);
             }
             if success {
                 engine.record_message_activity(&peer_id_hex);
@@ -3081,6 +3115,20 @@ impl IronCore {
                 peer_id = %peer_id,
                 "Peer identified; triggering outbox flush"
             );
+
+            let transports = if let Some(pk) = parse_peer_id_32(peer_id) {
+                self.transport_manager.read().transports_for_peer(pk)
+            } else {
+                Vec::new()
+            };
+
+            if transports.is_empty() {
+                self.routing_peer_seen(peer_id.to_string(), "tcp".to_string());
+            } else {
+                for t in transports {
+                    self.routing_peer_seen(peer_id.to_string(), t.to_string());
+                }
+            }
 
             let messages = self.outbox.write().flush_peer_messages(peer_id);
             if messages.is_empty() {
@@ -3525,6 +3573,18 @@ impl IronCore {
                     IronCoreError::CryptoError
                 })?;
 
+        // Record peer sighting in routing engine on observed transport(s)
+        if let Ok(pk) = <[u8; 32]>::try_from(sender_pubkey.as_slice()) {
+            let active_transports = self.transport_manager.read().transports_for_peer(pk);
+            if active_transports.is_empty() {
+                self.routing_peer_seen(sender_public_key_hex.clone(), "ble".to_string());
+            } else {
+                for t in active_transports {
+                    self.routing_peer_seen(sender_public_key_hex.clone(), t.to_string());
+                }
+            }
+        }
+
         // Also check device-specific blocks using the sender's last known device ID
         // Try the authenticated public key and its canonical identity_id; first
         // hit wins. A contact read error must fail closed rather than becoming
@@ -3779,6 +3839,10 @@ impl IronCore {
         peers: Vec<crate::privacy::circuit::PeerInfo>,
         config: CircuitConfig,
     ) {
+        for p in &peers {
+            self.routing_peer_seen(p.peer_id.clone(), "tcp".to_string());
+            self.routing_mark_gateway(p.peer_id.clone(), true);
+        }
         match CircuitBuilder::new(peers, config) {
             Ok(builder) => {
                 *self.circuit_builder.write() = Some(builder);
@@ -3947,14 +4011,23 @@ impl IronCore {
     pub fn record_reconnect_success_and_clear_cache(&self, peer_id_hex: &str) {
         self.clear_unreachable_peer(peer_id_hex);
         // Also notify transport manager of the successful reconnection
-        if let Ok(bytes) = hex::decode(peer_id_hex) {
-            if bytes.len() == 32 {
-                let mut peer_id_arr = [0u8; 32];
-                peer_id_arr.copy_from_slice(&bytes);
-                self.transport_manager
-                    .read()
-                    .record_reconnect_success(&peer_id_arr);
+        if let Some(peer_id_arr) = parse_peer_id_32(peer_id_hex) {
+            self.transport_manager
+                .read()
+                .record_reconnect_success(&peer_id_arr);
+            let transports = self
+                .transport_manager
+                .read()
+                .transports_for_peer(peer_id_arr);
+            if transports.is_empty() {
+                self.routing_peer_seen(peer_id_hex.to_string(), "tcp".to_string());
+            } else {
+                for t in transports {
+                    self.routing_peer_seen(peer_id_hex.to_string(), t.to_string());
+                }
             }
+        } else {
+            self.routing_peer_seen(peer_id_hex.to_string(), "tcp".to_string());
         }
     }
 
@@ -5238,5 +5311,114 @@ mod tests {
             .as_ref()
             .unwrap()
             .reputation_manager_is_configured());
+    }
+
+    #[test]
+    fn test_routing_peer_seen_multi_transport_failover_and_non_zero_confidence() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().expect("init identity");
+
+        let peer_pk = [42u8; 32];
+        let peer_hex = hex::encode(peer_pk);
+        let direct_hint: [u8; 4] = blake3::hash(&peer_pk).as_bytes()[0..4]
+            .try_into()
+            .expect("4 bytes hint");
+        let msg_id = [1u8; 16];
+        let now = 1000u64;
+
+        // 1. Initially, no sighting has occurred. Decision must degrade to StoreAndCarry with 0.0 confidence.
+        let initial_decision = core
+            .make_routing_decision(direct_hint, msg_id, 50, now)
+            .expect("decision");
+        assert_eq!(
+            initial_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
+        assert!(matches!(
+            initial_decision.primary,
+            crate::routing::NextHop::StoreAndCarry
+        ));
+        assert_eq!(initial_decision.confidence, 0.0);
+
+        // 2. Simulate peer observation on BLE transport
+        core.routing_peer_seen(peer_hex.clone(), "ble".to_string());
+
+        let ble_decision = core
+            .make_routing_decision(direct_hint, msg_id, 50, now)
+            .expect("decision");
+        assert_ne!(
+            ble_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
+        assert_eq!(ble_decision.decided_by, crate::routing::RoutingLayer::Local);
+        assert!(
+            ble_decision.confidence > 0.0,
+            "confidence must be non-zero after peer_seen"
+        );
+        assert!(ble_decision.confidence >= 0.5);
+        match ble_decision.primary {
+            crate::routing::NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer_pk);
+                assert_eq!(transport, crate::routing::TransportType::BLE);
+            }
+            other => panic!("expected Direct hop with BLE transport, got {:?}", other),
+        }
+
+        // 3. Simulate peer observation on second transport: TCP / WiFi
+        core.routing_peer_seen(peer_hex.clone(), "tcp".to_string());
+
+        let tcp_decision = core
+            .make_routing_decision(direct_hint, msg_id, 50, now)
+            .expect("decision");
+        assert_ne!(
+            tcp_decision.decided_by,
+            crate::routing::RoutingLayer::StoreAndCarry
+        );
+        assert_eq!(tcp_decision.decided_by, crate::routing::RoutingLayer::Local);
+        assert!(tcp_decision.confidence > 0.0);
+        match tcp_decision.primary {
+            crate::routing::NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer_pk);
+                assert_eq!(transport, crate::routing::TransportType::TCP);
+            }
+            other => panic!("expected Direct hop with TCP transport, got {:?}", other),
+        }
+        assert!(
+            tcp_decision.alternatives.iter().any(|alt| matches!(
+                alt,
+                crate::routing::NextHop::Direct { peer_id, transport } if *peer_id == peer_pk && *transport == crate::routing::TransportType::BLE
+            )),
+            "BLE must be preserved in alternative hops for failover"
+        );
+
+        // 4. Failover back to BLE: simulate peer observed on BLE again
+        core.routing_peer_seen(peer_hex.clone(), "ble".to_string());
+
+        let failover_decision = core
+            .make_routing_decision(direct_hint, msg_id, 50, now)
+            .expect("decision");
+        assert_eq!(
+            failover_decision.decided_by,
+            crate::routing::RoutingLayer::Local
+        );
+        assert!(failover_decision.confidence > 0.0);
+        match failover_decision.primary {
+            crate::routing::NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer_pk);
+                assert_eq!(transport, crate::routing::TransportType::BLE);
+            }
+            other => panic!(
+                "expected Direct hop with BLE transport after failover, got {:?}",
+                other
+            ),
+        }
+        assert!(
+            failover_decision.alternatives.iter().any(|alt| matches!(
+                alt,
+                crate::routing::NextHop::Direct { peer_id, transport } if *peer_id == peer_pk && *transport == crate::routing::TransportType::TCP
+            )),
+            "TCP must be preserved in alternative hops for failover"
+        );
     }
 }
