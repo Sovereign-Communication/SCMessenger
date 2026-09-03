@@ -543,15 +543,26 @@ mod tests {
         manager.record_message(peer_id, hint);
         assert_eq!(manager.frequent_peers[0].message_count, 1);
 
-        // Manually set last_message to past to trigger decay
-        manager.frequent_peers[0].last_message = Instant::now()
-            .checked_sub(Duration::from_secs(7200))
-            .unwrap_or_else(|| Instant::now() - Duration::from_secs(3600));
+        // Manually set last_message to the past to trigger decay. On hosts
+        // whose Instant anchor is younger than the window (Windows sandbox /
+        // CI runners with <2h uptime, std::time::Instant is boot-anchored),
+        // checked_sub returns None and a naive `now - 7200s` fallback PANICS
+        // with "overflow when subtracting duration from instant". Only run
+        // the strict decay assertion when the anchor can represent the
+        // window; otherwise assert the increment path.
+        if let Some(past) = Instant::now().checked_sub(Duration::from_secs(7200)) {
+            manager.frequent_peers[0].last_message = past;
 
-        // Record another message, should trigger decay
-        manager.record_message(peer_id, hint);
+            // Record another message, should trigger decay
+            manager.record_message(peer_id, hint);
 
-        // Message count should have decayed
-        assert!(manager.frequent_peers[0].message_count < 2);
+            // Message count should have decayed (2h = 2 half-lives)
+            assert!(manager.frequent_peers[0].message_count < 2);
+        } else {
+            // Fresh anchor: backdating is impossible; verify the
+            // count-increment path instead of panicking on subtraction.
+            manager.record_message(peer_id, hint);
+            assert_eq!(manager.frequent_peers[0].message_count, 2);
+        }
     }
 }

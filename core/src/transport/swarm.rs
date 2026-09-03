@@ -3437,12 +3437,37 @@ pub async fn start_swarm_with_config(
                             .collect();
                         for key in timed_out {
                             if let Some(entry) = pending_dials.remove(&key) {
-                                // P1 Item 3: Complete and apply backoff on timeout
+                                // P1 Item 3: Complete and apply backoff on timeout.
+                                // Liveness guard (mirrors the OutgoingConnectionError
+                                // path): a queued dial to one address timing out with no
+                                // signal is NOT evidence the peer is dead when the peer
+                                // currently has a live connection (identify flows over it
+                                // every 60s). The dead-mark printed by this path would
+                                // name the peer the addr-key was registered under, so a
+                                // stale-address timeout would dead-mark a peer whose live
+                                // path is fine -- the 5-minute dead cycle. Skip the
+                                // record_dial_failure entirely (no dead escalation, no
+                                // attempt-count burn) when any live path exists; the
+                                // address itself is still allowed to time out again.
                                 let key_str = key.to_string();
                                 dial_policy_manager.complete_dial_attempt(&key_str);
-                                dial_policy_manager.record_dial_failure(&key_str, None);
-                                if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
-                                    core.ledger_manager.record_failure(key_str.clone());
+                                let stale_addr_state =
+                                    dial_policy_manager.get_backoff_state(&key_str);
+                                let peer_has_live_path = stale_addr_state
+                                    .as_ref()
+                                    .and_then(|st| st.peer_id)
+                                    .map(|pid| swarm.is_connected(&pid))
+                                    .unwrap_or(false);
+                                if peer_has_live_path {
+                                    tracing::debug!(
+                                        addr=%key,
+                                        "[DIAL-POLICY] Pending dial timed out while peer has a live connection -- no dead mark"
+                                    );
+                                } else {
+                                    dial_policy_manager.record_dial_failure(&key_str, None);
+                                    if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                                        core.ledger_manager.record_failure(key_str.clone());
+                                    }
                                 }
 
                                 tracing::debug!("Pending dial to {} timed out after {}s with no connection signal", key, PENDING_DIAL_TIMEOUT_SECS);
@@ -5166,6 +5191,18 @@ pub async fn start_swarm_with_config(
                                 // Identity protocol confirms this peer is presently reachable.
                                 multi_path_delivery.record_recipient_seen_now(peer_id, peer_id);
 
+                                // Liveness proof beats stale dial-policy state: identify
+                                // runs over an established connection on a fixed interval,
+                                // so a peer that just identified is by definition reachable
+                                // RIGHT NOW. Clear any accumulated dial backoff / dead marks
+                                // for this peer -- otherwise secondary-address dial failures
+                                // (NAT'd or stale addresses) dead-mark a peer whose live
+                                // path identify keeps confirming, and the dead state
+                                // persists until the NEXT ConnectionEstablished, which on a
+                                // stable link may never come (the 5-minute dead cycle seen
+                                // in 3-node validation, 2026-09-03).
+                                dial_policy_manager.reset_peer_backoff(peer_id);
+
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
                                 let _peer_hint: [u8; 4] = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
@@ -5851,10 +5888,36 @@ pub async fn start_swarm_with_config(
                                     for (failed_addr, _) in errors {
                                         let stripped_failed: Multiaddr = failed_addr.iter().filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_))).collect();
 
-                                        // P1 Item 3: Apply backoff on transient dial failure
+                                        // P1 Item 3: Apply backoff on transient dial failure.
+                                        // Liveness guard: if this peer has ANY live
+                                        // connection right now (identify is flowing over it on
+                                        // a fixed interval), a dial failure against one
+                                        // secondary address (NAT-reflected, stale, or
+                                        // non-routable) is NOT evidence the peer is dead --
+                                        // it is evidence only that THAT address is unusable.
+                                        // Escalating to a 3-strike dead mark here previously
+                                        // dead-marked a peer whose live path identify kept
+                                        // confirming, and nothing cleared the mark until the
+                                        // next ConnectionEstablished (never, on a stable
+                                        // link) -- the 5-minute dead cycle. Dead-mark only
+                                        // when the peer has no live path at all; otherwise
+                                        // treat the failure as address-scoped only.
+                                        let peer_has_live_path = peer_id
+                                            .as_ref()
+                                            .map(|pid| swarm.is_connected(pid))
+                                            .unwrap_or(false);
                                         let addr_key = multiaddr_to_key(&stripped_failed);
-                                        dial_policy_manager.record_dial_failure(&addr_key, peer_id);
-                                        dial_policy_manager.complete_dial_attempt(&addr_key);
+                                        if peer_has_live_path {
+                                            dial_policy_manager.complete_dial_attempt(&addr_key);
+                                            tracing::debug!(
+                                                peer_id=?peer_id,
+                                                addr=%stripped_failed,
+                                                "[DIAL-POLICY] Dial failure on secondary addr while peer has a live connection -- address-scoped, no dead mark"
+                                            );
+                                        } else {
+                                            dial_policy_manager.record_dial_failure(&addr_key, peer_id);
+                                            dial_policy_manager.complete_dial_attempt(&addr_key);
+                                        }
                                         if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
                                             core.ledger_manager.record_failure(stripped_failed.to_string());
                                         }
