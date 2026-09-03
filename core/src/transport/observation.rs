@@ -4,6 +4,7 @@
 // Implements consensus-based address discovery without relying on external STUN servers.
 
 use libp2p::{Multiaddr, PeerId};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -26,6 +27,9 @@ pub struct AddressObservation {
 pub struct AddressObserver {
     /// Observations indexed by observer peer ID
     observations: HashMap<PeerId, AddressObservation>,
+    /// Ports currently bound by this node. This is the single source of truth
+    /// for whether an observed address can be advertised.
+    listen_ports: Vec<u16>,
     /// Cached consensus result (recalculated when observations change)
     cached_external_addresses: Vec<SocketAddr>,
 }
@@ -41,12 +45,33 @@ impl AddressObserver {
     pub fn new() -> Self {
         Self {
             observations: HashMap::new(),
+            listen_ports: Vec::new(),
             cached_external_addresses: Vec::new(),
         }
     }
 
-    /// Record an observation from a peer
+    /// Replace the local listener port set and remove observations that are no
+    /// longer eligible for advertisement.
+    pub fn set_listen_ports(&mut self, ports: impl IntoIterator<Item = u16>) {
+        self.listen_ports = ports.into_iter().collect();
+        self.observations
+            .retain(|_, observation| self.listen_ports.contains(&observation.address.port()));
+        self.recalculate_consensus();
+    }
+
+    /// Record an observation from a peer. Observations are accepted only for
+    /// ports this node currently listens on; an empty allowlist fails closed.
     pub fn record_observation(&mut self, observer: PeerId, address: SocketAddr) {
+        if !self.listen_ports.contains(&address.port()) {
+            // A newer observation from this peer that uses a non-listening port
+            // invalidates its previous address. Retaining that old value would
+            // keep a stale endpoint eligible for advertisement.
+            if self.observations.remove(&observer).is_some() {
+                self.recalculate_consensus();
+            }
+            return;
+        }
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock before UNIX_EPOCH")
@@ -116,7 +141,7 @@ impl AddressObserver {
 
         // Sort by count (most observed first)
         let mut addresses: Vec<(SocketAddr, u32)> = address_counts.into_iter().collect();
-        addresses.sort_by_key(|b| std::cmp::Reverse(b.1));
+        addresses.sort_by_key(|(address, count)| (Reverse(*count), *address));
 
         // Cache the sorted addresses
         self.cached_external_addresses = addresses.into_iter().map(|(addr, _)| addr).collect();
@@ -259,51 +284,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_address_observer_consensus() {
+    fn address_observer_contract() {
         let mut observer = AddressObserver::new();
-
+        observer.set_listen_ports([1234, 5678]);
         let peer1 = PeerId::random();
         let peer2 = PeerId::random();
-        let peer3 = PeerId::random();
-
         let addr1: SocketAddr = "1.2.3.4:1234".parse().unwrap();
         let addr2: SocketAddr = "5.6.7.8:5678".parse().unwrap();
 
-        // Three peers observe addr1
-        observer.record_observation(peer1, addr1);
-        observer.record_observation(peer2, addr1);
-        observer.record_observation(peer3, addr1);
-
-        // One peer observes addr2
+        for peer in [peer1, peer2] {
+            observer.record_observation(peer, addr1);
+        }
         observer.record_observation(PeerId::random(), addr2);
 
-        // Consensus should be addr1 (3 votes vs 1)
         assert_eq!(observer.primary_external_address(), Some(addr1));
-        assert_eq!(observer.external_addresses().len(), 2);
-        assert_eq!(observer.external_addresses()[0], addr1);
+        assert_eq!(observer.external_addresses(), &[addr1, addr2]);
     }
 
     #[test]
-    fn test_address_confirmation_count() {
+    fn non_listen_port_observations_are_rejected() {
+        let mut observer = AddressObserver::new();
+        let observer_peer = PeerId::random();
+        observer.set_listen_ports([9001]);
+
+        observer.record_observation(observer_peer, "203.0.113.5:9001".parse().unwrap());
+        observer.record_observation(observer_peer, "203.0.113.5:7196".parse().unwrap());
+        assert!(observer.external_addresses().is_empty());
+
+        observer.record_observation(observer_peer, "203.0.113.5:9001".parse().unwrap());
+        assert_eq!(
+            observer.primary_external_address(),
+            Some("203.0.113.5:9001".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn removing_a_listen_port_removes_its_observations() {
         let mut observer = AddressObserver::new();
         let peer = PeerId::random();
-        let addr: SocketAddr = "1.2.3.4:1234".parse().unwrap();
+        observer.set_listen_ports([9001, 9002]);
+        observer.record_observation(peer, "203.0.113.5:9001".parse().unwrap());
+        assert!(observer.primary_external_address().is_some());
 
-        // Record same observation multiple times
-        observer.record_observation(peer, addr);
-        observer.record_observation(peer, addr);
-        observer.record_observation(peer, addr);
+        observer.set_listen_ports([9002]);
+        assert!(observer.external_addresses().is_empty());
 
-        let obs = observer.all_observations();
-        assert_eq!(obs.len(), 1);
-        assert_eq!(obs[0].confirmation_count, 3);
+        observer.set_listen_ports([]);
+        assert!(observer.external_addresses().is_empty());
+    }
+
+    #[test]
+    fn empty_listen_port_set_fails_closed() {
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
+        assert!(observer.external_addresses().is_empty());
     }
 
     #[test]
     fn test_extract_socket_addr() {
-        let addr: Multiaddr = "/ip4/1.2.3.4/tcp/1234".parse().unwrap();
-        let socket_addr = ConnectionTracker::extract_socket_addr(&addr);
-        assert_eq!(socket_addr, Some("1.2.3.4:1234".parse().unwrap()));
+        let cases = [
+            ("/ip4/1.2.3.4/tcp/1234", Some("1.2.3.4:1234")),
+            ("/ip6/2001:db8::1/udp/5678", Some("[2001:db8::1]:5678")),
+            ("/dns4/example.com/tcp/1234", None),
+        ];
+        for (multiaddr, expected) in cases {
+            let addr: Multiaddr = multiaddr.parse().unwrap();
+            let actual =
+                ConnectionTracker::extract_socket_addr(&addr).map(|socket| socket.to_string());
+            assert_eq!(actual, expected.map(str::to_string));
+        }
     }
 
     #[test]
