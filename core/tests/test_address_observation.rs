@@ -77,11 +77,11 @@ async fn test_address_observation_between_peers() {
     // Bob records this observation
 
     println!("\nPhase 1 implementation verified:");
-    println!("✓ AddressObserver tracks peer observations");
-    println!("✓ ConnectionTracker monitors active connections");
-    println!("✓ Address reflection uses real remote addresses (not 0.0.0.0:0)");
-    println!("✓ Consensus calculation aggregates multiple observations");
-    println!("✓ SwarmHandle provides get_external_addresses() API");
+    println!("[OK] AddressObserver tracks peer observations");
+    println!("[OK] ConnectionTracker monitors active connections");
+    println!("[OK] Address reflection uses real remote addresses (not 0.0.0.0:0)");
+    println!("[OK] Consensus calculation aggregates multiple observations");
+    println!("[OK] SwarmHandle provides get_external_addresses() API");
 
     // Clean up
     alice_swarm.shutdown().await.ok();
@@ -95,6 +95,11 @@ async fn test_consensus_with_multiple_observations() {
     use std::net::SocketAddr;
 
     let mut observer = AddressObserver::new();
+    // V040 address admission contract: observations are only recorded for
+    // ports this node currently listens on (empty allowlist fails closed).
+    // Declare the two ports under test so consensus is exercised, matching
+    // the swarm wiring that calls set_listen_ports from NewListenAddr.
+    observer.set_listen_ports([1234, 5678]);
 
     let addr1: SocketAddr = "203.0.113.10:1234".parse().unwrap();
     let addr2: SocketAddr = "203.0.113.20:5678".parse().unwrap();
@@ -120,7 +125,7 @@ async fn test_consensus_with_multiple_observations() {
     assert_eq!(all_addrs[0], addr1, "First should be most observed");
     assert_eq!(all_addrs[1], addr2, "Second should be less observed");
 
-    println!("✓ Consensus correctly prioritizes most-observed address");
+    println!("[OK] Consensus correctly prioritizes most-observed address");
 }
 
 #[tokio::test]
@@ -165,7 +170,7 @@ async fn test_connection_tracking() {
         "Connection should be removed"
     );
 
-    println!("✓ ConnectionTracker correctly manages peer connections");
+    println!("[OK] ConnectionTracker correctly manages peer connections");
 }
 
 #[test]
@@ -197,5 +202,5 @@ fn test_address_extraction_from_multiaddr() {
         Some("1.2.3.4:1234".parse().unwrap())
     );
 
-    println!("✓ Address extraction handles various Multiaddr formats");
+    println!("[OK] Address extraction handles various Multiaddr formats");
 }
