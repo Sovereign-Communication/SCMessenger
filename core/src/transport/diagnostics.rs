@@ -264,7 +264,7 @@ mod tests {
         for i in 0..300 {
             let decision = crate::routing::RoutingDecision {
                 message_id: [i as u8; 16],
-                recipient_hint: [0xAA; 4],
+                recipient_hint: [0xAA; 8],
                 primary: crate::routing::NextHop::StoreAndCarry,
                 alternatives: vec![],
                 decided_by: crate::routing::RoutingLayer::StoreAndCarry,
@@ -288,7 +288,7 @@ mod tests {
 
         let decision = crate::routing::RoutingDecision {
             message_id: [1u8; 16],
-            recipient_hint: [0xAA; 4],
+            recipient_hint: [0xAA; 8],
             primary: crate::routing::NextHop::StoreAndCarry,
             alternatives: vec![],
             decided_by: crate::routing::RoutingLayer::StoreAndCarry,
