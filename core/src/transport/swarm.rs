@@ -3012,9 +3012,9 @@ pub async fn start_swarm_with_config(
         // peer ID so routing can begin immediately.
         let local_peer_id_bytes_raw = local_peer_id.to_bytes();
         let local_peer_id_bytes: [u8; 32] = extract_peer_id_bytes(&local_peer_id_bytes_raw);
-        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..4]
+        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..8]
             .try_into()
-            .expect("blake3 hash should be at least 4 bytes");
+            .expect("blake3 hash should be at least 8 bytes");
         {
             let mut guard = routing_engine_handle.write();
             if guard.is_none() {
@@ -4887,18 +4887,22 @@ pub async fn start_swarm_with_config(
                                             "DCUtR hole-punch SUCCESS with {} (attempts: {})",
                                             remote_peer_id, num_attempts
                                         );
-                                        // Hole-punch succeeded — direct connection established.
-                                        // Add this peer's direct addresses to Kademlia so the
-                                        // DHT knows how to reach them without the relay.
-                                        // Collect first to avoid simultaneous immutable + mutable borrow of swarm.
-                                        let ext_addrs: Vec<libp2p::Multiaddr> =
-                                            swarm.external_addresses().cloned().collect();
-                                        for addr in ext_addrs {
-                                            swarm.behaviour_mut().kademlia.add_address(
-                                                &remote_peer_id,
-                                                addr
-                                            );
-                                        }
+                                        // Hole-punch succeeded — the direct connection is
+                                        // established and lives in the swarm's connection layer.
+                                        // V040-T14: the previous code inserted
+                                        // `swarm.external_addresses()` — OUR OWN addresses — under
+                                        // `remote_peer_id`, publishing our endpoints as the remote
+                                        // peer's (identity misattribution, and our addresses leak
+                                        // bound to a stranger's id). The DCUtR event carries no
+                                        // remote address, so the remote's direct endpoint is not
+                                        // provable here; per the corrected-pair doctrine (T13
+                                        // F-DHT) an `add_address` lands only bindings OUR store
+                                        // proves, so this drop is the fix.
+                                        // Residual: the hole-punched connection remains in use;
+                                        // the peer's direct address enters the DHT only from a
+                                        // source that proves the pair (a successful dial recorded
+                                        // in our ledger, or Identify once the pair predicate
+                                        // gates that feed).
                                         bootstrap_capability.add_peer(remote_peer_id);
                                         if reported_peer_discoveries.insert(remote_peer_id) {
                                             let _ = event_tx.send(SwarmEvent2::PeerDiscovered(remote_peer_id)).await;
@@ -5014,12 +5018,15 @@ pub async fn start_swarm_with_config(
                             )) => {
                                 for (peer_id, addr) in peers {
                                     tracing::info!("mDNS discovered peer: {} at {}", peer_id, addr);
-                                    if is_discoverable_multiaddr(&addr) {
-                                        swarm
-                                            .behaviour_mut()
-                                            .kademlia
-                                            .add_address(&peer_id, addr.clone());
-                                    }
+                                    // V040-T14: mDNS is an unauthenticated LAN broadcast — the
+                                    // (peer_id, addr) pair is asserted by the broadcaster, not
+                                    // proven by our store. Per the corrected-pair doctrine (T13
+                                    // F-DHT) no `add_address` lands here: a hostile device on the
+                                    // LAN could bind any peer id to any public address and have
+                                    // it re-published into the DHT. Discovery still works — the
+                                    // validated dial below is how the pair becomes OUR proof via
+                                    // a successful connection, after which the ledger-backed
+                                    // feeds carry it.
 
                                     // Discovery must be self-initializing: a
                                     // peer learned from mDNS cannot identify
@@ -5130,9 +5137,9 @@ pub async fn start_swarm_with_config(
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                let _peer_hint: [u8; 4] = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                let _peer_hint: [u8; 8] = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
                                 // When identity protocol confirms a peer, use the Kademlia server
                                 // mode as the transport type basis since identity requires a
                                 // server-capable connection.
@@ -6015,15 +6022,15 @@ pub async fn start_swarm_with_config(
                                 // MYCORRHIZAL ROUTING: Use routing engine to determine path
                                 // Convert libp2p PeerId to routing module format
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                // Get recipient hint from peer_id (first 4 bytes of blake3 hash)
-                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                // Get recipient hint from peer_id (first 8 bytes of blake3 hash)
+                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
 
                                 // Route message using mycorrhizal routing engine.
                                 //
                                 // CRITICAL BYPASS: the mycorrhizal engine only ever sees a
-                                // 4-byte hint -- it has no way to know we already hold an
+                                // hint -- it has no way to know we already hold an
                                 // active libp2p connection to this exact peer_id right now,
                                 // and its layers (negative cache/prefetch/multipath/base
                                 // discovery) are designed for *indirect* routing when the
