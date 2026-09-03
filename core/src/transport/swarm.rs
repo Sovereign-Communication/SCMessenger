@@ -425,6 +425,24 @@ fn infer_seed_network_mode(my_addrs: &[String]) -> crate::transport::addr_filter
 /// that is not the current primary is a stale promotion and is retracted.
 /// (The two promotion sites below are the only add_external_address callers in
 /// the tree, so this cannot delete an address some other subsystem confirmed.)
+/// Map a connection's remote multiaddr to the transport string understood by
+/// `IronCore::routing_peer_seen` (which routes through `parse_transport_type`).
+/// A relayed circuit is reported as such even though it rides TCP physically:
+/// the routing engine must distinguish reachability-through-a-helper from a
+/// direct path so failover can prefer the direct ladder. Websockets ride TCP.
+fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
+    use libp2p::multiaddr::Protocol;
+    for proto in remote_addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => return "relay",
+            Protocol::Quic | Protocol::QuicV1 => return "quic",
+            Protocol::Ws(_) | Protocol::Wss(_) => return "ws",
+            _ => {}
+        }
+    }
+    "tcp"
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn sync_external_address(swarm: &mut libp2p::Swarm<IronCoreBehaviour>, observer: &AddressObserver) {
     let primary = observer.primary_external_address().map(|primary| {
@@ -1577,6 +1595,7 @@ fn routing_decision_to_ranked_routes(
                 RoutingTransportType::QUIC => 0.15,
                 RoutingTransportType::TCP => 0.10,
                 RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                RoutingTransportType::Circuit => 0.07,
                 RoutingTransportType::BLE => 0.0,
             };
             score = (score + transport_bonus).min(1.0);
@@ -1604,6 +1623,7 @@ fn routing_decision_to_ranked_routes(
                     RoutingTransportType::QUIC => 0.15,
                     RoutingTransportType::TCP => 0.10,
                     RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                    RoutingTransportType::Circuit => 0.07,
                     RoutingTransportType::BLE => 0.0,
                 };
                 score = (score + transport_bonus).min(1.0);
@@ -1665,6 +1685,7 @@ fn routing_decision_to_ranked_routes(
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::BLE => 0.0,
                     };
                     score = (score + transport_bonus).min(1.0);
@@ -1692,6 +1713,7 @@ fn routing_decision_to_ranked_routes(
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::BLE => 0.0,
                     };
                     score = (score + transport_bonus).min(1.0);
@@ -5542,6 +5564,26 @@ pub async fn start_swarm_with_config(
                                     );
                                 }
 
+                                // Feed the routing engine: a real connection now exists.
+                                // The ledger exchange above is deduped once per peer, but
+                                // every path sighting is meaningful here -- LocalCell
+                                // accumulates transports (direct + relayed circuit) and
+                                // peer_seen clears the peer's negative-cache entry, so a
+                                // reconnect after path loss restores routing confidence
+                                // immediately. Routing through the single
+                                // `IronCore::routing_peer_seen` code path keeps the
+                                // transport derivation and the engine's parser in lockstep.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
+                                }
+
                                 if reported_peer_discoveries.insert(peer_id) {
                                     let _ = event_tx.send(SwarmEvent2::PeerDiscovered(peer_id)).await;
 
@@ -7930,10 +7972,11 @@ pub async fn start_swarm_with_config(
                                     trigger = ?crate::routing::smart_retry::DeliveryTrigger::PeerDiscovered(peer_id.to_string()),
                                     peer = %peer_id
                                 );
+                                let remote_addr = endpoint.get_remote_address().clone();
                                 connection_tracker.add_connection(
                                     peer_id,
-                                    endpoint.get_remote_address().clone(),
-                                    match endpoint {
+                                    remote_addr.clone(),
+                                    match &endpoint {
                                         libp2p::core::ConnectedPoint::Listener { local_addr, .. } => local_addr.clone(),
                                         libp2p::core::ConnectedPoint::Dialer { .. } => "/ip4/0.0.0.0/tcp/0".parse().expect("static multiaddr parse cannot fail"),
                                     },
@@ -7973,6 +8016,21 @@ pub async fn start_swarm_with_config(
                                         "Started core ledger exchange with newly connected peer {} (WASM)",
                                         peer_id
                                     );
+                                }
+
+                                // Feed the routing engine (see the native arm for the
+                                // rationale): every path sighting is meaningful, and the
+                                // empty-engine case is a no-op, so this is safe on nodes
+                                // where the optimized engine is not yet initialized.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
                                 }
 
                                 if reported_peer_discoveries.insert(peer_id) {

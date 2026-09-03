@@ -119,9 +119,13 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
         "wifi_direct" | "wifidirect" | "p2p" => crate::routing::TransportType::WiFiDirect,
         "wifi_aware" | "wifiaware" | "nan" => crate::routing::TransportType::WiFiAware,
         "quic" => crate::routing::TransportType::QUIC,
-        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "relay" | "ip" | "local" => {
+        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "ip" | "local" | "ws" | "wss" => {
             crate::routing::TransportType::TCP
         }
+        // A relayed circuit rides TCP physically but is a materially different
+        // path (reachability through a helper node) -- the engine must be able
+        // to distinguish it from a direct connection for failover decisions.
+        "circuit" | "p2p_circuit" | "relay" => crate::routing::TransportType::Circuit,
         _ => crate::routing::TransportType::BLE,
     }
 }
@@ -5032,6 +5036,77 @@ mod tests {
             .get_peer(&peer)
             .unwrap();
         assert_eq!(stored.reachable_hints, vec![hint]);
+    }
+
+    #[test]
+    fn routing_peer_seen_distinguishes_circuit_from_direct_tcp() {
+        // D6 acceptance 2: a TCP endpoint and a relayed-circuit endpoint map to
+        // different recorded transports. Same peer, both paths -- the engine
+        // accumulates them, mirroring the swarm handler's multi-path reality.
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        let peer = [43u8; 32];
+
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        core.routing_peer_seen(hex::encode(peer), "relay".to_string());
+
+        let engine = core.routing_engine.read();
+        let stored = engine
+            .as_ref()
+            .expect("engine set")
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .expect("peer must be recorded after the feed");
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::TCP),
+            "direct TCP sighting must be recorded, got {:?}",
+            stored.transports
+        );
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::Circuit),
+            "relayed-circuit sighting must be recorded distinctly, got {:?}",
+            stored.transports
+        );
+    }
+
+    #[test]
+    fn parse_transport_type_distinguishes_direct_from_circuit() {
+        // The string contract between endpoint_transport_string (swarm.rs) and
+        // the engine's parser must be pinned here so the two cannot drift.
+        assert_eq!(
+            parse_transport_type("tcp"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("ws"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("wss"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("quic"),
+            crate::routing::TransportType::QUIC
+        );
+        assert_eq!(
+            parse_transport_type("relay"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_eq!(
+            parse_transport_type("circuit"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_ne!(
+            parse_transport_type("tcp"),
+            parse_transport_type("relay"),
+            "a relayed circuit must never collapse into the direct-TCP tier"
+        );
     }
 
     #[test]

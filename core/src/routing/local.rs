@@ -22,6 +22,8 @@ pub enum TransportType {
     WiFiDirect,
     TCP,
     QUIC,
+    /// Relayed circuit (libp2p p2p-circuit through a helper node)
+    Circuit,
 }
 
 /// Status of a known peer in the local cell
@@ -232,8 +234,7 @@ impl LocalCell {
     fn sort_by_reliability(peers: &mut Vec<&PeerInfo>) {
         peers.sort_by(|a, b| {
             b.reliability_score
-                .partial_cmp(&a.reliability_score)
-                .expect("f64 reliability scores should always be comparable")
+                .total_cmp(&a.reliability_score)
                 .then_with(|| a.peer_id.cmp(&b.peer_id))
         });
     }
@@ -342,11 +343,7 @@ impl LocalCell {
         let peer_to_evict = *self
             .peers
             .values()
-            .min_by(|a, b| {
-                a.reliability_score
-                    .partial_cmp(&b.reliability_score)
-                    .expect("f64 reliability scores should always be comparable")
-            })
+            .min_by(|a, b| a.reliability_score.total_cmp(&b.reliability_score))
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 
