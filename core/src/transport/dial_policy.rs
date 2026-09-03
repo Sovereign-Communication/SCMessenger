@@ -26,6 +26,16 @@ use web_time::{Duration, Instant};
 /// address failures dead-marked a peer whose live path identify kept
 /// confirming. Fix A/B/C stop dead-marks on live peers; this window bounds
 /// the dead state for genuinely unreachable peers.
+///
+/// Anti-hammer bound (review A3, 2026-09-03): a revive is NOT a free dial
+/// burst. A revived entry starts from zero strikes, but the FIRST failure
+/// immediately re-applies the 1s/2s/4s backoff ladder and the 3rd strike
+/// re-marks it dead -- so a genuinely unreachable address gets at most ~3
+/// attempts within the seconds after a revive, then stays dead until the
+/// next 60s window. Worst case is ~3 dial attempts/minute per dead address,
+/// and the window itself is a single shared constant used by both
+/// `is_eligible` (read) and `maybe_revive` (mutate), so no path can observe
+/// a different revive predicate.
 pub const DEAD_REVIVE_AFTER: Duration = Duration::from_secs(60);
 
 /// Per-peer backoff state tracking.
@@ -282,6 +292,17 @@ impl DialPolicyManager {
     /// and marked dead — so the addr-keyed reset misses it. An established
     /// connection is proof of liveness regardless of transport path, so clear
     /// every entry attributed to this peer.
+    ///
+    /// Deliberate scope (review A1, 2026-09-03): the reset clears address-scoped
+    /// dead marks when ANY path proves the peer is alive, rather than only the
+    /// address that showed liveness. The alternative (keeping a stale address
+    /// dead while the peer is demonstrably up) is exactly the 5-minute dead
+    /// cycle being fixed -- a NAT-reflected address's dead mark suppressed
+    /// hint-dials and relay pulls for a peer whose live path was fine. Cost of
+    /// the broad reset: at most one dial attempt per stale address per revive
+    /// window, immediately re-escalated by the failure path. Bounded: only
+    /// entries whose stored peer_id matches, and only entries with is_dead or
+    /// attempt_count > 0.
     pub fn reset_peer_backoff(&self, peer_id: PeerId) {
         let mut backoff = self.peer_backoff.write();
         let mut reset_count = 0u32;

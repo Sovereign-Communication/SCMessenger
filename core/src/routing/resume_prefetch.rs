@@ -561,6 +561,10 @@ mod tests {
         } else {
             // Fresh anchor: backdating is impossible; verify the
             // count-increment path instead of panicking on subtraction.
+            // Print a marker so CI logs show WHICH branch ran -- the weak
+            // branch does not prove decay, and a short-uptime runner must
+            // not silently skip the strict assertion.
+            eprintln!("[WARN] resume_prefetch decay test: Instant anchor younger than 2h -- weak branch (increment path) asserted, decay not exercised");
             manager.record_message(peer_id, hint);
             assert_eq!(manager.frequent_peers[0].message_count, 2);
         }
