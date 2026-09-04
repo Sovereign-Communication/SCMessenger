@@ -19,6 +19,18 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
+/// Clamp a wire-supplied `last_seen` (seconds, as carried by
+/// `SharedPeerEntry`) into local millis. `last_seen` is a RANKING key:
+/// `seed_addresses` sorts descending, `evict_one_locked` picks the minimum.
+/// A ceiling of `now + allowance` would still let a hostile `u64::MAX` land
+/// strictly above every honest value forever (honest senders report a past
+/// observation), so the ceiling is plain local `now`: an attacker gains
+/// nothing, and an honest peer with a fast clock ties with local time
+/// instead of beating everyone.
+fn clamp_wire_last_seen_ms(wire_seconds: u64) -> u64 {
+    wire_seconds.saturating_mul(1000).min(current_timestamp())
+}
+
 /// Whether a multiaddr carries a TCP/UDP port below the IANA dynamic range
 /// (49152). Ephemeral source ports (>= 49152) are dead the instant the
 /// connection closes and are the bulk of the legacy CLI store's pollution.
@@ -1840,8 +1852,25 @@ impl LedgerManager {
                 match slot {
                     // Attach the advertised identity to the known address but
                     // do NOT mark it verified -- advertisement is hearsay.
+                    // V040-T13 F-DHT (Bypass-B fix, uniform with the wire-merge
+                    // and migration paths): an advertised pid is never written
+                    // into an entry's CURRENT-BINDING slot when that entry is
+                    // locally_verified. The DHT gate authorizes (identity,
+                    // address) PAIRS from our own store -- if an Identify
+                    // message could bind an attacker pid as the current
+                    // binding of a verified entry (e.g. an operator bootstrap
+                    // with an empty peer_id slot), the pair lookup would
+                    // authenticate it. Verified entries get their binding from
+                    // the dial that proved them.
+                    //
+                    // `observed_peer_ids` is still recorded on verified
+                    // entries: it is the P0 stale-identity signal the dial
+                    // guard needs (an address that served `a` is now claimed
+                    // by `b`), and the F-DHT predicate never consults it.
                     Some(entry) => {
-                        entry.peer_id.get_or_insert_with(|| peer_id.to_string());
+                        if !entry.locally_verified {
+                            entry.peer_id.get_or_insert_with(|| peer_id.to_string());
+                        }
                         record_observed_peer_id_locked(entry, peer_id);
                     }
                     None => {
@@ -1998,12 +2027,35 @@ impl LedgerManager {
                         .iter_mut()
                         .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
                     {
+                        // V040-T13 F-DHT (Bypass-B fix): a wire-supplied pid is
+                        // never written onto an entry this node has personally
+                        // verified. The DHT gate authorizes (identity, address)
+                        // PAIRS from our own store -- if a wire message could
+                        // bind an attacker pid to a locally_verified entry
+                        // (e.g. an operator bootstrap with an empty peer_id
+                        // slot), the pair lookup would authenticate it. Hearsay
+                        // entries may still learn identity from the wire; the
+                        // first successful dial overwrites it.
                         if let Some(pid) = shared.last_peer_id.as_deref() {
-                            entry.peer_id.get_or_insert_with(|| pid.to_string());
+                            if !entry.locally_verified {
+                                entry.peer_id.get_or_insert_with(|| pid.to_string());
+                            }
+                            // Review triage (qwen3.8-max-0902, finding 3),
+                            // uniform with record_identified_peer: the
+                            // wire-merge path also records the observed pid on
+                            // verified entries -- it is the P0 stale-identity
+                            // signal (an address that served `a` is now claimed
+                            // by `b`), it is never consulted by the F-DHT
+                            // predicate, and it never touches the verified
+                            // entry's current-binding slot (dial-proven only).
                             record_observed_peer_id_locked(entry, pid);
                         }
                         if entry.last_seen.map(|ls| ls / 1000).unwrap_or(0) < shared.last_seen {
-                            entry.last_seen = Some(shared.last_seen.saturating_mul(1000));
+                            // V040-T13 F2: wire `last_seen` is attacker-chosen;
+                            // never let a remote value exceed local time (plus
+                            // the skew allowance). In a capped store this value
+                            // selects eviction victims and the dial tier.
+                            entry.last_seen = Some(clamp_wire_last_seen_ms(shared.last_seen));
                         }
                         for topic in &shared.known_topics {
                             if !entry.topics.iter().any(|t| t == topic)
@@ -2024,7 +2076,7 @@ impl LedgerManager {
                         nickname: None,
                         success_count: 0,
                         failure_count: 0,
-                        last_seen: Some(shared.last_seen.saturating_mul(1000)),
+                        last_seen: Some(clamp_wire_last_seen_ms(shared.last_seen)),
                         topics: shared.known_topics.clone(),
                         locally_verified: false,
                         is_bootstrap: false,
@@ -2047,6 +2099,14 @@ impl LedgerManager {
 
     /// Mark an operator-configured bootstrap address: locally verified,
     /// never evicted, labelled.
+    ///
+    /// Review triage (qwen3.8-max-0902, finding 2): an entry added without a
+    /// peer_id binding (and with success_count 0) can never satisfy
+    /// `is_locally_verified_pair` until a completed dial fills the binding
+    /// via `record_connection`. That is INTENTIONAL and is the doctrine: a
+    /// bootstrap address is operator hearsay, not a proven (address,
+    /// identity) pair, so it must not be DHT-published until our store has
+    /// proved it. The entry remains fully usable for seeding/dialing.
     pub fn add_bootstrap(&self, multiaddr: &str, label: Option<&str>) {
         let stripped = strip_peer_id_component(multiaddr);
         if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
@@ -2122,10 +2182,12 @@ impl LedgerManager {
     ///
     /// `local_peer_id` (own identity) and `my_addrs` (own listen/external
     /// addresses) exclude self-entries -- the migration must never import a
-    /// node's own address or identity. `locally_verified` is preserved from
-    /// the legacy file so genuinely verified history survives; everything
-    /// else imports as hearsay. `peers.json` is left in place; the caller
-    /// simply stops writing it.
+    /// node's own address or identity. The legacy `locally_verified` flag is
+    /// NOT trusted (V040-T13 F9): the pre-unification CLI marked every
+    /// advertised listen address as verified, so only `is_bootstrap`
+    /// (operator-configured by fiat) survives as verified; everything else
+    /// imports as hearsay and is re-proven by the first live dial.
+    /// `peers.json` is left in place; the caller simply stops writing it.
     pub fn import_legacy_cli_entries(
         &self,
         entries: Vec<LedgerMigrationEntry>,
@@ -2176,7 +2238,9 @@ impl LedgerManager {
                         .iter_mut()
                         .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
                     {
-                        if !e.locally_verified && entry.locally_verified {
+                        // V040-T13 F9: the legacy verified flag is not trusted.
+                        // Only operator bootstrap status may upgrade an entry.
+                        if !e.locally_verified && entry.is_bootstrap {
                             e.locally_verified = true;
                         }
                         if e.is_bootstrap {
@@ -2184,21 +2248,27 @@ impl LedgerManager {
                         } else if entry.is_bootstrap {
                             e.is_bootstrap = true;
                         }
-                        if let Some(pid) = entry.peer_id.as_deref() {
-                            e.peer_id.get_or_insert_with(|| pid.to_string());
-                            record_observed_peer_id_locked(e, pid);
-                        }
-                        for pid in &entry.observed_peer_ids {
-                            record_observed_peer_id_locked(e, pid);
+                        // V040-T13 F-DHT (Bypass-B fix, uniform with the wire
+                        // merge path): a legacy-supplied pid is never written
+                        // onto an entry this node has personally verified.
+                        if !e.locally_verified {
+                            if let Some(pid) = entry.peer_id.as_deref() {
+                                e.peer_id.get_or_insert_with(|| pid.to_string());
+                                record_observed_peer_id_locked(e, pid);
+                            }
+                            for pid in &entry.observed_peer_ids {
+                                record_observed_peer_id_locked(e, pid);
+                            }
                         }
                         if e.first_seen.is_none() {
                             e.first_seen = entry.first_seen.map(|s| s.saturating_mul(1000));
                         }
-                        if entry
-                            .last_seen
-                            .is_some_and(|ls| e.last_seen.unwrap_or(0) / 1000 < ls)
-                        {
-                            e.last_seen = entry.last_seen.map(|s| s.saturating_mul(1000));
+                        if let Some(ls) = entry.last_seen {
+                            if e.last_seen.unwrap_or(0) / 1000 < ls {
+                                // V040-T13 F6: legacy last_seen is the same
+                                // ranking-key hazard as the wire value -- clamp.
+                                e.last_seen = Some(clamp_wire_last_seen_ms(ls));
+                            }
                         }
                     }
                 } else {
@@ -2215,9 +2285,13 @@ impl LedgerManager {
                         // Legacy `consecutive_failures` maps onto the core
                         // dead-tier counter so a poisoned entry cannot
                         // masquerade as healthy.
-                        last_seen: entry.last_seen.map(|s| s.saturating_mul(1000)),
+                        // V040-T13 F6: legacy last_seen is the same
+                        // ranking-key hazard as the wire value -- clamp.
+                        last_seen: entry.last_seen.map(clamp_wire_last_seen_ms),
                         topics: Vec::new(),
-                        locally_verified: entry.locally_verified,
+                        // V040-T13 F9: the legacy verified flag is not
+                        // trusted -- only operator bootstrap survives.
+                        locally_verified: entry.is_bootstrap,
                         is_bootstrap: entry.is_bootstrap,
                         first_seen: entry.first_seen.map(|s| s.saturating_mul(1000)),
                         observed_peer_ids: entry
@@ -2291,6 +2365,48 @@ impl LedgerManager {
             .iter()
             .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
             .cloned()
+    }
+
+    /// V040-T13 F-DHT (revised): whether the (identity, address) PAIR is
+    /// proven in OUR OWN store. The address is the lookup key -- the same
+    /// per-entry granularity the export paths use
+    /// (`export_seed_entries_for`, `exchange_response_entries_for_request`,
+    /// both filtering per entry on `locally_verified`). An entry passes only
+    /// if it is locally verified (a dial WE completed), proven
+    /// (`success_count > 0`), not dead-tier, and bound to exactly this peer
+    /// identity as its CURRENT binding. Never consults `observed_peer_ids`
+    /// (wire-attacker-writable) and never accepts a wire-supplied peer id as
+    /// the key -- the wire may only NAME the pair; our store must PROVE it.
+    pub fn is_locally_verified_pair(&self, multiaddr: &str, peer_id: &str) -> bool {
+        let Some(entry) = self.entry_for_multiaddr(multiaddr) else {
+            return false;
+        };
+        if !entry.locally_verified
+            || entry.success_count == 0
+            || entry.failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD
+        {
+            return false;
+        }
+        let Some(bound) = entry.peer_id.as_deref() else {
+            return false;
+        };
+        let canonical = canonical_ledger_peer_id(peer_id, None);
+        // Review triage (qwen3.8-max-0902, V040-T13) + hostile re-review
+        // (2026-09-01): the raw arm is LOAD-BEARING for stored bounds that
+        // canonical_ledger_peer_id cannot convert (non-Ed25519 pids are
+        // stored as base58 and the canonical arm returns None for them).
+        // Case-insensitivity is safe ONLY for hex: hex digits are a
+        // case-insensitive spelling of the same bytes, so a case-variant of
+        // a 64-hex bound is the same identity and can never admit an
+        // unproven pair. Base58 is a case-SENSITIVE encoding: a hand-crafted
+        // case-variant decodes to different bytes, so the exact arm must
+        // stay exact for non-hex bounds (the live caller passes canonical
+        // PeerId::to_string(), which is base58 in canonical case). The
+        // canonical arm covers key-derived base58 and mixed-case hex; all
+        // arms fail closed on garbage (canonical -> None).
+        let trimmed = peer_id.trim();
+        let hex_casefold = trimmed.len() == 64 && trimmed.eq_ignore_ascii_case(bound);
+        trimmed == bound || hex_casefold || canonical.as_deref() == Some(bound)
     }
 
     /// Number of stored entries that carry at least one known gossipsub topic.
@@ -2416,6 +2532,80 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    /// V040-T13 F2 (revised per Rule-8 F-5): `last_seen` is a RANKING key --
+    /// `seed_addresses` sorts descending, `evict_one_locked` picks the
+    /// minimum. A ceiling of `now + allowance` would still let a hostile
+    /// u64::MAX land strictly above every honest value forever (honest
+    /// senders report a PAST observation), so the clamp is plain
+    /// `min(wire, now)`: an attacker can never exceed what a fresh local
+    /// observation produces, and an honest peer with a fast clock ties with
+    /// local time instead of beating everyone.
+    #[test]
+    fn wire_last_seen_cannot_outrank_honest_entries() {
+        let (_dir, mgr) = manager();
+        let pid = peer();
+        let addr = "/ip4/198.51.100.200/tcp/9001".to_string();
+
+        // Attacker: u64::MAX. Clamps to exactly local now.
+        let merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid.clone()),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        assert_eq!(merged, 1);
+        let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
+        let now_ms = current_timestamp();
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "attacker last_seen must clamp to local now, not now + allowance"
+        );
+
+        // Honest peer with a fast clock: reports now + 30s. Under the old
+        // +5min ceiling this landed below the attacker; with min(wire, now)
+        // it ties at local time. THE ORDERING PROPERTY: the attacker must
+        // never sort strictly above an honest peer.
+        let honest_addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let fast_clock = (current_timestamp() / 1000) + 30;
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: honest_addr.clone(),
+            last_peer_id: Some(peer()),
+            last_seen: fast_clock,
+            known_topics: Vec::new(),
+        }]);
+        let honest = mgr
+            .entry_for_multiaddr(&honest_addr)
+            .expect("honest stored");
+        let now_ms = current_timestamp();
+        assert!(
+            honest.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "honest fast-clock value must clamp to local now"
+        );
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= honest.last_seen.unwrap_or(u64::MAX),
+            "attacker must not outrank an honest peer"
+        );
+
+        // Exists-branch (update): re-merging the hostile value stays clamped.
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        let remerged = mgr.entry_for_multiaddr(&addr).expect("remerged");
+        let now_ms = current_timestamp();
+        assert!(
+            remerged.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "update branch must re-clamp the hostile value"
+        );
+
+        // V040-T13 F-DHT: merged entries are hearsay, never locally verified --
+        // the exact property the Kademlia disclosure gate checks before
+        // re-publishing an address.
+        assert!(!honest.locally_verified, "merged entries are hearsay");
     }
 
     /// A (peer_id, public_key_hex) pair that genuinely self-certifies: the
@@ -4731,6 +4921,10 @@ mod tests {
         let remote_verified = peer();
         let remote_hearsay = peer();
 
+        // V040-T13 F9: legacy `locally_verified: true` is NOT trusted -- the
+        // pre-unification CLI marked every advertised listen address as
+        // verified. Only `is_bootstrap` (operator-configured by fiat) survives
+        // as verified; this fixture imports as hearsay.
         let good_verified = LedgerMigrationEntry {
             multiaddr: "/ip4/98.94.45.116/tcp/9001".to_string(),
             peer_id: Some(remote_verified.clone()),
@@ -4739,6 +4933,19 @@ mod tests {
             first_seen: Some(1_700_000_000),
             last_seen: Some(1_700_000_100),
             observed_peer_ids: vec![remote_verified.clone()],
+            label: None,
+            consecutive_failures: 0,
+        };
+        // Operator bootstrap: verified by fiat even though the legacy flag
+        // says otherwise -- the only trusted verified input.
+        let good_bootstrap = LedgerMigrationEntry {
+            multiaddr: "/ip4/198.51.100.250/tcp/9001".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: false,
+            is_bootstrap: true,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
             label: None,
             consecutive_failures: 0,
         };
@@ -4801,6 +5008,7 @@ mod tests {
         let result = mgr.import_legacy_cli_entries(
             vec![
                 good_verified,
+                good_bootstrap,
                 good_hearsay,
                 ephemeral,
                 self_by_identity,
@@ -4810,8 +5018,8 @@ mod tests {
             Some(&my_peer),
             &my_addrs,
         );
-        assert_eq!(result.offered, 6);
-        assert_eq!(result.imported, 2);
+        assert_eq!(result.offered, 7);
+        assert_eq!(result.imported, 3);
         assert_eq!(result.rejected, 4);
 
         let entries = mgr.entries.lock().clone();
@@ -4827,11 +5035,23 @@ mod tests {
         assert!(entries
             .iter()
             .all(|e| e.multiaddr != "/ip4/10.32.4.5/tcp/9001"));
+        // V040-T13 F9: the legacy verified flag is NOT trusted -- this entry
+        // imports as hearsay despite `locally_verified: true` in the file.
         let verified = entries
             .iter()
             .find(|e| e.multiaddr == "/ip4/98.94.45.116/tcp/9001")
-            .expect("verified survivor imported");
-        assert!(verified.locally_verified);
+            .expect("legacy verified survivor imported");
+        assert!(
+            !verified.locally_verified,
+            "legacy locally_verified flag must not survive migration"
+        );
+        // Operator bootstrap survives as verified by fiat.
+        let bootstrap = entries
+            .iter()
+            .find(|e| e.multiaddr == "/ip4/198.51.100.250/tcp/9001")
+            .expect("bootstrap survivor imported");
+        assert!(bootstrap.locally_verified);
+        assert!(bootstrap.is_bootstrap);
         let hearsay = entries
             .iter()
             .find(|e| e.multiaddr == "/ip4/203.0.113.50/tcp/9002")
@@ -4936,5 +5156,135 @@ mod tests {
         );
         mgr.record_connection("/ip4/198.51.100.70/tcp/9001".to_string(), p.clone());
         assert!(mgr.find_by_peer_id(&p).expect("entry").locally_verified);
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 1): the pair predicate must
+    /// accept the stored hex binding in ANY case (case cannot change
+    /// identity) and must keep failing closed on a wrong or garbage pid.
+    #[test]
+    fn pair_gate_matches_mixed_case_hex_and_rejects_others() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.71/tcp/9001".to_string();
+        // Ed25519-derived pid: record_connection's live canonicalization
+        // stores the bound as lowercase hex (PeerId::random() is not
+        // Ed25519-derived, so canonical_ledger_peer_id would return None).
+        let (p, _key_hex) = self_certifying_pair();
+        let bound_hex = canonical_ledger_peer_id(&p, None).expect("base58 -> hex");
+        assert_eq!(bound_hex, bound_hex.to_lowercase());
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        // Same identity, any presentation: base58 (the live caller form) and
+        // the stored hex in UPPERCASE both match.
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "base58 caller form must match"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex.to_uppercase()),
+            "uppercase hex caller form must match (case-insensitive arm)"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex),
+            "lowercase hex caller form must match"
+        );
+
+        // Wrong identity and garbage fail closed.
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &peer()),
+            "different pid must not match"
+        );
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, "not-a-peer-id"),
+            "garbage pid must fail closed"
+        );
+    }
+
+    /// Hostile re-review (2026-09-01): a stored BASE58 bound (a pid the
+    /// canonicalizer cannot convert to hex, e.g. non-Ed25519) must match its
+    /// canonical base58 string exactly -- base58 is case-sensitive, so a
+    /// hand-crafted case-variant decodes to a DIFFERENT peer id and must
+    /// fail closed even though it case-folds to the bound.
+    #[test]
+    fn pair_gate_rejects_base58_case_variants() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.73/tcp/9001".to_string();
+        let p = peer(); // PeerId::random() is not Ed25519-derived
+        assert!(
+            canonical_ledger_peer_id(&p, None).is_none(),
+            "fixture must be un-canonicalizable so the bound stays base58"
+        );
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "canonical base58 must match the stored bound exactly"
+        ); // Flip one letter's case: same string modulo case, different bytes
+           // when read as base58. Must fail closed.
+        let mut mangled = p.clone();
+        let flip = mangled
+            .find(|c: char| c.is_ascii_alphabetic())
+            .expect("base58 pid has letters");
+        let ch = mangled[flip..flip + 1].chars().next().expect("char");
+        let toggled = if ch.is_ascii_lowercase() {
+            ch.to_ascii_uppercase()
+        } else {
+            ch.to_ascii_lowercase()
+        };
+        mangled.replace_range(flip..flip + 1, &toggled.to_string());
+        assert_ne!(mangled, p, "fixture must actually differ");
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &mangled),
+            "base58 case-variant must fail closed"
+        );
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 3): the wire-merge path must
+    /// record the heard pid in observed_peer_ids even on a locally_verified
+    /// entry (stale-identity signal), while the current binding and the
+    /// verified flag stay untouched.
+    #[test]
+    fn wire_merge_records_observed_pid_on_verified_entry() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.72/tcp/9001".to_string();
+        let proven = peer();
+        let heard = peer();
+        mgr.record_connection(addr.clone(), proven.clone());
+        let before = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(before.locally_verified);
+        assert_eq!(before.peer_id.as_deref(), Some(proven.as_str()));
+
+        // Update branch (entry exists): merge returns the added-count, which
+        // is 0 for an update -- the observable state is what we assert on.
+        let _merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(heard.clone()),
+            last_seen: current_timestamp() / 1000,
+            known_topics: Vec::new(),
+        }]);
+
+        let after = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(
+            after.locally_verified,
+            "verified flag must survive the merge"
+        );
+        assert_eq!(
+            after.peer_id.as_deref(),
+            Some(proven.as_str()),
+            "current binding must stay dial-proven, never overwritten by wire"
+        );
+        assert!(
+            after.observed_peer_ids.iter().any(|id| id == &heard),
+            "heard pid must land in observed_peer_ids on a verified entry"
+        );
     }
 }
