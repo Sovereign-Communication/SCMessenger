@@ -303,10 +303,13 @@ impl TransportManager {
         capabilities: TransportCapabilities,
     ) {
         let mut transports = self.transports.write();
-        transports
-            .entry(transport_type)
-            .or_insert_with(|| TransportState::new(capabilities));
-        info!("Transport registered (if absent): {}", transport_type);
+        // R3-C4: log only when this call actually registers something --
+        // this runs on every swarm connect, so unconditional info-level
+        // logging would spam under reconnect churn.
+        if let std::collections::hash_map::Entry::Vacant(e) = transports.entry(transport_type) {
+            e.insert(TransportState::new(capabilities));
+            debug!("Transport registered: {}", transport_type);
+        }
     }
 
     /// Handle a transport event
