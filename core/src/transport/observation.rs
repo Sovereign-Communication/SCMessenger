@@ -3,7 +3,7 @@
 // Tracks observations from multiple peers to determine our actual external addresses.
 // Implements consensus-based address discovery without relying on external STUN servers.
 
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -28,7 +28,11 @@ pub struct AddressObserver {
     /// Observations indexed by observer peer ID
     observations: HashMap<PeerId, AddressObservation>,
     /// Ports currently bound by this node. This is the single source of truth
-    /// for whether an observed address can be advertised.
+    /// for whether an observed address can be advertised. Observations whose
+    /// port is not in this set are the NAT-mapped *source* ports of outbound
+    /// flows -- ephemeral and never dialable -- and are dropped at the source
+    /// (V040-T14 P0). Empty set = accept all (browser/wasm transport has no
+    /// listeners).
     listen_ports: Vec<u16>,
     /// Cached consensus result (recalculated when observations change)
     cached_external_addresses: Vec<SocketAddr>,
@@ -50,25 +54,30 @@ impl AddressObserver {
         }
     }
 
-    /// Replace the local listener port set and remove observations that are no
-    /// longer eligible for advertisement.
+    /// Replace the local listener port set. Observations on other ports are
+    /// excluded from the consensus immediately (re-filtered on recalc).
     pub fn set_listen_ports(&mut self, ports: impl IntoIterator<Item = u16>) {
         self.listen_ports = ports.into_iter().collect();
-        self.observations
-            .retain(|_, observation| self.listen_ports.contains(&observation.address.port()));
         self.recalculate_consensus();
     }
 
     /// Record an observation from a peer. Observations are accepted only for
-    /// ports this node currently listens on; an empty allowlist fails closed.
+    /// ports this node currently listens on; an empty allowlist accepts all
+    /// (V040-T14 P0: browser/wasm transport has no listeners).
     pub fn record_observation(&mut self, observer: PeerId, address: SocketAddr) {
-        if !self.listen_ports.contains(&address.port()) {
-            // A newer observation from this peer that uses a non-listening port
-            // invalidates its previous address. Retaining that old value would
-            // keep a stale endpoint eligible for advertisement.
-            if self.observations.remove(&observer).is_some() {
-                self.recalculate_consensus();
-            }
+        // V040-T14 P0: an observed address whose port is not one we listen on
+        // is the NAT-mapped source port of an outbound flow -- ephemeral and
+        // never dialable. It must never enter the consensus: once advertised,
+        // every peer that learns it wastes dial budget on it and inbound
+        // reachability for that address is impossible. Empty listen_ports =
+        // accept all (browser/wasm transport has no listeners).
+        if !self.listen_ports.is_empty() && !self.listen_ports.contains(&address.port()) {
+            tracing::debug!(
+                "Dropping address observation {} from {}: port {} is not a listen port",
+                address,
+                observer,
+                address.port()
+            );
             return;
         }
 
@@ -136,16 +145,45 @@ impl AddressObserver {
         let mut address_counts: HashMap<SocketAddr, u32> = HashMap::new();
 
         for obs in self.observations.values() {
+            // Belt-and-suspenders with the record-time gate: any stored
+            // observation that predates a set_listen_ports call is excluded
+            // from the consensus the same way.
+            if !self.listen_ports.is_empty() && !self.listen_ports.contains(&obs.address.port()) {
+                continue;
+            }
             *address_counts.entry(obs.address).or_insert(0) += obs.confirmation_count;
         }
 
-        // Sort by count (most observed first)
+        // Sort by count (most observed first). Equal counts resolve by address
+        // so the consensus is deterministic -- the previous sort left ties to
+        // HashMap iteration order, letting an attacker's permitted-port
+        // observation win promotion over an equally-voted legitimate one
+        // depending on the run (V040-T14 P0 audit).
         let mut addresses: Vec<(SocketAddr, u32)> = address_counts.into_iter().collect();
         addresses.sort_by_key(|(address, count)| (Reverse(*count), *address));
 
         // Cache the sorted addresses
         self.cached_external_addresses = addresses.into_iter().map(|(addr, _)| addr).collect();
     }
+}
+
+/// Extract the set of TCP/UDP ports from a list of multiaddrs (our listeners).
+/// Used to distinguish legitimate NAT-reflected observations (port == a port
+/// we listen on) from ephemeral NAT source ports of outbound flows.
+pub fn listen_ports_from_multiaddrs(addrs: &[Multiaddr]) -> Vec<u16> {
+    let mut ports: Vec<u16> = Vec::new();
+    for addr in addrs {
+        for proto in addr.iter() {
+            let port = match proto {
+                Protocol::Tcp(p) | Protocol::Udp(p) => p,
+                _ => continue,
+            };
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        }
+    }
+    ports
 }
 
 /// Connection endpoint information
@@ -302,42 +340,105 @@ mod tests {
     }
 
     #[test]
-    fn non_listen_port_observations_are_rejected() {
+    fn test_ephemeral_source_port_observation_is_dropped() {
         let mut observer = AddressObserver::new();
-        let observer_peer = PeerId::random();
-        observer.set_listen_ports([9001]);
+        observer.set_listen_ports(vec![9001]);
 
-        observer.record_observation(observer_peer, "203.0.113.5:9001".parse().unwrap());
-        observer.record_observation(observer_peer, "203.0.113.5:7196".parse().unwrap());
+        let peer = PeerId::random();
+        // 7196 is an ephemeral NAT source port, not a listen port -- must never
+        // enter the consensus.
+        observer.record_observation(peer, "147.81.41.188:7196".parse().unwrap());
         assert!(observer.external_addresses().is_empty());
 
-        observer.record_observation(observer_peer, "203.0.113.5:9001".parse().unwrap());
+        // The same public IP on a real listen port IS accepted.
+        observer.record_observation(peer, "147.81.41.188:9001".parse().unwrap());
         assert_eq!(
             observer.primary_external_address(),
-            Some("203.0.113.5:9001".parse().unwrap())
+            Some("147.81.41.188:9001".parse().unwrap())
         );
     }
 
     #[test]
-    fn removing_a_listen_port_removes_its_observations() {
+    fn test_consensus_excludes_ephemeral_port_even_when_more_common() {
         let mut observer = AddressObserver::new();
-        let peer = PeerId::random();
-        observer.set_listen_ports([9001, 9002]);
-        observer.record_observation(peer, "203.0.113.5:9001".parse().unwrap());
-        assert!(observer.primary_external_address().is_some());
+        observer.set_listen_ports(vec![9001]);
 
-        observer.set_listen_ports([9002]);
-        assert!(observer.external_addresses().is_empty());
+        // Five peers observe the ephemeral source port; one observes the real
+        // listen port. Without the filter the ephemeral port wins the vote and
+        // becomes the advertised external address.
+        for _ in 0..5 {
+            observer.record_observation(PeerId::random(), "147.81.41.188:7196".parse().unwrap());
+        }
+        observer.record_observation(PeerId::random(), "147.81.41.188:9001".parse().unwrap());
 
-        observer.set_listen_ports([]);
+        assert_eq!(
+            observer.primary_external_address(),
+            Some("147.81.41.188:9001".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_consensus_tie_breaks_deterministically_by_address() {
+        let mut observer = AddressObserver::new();
+        // Two permitted-port addresses with EQUAL vote counts. The winner was
+        // previously HashMap-iteration order (nondeterministic); it must now be
+        // the deterministically-lower address regardless of insertion order.
+        let lower: SocketAddr = "203.0.113.5:9001".parse().unwrap();
+        let higher: SocketAddr = "203.0.113.9:9001".parse().unwrap();
+
+        // Insert higher first, lower second -- equal totals either way.
+        observer.record_observation(PeerId::random(), higher);
+        observer.record_observation(PeerId::random(), lower);
+
+        assert_eq!(observer.external_addresses().len(), 2);
+        assert_eq!(observer.primary_external_address(), Some(lower));
+
+        // And with insertion reversed, the same address still wins.
+        let mut observer2 = AddressObserver::new();
+        observer2.record_observation(PeerId::random(), lower);
+        observer2.record_observation(PeerId::random(), higher);
+        assert_eq!(observer2.primary_external_address(), Some(lower));
+    }
+
+    #[test]
+    fn test_set_listen_ports_re_filters_stored_observations() {
+        let mut observer = AddressObserver::new();
+        // Accept-all observer (wasm transport): the ephemeral observation is
+        // stored.
+        observer.record_observation(PeerId::random(), "147.81.41.188:7196".parse().unwrap());
+        assert_eq!(observer.external_addresses().len(), 1);
+
+        // Once the listener set is known, the stored observation is excluded
+        // from the consensus immediately.
+        observer.set_listen_ports(vec![9001]);
         assert!(observer.external_addresses().is_empty());
     }
 
     #[test]
-    fn empty_listen_port_set_fails_closed() {
+    fn test_listen_ports_from_multiaddrs() {
+        let addrs: Vec<Multiaddr> = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse().unwrap(),
+            "/ip6/::/tcp/9001".parse().unwrap(),
+            "/ip4/0.0.0.0/udp/9002".parse().unwrap(),
+        ];
+        let ports = listen_ports_from_multiaddrs(&addrs);
+        assert_eq!(ports, vec![9001, 9002]);
+    }
+
+    #[test]
+    fn test_address_confirmation_count() {
         let mut observer = AddressObserver::new();
-        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
-        assert!(observer.external_addresses().is_empty());
+        let peer = PeerId::random();
+        let addr: SocketAddr = "1.2.3.4:1234".parse().unwrap();
+
+        // Record same observation multiple times
+        observer.record_observation(peer, addr);
+        observer.record_observation(peer, addr);
+        observer.record_observation(peer, addr);
+
+        let obs = observer.all_observations();
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].confirmation_count, 3);
     }
 
     #[test]

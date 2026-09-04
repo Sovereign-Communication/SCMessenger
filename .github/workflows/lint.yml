@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
 jobs:
   rust:
     name: Rust Linting
@@ -16,28 +20,38 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      
+
+      - name: Detect docs-only change
+        id: docs_only
+        uses: ./.github/actions/detect-docs-only
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           toolchain: stable
           components: rustfmt, clippy
       
       - uses: Swatinem/rust-cache@v2
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           key: lint-rust-${{ hashFiles('**/Cargo.lock') }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install libdbus-1-dev (Ubuntu)
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Check Rust formatting
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: cargo fmt --all -- --check
       
       - name: Run Clippy
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: cargo clippy --workspace -- -D warnings -A clippy::empty_line_after_doc_comments
       
       - name: Check for unwrap() in library code
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           echo "Checking for unwrap() in library code (core/src, mobile/src)..."
           if rg -n '\.unwrap\(\)' core/src mobile/src --glob '!*test*' --glob '!*bench*'; then
@@ -47,6 +61,7 @@ jobs:
           echo "[OK] No unwrap() found in library code"
       
       - name: Check for println! in library code
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           echo "Checking for println! in library code (core/src, mobile/src)..."
           if rg -n 'println!' core/src mobile/src --glob '!*test*' --glob '!*bench*'; then
@@ -61,11 +76,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      
+
+      - name: Detect docs-only change
+        id: docs_only
+        uses: ./.github/actions/detect-docs-only
+
       - name: Setup Android SDK
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         uses: android-actions/setup-android@v3
       
       - name: Cache Gradle dependencies
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -76,6 +97,7 @@ jobs:
             ${{ runner.os }}-gradle-
       
       - name: Run ktlint
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           cd android
           ./gradlew ktlintCheck
@@ -86,11 +108,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      
+
+      - name: Detect docs-only change
+        id: docs_only
+        uses: ./.github/actions/detect-docs-only
+
       - name: Install swiftlint
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: brew install swiftlint
       
       - name: Run swiftlint
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           cd iOS
           swiftlint lint --strict
@@ -101,13 +129,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      
+
+      - name: Detect docs-only change
+        id: docs_only
+        uses: ./.github/actions/detect-docs-only
+
       - uses: actions/setup-node@v4
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           node-version: '20'
       
       - name: Check if package.json exists
         id: check-package
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           if [ -f "wasm/package.json" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
@@ -117,7 +151,7 @@ jobs:
           fi
       
       - name: Cache npm dependencies
-        if: steps.check-package.outputs.exists == 'true'
+        if: steps.check-package.outputs.exists == 'true' && steps.docs_only.outputs.is_docs_only != 'true'
         uses: actions/cache@v6
         with:
           path: wasm/node_modules
@@ -126,13 +160,13 @@ jobs:
             ${{ runner.os }}-node-
       
       - name: Install dependencies
-        if: steps.check-package.outputs.exists == 'true'
+        if: steps.check-package.outputs.exists == 'true' && steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           cd wasm
           npm install
       
       - name: Run eslint
-        if: steps.check-package.outputs.exists == 'true'
+        if: steps.check-package.outputs.exists == 'true' && steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           cd wasm
           npm run lint

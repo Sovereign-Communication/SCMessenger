@@ -826,9 +826,9 @@ impl IronCore {
             // Initialize routing engine with identity-derived peer id and hint.
             // If the swarm has already seeded the engine (via start_swarm_with_config),
             // keep it — the shared engine is already in use for message dispatch.
-            let hint = blake3::hash(&pk_bytes).as_bytes()[0..4]
+            let hint = blake3::hash(&pk_bytes).as_bytes()[0..8]
                 .try_into()
-                .unwrap_or([0u8; 4]);
+                .unwrap_or([0u8; 8]);
             let mut routing = self.routing_engine.write();
             if routing.is_none() {
                 *routing = Some(OptimizedRoutingEngine::new(pk_bytes, hint));
@@ -1032,9 +1032,9 @@ impl IronCore {
         }
 
         // Check routing decision
-        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..4]
+        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..8]
             .try_into()
-            .unwrap_or([0u8; 4]);
+            .unwrap_or([0u8; 8]);
         let msg_id_bytes: [u8; 16] = *uuid::Uuid::parse_str(&message_id)
             .unwrap_or_else(|_| uuid::Uuid::nil())
             .as_bytes();
@@ -2595,7 +2595,7 @@ impl IronCore {
         if let Some(ref mut engine) = guard.as_mut() {
             let current_routes: Vec<(
                 [u8; 32],
-                [u8; 4],
+                [u8; 8],
                 crate::routing::global::RouteAdvertisement,
             )> = engine
                 .base_engine_mut()
@@ -2730,9 +2730,9 @@ impl IronCore {
             engine.record_message_activity(&peer_id_hex);
             if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
                 if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    let parsed_hints: Vec<[u8; 4]> = hints
+                    let parsed_hints: Vec<[u8; 8]> = hints
                         .into_iter()
-                        .filter_map(|hint| <[u8; 4]>::try_from(hint.as_slice()).ok())
+                        .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
                         .collect();
                     // LocalCell intentionally updates only peers already known to
                     // the local topology; an announcement cannot create a peer.
@@ -3029,9 +3029,9 @@ impl IronCore {
         let mut guard = self.routing_engine.write();
         match guard.as_mut() {
             Some(engine) => {
-                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..4]
+                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..8]
                     .try_into()
-                    .unwrap_or([0u8; 4]);
+                    .unwrap_or([0u8; 8]);
                 let msg_id: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
                 let now = web_time::SystemTime::now()
                     .duration_since(web_time::UNIX_EPOCH)
@@ -3747,7 +3747,7 @@ impl IronCore {
     }
     pub fn make_routing_decision(
         &self,
-        recipient_hint: [u8; 4],
+        recipient_hint: [u8; 8],
         message_id: [u8; 16],
         priority: u8,
         now: u64,
@@ -4052,7 +4052,7 @@ impl IronCore {
     /// Returns `None` if the routing engine is not initialized.
     pub fn get_best_forwarding_path(
         &self,
-        recipient_hint: &[u8; 4],
+        recipient_hint: &[u8; 8],
         message_id: &[u8; 16],
         priority: u8,
     ) -> Option<crate::routing::RoutingDecision> {
@@ -4076,7 +4076,7 @@ impl IronCore {
                     let peers = engine
                         .base_engine()
                         .local_cell()
-                        .peers_for_hint(&arr[0..4].try_into().unwrap_or([0u8; 4]));
+                        .peers_for_hint(&arr[0..8].try_into().unwrap_or([0u8; 8]));
                     return peers
                         .iter()
                         .map(|p| format!("{:?}", p.transports))
@@ -4458,7 +4458,7 @@ impl IronCore {
     /// Mark a prefetched route refresh as failed.
     /// Called when a route refresh attempt fails, so the prefetch manager
     /// can track failures and deprioritize that route.
-    pub fn routing_mark_refresh_failed(&self, hint: [u8; 4]) {
+    pub fn routing_mark_refresh_failed(&self, hint: [u8; 8]) {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().mark_refresh_failed(&hint);
@@ -4467,7 +4467,7 @@ impl IronCore {
 
     /// Get the next destination hint that needs route refresh.
     /// Returns `None` if the prefetch queue is empty.
-    pub fn routing_next_refresh_hint(&self) -> Option<[u8; 4]> {
+    pub fn routing_next_refresh_hint(&self) -> Option<[u8; 8]> {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().next_refresh_hint()
@@ -4497,7 +4497,7 @@ impl IronCore {
     }
 
     /// Start a route refresh cycle for a specific hint.
-    pub fn routing_start_refresh(&self, hint: [u8; 4]) {
+    pub fn routing_start_refresh(&self, hint: [u8; 8]) {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().start_route_refresh(&hint);
@@ -5013,9 +5013,9 @@ mod tests {
     #[test]
     fn routing_hint_update_populates_local_cell() {
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [7u8; 32];
-        let hint = [1u8, 2u8, 3u8, 4u8];
+        let hint = [1u8, 2u8, 3u8, 4u8, 0u8, 0u8, 0u8, 0u8];
         {
             let mut engine = core.routing_engine.write();
             engine
@@ -5040,16 +5040,58 @@ mod tests {
     }
 
     #[test]
+    fn reliability_success_updates_local_score_and_capability_uses_active_peers() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer = [8u8; 32];
+        {
+            let mut engine = core.routing_engine.write();
+            engine
+                .as_mut()
+                .unwrap()
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_seen(peer, crate::routing::TransportType::BLE);
+        }
+
+        let before = core
+            .routing_engine
+            .read()
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap()
+            .reliability_score;
+        core.routing_update_reliability(hex::encode(peer), true);
+        let after = core
+            .routing_engine
+            .read()
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap()
+            .reliability_score;
+
+        assert!(after > before);
+        assert!(core.get_forwarding_capability("ble"));
+        assert!(!core.get_forwarding_capability("tcp"));
+    }
+
+    #[test]
     fn routing_peer_seen_raises_confidence_after_connection_established() {
         // D6 acceptance 1: routing confidence for a peer is zero before any
         // sighting and non-zero after the swarm's ConnectionEstablished feed
         // (routed through this exact IronCore entry point).
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [42u8; 32];
-        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
             .try_into()
-            .expect("4 byte hint");
+            .expect("8 byte hint");
         let msg_id = [7u8; 16];
 
         // Before the feed: unknown peer, StoreAndCarry fallback, zero confidence.
@@ -5094,7 +5136,7 @@ mod tests {
         // different recorded transports. Same peer, both paths -- the engine
         // accumulates them, mirroring the swarm handler's multi-path reality.
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [43u8; 32];
 
         core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
@@ -5157,48 +5199,6 @@ mod tests {
             parse_transport_type("relay"),
             "a relayed circuit must never collapse into the direct-TCP tier"
         );
-    }
-
-    #[test]
-    fn reliability_success_updates_local_score_and_capability_uses_active_peers() {
-        let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
-        let peer = [8u8; 32];
-        {
-            let mut engine = core.routing_engine.write();
-            engine
-                .as_mut()
-                .unwrap()
-                .base_engine_mut()
-                .local_cell_mut()
-                .peer_seen(peer, crate::routing::TransportType::BLE);
-        }
-
-        let before = core
-            .routing_engine
-            .read()
-            .as_ref()
-            .unwrap()
-            .base_engine()
-            .local_cell()
-            .get_peer(&peer)
-            .unwrap()
-            .reliability_score;
-        core.routing_update_reliability(hex::encode(peer), true);
-        let after = core
-            .routing_engine
-            .read()
-            .as_ref()
-            .unwrap()
-            .base_engine()
-            .local_cell()
-            .get_peer(&peer)
-            .unwrap()
-            .reliability_score;
-
-        assert!(after > before);
-        assert!(core.get_forwarding_capability("ble"));
-        assert!(!core.get_forwarding_capability("tcp"));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
