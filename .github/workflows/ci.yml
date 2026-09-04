@@ -37,7 +37,11 @@ jobs:
         if: steps.docs_only.outputs.is_docs_only != 'true'
       - run: cargo clippy --workspace --all-features -- -D warnings
         if: steps.docs_only.outputs.is_docs_only != 'true'
-      - run: cargo install cargo-deny
+      # Pin version + lockfile: an unpinned install re-resolves transitive
+      # deps against the live index, and tinyvec 1.13.0 fails to compile on
+      # the runner toolchain, killing the Lint gate (tinyvec 1.11.0 in
+      # cargo-deny 0.20.2's shipped Cargo.lock is known-good).
+      - run: cargo install cargo-deny --version 0.20.2 --locked
         if: steps.docs_only.outputs.is_docs_only != 'true'
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
