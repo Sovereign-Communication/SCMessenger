@@ -3085,7 +3085,7 @@ impl IronCore {
     /// queue and entries stay in the outbox pending receipt, exactly the
     /// pre-egress semantics (R1-A2 disposition).
     pub fn handle_peer_connection_event(&self, peer_id: &str, connected: bool) {
-        self.handle_peer_connection_event_with_egress(peer_id, connected, &mut |_| false);
+        self.handle_peer_connection_event_with_egress(peer_id, connected, false, &mut |_| false);
     }
 
     /// Mirror a live libp2p swarm connection into the transport manager so the
@@ -3152,13 +3152,36 @@ impl IronCore {
         }
     }
 }
+/// R3-C2: grace window after a successful swarm egress. The retry loop may
+/// re-dispatch once inside this window if no receipt arrives; both the entry
+/// and the retry are receipt-idempotent (receipts clear the entry regardless
+/// of state), so this trades a rare duplicate for never marking a delivered
+/// message as Failed.
+pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
+
 impl IronCore {
     pub(crate) fn handle_peer_connection_event_with_egress(
         &self,
         peer_id: &str,
         connected: bool,
+        skip_flush: bool,
         egress: &mut dyn FnMut(&[u8]) -> bool,
     ) {
+        if !connected || skip_flush {
+            // R3-C1: an explicit skip (duplicate connect event for a
+            // connection that already flushed, or the losing site of the
+            // once-per-connection gate) leaves the outbox untouched -- no
+            // drain, no attempt counting, no fake success. The entries
+            // belong to the flush that actually owns this connection.
+            tracing::debug!(
+                event = "outbox_flush_skipped",
+                peer_id = %peer_id,
+                connected = connected,
+                skip_flush = skip_flush,
+                "Flush skipped for this connection; entries remain in the outbox"
+            );
+            return;
+        }
         if connected {
             tracing::info!(
                 event = "outbox_reconnect_detected",
@@ -3214,6 +3237,11 @@ impl IronCore {
                         // entry stays Enqueued until an application-level
                         // receipt calls mark_message_sent.
                         if egress(&msg.envelope_data) {
+                            // R3-C2: a real dispatch runs NO failure ladder --
+                            // never Failed, never exponential backoff. The entry
+                            // stays Enqueued with a fixed grace window (re-flush
+                            // safety net for a lost in-flight send); only a
+                            // receipt (mark_message_sent) clears it.
                             tracing::info!(
                                 event = "outbox_egress_dispatched",
                                 message_id = %msg_id,
@@ -3223,23 +3251,11 @@ impl IronCore {
                             );
                             msg.attempts = current_attempt;
                             msg.state = crate::store::outbox::MessageState::Enqueued;
-                            if current_attempt >= 12 {
-                                msg.state = crate::store::outbox::MessageState::Failed;
-                                msg.next_retry_at = None;
-                            } else {
-                                // R2-B1: backoff timer so an in-flight loss (peer
-                                // drops between the connected check and send) is
-                                // retried by the next reconnect flush instead of
-                                // sitting due-forever.
-                                let now_secs = web_time::SystemTime::now()
-                                    .duration_since(web_time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                msg.next_retry_at = Some(
-                                    now_secs
-                                        + 2u64.saturating_pow(current_attempt.min(12)).min(3600),
-                                );
-                            }
+                            let now_secs = web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            msg.next_retry_at = Some(now_secs + OUTBOX_EGRESS_GRACE_SECS);
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
                                     event = "outbox_enqueue_failed",
@@ -5220,6 +5236,7 @@ mod tests {
         core.handle_peer_connection_event_with_egress(
             &recipient,
             true,
+            false,
             &mut |envelope: &[u8]| {
                 egressed.push(envelope.to_vec());
                 true
@@ -5241,6 +5258,76 @@ mod tests {
         );
         assert!(core.mark_message_sent(prepared.message_id));
         assert_eq!(core.outbox_count(), 0);
+
+        // R3-C1: an explicit skip leaves the outbox untouched -- no drain,
+        // no attempt counting, no fake success on the losing site.
+        let prepared_skip = core
+            .prepare_message(
+                recipient.clone(),
+                "skip-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared_skip.message_id));
+        let mut egress_calls = 0usize;
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            true, // skip: duplicate connect event
+            &mut |_| {
+                egress_calls += 1;
+                true
+            },
+        );
+        assert_eq!(egress_calls, 0, "skipped flush must not call egress");
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &prepared_skip.message_id),
+            "skipped flush must leave the outbox untouched"
+        );
+        assert!(core.mark_message_sent(prepared_skip.message_id));
+
+        // R3-C2: a real dispatch never marks Failed and never schedules an
+        // exponential retry -- only a fixed grace window; a receipt after the
+        // window still clears the entry.
+        let prepared_grace = core
+            .prepare_message(
+                recipient.clone(),
+                "grace-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_: &[u8]| true,
+        );
+        {
+            let snapshot = core.outbox.read().peek_for_peer(&recipient);
+            let entry = snapshot
+                .iter()
+                .find(|m| m.message_id == prepared_grace.message_id)
+                .expect("entry must stay in outbox after egress");
+            assert_eq!(
+                entry.state,
+                crate::store::outbox::MessageState::Enqueued,
+                "dispatch must never mark Failed (R3-C2)"
+            );
+            let nra = entry
+                .next_retry_at
+                .expect("grace window must be set after egress");
+            let now_secs = web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            assert!(
+                nra > now_secs && nra <= now_secs + OUTBOX_EGRESS_GRACE_SECS + 5,
+                "grace window must be a fixed near-term retry, not exponential (R3-C2)"
+            );
+        }
+        assert!(core.mark_message_sent(prepared_grace.message_id));
 
         // No-egress fallback keeps the legacy park semantics.
         let prepared2 = core
