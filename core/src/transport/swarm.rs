@@ -3528,6 +3528,12 @@ pub async fn start_swarm_with_config(
             // Re-deriving from the peer id fails for hashed peers that the identify
             // site registered (its key comes from identify, not the peer id).
             let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+            // R2-B2: peers already flushed during the current connection; a
+            // re-connect re-inserts them, a close clears them (see
+            // ConnectionClosed arm below). One flush per connection prevents
+            // identify+ConnectionEstablished duplicate drains.
+            let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+                std::collections::HashSet::new();
             let mut reported_peer_discoveries: std::collections::HashSet<PeerId> =
                 std::collections::HashSet::new();
             // mDNS can report several socket addresses for one peer.  Keep one
@@ -5645,13 +5651,31 @@ pub async fn start_swarm_with_config(
                                                     // R1-A2: egress the reconnect flush over the
                                                     // live swarm link instead of parking envelopes
                                                     // in the consumer-less transport-manager queue.
+                                                    // R2-B1: only dispatch while the peer is
+                                                    // actually connected at send time; a lost
+                                                    // peer returns false so the flush applies
+                                                    // its retry/backoff path instead of
+                                                    // assuming an in-flight success.
+                                                    // R2-B2: one flush per connection -- the
+                                                    // gate is inserted on first flush and
+                                                    // cleared on ConnectionClosed, so the
+                                                    // identify and ConnectionEstablished
+                                                    // events for a single connect cannot both
+                                                    // drain the outbox and duplicate envelopes.
                                                     let mut egress = |envelope: &[u8]| -> bool {
-                                                        let framed = wrap_in_drift_frame(envelope);
-                                                        let _request_id = swarm.behaviour_mut().messaging.send_request(
-                                                            &peer_id,
-                                                            Libp2pMessageRequest { envelope_data: framed },
-                                                        );
-                                                        true
+                                                    if !flushed_this_connection.insert(peer_id) {
+                                                        return true; // already flushed this connect
+                                                    }
+                                                    if !swarm.is_connected(&peer_id) {
+                                                        flushed_this_connection.remove(&peer_id);
+                                                        return false;
+                                                    }
+                                                    let framed = wrap_in_drift_frame(envelope);
+                                                    let _request_id = swarm.behaviour_mut().messaging.send_request(
+                                                        &peer_id,
+                                                        Libp2pMessageRequest { envelope_data: framed },
+                                                    );
+                                                    true
                                                     };
                                                     c_arc.handle_peer_connection_event_with_egress(
                                                         pk_hex,
@@ -5831,13 +5855,31 @@ pub async fn start_swarm_with_config(
                                                     // R1-A2: egress the reconnect flush over the
                                                     // live swarm link instead of parking envelopes
                                                     // in the consumer-less transport-manager queue.
+                                                    // R2-B1: only dispatch while the peer is
+                                                    // actually connected at send time; a lost
+                                                    // peer returns false so the flush applies
+                                                    // its retry/backoff path instead of
+                                                    // assuming an in-flight success.
+                                                    // R2-B2: one flush per connection -- the
+                                                    // gate is inserted on first flush and
+                                                    // cleared on ConnectionClosed, so the
+                                                    // identify and ConnectionEstablished
+                                                    // events for a single connect cannot both
+                                                    // drain the outbox and duplicate envelopes.
                                                     let mut egress = |envelope: &[u8]| -> bool {
-                                                        let framed = wrap_in_drift_frame(envelope);
-                                                        let _request_id = swarm.behaviour_mut().messaging.send_request(
-                                                            &peer_id,
-                                                            Libp2pMessageRequest { envelope_data: framed },
-                                                        );
-                                                        true
+                                                    if !flushed_this_connection.insert(peer_id) {
+                                                        return true; // already flushed this connect
+                                                    }
+                                                    if !swarm.is_connected(&peer_id) {
+                                                        flushed_this_connection.remove(&peer_id);
+                                                        return false;
+                                                    }
+                                                    let framed = wrap_in_drift_frame(envelope);
+                                                    let _request_id = swarm.behaviour_mut().messaging.send_request(
+                                                        &peer_id,
+                                                        Libp2pMessageRequest { envelope_data: framed },
+                                                    );
+                                                    true
                                                     };
                                                     c_arc.handle_peer_connection_event_with_egress(
                                                         &pk_hex,
@@ -6127,6 +6169,7 @@ pub async fn start_swarm_with_config(
                                 // re-deriving from the peer id -- derivation fails for hashed
                                 // peer ids that the identify site registered, which would
                                 // otherwise leak a stale "connected" registration.
+                                flushed_this_connection.remove(&peer_id);
                                 if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
                                     if let Some(c) = &core_handle {
                                         if let Some(c_arc) = c.upgrade() {

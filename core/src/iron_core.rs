@@ -3119,28 +3119,36 @@ impl IronCore {
             return;
         };
         let transport = TransportType::Internet;
-        let manager = self.transport_manager.read();
+        // R2-B4: acquire the manager guard per operation instead of holding it
+        // across all of them -- the inner manager calls take their own locks,
+        // and narrow scopes keep read-guard/write-lock nesting shallow.
         if connected {
             // Idempotent: ensure the Internet transport state exists so
             // ConnectionEstablished can mark the peer connected.
-            manager.ensure_transport_registered(
+            self.transport_manager.read().ensure_transport_registered(
                 transport,
                 TransportCapabilities::for_transport(transport),
             );
-            manager.handle_event(TransportEvent::PeerDiscovered {
-                peer_id: peer_key,
-                transport,
-                addr: vec![],
-            });
-            manager.handle_event(TransportEvent::ConnectionEstablished {
-                peer_id: peer_key,
-                transport,
-            });
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::PeerDiscovered {
+                    peer_id: peer_key,
+                    transport,
+                    addr: vec![],
+                });
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::ConnectionEstablished {
+                    peer_id: peer_key,
+                    transport,
+                });
         } else {
-            manager.handle_event(TransportEvent::PeerDisconnected {
-                peer_id: peer_key,
-                transport,
-            });
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::PeerDisconnected {
+                    peer_id: peer_key,
+                    transport,
+                });
         }
     }
 }
@@ -3178,7 +3186,10 @@ impl IronCore {
             );
 
             if let Ok(recipient_bytes) = hex::decode(peer_id) {
-                if let Ok(recipient_pk) = recipient_bytes.try_into() {
+                // R2-B3: the pubkey itself is no longer needed here (the
+                // egress closure addresses the peer directly), but keep the
+                // validity gate so a malformed outbox key fails loudly.
+                if let Ok(_recipient_pk) = <[u8; 32]>::try_from(recipient_bytes.as_slice()) {
                     let mut succeeded = 0;
                     let mut failed = 0;
 
@@ -3215,6 +3226,19 @@ impl IronCore {
                             if current_attempt >= 12 {
                                 msg.state = crate::store::outbox::MessageState::Failed;
                                 msg.next_retry_at = None;
+                            } else {
+                                // R2-B1: backoff timer so an in-flight loss (peer
+                                // drops between the connected check and send) is
+                                // retried by the next reconnect flush instead of
+                                // sitting due-forever.
+                                let now_secs = web_time::SystemTime::now()
+                                    .duration_since(web_time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                msg.next_retry_at = Some(
+                                    now_secs
+                                        + 2u64.saturating_pow(current_attempt.min(12)).min(3600),
+                                );
                             }
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
@@ -3228,95 +3252,51 @@ impl IronCore {
                             continue;
                         }
 
-                        match self.transport_manager.read().send_to_peer(
-                            recipient_pk,
-                            msg.envelope_data.clone(),
-                            1,
-                        ) {
-                            Ok(crate::transport::manager::SendResult::Queued(transport_type)) => {
-                                tracing::info!(
-                                    event = "outbox_transport_queued",
-                                    message_id = %msg_id,
-                                    peer_id = %peer_id,
-                                    transport = ?transport_type,
-                                    "Message queued to transport; awaiting delivery receipt"
-                                );
-                                succeeded += 1;
-                                msg.attempts = current_attempt;
-                                msg.state = crate::store::outbox::MessageState::Enqueued;
-                                let now_secs = web_time::SystemTime::now()
-                                    .duration_since(web_time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                if current_attempt >= 12 {
-                                    msg.state = crate::store::outbox::MessageState::Failed;
-                                    msg.next_retry_at = None;
-                                } else {
-                                    let receipt_timeout =
-                                        2u64.saturating_pow(current_attempt.min(12)).min(3600);
-                                    msg.next_retry_at = Some(now_secs + receipt_timeout);
-                                }
-                                // Transport queuing is not delivery confirmation. Keep the
-                                // message in the outbox until an application-level receipt
-                                // calls mark_message_sent.
-                                if let Err(e) = self.outbox.write().enqueue(msg) {
-                                    tracing::error!(
-                                        event = "outbox_enqueue_failed",
-                                        message_id = %msg_id,
-                                        error = %e,
-                                        "Failed to re-enqueue message after transport queue"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                msg.attempts = current_attempt;
-                                if current_attempt >= 3 {
-                                    // Persistent failure after 3 attempts: mark as Failed, keep in outbox for UX
-                                    msg.state = crate::store::outbox::MessageState::Failed;
-                                    msg.next_retry_at = None;
-                                    tracing::debug!(
-                                        event = "outbox_delivery_failed_persistent",
-                                        message_id = %msg_id,
-                                        peer_id = %peer_id,
-                                        error = %e,
-                                        attempt = current_attempt,
-                                        "Delivery attempt failed 3 times; marking as Failed in outbox"
-                                    );
-                                    if let Err(e) = self.outbox.write().enqueue(msg) {
-                                        tracing::error!(
-                                            event = "outbox_enqueue_failed",
-                                            message_id = %msg_id,
-                                            error = %e,
-                                            "Failed to re-enqueue message after persistent failure"
-                                        );
-                                    }
-                                    failed += 1;
-                                } else {
-                                    // Transient failure (< 3 attempts): leave as Enqueued with exponential backoff
-                                    msg.state = crate::store::outbox::MessageState::Enqueued;
-                                    let backoff_secs =
-                                        2u64.saturating_pow(current_attempt.min(12)).min(3600);
-                                    let now_secs = web_time::SystemTime::now()
-                                        .duration_since(web_time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    msg.next_retry_at = Some(now_secs + backoff_secs);
-
-                                    tracing::debug!(
-                                        event = "outbox_delivery_failed_transient",
-                                        message_id = %msg_id,
-                                        peer_id = %peer_id,
-                                        error = %e,
-                                        attempt = current_attempt,
-                                        backoff_secs = backoff_secs,
-                                        "Delivery attempt failed; re-enqueueing with backoff"
-                                    );
-
-                                    let _ = self.outbox.write().enqueue(msg);
-                                    failed += 1;
-                                }
-                            }
+                        // R2-B3: no live egress path -- do NOT park in the
+                        // transport-manager outgoing queue (no production
+                        // consumer; parking would also dual-state with the
+                        // outbox entry). Treat like a failed attempt: marked
+                        // Failed after 3, transient backoff otherwise. The
+                        // entry stays in the outbox either way; only a
+                        // receipt clears it.
+                        msg.attempts = current_attempt;
+                        if current_attempt >= 3 {
+                            msg.state = crate::store::outbox::MessageState::Failed;
+                            msg.next_retry_at = None;
+                            tracing::debug!(
+                                event = "outbox_delivery_failed_persistent",
+                                message_id = %msg_id,
+                                peer_id = %peer_id,
+                                attempt = current_attempt,
+                                "Flush has no egress path after 3 attempts; marking as Failed"
+                            );
+                        } else {
+                            msg.state = crate::store::outbox::MessageState::Enqueued;
+                            let backoff_secs =
+                                2u64.saturating_pow(current_attempt.min(12)).min(3600);
+                            let now_secs = web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            msg.next_retry_at = Some(now_secs + backoff_secs);
+                            tracing::debug!(
+                                event = "outbox_delivery_failed_transient",
+                                message_id = %msg_id,
+                                peer_id = %peer_id,
+                                attempt = current_attempt,
+                                backoff_secs = backoff_secs,
+                                "Flush has no egress path; re-enqueueing with backoff"
+                            );
                         }
+                        if let Err(e) = self.outbox.write().enqueue(msg) {
+                            tracing::error!(
+                                event = "outbox_enqueue_failed",
+                                message_id = %msg_id,
+                                error = %e,
+                                "Failed to re-enqueue message after flush without egress"
+                            );
+                        }
+                        failed += 1;
                     }
 
                     tracing::info!(
@@ -3324,7 +3304,7 @@ impl IronCore {
                         peer_id = %peer_id,
                         succeeded = succeeded,
                         failed = failed,
-                        "Outbox flush complete: {} queued for transport, {} scheduled for retry",
+                        "Outbox flush complete: {} dispatched over swarm, {} scheduled for retry/failed",
                         succeeded,
                         failed
                     );
@@ -5109,7 +5089,11 @@ mod tests {
             core.outbox_contains_for_recipient(&recipient, &prepared.message_id),
             "transport queueing must not be treated as delivery"
         );
-        assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
+        // R2-B3: the flush never parks in the transport-manager outgoing
+        // queue (no production consumer); without a live egress path the
+        // attempt is retried with backoff while the entry stays in the
+        // outbox until an application receipt clears it.
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         assert!(core.mark_message_sent(prepared.message_id));
     }
 
@@ -5153,9 +5137,11 @@ mod tests {
             "registered swarm peer must read as connected (prepare_message direct-send gate)"
         );
 
-        // The outbox flush now resolves a transport instead of PeerNotFound.
+        // R2-B3: without an egress path the flush never parks in the
+        // transport-manager queue (no production consumer) -- it treats the
+        // attempt as failed/backoff and the entry stays in the outbox.
         core.handle_peer_connection_event(&recipient, true);
-        assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         // Transport queueing is not delivery: the message stays in the outbox
         // until an application-level receipt calls mark_message_sent.
         assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
@@ -5269,8 +5255,8 @@ mod tests {
         core.handle_peer_connection_event(&recipient, true);
         assert_eq!(
             core.transport_manager.read().pending_sends().len(),
-            1,
-            "no-egress flush must park in the transport manager (legacy semantics)"
+            0,
+            "no-egress flush must NOT park in the consumer-less queue (R2-B3)"
         );
         assert!(core.outbox_contains_for_recipient(&recipient, &prepared2.message_id));
         assert!(core.mark_message_sent(prepared2.message_id));
