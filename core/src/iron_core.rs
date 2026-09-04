@@ -3080,7 +3080,77 @@ impl IronCore {
     /// - `outbox_retry_attempt`: attempting to send message (attempt #X)
     /// - `outbox_delivery_success`: message sent successfully
     /// - `outbox_delivery_failed_transient`: delivery failed with backoff retry
+    /// Reconnect-flush entry for callers without a live send path (tests,
+    /// non-swarm event sources): the flush falls back to the transport-manager
+    /// queue and entries stay in the outbox pending receipt, exactly the
+    /// pre-egress semantics (R1-A2 disposition).
     pub fn handle_peer_connection_event(&self, peer_id: &str, connected: bool) {
+        self.handle_peer_connection_event_with_egress(peer_id, connected, &mut |_| false);
+    }
+
+    /// Mirror a live libp2p swarm connection into the transport manager so the
+    /// routing and send paths see the peer as reachable over an active swarm
+    /// link.
+    ///
+    /// RCA (drop-hop, e97c3f82 fleet, 2026-09-04): the transport manager's
+    /// `peer_transports` registry is populated ONLY by
+    /// `TransportEvent::PeerDiscovered`, and no production code path emitted
+    /// that event for swarm peers -- the registry's only writer was a unit
+    /// test. Every swarm peer therefore read as "not connected":
+    ///
+    /// - `prepare_message_internal`'s `is_peer_connected(recipient_pk)` gate
+    ///   always returned false on CLI/desktop, so every prepared message fell
+    ///   into the outbox instead of being sent over the live connection, and
+    /// - the outbox flush's `send_to_peer` lookup then returned
+    ///   `PeerNotFound`, so those messages were retried forever (zero
+    ///   `transport_handoff` lines in a full session log).
+    ///
+    /// libp2p TCP/relay connections are Internet transport; the canonical key
+    /// registered is the same hex pubkey the outbox flush hex-decodes into its
+    /// `[u8; 32]` recipient key (the peer id's embedded Ed25519 key, cf.
+    /// `public_key_hex_from_libp2p_peer_id`). `connected=false` removes the
+    /// registration so a dead peer cannot keep the direct-send path warm.
+    pub(crate) fn set_swarm_peer_connection(&self, public_key_hex: &str, connected: bool) {
+        use crate::transport::abstraction::{TransportCapabilities, TransportEvent, TransportType};
+        let Ok(bytes) = hex::decode(public_key_hex) else {
+            return;
+        };
+        let Ok(peer_key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            return;
+        };
+        let transport = TransportType::Internet;
+        let manager = self.transport_manager.read();
+        if connected {
+            // Idempotent: ensure the Internet transport state exists so
+            // ConnectionEstablished can mark the peer connected.
+            manager.ensure_transport_registered(
+                transport,
+                TransportCapabilities::for_transport(transport),
+            );
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer_key,
+                transport,
+                addr: vec![],
+            });
+            manager.handle_event(TransportEvent::ConnectionEstablished {
+                peer_id: peer_key,
+                transport,
+            });
+        } else {
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer_key,
+                transport,
+            });
+        }
+    }
+}
+impl IronCore {
+    pub(crate) fn handle_peer_connection_event_with_egress(
+        &self,
+        peer_id: &str,
+        connected: bool,
+        egress: &mut dyn FnMut(&[u8]) -> bool,
+    ) {
         if connected {
             tracing::info!(
                 event = "outbox_reconnect_detected",
@@ -3124,6 +3194,39 @@ impl IronCore {
                             "Attempting delivery (attempt #{}/12)",
                             current_attempt
                         );
+
+                        // R1-A2: real egress when the caller owns a live send
+                        // path (native swarm loop). The transport-manager
+                        // outgoing queue has no production consumer, so
+                        // without this the reconnect flush parked messages
+                        // forever. Dispatched-over-swarm is NOT delivery: the
+                        // entry stays Enqueued until an application-level
+                        // receipt calls mark_message_sent.
+                        if egress(&msg.envelope_data) {
+                            tracing::info!(
+                                event = "outbox_egress_dispatched",
+                                message_id = %msg_id,
+                                peer_id = %peer_id,
+                                attempt = current_attempt,
+                                "Envelope dispatched over live swarm link; awaiting receipt"
+                            );
+                            msg.attempts = current_attempt;
+                            msg.state = crate::store::outbox::MessageState::Enqueued;
+                            if current_attempt >= 12 {
+                                msg.state = crate::store::outbox::MessageState::Failed;
+                                msg.next_retry_at = None;
+                            }
+                            if let Err(e) = self.outbox.write().enqueue(msg) {
+                                tracing::error!(
+                                    event = "outbox_enqueue_failed",
+                                    message_id = %msg_id,
+                                    error = %e,
+                                    "Failed to re-enqueue message after swarm egress"
+                                );
+                            }
+                            succeeded += 1;
+                            continue;
+                        }
 
                         match self.transport_manager.read().send_to_peer(
                             recipient_pk,
@@ -3241,60 +3344,8 @@ impl IronCore {
             }
         }
     }
-
-    /// Mirror a live libp2p swarm connection into the transport manager so the
-    /// routing and send paths see the peer as reachable over an active swarm
-    /// link.
-    ///
-    /// RCA (drop-hop, e97c3f82 fleet, 2026-09-04): the transport manager's
-    /// `peer_transports` registry is populated ONLY by
-    /// `TransportEvent::PeerDiscovered`, and no production code path emitted
-    /// that event for swarm peers -- the registry's only writer was a unit
-    /// test. Every swarm peer therefore read as "not connected":
-    ///
-    /// - `prepare_message_internal`'s `is_peer_connected(recipient_pk)` gate
-    ///   always returned false on CLI/desktop, so every prepared message fell
-    ///   into the outbox instead of being sent over the live connection, and
-    /// - the outbox flush's `send_to_peer` lookup then returned
-    ///   `PeerNotFound`, so those messages were retried forever (zero
-    ///   `transport_handoff` lines in a full session log).
-    ///
-    /// libp2p TCP/relay connections are Internet transport; the canonical key
-    /// registered is the same hex pubkey the outbox flush hex-decodes into its
-    /// `[u8; 32]` recipient key (the peer id's embedded Ed25519 key, cf.
-    /// `public_key_hex_from_libp2p_peer_id`). `connected=false` removes the
-    /// registration so a dead peer cannot keep the direct-send path warm.
-    pub(crate) fn set_swarm_peer_connection(&self, public_key_hex: &str, connected: bool) {
-        use crate::transport::abstraction::{TransportCapabilities, TransportEvent, TransportType};
-        let Ok(bytes) = hex::decode(public_key_hex) else {
-            return;
-        };
-        let Ok(peer_key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
-            return;
-        };
-        let transport = TransportType::Internet;
-        let manager = self.transport_manager.read();
-        if connected {
-            // Idempotent: ensure the Internet transport state exists so
-            // ConnectionEstablished can mark the peer connected.
-            manager.register_transport(transport, TransportCapabilities::for_transport(transport));
-            manager.handle_event(TransportEvent::PeerDiscovered {
-                peer_id: peer_key,
-                transport,
-                addr: vec![],
-            });
-            manager.handle_event(TransportEvent::ConnectionEstablished {
-                peer_id: peer_key,
-                transport,
-            });
-        } else {
-            manager.handle_event(TransportEvent::PeerDisconnected {
-                peer_id: peer_key,
-                transport,
-            });
-        }
-    }
 }
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // RECEIPT ENCODING/DECODING (exported via UniFFI for cross-platform consistency)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5120,6 +5171,109 @@ mod tests {
                 .is_peer_connected(recipient_bytes),
             "disconnected swarm peer must no longer read as connected"
         );
+    }
+
+    #[test]
+    fn swarm_peer_registration_is_multi_peer_safe() {
+        // R1-A4: register_transport() per connect REPLACED the Internet
+        // TransportState, wiping connected_peers of every peer registered
+        // earlier -- peer B connecting made peer A read as disconnected and
+        // stranded A's direct-send path. ensure_transport_registered must be
+        // non-clobbering and teardown must stay per-peer.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let a = core.get_identity_info().public_key_hex.clone().unwrap();
+        let a_bytes: [u8; 32] = hex::decode(&a).unwrap().try_into().unwrap();
+        let mut b_bytes = a_bytes;
+        b_bytes[0] ^= 0xFF;
+        let b = hex::encode(b_bytes);
+
+        core.set_swarm_peer_connection(&a, true);
+        core.set_swarm_peer_connection(&b, true);
+        {
+            let tm = core.transport_manager.read();
+            assert!(
+                tm.is_peer_connected(a_bytes),
+                "peer A must survive peer B's registration (R1-A4 clobber)"
+            );
+            assert!(tm.is_peer_connected(b_bytes));
+        }
+
+        core.set_swarm_peer_connection(&a, false);
+        let tm = core.transport_manager.read();
+        assert!(!tm.is_peer_connected(a_bytes));
+        assert!(
+            tm.is_peer_connected(b_bytes),
+            "peer B must survive peer A's teardown"
+        );
+    }
+
+    #[test]
+    fn reconnect_flush_egresses_over_live_link() {
+        // R1-A2: with an egress path the flush hands the drained envelope to
+        // the caller's live send path and keeps the entry Enqueued pending the
+        // application receipt; without egress it parks in the transport
+        // manager exactly as before.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "egress-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+
+        let mut egressed: Vec<Vec<u8>> = Vec::new();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            &mut |envelope: &[u8]| {
+                egressed.push(envelope.to_vec());
+                true
+            },
+        );
+        assert_eq!(
+            egressed.len(),
+            1,
+            "flush must hand the envelope to the egress path"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &prepared.message_id),
+            "swarm dispatch is not delivery: entry stays until receipt"
+        );
+        assert_eq!(
+            core.transport_manager.read().pending_sends().len(),
+            0,
+            "egress path must not park messages in the consumer-less transport queue"
+        );
+        assert!(core.mark_message_sent(prepared.message_id));
+        assert_eq!(core.outbox_count(), 0);
+
+        // No-egress fallback keeps the legacy park semantics.
+        let prepared2 = core
+            .prepare_message(
+                recipient.clone(),
+                "fallback-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.set_swarm_peer_connection(&recipient, true);
+        core.handle_peer_connection_event(&recipient, true);
+        assert_eq!(
+            core.transport_manager.read().pending_sends().len(),
+            1,
+            "no-egress flush must park in the transport manager (legacy semantics)"
+        );
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared2.message_id));
+        assert!(core.mark_message_sent(prepared2.message_id));
     }
 
     #[test]

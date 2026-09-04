@@ -3523,6 +3523,11 @@ pub async fn start_swarm_with_config(
             // P0.12: Deduplicate bridge events to prevent UI freezing and bridge spam
             // We track the last reported 'PeerIdentified' and 'PeerDiscovered' state.
             let mut reported_peer_info: HashMap<PeerId, (String, Vec<Multiaddr>)> = HashMap::new();
+            // R1-A3: canonical pk (hex) this loop registered per wire peer, so the
+            // last-connection teardown can de-register EXACTLY what was registered.
+            // Re-deriving from the peer id fails for hashed peers that the identify
+            // site registered (its key comes from identify, not the peer id).
+            let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
             let mut reported_peer_discoveries: std::collections::HashSet<PeerId> =
                 std::collections::HashSet::new();
             // mDNS can report several socket addresses for one peer.  Keep one
@@ -5628,13 +5633,32 @@ pub async fn start_swarm_with_config(
                                     if let Some(pk_hex) = &public_key_hex {
                                         if let Some(c) = &core_handle {
                                             if let Some(c_arc) = c.upgrade() {
-                                                c_arc.handle_peer_connection_event(pk_hex, true);
-                                                // RCA drop-hop fix: mirror the identified peer
-                                                // into the transport manager (peer_transports)
-                                                // under its canonical key so prepare_message's
-                                                // is_peer_connected gate sees the live link and
-                                                // the outbox flush can resolve a transport.
-                                                c_arc.set_swarm_peer_connection(pk_hex, true);
+                                                // R1-A1/A3: only register while a connection to
+                                                // this peer is actually live (a late identify
+                                                // event for an already-closed peer must not
+                                                // leave a stale "connected" registration), and
+                                                // register BEFORE the flush so the flush's
+                                                // send_to_peer lookup can resolve a transport.
+                                                if connection_tracker.get_connection(&peer_id).is_some() {
+                                                    registered_swarm_peers.insert(peer_id, pk_hex.clone());
+                                                    c_arc.set_swarm_peer_connection(pk_hex, true);
+                                                    // R1-A2: egress the reconnect flush over the
+                                                    // live swarm link instead of parking envelopes
+                                                    // in the consumer-less transport-manager queue.
+                                                    let mut egress = |envelope: &[u8]| -> bool {
+                                                        let framed = wrap_in_drift_frame(envelope);
+                                                        let _request_id = swarm.behaviour_mut().messaging.send_request(
+                                                            &peer_id,
+                                                            Libp2pMessageRequest { envelope_data: framed },
+                                                        );
+                                                        true
+                                                    };
+                                                    c_arc.handle_peer_connection_event_with_egress(
+                                                        pk_hex,
+                                                        true,
+                                                        &mut egress,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -5802,11 +5826,38 @@ pub async fn start_swarm_with_config(
                                             );
                                             match canonical_pk {
                                                 Some(pk_hex) => {
+                                                    registered_swarm_peers.insert(peer_id, pk_hex.clone());
                                                     c_arc.set_swarm_peer_connection(&pk_hex, true);
-                                                    c_arc.handle_peer_connection_event(&pk_hex, true);
+                                                    // R1-A2: egress the reconnect flush over the
+                                                    // live swarm link instead of parking envelopes
+                                                    // in the consumer-less transport-manager queue.
+                                                    let mut egress = |envelope: &[u8]| -> bool {
+                                                        let framed = wrap_in_drift_frame(envelope);
+                                                        let _request_id = swarm.behaviour_mut().messaging.send_request(
+                                                            &peer_id,
+                                                            Libp2pMessageRequest { envelope_data: framed },
+                                                        );
+                                                        true
+                                                    };
+                                                    c_arc.handle_peer_connection_event_with_egress(
+                                                        &pk_hex,
+                                                        true,
+                                                        &mut egress,
+                                                    );
                                                 }
                                                 None => {
-                                                    c_arc.handle_peer_connection_event(&peer_id.to_string(), true);
+                                                    // R1-A5: a peer id that does not embed an
+                                                    // Ed25519 key cannot be registered/flushed by
+                                                    // canonical key at this site. The old base58
+                                                    // string call was a guaranteed silent no-op
+                                                    // (hex::decode fails inside the flush) -- log
+                                                    // loudly instead of pretending a flush ran.
+                                                    // The identify site registers such peers from
+                                                    // identify's own public key when connected.
+                                                    tracing::warn!(
+                                                        "Cannot derive canonical Ed25519 key from peer id {} -- deferring registration/flush to identify",
+                                                        peer_id
+                                                    );
                                                 }
                                             }
                                         }
@@ -6070,15 +6121,13 @@ pub async fn start_swarm_with_config(
                                 reported_peer_discoveries.remove(&peer_id);
                                 reported_peer_info.remove(&peer_id);
 
-                                // RCA drop-hop fix: mirror the last-connection teardown into
-                                // the transport manager so the peer no longer reads as
-                                // connected -- prepare_message would otherwise trust a dead
-                                // link and drop straight into direct-send.
-                                if let Some(pk_hex) =
-                                    crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
-                                        &peer_id.to_string(),
-                                    )
-                                {
+                                // RCA drop-hop fix (R1-A3): mirror the last-connection
+                                // teardown into the transport manager, de-registering by the
+                                // key this loop REGISTERED (map-tracked) rather than
+                                // re-deriving from the peer id -- derivation fails for hashed
+                                // peer ids that the identify site registered, which would
+                                // otherwise leak a stale "connected" registration.
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
                                     if let Some(c) = &core_handle {
                                         if let Some(c_arc) = c.upgrade() {
                                             c_arc.set_swarm_peer_connection(&pk_hex, false);
