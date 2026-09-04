@@ -5629,6 +5629,12 @@ pub async fn start_swarm_with_config(
                                         if let Some(c) = &core_handle {
                                             if let Some(c_arc) = c.upgrade() {
                                                 c_arc.handle_peer_connection_event(pk_hex, true);
+                                                // RCA drop-hop fix: mirror the identified peer
+                                                // into the transport manager (peer_transports)
+                                                // under its canonical key so prepare_message's
+                                                // is_peer_connected gate sees the live link and
+                                                // the outbox flush can resolve a transport.
+                                                c_arc.set_swarm_peer_connection(pk_hex, true);
                                             }
                                         }
                                     }
@@ -5784,7 +5790,25 @@ pub async fn start_swarm_with_config(
                                         }
 
                                         if !had_active_connection {
-                                            c_arc.handle_peer_connection_event(&peer_id.to_string(), true);
+                                            // RCA drop-hop fix: register the peer under its
+                                            // canonical key (the Ed25519 key embedded in the
+                                            // peer id) before flushing. The bare libp2p peer id
+                                            // string is base58 -- hex::decode() of it fails
+                                            // inside the flush (outbox_peer_id_decode_failed)
+                                            // and without a registration the flush's
+                                            // send_to_peer returns PeerNotFound forever.
+                                            let canonical_pk = crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                                &peer_id.to_string(),
+                                            );
+                                            match canonical_pk {
+                                                Some(pk_hex) => {
+                                                    c_arc.set_swarm_peer_connection(&pk_hex, true);
+                                                    c_arc.handle_peer_connection_event(&pk_hex, true);
+                                                }
+                                                None => {
+                                                    c_arc.handle_peer_connection_event(&peer_id.to_string(), true);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -6045,6 +6069,22 @@ pub async fn start_swarm_with_config(
                                 pending_ledger_exchanges.remove(&peer_id);
                                 reported_peer_discoveries.remove(&peer_id);
                                 reported_peer_info.remove(&peer_id);
+
+                                // RCA drop-hop fix: mirror the last-connection teardown into
+                                // the transport manager so the peer no longer reads as
+                                // connected -- prepare_message would otherwise trust a dead
+                                // link and drop straight into direct-send.
+                                if let Some(pk_hex) =
+                                    crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                        &peer_id.to_string(),
+                                    )
+                                {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
 
                                 // P0.13: Clear relay tracking so we can re-reserve on reconnect
                                 if let Some(listener_id) = successful_relay_reservations.remove(&peer_id) {

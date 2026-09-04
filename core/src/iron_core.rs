@@ -3241,8 +3241,60 @@ impl IronCore {
             }
         }
     }
-}
 
+    /// Mirror a live libp2p swarm connection into the transport manager so the
+    /// routing and send paths see the peer as reachable over an active swarm
+    /// link.
+    ///
+    /// RCA (drop-hop, e97c3f82 fleet, 2026-09-04): the transport manager's
+    /// `peer_transports` registry is populated ONLY by
+    /// `TransportEvent::PeerDiscovered`, and no production code path emitted
+    /// that event for swarm peers -- the registry's only writer was a unit
+    /// test. Every swarm peer therefore read as "not connected":
+    ///
+    /// - `prepare_message_internal`'s `is_peer_connected(recipient_pk)` gate
+    ///   always returned false on CLI/desktop, so every prepared message fell
+    ///   into the outbox instead of being sent over the live connection, and
+    /// - the outbox flush's `send_to_peer` lookup then returned
+    ///   `PeerNotFound`, so those messages were retried forever (zero
+    ///   `transport_handoff` lines in a full session log).
+    ///
+    /// libp2p TCP/relay connections are Internet transport; the canonical key
+    /// registered is the same hex pubkey the outbox flush hex-decodes into its
+    /// `[u8; 32]` recipient key (the peer id's embedded Ed25519 key, cf.
+    /// `public_key_hex_from_libp2p_peer_id`). `connected=false` removes the
+    /// registration so a dead peer cannot keep the direct-send path warm.
+    pub(crate) fn set_swarm_peer_connection(&self, public_key_hex: &str, connected: bool) {
+        use crate::transport::abstraction::{TransportCapabilities, TransportEvent, TransportType};
+        let Ok(bytes) = hex::decode(public_key_hex) else {
+            return;
+        };
+        let Ok(peer_key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            return;
+        };
+        let transport = TransportType::Internet;
+        let manager = self.transport_manager.read();
+        if connected {
+            // Idempotent: ensure the Internet transport state exists so
+            // ConnectionEstablished can mark the peer connected.
+            manager.register_transport(transport, TransportCapabilities::for_transport(transport));
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer_key,
+                transport,
+                addr: vec![],
+            });
+            manager.handle_event(TransportEvent::ConnectionEstablished {
+                peer_id: peer_key,
+                transport,
+            });
+        } else {
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer_key,
+                transport,
+            });
+        }
+    }
+}
 // ═══════════════════════════════════════════════════════════════════════════════
 // RECEIPT ENCODING/DECODING (exported via UniFFI for cross-platform consistency)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5008,6 +5060,66 @@ mod tests {
         );
         assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
         assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    #[test]
+    fn swarm_peer_registration_drives_is_connected_and_flush() {
+        // Regression for the RCA drop-hop (2026-09-04): swarm peers were never
+        // registered in the transport manager (no production emitter of
+        // TransportEvent::PeerDiscovered), so is_peer_connected() stayed false
+        // and every prepared message fell into the outbox while the outbox
+        // flush's send_to_peer() returned PeerNotFound forever. The swarm
+        // loop's identify/connection handlers now call
+        // set_swarm_peer_connection, which must drive both gates.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        let recipient_bytes: [u8; 32] = hex::decode(&recipient).unwrap().try_into().unwrap();
+
+        // Fresh core: peer unknown -> reads as disconnected -> prepare queues
+        // to the outbox (this is the state that stranded every CLI send).
+        assert!(!core
+            .transport_manager
+            .read()
+            .is_peer_connected(recipient_bytes));
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "swarm-peer-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+
+        // Simulate the swarm loop's identify/connection handler.
+        core.set_swarm_peer_connection(&recipient, true);
+        assert!(
+            core.transport_manager
+                .read()
+                .is_peer_connected(recipient_bytes),
+            "registered swarm peer must read as connected (prepare_message direct-send gate)"
+        );
+
+        // The outbox flush now resolves a transport instead of PeerNotFound.
+        core.handle_peer_connection_event(&recipient, true);
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
+        // Transport queueing is not delivery: the message stays in the outbox
+        // until an application-level receipt calls mark_message_sent.
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+        assert!(core.mark_message_sent(prepared.message_id));
+
+        // Last-connection teardown must remove the registration so a dead peer
+        // cannot keep the direct-send path warm.
+        core.set_swarm_peer_connection(&recipient, false);
+        assert!(
+            !core
+                .transport_manager
+                .read()
+                .is_peer_connected(recipient_bytes),
+            "disconnected swarm peer must no longer read as connected"
+        );
     }
 
     #[test]
