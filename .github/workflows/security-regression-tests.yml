@@ -1,0 +1,130 @@
+# ==============================================================================
+# Forgery / negative-security regression gate
+# ==============================================================================
+#
+# WHY THIS EXISTS
+# ----------------
+# RatchetSession::init_as_sender_hybrid / init_as_receiver_hybrid shipped for
+# months accepting real sender-authentication inputs and silently discarding
+# them (parameters named `_our_signing_key` / `_sender_bundle`), letting an
+# attacker who had only two published public bundles send a message that
+# decrypted and attributed to a contact of their choosing. Three regression
+# tests close that hole -- test_v1_bincode_downgrade_forgery,
+# test_v1_legacy_envelope_forgery_is_rejected (the function inside is named
+# test_v1_legacy_forged_unsigned_envelope_is_rejected -- see below), and
+# test_v2_hybrid_envelope_forgery_is_rejected -- but as of this workflow they
+# live only on cto/v2-sender-auth-2026-08-22, not on main. This job's purpose
+# is to guarantee that once they land, nothing can merge a change to the
+# crypto/transport/routing/privacy perimeter that regresses them, ever again,
+# without a human noticing.
+#
+# WHY A NAME-PATTERN SELECTOR, NOT A HARDCODED TEST LIST
+# --------------------------------------------------------
+# The exact names above already drifted once: the file
+# core/tests/test_v1_legacy_envelope_forgery_is_rejected.rs contains a
+# function named test_v1_legacy_forged_unsigned_envelope_is_rejected, not the
+# name matching the filename. A hardcoded list would have silently matched
+# zero tests the moment that file landed -- exactly the failure mode this
+# design avoids. Instead this job selects any test whose fully-qualified name
+# contains the substring `forg` (covers both "forgery" and "forged"), which
+# today already matches two pre-existing, unrelated regression tests
+# (test_forged_signature_fails_verification in crypto/encrypt.rs and
+# test_invite_token_forged_signature_is_rejected in relay/invite.rs) and will
+# pick up the three new ones automatically once they land, with no edit to
+# this file required. See the final step: if that pattern ever selects zero
+# tests, the job fails loudly rather than reporting a silent, meaningless
+# green.
+#
+# WHY THIS TRIGGERS ON EVERY PUSH/PR RATHER THAN BEING PATH-FILTERED
+# ---------------------------------------------------------------------
+# The task this job exists for is "every change touching
+# core/src/{crypto,transport,routing,privacy}/", which argues for a `paths:`
+# filter on the trigger below. That filter was deliberately NOT added: this
+# repo's branch protection uses classic required-status-check *contexts*
+# (job/workflow names), and a required context whose workflow is path-filtered
+# leaves any PR that doesn't touch those paths stuck showing "Expected --
+# waiting for a status to be reported" forever, because the workflow (and
+# therefore the check) never runs for that PR at all. None of this repo's
+# other required checks (Lint, Rust Linting, Test) use path filters for
+# exactly that reason. Running unconditionally is a strict superset of
+# "every change touching the perimeter" and costs a few extra minutes of CI
+# time on unrelated PRs in exchange for never getting stuck.
+#
+# NOTE: adding this workflow does not, by itself, make it a *required* check
+# for merging (see the branch-protection findings in the CI-hardening task
+# report that introduced this file -- Docker Integration Suite already
+# demonstrates that a workflow existing and being required are different,
+# separately-configured things). Making this job required in branch
+# protection is a follow-up action for a repo admin.
+# ==============================================================================
+
+name: Security Regression Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  forgery-regression:
+    name: Forgery/Negative Security Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: forgery-regression-${{ hashFiles('**/Cargo.lock') }}
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install libdbus-1-dev (Ubuntu)
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Run forgery/negative-security regression tests
+        run: |
+          set -euo pipefail
+          OUTPUT_FILE=forgery_test_output.txt
+
+          # `forg`, not `forgery`: must match both "..._downgrade_forgery"
+          # and "..._legacy_forged_unsigned_envelope_is_rejected". Scoped to
+          # -p scmessenger-core (not --workspace): every crypto/transport/
+          # routing/privacy source path and every current forg* test live in
+          # that one package: cli/wasm/mobile/desktop_bridge would only add
+          # build time, not coverage.
+          cargo test -p scmessenger-core --no-fail-fast forg 2>&1 | tee "$OUTPUT_FILE"
+
+          # cargo's test harness prints one "test result: ok. N passed; M
+          # failed; ... filtered out" summary line per binary it runs (lib,
+          # each integration-test target, doctests). Sum passed+failed
+          # (tests actually selected and executed) across all of them;
+          # "filtered out" is deliberately excluded since that counts tests
+          # that did NOT match `forg` and were correctly skipped.
+          MATCHED=$(grep -oE '[0-9]+ passed; [0-9]+ failed' "$OUTPUT_FILE" \
+            | awk -F'[^0-9]+' '{sum += $1 + $2} END {print sum+0}')
+          echo "Selected+ran test count: $MATCHED"
+
+          if [ "$MATCHED" -eq 0 ]; then
+            echo "[FAIL] the 'forg' filter selected ZERO tests in scmessenger-core."
+            echo "This must never report green. Either:"
+            echo "  - the forgery/negative-security regression tests have not"
+            echo "    landed on this branch yet (see cto/v2-sender-auth-2026-08-22"
+            echo "    at the time this job was added), or"
+            echo "  - every test whose name matched 'forg' was deleted or renamed"
+            echo "    away from that pattern."
+            echo "Either way, a job that silently matches nothing is worse than"
+            echo "no job at all -- treat this as a hard failure, not a pass."
+            exit 1
+          fi
+
+          echo "[OK] $MATCHED forgery/negative-security regression test(s) selected and passed"

@@ -209,6 +209,12 @@ impl WifiDirectPlatformBridge for PlatformWifiDirectBridge {
     fn set_on_connection_info(&self, callback: Box<dyn Fn(GroupInfo) + Send + Sync>) {
         *self.on_connection_info.lock() = Some(callback);
     }
+    // PERIMETER-ALLOW-UNDERSCORE: WiFi Direct data does not arrive via a
+    // discrete message callback on this bridge -- the GO/client link is a
+    // direct TCP dial instead (see HANDOFF/plans/P1-15_transport_matrix_audit.md
+    // and HANDOFF/plans/P1-17_windows_wifi_direct_design.md, both already
+    // documenting this as a deliberate no-op, not a gap). `PlatformWifiDirectBridge`
+    // has no `on_message_received` field to store it in.
     fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
 }
 
@@ -374,6 +380,9 @@ mod tests {
         async fn stop_discovery(&self) -> Result<(), WifiDirectError> {
             Ok(())
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock of WifiDirectPlatformBridge;
+        // MockWifiDirectBridge is a fixed available/unavailable stub and does
+        // not model per-call arguments.
         async fn connect(&self, _device_address: &str) -> Result<(), WifiDirectError> {
             if self.available {
                 Ok(())
@@ -381,6 +390,7 @@ mod tests {
                 Err(WifiDirectError::Unavailable)
             }
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         async fn create_group(&self, _group_name: &str) -> Result<(), WifiDirectError> {
             if self.available {
                 Ok(())
@@ -391,8 +401,11 @@ mod tests {
         async fn remove_group(&self) -> Result<(), WifiDirectError> {
             Ok(())
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_peers_changed(&self, _callback: Box<dyn Fn(Vec<WifiDirectPeer>) + Send + Sync>) {}
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_connection_info(&self, _callback: Box<dyn Fn(GroupInfo) + Send + Sync>) {}
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
     }
 

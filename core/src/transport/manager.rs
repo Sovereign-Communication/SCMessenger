@@ -894,6 +894,9 @@ impl TransportManager {
 
     /// Run multi-hop recall to retrieve transport paths for a peer.
     /// Returns a list of potential paths through available transports.
+    // PERIMETER-ALLOW-UNDERSCORE: the DSPy multi-hop recall module is not yet
+    // wired into production routing (recall() is a stub returning empty -- see
+    // dspy/modules.rs); peer_id is reserved for peer-scoped recall when wired up.
     pub fn run_multi_hop_path_selection(
         &self,
         _peer_id: &[u8; 32],
