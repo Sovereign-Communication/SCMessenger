@@ -8540,19 +8540,26 @@ pub async fn start_swarm_with_config(
                                 // carries the verified public key even for those PeerIds;
                                 // use it as the canonical transport-manager key while the
                                 // connection tracker still proves that this peer is live.
-                                if let Some(pk_hex) = &public_key_hex {
-                                    if connection_tracker.get_connection(&peer_id).is_some() {
-                                        if let Some(core_arc) =
-                                            core_handle.as_ref().and_then(|weak| weak.upgrade())
-                                        {
-                                            register_and_flush_swarm_peer(
-                                                &core_arc,
-                                                &mut swarm,
-                                                &mut registered_swarm_peers,
-                                                &mut flushed_this_connection,
-                                                peer_id,
-                                                pk_hex,
-                                            );
+                                // For self-certifying peers, ConnectionEstablished already
+                                // registered and flushed the peer. Only use this Identify
+                                // fallback when that event could not derive a canonical key
+                                // (hashed PeerId); otherwise this branch needlessly repeats
+                                // the registration bookkeeping.
+                                if !registered_swarm_peers.contains_key(&peer_id) {
+                                    if let Some(pk_hex) = &public_key_hex {
+                                        if connection_tracker.get_connection(&peer_id).is_some() {
+                                            if let Some(core_arc) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {
+                                                register_and_flush_swarm_peer(
+                                                    &core_arc,
+                                                    &mut swarm,
+                                                    &mut registered_swarm_peers,
+                                                    &mut flushed_this_connection,
+                                                    peer_id,
+                                                    pk_hex,
+                                                );
+                                            }
                                         }
                                     }
                                 }
