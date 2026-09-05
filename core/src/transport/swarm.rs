@@ -8534,6 +8534,29 @@ pub async fn start_swarm_with_config(
                                 }
 
                                 let public_key_hex = info.public_key.clone().try_into_ed25519().map(|pk| hex::encode(pk.to_bytes())).ok();
+
+                                // R11-F1: hashed PeerIds do not carry an Ed25519 key,
+                                // so the WASM connect arm cannot register them. Identify
+                                // carries the verified public key even for those PeerIds;
+                                // use it as the canonical transport-manager key while the
+                                // connection tracker still proves that this peer is live.
+                                if let Some(pk_hex) = &public_key_hex {
+                                    if connection_tracker.get_connection(&peer_id).is_some() {
+                                        if let Some(core_arc) =
+                                            core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                        {
+                                            register_and_flush_swarm_peer(
+                                                &core_arc,
+                                                &mut swarm,
+                                                &mut registered_swarm_peers,
+                                                &mut flushed_this_connection,
+                                                peer_id,
+                                                pk_hex,
+                                            );
+                                        }
+                                    }
+                                }
+
                                 let _ = event_tx.send(SwarmEvent2::PeerIdentified {
                                     peer_id,
                                     public_key: public_key_hex,
