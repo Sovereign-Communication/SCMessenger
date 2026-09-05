@@ -3556,6 +3556,15 @@ pub async fn start_swarm_with_config(
             // ConnectionClosed arm below). One flush per connection prevents
             // identify+ConnectionEstablished duplicate drains.
             //
+            // R6-F2: the gate is per-PEER, not per-connection, on purpose. The
+            // reconnect flush drains messages that accumulated while the peer
+            // was UNREACHABLE; while any connection is live, prepare_message
+            // direct-sends over the registered link and never touches the
+            // outbox, so a second concurrent connection (e.g. TCP + relay) has
+            // nothing new to drain. Entries that failed egress carry backoff
+            // timers and flush on the next genuine reconnect. Same-peer
+            // multi-connection flush suppression is intentional.
+            //
             // Concurrency model (R5-E1/E2): everything that touches this map,
             // connection_tracker, and set_swarm_peer_connection runs in THIS
             // single-threaded select! task -- there is no other caller of

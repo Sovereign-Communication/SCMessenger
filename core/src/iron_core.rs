@@ -3113,15 +3113,28 @@ impl IronCore {
     pub(crate) fn set_swarm_peer_connection(&self, public_key_hex: &str, connected: bool) {
         use crate::transport::abstraction::{TransportCapabilities, TransportEvent, TransportType};
         let Ok(bytes) = hex::decode(public_key_hex) else {
+            tracing::warn!(
+                event = "swarm_peer_registration_invalid_key",
+                key = %public_key_hex,
+                "set_swarm_peer_connection: key is not valid hex; peer stays unregistered"
+            );
             return;
         };
         let Ok(peer_key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            tracing::warn!(
+                event = "swarm_peer_registration_invalid_key",
+                key = %public_key_hex,
+                len = bytes.len(),
+                "set_swarm_peer_connection: key is not 32 bytes; peer stays unregistered"
+            );
             return;
         };
         let transport = TransportType::Internet;
         // R2-B4: acquire the manager guard per operation instead of holding it
         // across all of them -- the inner manager calls take their own locks,
         // and narrow scopes keep read-guard/write-lock nesting shallow.
+        // R6-F3: malformed keys must not fail silently -- the RCA symptom this
+        // whole fix addresses was peers silently reading as unregistered.
         if connected {
             // Idempotent: ensure the Internet transport state exists so
             // ConnectionEstablished can mark the peer connected.
