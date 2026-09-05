@@ -1716,7 +1716,8 @@ fn log_route_decision(
 /// R7-G2 single-owner register-and-flush: the ONE place that records the
 /// canonical key for teardown, mirrors the live connection into the transport
 /// manager, and performs the once-per-connection reconnect flush over the real
-/// swarm. Both reconnect sites (identify and ConnectionEstablished) call it.
+/// swarm. Both native reconnect sites (identify and ConnectionEstablished)
+/// call it, plus the wasm connect arm (R8-F4 parity).
 fn register_and_flush_swarm_peer(
     core: &std::sync::Arc<crate::IronCore>,
     swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
@@ -3591,7 +3592,8 @@ pub async fn start_swarm_with_config(
             // Concurrency model (R5-E1/E2): everything that touches this map,
             // connection_tracker, and set_swarm_peer_connection runs in THIS
             // single-threaded select! task -- there is no other caller of
-            // set_swarm_peer_connection in the tree, so no interleaving
+            // set_swarm_peer_connection on this target (the wasm loop is
+            // cfg-excluded and runs its own single task), so no interleaving
             // between the registration, flush, and teardown steps is
             // possible, and libp2p never emits ConnectionClosed for a
             // connection before its ConnectionEstablished was processed.
@@ -7577,6 +7579,12 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // R8-F4: same lifecycle contracts as the native loop -- canonical pk
+        // (hex) this loop registered per wire peer, and the once-per-connection
+        // flush gate. Both are owned by this single-threaded select task.
+        let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+        let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+            std::collections::HashSet::new();
         // wasm/browser transport has no TCP/UDP listeners, so the observer
         // keeps its accept-all default here: there is no listen-port set to
         // filter against (V040-T14 P0 does not apply to a node that cannot
@@ -8547,6 +8555,11 @@ pub async fn start_swarm_with_config(
                                 // Clone the remote address before `endpoint` is consumed
                                 // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // R8-F4: the zero-to-one connection transition drives the
+                                // reconnect flush on native; capture the same signal here
+                                // BEFORE this path joins the tracker.
+                                let had_active_connection =
+                                    connection_tracker.get_connection(&peer_id).is_some();
                                 connection_tracker.add_connection(
                                     peer_id,
                                     remote_addr.clone(),
@@ -8556,6 +8569,40 @@ pub async fn start_swarm_with_config(
                                     },
                                     connection_id.to_string(),
                                 );
+                                // R8-F4: mirror the native register-and-flush lifecycle.
+                                // Without this the transport manager never learns swarm
+                                // peers on wasm, prepare_message's is_peer_connected gate
+                                // always routes Full-mode sends to the outbox, and nothing
+                                // ever flushes them (the drop-hop class, wasm variant).
+                                if !had_active_connection {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        match crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                            &peer_id.to_string(),
+                                        ) {
+                                            Some(pk_hex) => {
+                                                register_and_flush_swarm_peer(
+                                                    &core_arc,
+                                                    &mut swarm,
+                                                    &mut registered_swarm_peers,
+                                                    &mut flushed_this_connection,
+                                                    peer_id,
+                                                    &pk_hex,
+                                                );
+                                            }
+                                            None => {
+                                                // R1-A5 policy: hashed peer ids carry no
+                                                // recoverable Ed25519 key; skip registration
+                                                // rather than fabricate a key (WASM).
+                                                tracing::debug!(
+                                                    "Peer {} has no embedded Ed25519 key; skipping swarm registration (WASM)",
+                                                    peer_id
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 dispatch_pending_custody_for_peer(
                                     &mut swarm,
                                     &relay_custody_store,
@@ -8683,6 +8730,17 @@ pub async fn start_swarm_with_config(
                                 connection_tracker.remove_connection(&peer_id);
                                 ledger_exchanged_peers.remove(&peer_id);
                                 pending_ledger_exchanges.remove(&peer_id);
+                                // R8-F4: mirror the native teardown -- de-register by the
+                                // key the connect arm registered (map-tracked), re-arm the
+                                // flush gate, and clear the manager's connected state.
+                                flushed_this_connection.remove(&peer_id);
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
                                 let stale_dispatches: Vec<libp2p::request_response::OutboundRequestId> =
                                     pending_custody_dispatches
                                         .iter()
