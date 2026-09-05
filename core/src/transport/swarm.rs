@@ -1713,6 +1713,29 @@ fn log_route_decision(
     );
 }
 
+/// R7-G2 single-owner register-and-flush: the ONE place that records the
+/// canonical key for teardown, mirrors the live connection into the transport
+/// manager, and performs the once-per-connection reconnect flush over the real
+/// swarm. Both reconnect sites (identify and ConnectionEstablished) call it.
+fn register_and_flush_swarm_peer(
+    core: &std::sync::Arc<crate::IronCore>,
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    registered_swarm_peers: &mut HashMap<PeerId, String>,
+    flushed_this_connection: &mut HashSet<PeerId>,
+    peer_id: PeerId,
+    pk_hex: &str,
+) {
+    registered_swarm_peers.insert(peer_id, pk_hex.to_string());
+    core.set_swarm_peer_connection(pk_hex, true);
+
+    // The gate is deliberately outside the egress closure: a duplicate event
+    // leaves the outbox untouched instead of claiming that a flush happened.
+    let skip_flush = !flushed_this_connection.insert(peer_id) || !swarm.is_connected(&peer_id);
+    let mut egress =
+        |envelope: &[u8]| -> bool { flush_outbox_over_swarm(swarm, &peer_id, envelope) };
+    core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
+}
+
 /// R2-B1 / R3-C3 single-owner outbox egress: frame the envelope and dispatch
 /// it over the messaging request-response protocol to `peer_id`. Returns
 /// false when the peer is not connected at send time so the flush applies
@@ -5686,38 +5709,13 @@ pub async fn start_swarm_with_config(
                                                 // register BEFORE the flush so the flush's
                                                 // send_to_peer lookup can resolve a transport.
                                                 if connection_tracker.get_connection(&peer_id).is_some() {
-                                                    registered_swarm_peers.insert(peer_id, pk_hex.clone());
-                                                    c_arc.set_swarm_peer_connection(pk_hex, true);
-                                                    // R1-A2: egress the reconnect flush over the
-                                                    // live swarm link instead of parking envelopes
-                                                    // in the consumer-less transport-manager queue.
-                                                    // R3-C1: the once-per-connection decision
-                                                    // is made HERE, outside the egress
-                                                    // closure, so the losing event site skips
-                                                    // the flush entirely instead of pretending
-                                                    // envelopes were sent. Cleared on
-                                                    // ConnectionClosed so a genuine reconnect
-                                                    // flushes again. R3-C3: the send itself is
-                                                    // the single-owner helper.
-                                                    let already_flushed =
-                                                        !flushed_this_connection.insert(peer_id);
-                                                    // Checked before the egress closure takes
-                                                    // its &mut swarm borrow; the helper still
-                                                    // re-checks is_connected at send time.
-                                                    let skip_flush = already_flushed
-                                                        || !swarm.is_connected(&peer_id);
-                                                    let mut egress = |envelope: &[u8]| -> bool {
-                                                        flush_outbox_over_swarm(
-                                                            &mut swarm,
-                                                            &peer_id,
-                                                            envelope,
-                                                        )
-                                                    };
-                                                    c_arc.handle_peer_connection_event_with_egress(
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        peer_id,
                                                         pk_hex,
-                                                        true,
-                                                        skip_flush,
-                                                        &mut egress,
                                                     );
                                                 }
                                             }
@@ -5887,38 +5885,13 @@ pub async fn start_swarm_with_config(
                                             );
                                             match canonical_pk {
                                                 Some(pk_hex) => {
-                                                    registered_swarm_peers.insert(peer_id, pk_hex.clone());
-                                                    c_arc.set_swarm_peer_connection(&pk_hex, true);
-                                                    // R1-A2: egress the reconnect flush over the
-                                                    // live swarm link instead of parking envelopes
-                                                    // in the consumer-less transport-manager queue.
-                                                    // R3-C1: the once-per-connection decision
-                                                    // is made HERE, outside the egress
-                                                    // closure, so the losing event site skips
-                                                    // the flush entirely instead of pretending
-                                                    // envelopes were sent. Cleared on
-                                                    // ConnectionClosed so a genuine reconnect
-                                                    // flushes again. R3-C3: the send itself is
-                                                    // the single-owner helper.
-                                                    let already_flushed =
-                                                        !flushed_this_connection.insert(peer_id);
-                                                    // Checked before the egress closure takes
-                                                    // its &mut swarm borrow; the helper still
-                                                    // re-checks is_connected at send time.
-                                                    let skip_flush = already_flushed
-                                                        || !swarm.is_connected(&peer_id);
-                                                    let mut egress = |envelope: &[u8]| -> bool {
-                                                        flush_outbox_over_swarm(
-                                                            &mut swarm,
-                                                            &peer_id,
-                                                            envelope,
-                                                        )
-                                                    };
-                                                    c_arc.handle_peer_connection_event_with_egress(
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        peer_id,
                                                         &pk_hex,
-                                                        true,
-                                                        skip_flush,
-                                                        &mut egress,
                                                     );
                                                 }
                                                 None => {
