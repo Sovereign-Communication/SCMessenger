@@ -3152,14 +3152,15 @@ impl IronCore {
         }
     }
 }
-/// R3-C2: grace window after a successful swarm egress. The retry loop may
-/// re-dispatch once inside this window if no receipt arrives; both the entry
-/// and the retry are receipt-idempotent (receipts clear the entry regardless
-/// of state), so this trades a rare duplicate for never marking a delivered
-/// message as Failed.
-pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
-
 impl IronCore {
+    /// R3-C2: grace window after a successful swarm egress. The retry loop
+    /// may re-dispatch once inside this window if no receipt arrives; both
+    /// the entry and the retry are receipt-idempotent (receipts clear the
+    /// entry regardless of state, and the recipient's inbox dedupes by
+    /// message id), so this trades a rare duplicate for never marking a
+    /// delivered message as Failed.
+    pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
+
     pub(crate) fn handle_peer_connection_event_with_egress(
         &self,
         peer_id: &str,
@@ -3255,7 +3256,7 @@ impl IronCore {
                                 .duration_since(web_time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
-                            msg.next_retry_at = Some(now_secs + OUTBOX_EGRESS_GRACE_SECS);
+                            msg.next_retry_at = Some(now_secs + Self::OUTBOX_EGRESS_GRACE_SECS);
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
                                     event = "outbox_enqueue_failed",
@@ -5323,7 +5324,7 @@ mod tests {
                 .unwrap_or_default()
                 .as_secs();
             assert!(
-                nra > now_secs && nra <= now_secs + OUTBOX_EGRESS_GRACE_SECS + 5,
+                nra > now_secs && nra <= now_secs + IronCore::OUTBOX_EGRESS_GRACE_SECS + 5,
                 "grace window must be a fixed near-term retry, not exponential (R3-C2)"
             );
         }
