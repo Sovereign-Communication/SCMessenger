@@ -3152,6 +3152,10 @@ impl IronCore {
         }
     }
 }
+// R5-E3: this is deliberately a SEPARATE impl block. The block above is
+// `#[uniffi::export]`-annotated, and the UniFFI proc-macro rejects any method
+// whose parameters are not UDL-representable (here: the egress FnMut). These
+// crate-internal members must live outside that macro's reach.
 impl IronCore {
     /// R3-C2: grace window after a successful swarm egress. The retry loop
     /// may re-dispatch once inside this window if no receipt arrives; both

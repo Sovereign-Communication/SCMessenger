@@ -3555,6 +3555,14 @@ pub async fn start_swarm_with_config(
             // re-connect re-inserts them, a close clears them (see
             // ConnectionClosed arm below). One flush per connection prevents
             // identify+ConnectionEstablished duplicate drains.
+            //
+            // Concurrency model (R5-E1/E2): everything that touches this map,
+            // connection_tracker, and set_swarm_peer_connection runs in THIS
+            // single-threaded select! task -- there is no other caller of
+            // set_swarm_peer_connection in the tree, so no interleaving
+            // between the registration, flush, and teardown steps is
+            // possible, and libp2p never emits ConnectionClosed for a
+            // connection before its ConnectionEstablished was processed.
             let mut flushed_this_connection: std::collections::HashSet<PeerId> =
                 std::collections::HashSet::new();
             let mut reported_peer_discoveries: std::collections::HashSet<PeerId> =
