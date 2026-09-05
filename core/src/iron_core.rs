@@ -3133,6 +3133,17 @@ impl IronCore {
         // R2-B4: acquire the manager guard per operation instead of holding it
         // across all of them -- the inner manager calls take their own locks,
         // and narrow scopes keep read-guard/write-lock nesting shallow.
+        // R10-F1 (safety of read-guard + interior mutability): these calls
+        // mutate TransportManager's inner `parking_lot::RwLock` fields behind
+        // the outer read guard, so two concurrent callers COULD interleave
+        // their inner writes. That is safe here BY CALLER CENSUS, not by lock
+        // discipline: the only callers are the native swarm select task and
+        // the wasm select task (each single-threaded, mutually cfg-exclusive),
+        // plus single-threaded unit tests. No concurrent pair exists (verified
+        // R9-F1/R10-F1: the only transport_manager.write() callers live in
+        // perform_maintenance, which has zero native callers). If a second
+        // concurrent caller is ever introduced, this method must move to the
+        // outer write() guard or a compound event.
         // R6-F3: malformed keys must not fail silently -- the RCA symptom this
         // whole fix addresses was peers silently reading as unregistered.
         if connected {
@@ -5400,8 +5411,21 @@ mod tests {
             );
         }
         // The invariant that matters: a later genuine reconnect still drains
-        // it once the short backoff elapses.
-        std::thread::sleep(std::time::Duration::from_millis(2_500));
+        // it once the backoff elapses. Deterministic: rewind the entry's
+        // next_retry_at into the past instead of sleeping out the 2s backoff
+        // (R10-F4 -- wall-clock sleeps are CI-flaky). Safe as a test-only
+        // mutation because enqueue replaces by message_id.
+        {
+            let mut ob = core.outbox.write();
+            let mut entry = ob
+                .drain_for_peer(&recipient)
+                .into_iter()
+                .find(|m| m.message_id == prepared_r9.message_id)
+                .expect("deferred entry must still be present before the recovery flush");
+            entry.next_retry_at = Some(0);
+            ob.enqueue(entry)
+                .expect("re-enqueue of drained entry cannot hit limits");
+        }
         let mut delivered_after_recovery = 0usize;
         core.handle_peer_connection_event_with_egress(
             &recipient,
