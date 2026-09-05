@@ -3286,42 +3286,37 @@ impl IronCore {
                             continue;
                         }
 
-                        // R2-B3: no live egress path -- do NOT park in the
-                        // transport-manager outgoing queue (no production
-                        // consumer; parking would also dual-state with the
-                        // outbox entry). Treat like a failed attempt: marked
-                        // Failed after 3, transient backoff otherwise. The
-                        // entry stays in the outbox either way; only a
-                        // receipt clears it.
+                        // R2-B3, amended R9-F3: no live egress path -- do
+                        // NOT park in the transport-manager outgoing queue
+                        // (no production consumer; parking would also
+                        // dual-state with the outbox entry). Egress=false is
+                        // ALWAYS transient: in production it means the
+                        // connection dropped between the flush gate's
+                        // is_connected check and the send (reconnect
+                        // timing), and marking the entry Failed here would
+                        // permanently skip it -- flush_peer_messages only
+                        // drains Enqueued entries, so a genuine reconnect
+                        // could never deliver it. The attempt counter is
+                        // diagnostic-only now: it feeds the backoff curve
+                        // (2^attempt, capped at 3600s) and grows u32-
+                        // saturating; no threshold converts the entry to
+                        // Failed. Only a receipt clears it.
                         msg.attempts = current_attempt;
-                        if current_attempt >= 3 {
-                            msg.state = crate::store::outbox::MessageState::Failed;
-                            msg.next_retry_at = None;
-                            tracing::debug!(
-                                event = "outbox_delivery_failed_persistent",
-                                message_id = %msg_id,
-                                peer_id = %peer_id,
-                                attempt = current_attempt,
-                                "Flush has no egress path after 3 attempts; marking as Failed"
-                            );
-                        } else {
-                            msg.state = crate::store::outbox::MessageState::Enqueued;
-                            let backoff_secs =
-                                2u64.saturating_pow(current_attempt.min(12)).min(3600);
-                            let now_secs = web_time::SystemTime::now()
-                                .duration_since(web_time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
-                            msg.next_retry_at = Some(now_secs + backoff_secs);
-                            tracing::debug!(
-                                event = "outbox_delivery_failed_transient",
-                                message_id = %msg_id,
-                                peer_id = %peer_id,
-                                attempt = current_attempt,
-                                backoff_secs = backoff_secs,
-                                "Flush has no egress path; re-enqueueing with backoff"
-                            );
-                        }
+                        msg.state = crate::store::outbox::MessageState::Enqueued;
+                        let backoff_secs = 2u64.saturating_pow(current_attempt.min(12)).min(3600);
+                        let now_secs = web_time::SystemTime::now()
+                            .duration_since(web_time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        msg.next_retry_at = Some(now_secs + backoff_secs);
+                        tracing::debug!(
+                            event = "outbox_delivery_deferred_no_egress",
+                            message_id = %msg_id,
+                            peer_id = %peer_id,
+                            attempt = current_attempt,
+                            backoff_secs = backoff_secs,
+                            "Flush has no egress path; deferred with backoff until next reconnect"
+                        );
                         if let Err(e) = self.outbox.write().enqueue(msg) {
                             tracing::error!(
                                 event = "outbox_enqueue_failed",
@@ -5365,6 +5360,63 @@ mod tests {
         );
         assert!(core.outbox_contains_for_recipient(&recipient, &prepared2.message_id));
         assert!(core.mark_message_sent(prepared2.message_id));
+
+        // R9-F3: egress=false is ALWAYS transient (production meaning: the
+        // connection raced away between the flush gate and the send). No
+        // flush may convert the entry to Failed -- flush_peer_messages only
+        // drains Enqueued entries, so a Failed entry could never be
+        // delivered by a later genuine reconnect. (Peer deliberately marked
+        // disconnected first so prepare_message outboxes instead of
+        // direct-sending over the still-registered live link.)
+        core.set_swarm_peer_connection(&recipient, false);
+        let prepared_r9 = core
+            .prepare_message(
+                recipient.clone(),
+                "r9-f3-no-failed".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_: &[u8]| false,
+        );
+        {
+            let snapshot = core.outbox.read().peek_for_peer(&recipient);
+            let entry = snapshot
+                .iter()
+                .find(|m| m.message_id == prepared_r9.message_id)
+                .expect("entry must remain in the outbox after a no-egress flush");
+            assert_eq!(
+                entry.state,
+                crate::store::outbox::MessageState::Enqueued,
+                "no-egress flush must never mark the entry Failed (R9-F3)"
+            );
+            assert!(
+                entry.next_retry_at.is_some(),
+                "no-egress flush must schedule a backoff retry, not a terminal state (R9-F3)"
+            );
+        }
+        // The invariant that matters: a later genuine reconnect still drains
+        // it once the short backoff elapses.
+        std::thread::sleep(std::time::Duration::from_millis(2_500));
+        let mut delivered_after_recovery = 0usize;
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_: &[u8]| {
+                delivered_after_recovery += 1;
+                true
+            },
+        );
+        assert_eq!(
+            delivered_after_recovery, 1,
+            "a recovered connection must re-drain the entry the race deferred (R9-F3)"
+        );
+        assert!(core.mark_message_sent(prepared_r9.message_id));
     }
 
     #[test]
