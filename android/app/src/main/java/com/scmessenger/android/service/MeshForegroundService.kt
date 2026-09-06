@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -97,7 +98,11 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        val shouldStartForeground = action == null || action == ACTION_START || action == ACTION_RESUME
+        // R6-2: ACTION_ENSURE is delivered via startForegroundService() too,
+        // so the 5-second startForeground() contract applies even when the
+        // user-stop latch later resolves the delivery to NoOp.
+        val shouldStartForeground =
+            action == null || action == ACTION_START || action == ACTION_RESUME || action == ACTION_ENSURE
 
         // Android 12+ requires startForeground() within 5 seconds of onStartCommand returning.
         // Promote to foreground synchronously; async initialization continues in the coroutine.
@@ -118,7 +123,21 @@ class MeshForegroundService : Service() {
                 StartDecision.Stop -> stopMeshService()
                 StartDecision.Pause -> pauseMeshService()
                 StartDecision.Resume -> resumeMeshService()
-                StartDecision.NoOp -> Timber.w("Ignoring pause request while service is not running")
+                StartDecision.NoOp -> {
+                    // R6-2/R8-1: while the user-stop latch is active the mesh
+                    // must stay down, so ANY NoOp delivery should terminate
+                    // the service if it is still the most recent request
+                    // (stopSelfResult). This covers a latched ACTION_ENSURE
+                    // that promoted to foreground, a latched START_STICKY
+                    // restart delivering a null intent, and a stray PAUSE --
+                    // whichever delivery is newest takes the transient
+                    // foreground state with it; none can strand the service
+                    // in foreground with the mesh stopped.
+                    Timber.w("Ignoring %s request while service is not running", action ?: "null action")
+                    if (userStoppedForSession && stopSelfResult(startId)) {
+                        Timber.d("Service stopped after NoOp while user stop in effect (startId=%d)", startId)
+                    }
+                }
             }
         }
 
@@ -366,6 +385,7 @@ class MeshForegroundService : Service() {
             }
 
             isRunning = false
+            userStoppedForSession = true
             connectedPeers.clear()
             messagesRelayed.set(0)
             anrWatchdog.stop()
@@ -684,7 +704,27 @@ class MeshForegroundService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1001
 
+        /**
+         * R3-F1: a user-initiated Stop (notification action or the service
+         * view model) must survive activity onResume — the activity's
+         * ensure-latch must not resurrect a mesh the user deliberately
+         * stopped. Set on ACTION_STOP handling, cleared only by an explicit
+         * ACTION_START (or fresh cold start where the flag is false).
+         * Process-lifetime by design: a killed process loses the latch and
+         * the next cold start legitimately re-autostarts the mesh.
+         */
+        @Volatile
+        internal var userStoppedForSession: Boolean = false
+
+        /**
+         * R4-L1: observable record of the most recent ensure/start attempt
+         * (true = last attempt failed). Lives on the companion so it survives
+         * activity recreation; collect it for UI/diagnostics surfacing.
+         */
+        internal val fgsStartFailed = MutableStateFlow(false)
+
         const val ACTION_START = "com.scmessenger.android.service.START"
+        const val ACTION_ENSURE = "com.scmessenger.android.service.ENSURE"
         const val ACTION_STOP = "com.scmessenger.android.service.STOP"
         const val ACTION_PAUSE = "com.scmessenger.android.service.PAUSE"
         const val ACTION_RESUME = "com.scmessenger.android.service.RESUME"
@@ -702,9 +742,28 @@ class MeshForegroundService : Service() {
             serviceRunning: Boolean,
             repositoryRunning: Boolean
         ): StartDecision {
+            // R4-M1: STOP is always honored -- a repeated or late stop must be
+            // able to complete teardown even if the latch is already set.
+            if (action == ACTION_STOP) {
+                return StartDecision.Stop
+            }
+            // R3-F1 / R4-M2: after a user stop, only an explicit ACTION_START
+            // (user-initiated from the service view model) may restart the
+            // mesh and clear the latch. ACTION_ENSURE (automatic ensure from
+            // the activity) must never resurrect a stopped mesh and cannot
+            // clear the latch, so a STOP that races ahead of a queued ENSURE
+            // still wins.
+            if (userStoppedForSession && action != ACTION_START) {
+                Timber.d("decideCommand: user stop in effect; ignoring action=%s", action ?: "null")
+                return StartDecision.NoOp
+            }
+            if (action == ACTION_START) {
+                userStoppedForSession = false
+            }
             return when (action) {
                 null -> StartDecision.Start
                 ACTION_START -> StartDecision.Start
+                ACTION_ENSURE -> StartDecision.Start
                 ACTION_STOP -> StartDecision.Stop
                 ACTION_PAUSE -> if (serviceRunning || repositoryRunning) {
                     StartDecision.Pause
