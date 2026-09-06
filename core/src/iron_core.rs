@@ -3085,7 +3085,7 @@ impl IronCore {
     /// queue and entries stay in the outbox pending receipt, exactly the
     /// pre-egress semantics (R1-A2 disposition).
     pub fn handle_peer_connection_event(&self, peer_id: &str, connected: bool) {
-        self.handle_peer_connection_event_with_egress(peer_id, connected, false, &mut |_| false);
+        self.handle_peer_connection_event_with_egress(peer_id, connected, false, &mut |_, _| false);
     }
 
     /// Mirror a live libp2p swarm connection into the transport manager so the
@@ -3189,12 +3189,16 @@ impl IronCore {
     /// delivered message as Failed.
     pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
 
+    pub(crate) fn retry_outbox_message_now(&self, message_id: &str) -> bool {
+        self.outbox.write().retry_now(message_id)
+    }
+
     pub(crate) fn handle_peer_connection_event_with_egress(
         &self,
         peer_id: &str,
         connected: bool,
         skip_flush: bool,
-        egress: &mut dyn FnMut(&[u8]) -> bool,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
     ) {
         if !connected || skip_flush {
             // R3-C1: an explicit skip (duplicate connect event for a
@@ -3265,7 +3269,7 @@ impl IronCore {
                         // forever. Dispatched-over-swarm is NOT delivery: the
                         // entry stays Enqueued until an application-level
                         // receipt calls mark_message_sent.
-                        if egress(&msg.envelope_data) {
+                        if egress(&msg_id, &msg.envelope_data) {
                             // R3-C2: a real dispatch runs NO failure ladder --
                             // never Failed, never exponential backoff. The entry
                             // stays Enqueued with a fixed grace window (re-flush
@@ -3285,13 +3289,24 @@ impl IronCore {
                                 .unwrap_or_default()
                                 .as_secs();
                             msg.next_retry_at = Some(now_secs + Self::OUTBOX_EGRESS_GRACE_SECS);
+                            let restore = msg.clone();
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
                                     event = "outbox_enqueue_failed",
                                     message_id = %msg_id,
                                     error = %e,
-                                    "Failed to re-enqueue message after swarm egress"
+                                    "Failed to re-enqueue message after swarm egress; restoring drained ownership"
                                 );
+                                if let Err(restore_error) =
+                                    self.outbox.write().restore_drained(restore)
+                                {
+                                    tracing::error!(
+                                        event = "outbox_restore_failed",
+                                        message_id = %msg_id,
+                                        error = %restore_error,
+                                        "Drained message could not be restored after enqueue failure"
+                                    );
+                                }
                             }
                             succeeded += 1;
                             continue;
@@ -3328,13 +3343,23 @@ impl IronCore {
                             backoff_secs = backoff_secs,
                             "Flush has no egress path; deferred with backoff until next reconnect"
                         );
+                        let restore = msg.clone();
                         if let Err(e) = self.outbox.write().enqueue(msg) {
                             tracing::error!(
                                 event = "outbox_enqueue_failed",
                                 message_id = %msg_id,
                                 error = %e,
-                                "Failed to re-enqueue message after flush without egress"
+                                "Failed to re-enqueue message after flush without egress; restoring drained ownership"
                             );
+                            if let Err(restore_error) = self.outbox.write().restore_drained(restore)
+                            {
+                                tracing::error!(
+                                    event = "outbox_restore_failed",
+                                    message_id = %msg_id,
+                                    error = %restore_error,
+                                    "Drained message could not be restored after enqueue failure"
+                                );
+                            }
                         }
                         failed += 1;
                     }
@@ -5261,7 +5286,7 @@ mod tests {
             &recipient,
             true,
             false,
-            &mut |envelope: &[u8]| {
+            &mut |_, envelope: &[u8]| {
                 egressed.push(envelope.to_vec());
                 true
             },
@@ -5299,7 +5324,7 @@ mod tests {
             &recipient,
             true,
             true, // skip: duplicate connect event
-            &mut |_| {
+            &mut |_, _| {
                 egress_calls += 1;
                 true
             },
@@ -5326,7 +5351,7 @@ mod tests {
             &recipient,
             true,
             false,
-            &mut |_: &[u8]| true,
+            &mut |_, _: &[u8]| true,
         );
         {
             let snapshot = core.outbox.read().peek_for_peer(&recipient);
@@ -5392,7 +5417,7 @@ mod tests {
             &recipient,
             true,
             false,
-            &mut |_: &[u8]| false,
+            &mut |_, _: &[u8]| false,
         );
         {
             let snapshot = core.outbox.read().peek_for_peer(&recipient);
@@ -5431,7 +5456,7 @@ mod tests {
             &recipient,
             true,
             false,
-            &mut |_: &[u8]| {
+            &mut |_, _: &[u8]| {
                 delivered_after_recovery += 1;
                 true
             },

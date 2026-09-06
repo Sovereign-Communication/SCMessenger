@@ -1723,6 +1723,7 @@ fn register_and_flush_swarm_peer(
     swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
     registered_swarm_peers: &mut HashMap<PeerId, String>,
     flushed_this_connection: &mut HashSet<PeerId>,
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
     peer_id: PeerId,
     pk_hex: &str,
 ) {
@@ -1732,8 +1733,15 @@ fn register_and_flush_swarm_peer(
     // The gate is deliberately outside the egress closure: a duplicate event
     // leaves the outbox untouched instead of claiming that a flush happened.
     let skip_flush = !flushed_this_connection.insert(peer_id) || !swarm.is_connected(&peer_id);
-    let mut egress =
-        |envelope: &[u8]| -> bool { flush_outbox_over_swarm(swarm, &peer_id, envelope) };
+    let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+        flush_outbox_over_swarm(
+            swarm,
+            &peer_id,
+            message_id,
+            envelope,
+            reconnect_request_to_message,
+        )
+    };
     core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
 }
 
@@ -1745,18 +1753,21 @@ fn register_and_flush_swarm_peer(
 fn flush_outbox_over_swarm(
     swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
     peer_id: &libp2p::PeerId,
+    message_id: &str,
     envelope: &[u8],
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
 ) -> bool {
     if !swarm.is_connected(peer_id) {
         return false;
     }
     let framed = wrap_in_drift_frame(envelope);
-    let _request_id = swarm.behaviour_mut().messaging.send_request(
+    let request_id = swarm.behaviour_mut().messaging.send_request(
         peer_id,
         Libp2pMessageRequest {
             envelope_data: framed,
         },
     );
+    reconnect_request_to_message.insert(request_id, message_id.to_string());
     true
 }
 
@@ -3373,6 +3384,13 @@ pub async fn start_swarm_with_config(
         // Track outbound request IDs to message IDs for direct sends
         let mut request_to_message: HashMap<libp2p::request_response::OutboundRequestId, String> =
             HashMap::new();
+        // Reconnect-flush request IDs are tracked separately from route-dispatch
+        // IDs so an outbound failure can wake the durable outbox entry without
+        // disturbing the normal pending-message retry state.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
+        > = HashMap::new();
 
         // Track outbound relay request IDs
         let mut pending_relay_requests: HashMap<
@@ -4265,6 +4283,22 @@ pub async fn start_swarm_with_config(
                                                 }
                                             }
                                         } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if !response.accepted {
+                                                if let Some(core) =
+                                                    core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                {
+                                                    core.retry_outbox_message_now(&message_id);
+                                                }
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_response",
+                                                message_id = %message_id,
+                                                accepted = response.accepted,
+                                                "Reconnect-flush request completed"
+                                            );
+                                        } else if let Some(message_id) =
                                             request_to_message.remove(&request_id)
                                         {
                                             // Response to our outbound message request
@@ -4313,6 +4347,20 @@ pub async fn start_swarm_with_config(
                                             e
                                         );
                                     }
+                                } else if let Some(message_id) =
+                                    reconnect_request_to_message.remove(&request_id)
+                                {
+                                    if let Some(core) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core.retry_outbox_message_now(&message_id);
+                                    }
+                                    tracing::debug!(
+                                        event = "outbox_reconnect_failure",
+                                        message_id = %message_id,
+                                        error = %error,
+                                        "Reconnect-flush request failed; entry is eligible on next reconnect"
+                                    );
                                 } else if let Some(message_id) = request_to_message.remove(&request_id) {
                                     if let Some(pending) = pending_messages.remove(&message_id) {
                                         tracing::warn!(
@@ -5716,6 +5764,7 @@ pub async fn start_swarm_with_config(
                                                         &mut swarm,
                                                         &mut registered_swarm_peers,
                                                         &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
                                                         peer_id,
                                                         pk_hex,
                                                     );
@@ -5892,6 +5941,7 @@ pub async fn start_swarm_with_config(
                                                         &mut swarm,
                                                         &mut registered_swarm_peers,
                                                         &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
                                                         peer_id,
                                                         &pk_hex,
                                                     );
@@ -7542,6 +7592,12 @@ pub async fn start_swarm_with_config(
             libp2p::request_response::OutboundRequestId,
             mpsc::Sender<Result<(), String>>,
         > = HashMap::new();
+        // Reconnect-flush requests have no caller reply channel; retain their
+        // message IDs so transport failures can make the outbox eligible again.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
+        > = HashMap::new();
 
         let mut bound_addresses = Vec::new();
         let mut pending_reflections: HashMap<
@@ -8002,6 +8058,22 @@ pub async fn start_swarm_with_config(
                                                         &reason,
                                                     );
                                                 }
+                                            } else if let Some(message_id) =
+                                                reconnect_request_to_message.remove(&request_id)
+                                            {
+                                                if !response.accepted {
+                                                    if let Some(core) =
+                                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                    {
+                                                        core.retry_outbox_message_now(&message_id);
+                                                    }
+                                                }
+                                                tracing::debug!(
+                                                    event = "outbox_reconnect_response",
+                                                    message_id = %message_id,
+                                                    accepted = response.accepted,
+                                                    "WASM reconnect-flush request completed"
+                                                );
                                             } else if let Some(reply_tx) =
                                                 pending_direct_replies.remove(&request_id)
                                             {
@@ -8023,6 +8095,20 @@ pub async fn start_swarm_with_config(
                                                 &dispatch.destination_peer.to_string(),
                                                 &dispatch.custody_id,
                                                 &reason,
+                                            );
+                                        } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if let Some(core) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {
+                                                core.retry_outbox_message_now(&message_id);
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_failure",
+                                                message_id = %message_id,
+                                                error = %error,
+                                                "WASM reconnect-flush request failed; entry is eligible on next reconnect"
                                             );
                                         } else if let Some(reply_tx) =
                                             pending_direct_replies.remove(&request_id)
@@ -8550,15 +8636,15 @@ pub async fn start_swarm_with_config(
                                         if connection_tracker.get_connection(&peer_id).is_some() {
                                             if let Some(core_arc) =
                                                 core_handle.as_ref().and_then(|weak| weak.upgrade())
-                                            {
-                                                register_and_flush_swarm_peer(
-                                                    &core_arc,
-                                                    &mut swarm,
-                                                    &mut registered_swarm_peers,
-                                                    &mut flushed_this_connection,
-                                                    peer_id,
-                                                    pk_hex,
-                                                );
+                                            {                                                    register_and_flush_swarm_peer(
+                                                        &core_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        pk_hex,
+                                                    );
                                             }
                                         }
                                     }
@@ -8617,6 +8703,7 @@ pub async fn start_swarm_with_config(
                                                     &mut swarm,
                                                     &mut registered_swarm_peers,
                                                     &mut flushed_this_connection,
+                                                    &mut reconnect_request_to_message,
                                                     peer_id,
                                                     &pk_hex,
                                                 );
