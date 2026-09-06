@@ -270,11 +270,17 @@ class NetworkDetector @Inject constructor(
         val previousType = _networkType.value
         _networkType.value = newType
 
+        // R3-F5b: one owner for the blocked-ports derivation. UNKNOWN (no
+        // verified network evidence) must not silently retain a previous
+        // network's port-blocking posture; clearing it here is the only
+        // place blocked ports are set or cleared.
         if (newType == NetworkType.CELLULAR || newType == NetworkType.CELLULAR_RESTRICTED) {
             _blockedPorts.value = commonlyBlockedPorts
             Timber.w("Cellular network detected (%s) after %dms stability — blocking ports: %s",
                 newType, networkStabilityMs, commonlyBlockedPorts)
         } else {
+            // UNKNOWN also clears: with no verified network evidence the prior
+            // port posture is stale, not conservative.
             _blockedPorts.value = emptySet()
         }
 

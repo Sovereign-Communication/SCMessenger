@@ -20,6 +20,10 @@ import javax.inject.Singleton
 class CircuitBreaker @Inject constructor(
     private val config: CircuitBreakerConfig = CircuitBreakerConfig()
 ) {
+    companion object {
+        const val HALF_OPEN_TIMEOUT_MS: Long = 30_000L
+    }
+
     /** Per-relay circuit state entries */
     private val entries = ConcurrentHashMap<String, CircuitEntry>()
 
@@ -30,7 +34,7 @@ class CircuitBreaker @Inject constructor(
     data class CircuitBreakerConfig(
         val failureThreshold: Int = 3,
         val openTimeoutMs: Long = 300_000L, // 5 minutes
-        val halfOpenTimeoutMs: Long = 30_000L, // 30 seconds
+        val halfOpenTimeoutMs: Long = HALF_OPEN_TIMEOUT_MS,
         val successThreshold: Int = 2,
         val maxHalfOpenProbes: Int = 3
     )

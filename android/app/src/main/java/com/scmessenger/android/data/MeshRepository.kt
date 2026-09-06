@@ -71,7 +71,7 @@ open class MeshRepository(
          * half-open cadence (30 s) so probe attempts align with the breaker's
          * own OPEN -> HALF_OPEN transition instead of hot-looping.
          */
-        private const val BOOTSTRAP_BREAKER_REPROBE_MS = 30_000L
+        private val BOOTSTRAP_BREAKER_REPROBE_MS = CircuitBreaker.HALF_OPEN_TIMEOUT_MS
 
         // P0: Cache key identity fields in SharedPreferences for instant UI load.
         // Eliminates 30-60s "Unavailable" gap while service starts up.

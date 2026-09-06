@@ -366,6 +366,7 @@ class MeshForegroundService : Service() {
             }
 
             isRunning = false
+            userStoppedForSession = true
             connectedPeers.clear()
             messagesRelayed.set(0)
             anrWatchdog.stop()
@@ -684,6 +685,18 @@ class MeshForegroundService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1001
 
+        /**
+         * R3-F1: a user-initiated Stop (notification action or the service
+         * view model) must survive activity onResume — the activity's
+         * ensure-latch must not resurrect a mesh the user deliberately
+         * stopped. Set on ACTION_STOP handling, cleared only by an explicit
+         * ACTION_START (or fresh cold start where the flag is false).
+         * Process-lifetime by design: a killed process loses the latch and
+         * the next cold start legitimately re-autostarts the mesh.
+         */
+        @Volatile
+        internal var userStoppedForSession: Boolean = false
+
         const val ACTION_START = "com.scmessenger.android.service.START"
         const val ACTION_STOP = "com.scmessenger.android.service.STOP"
         const val ACTION_PAUSE = "com.scmessenger.android.service.PAUSE"
@@ -702,6 +715,17 @@ class MeshForegroundService : Service() {
             serviceRunning: Boolean,
             repositoryRunning: Boolean
         ): StartDecision {
+            // R3-F1: after a user stop, only an explicit ACTION_START may
+            // restart the mesh. Every other trigger (null action from a
+            // restart, unknown actions) is treated as Start normally when no
+            // stop happened, and as NoOp while the stop is in effect.
+            if (userStoppedForSession && action != ACTION_START) {
+                Timber.d("decideCommand: user stop in effect; ignoring action=%s", action ?: "null")
+                return StartDecision.NoOp
+            }
+            if (action == ACTION_START) {
+                userStoppedForSession = false
+            }
             return when (action) {
                 null -> StartDecision.Start
                 ACTION_START -> StartDecision.Start

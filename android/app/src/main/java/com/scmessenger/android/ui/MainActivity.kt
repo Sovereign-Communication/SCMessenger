@@ -11,6 +11,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import com.scmessenger.android.service.AndroidPlatformBridge
+import com.scmessenger.android.service.MeshForegroundService
 import com.scmessenger.android.service.AnrWatchdog
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.theme.SCMessengerTheme
@@ -56,6 +57,13 @@ class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
     private val permissionRequestInProgress = AtomicBoolean(false)
+
+    /**
+     * R3-F1: observable record of the most recent foreground-service start
+     * attempt. True means the last attempt failed; surfaced so a systematic
+     * start denial is state, not just a log line.
+     */
+    private val meshForegroundStartFailed = AtomicBoolean(false)
     private val permissionRequestDebounceMs = 500L
     private val handler = Handler(Looper.getMainLooper())
 
@@ -359,15 +367,24 @@ class MainActivity : ComponentActivity() {
      * mesh is already running just refreshes the notification.
      */
     private fun ensureMeshForegroundService() {
+        // R3-F1: never resurrect a mesh the user explicitly stopped this
+        // session. Only an in-app Start (which sends ACTION_START through the
+        // service) clears the latch.
+        if (MeshForegroundService.userStoppedForSession) {
+            Timber.d("Mesh start skipped: user stop in effect this session")
+            return
+        }
         try {
             val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
                 .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_START }
             startForegroundService(intent)
+            meshForegroundStartFailed.set(false)
             Timber.d("Mesh foreground service ensured (ACTION_START)")
         } catch (e: Exception) {
-            // R1-6: background-start restrictions and permission gaps land here.
-            // Distinguish them from unexpected failures so a systematic denial
-            // is visible instead of silently swallowed.
+            // R1-6 + R3-F1: background-start restrictions and permission gaps
+            // land here; record the failure as observable state so a
+            // systematic denial is visible instead of silently swallowed.
+            meshForegroundStartFailed.set(true)
             if (e is IllegalStateException) {
                 Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
             } else {
