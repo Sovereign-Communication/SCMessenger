@@ -1713,6 +1713,64 @@ fn log_route_decision(
     );
 }
 
+/// R7-G2 single-owner register-and-flush: the ONE place that records the
+/// canonical key for teardown, mirrors the live connection into the transport
+/// manager, and performs the once-per-connection reconnect flush over the real
+/// swarm. Both native reconnect sites (identify and ConnectionEstablished)
+/// call it, plus the wasm connect arm (R8-F4 parity).
+fn register_and_flush_swarm_peer(
+    core: &std::sync::Arc<crate::IronCore>,
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    registered_swarm_peers: &mut HashMap<PeerId, String>,
+    flushed_this_connection: &mut HashSet<PeerId>,
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+    peer_id: PeerId,
+    pk_hex: &str,
+) {
+    registered_swarm_peers.insert(peer_id, pk_hex.to_string());
+    core.set_swarm_peer_connection(pk_hex, true);
+
+    // The gate is deliberately outside the egress closure: a duplicate event
+    // leaves the outbox untouched instead of claiming that a flush happened.
+    let skip_flush = !flushed_this_connection.insert(peer_id) || !swarm.is_connected(&peer_id);
+    let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+        flush_outbox_over_swarm(
+            swarm,
+            &peer_id,
+            message_id,
+            envelope,
+            reconnect_request_to_message,
+        )
+    };
+    core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
+}
+
+/// R2-B1 / R3-C3 single-owner outbox egress: frame the envelope and dispatch
+/// it over the messaging request-response protocol to `peer_id`. Returns
+/// false when the peer is not connected at send time so the flush applies
+/// its retry path instead of assuming an in-flight success. Both reconnect
+/// sites (identify + ConnectionEstablished) use this one helper.
+fn flush_outbox_over_swarm(
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    peer_id: &libp2p::PeerId,
+    message_id: &str,
+    envelope: &[u8],
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+) -> bool {
+    if !swarm.is_connected(peer_id) {
+        return false;
+    }
+    let framed = wrap_in_drift_frame(envelope);
+    let request_id = swarm.behaviour_mut().messaging.send_request(
+        peer_id,
+        Libp2pMessageRequest {
+            envelope_data: framed,
+        },
+    );
+    reconnect_request_to_message.insert(request_id, message_id.to_string());
+    true
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 fn dispatch_ranked_route(
@@ -3326,6 +3384,13 @@ pub async fn start_swarm_with_config(
         // Track outbound request IDs to message IDs for direct sends
         let mut request_to_message: HashMap<libp2p::request_response::OutboundRequestId, String> =
             HashMap::new();
+        // Reconnect-flush request IDs are tracked separately from route-dispatch
+        // IDs so an outbound failure can wake the durable outbox entry without
+        // disturbing the normal pending-message retry state.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
+        > = HashMap::new();
 
         // Track outbound relay request IDs
         let mut pending_relay_requests: HashMap<
@@ -3523,6 +3588,35 @@ pub async fn start_swarm_with_config(
             // P0.12: Deduplicate bridge events to prevent UI freezing and bridge spam
             // We track the last reported 'PeerIdentified' and 'PeerDiscovered' state.
             let mut reported_peer_info: HashMap<PeerId, (String, Vec<Multiaddr>)> = HashMap::new();
+            // R1-A3: canonical pk (hex) this loop registered per wire peer, so the
+            // last-connection teardown can de-register EXACTLY what was registered.
+            // Re-deriving from the peer id fails for hashed peers that the identify
+            // site registered (its key comes from identify, not the peer id).
+            let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+            // R2-B2: peers already flushed during the current connection; a
+            // re-connect re-inserts them, a close clears them (see
+            // ConnectionClosed arm below). One flush per connection prevents
+            // identify+ConnectionEstablished duplicate drains.
+            //
+            // R6-F2: the gate is per-PEER, not per-connection, on purpose. The
+            // reconnect flush drains messages that accumulated while the peer
+            // was UNREACHABLE; while any connection is live, prepare_message
+            // direct-sends over the registered link and never touches the
+            // outbox, so a second concurrent connection (e.g. TCP + relay) has
+            // nothing new to drain. Entries that failed egress carry backoff
+            // timers and flush on the next genuine reconnect. Same-peer
+            // multi-connection flush suppression is intentional.
+            //
+            // Concurrency model (R5-E1/E2): everything that touches this map,
+            // connection_tracker, and set_swarm_peer_connection runs in THIS
+            // single-threaded select! task -- there is no other caller of
+            // set_swarm_peer_connection on this target (the wasm loop is
+            // cfg-excluded and runs its own single task), so no interleaving
+            // between the registration, flush, and teardown steps is
+            // possible, and libp2p never emits ConnectionClosed for a
+            // connection before its ConnectionEstablished was processed.
+            let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+                std::collections::HashSet::new();
             let mut reported_peer_discoveries: std::collections::HashSet<PeerId> =
                 std::collections::HashSet::new();
             // mDNS can report several socket addresses for one peer.  Keep one
@@ -4189,6 +4283,22 @@ pub async fn start_swarm_with_config(
                                                 }
                                             }
                                         } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if !response.accepted {
+                                                if let Some(core) =
+                                                    core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                {
+                                                    core.retry_outbox_message_now(&message_id);
+                                                }
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_response",
+                                                message_id = %message_id,
+                                                accepted = response.accepted,
+                                                "Reconnect-flush request completed"
+                                            );
+                                        } else if let Some(message_id) =
                                             request_to_message.remove(&request_id)
                                         {
                                             // Response to our outbound message request
@@ -4237,6 +4347,20 @@ pub async fn start_swarm_with_config(
                                             e
                                         );
                                     }
+                                } else if let Some(message_id) =
+                                    reconnect_request_to_message.remove(&request_id)
+                                {
+                                    if let Some(core) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core.retry_outbox_message_now(&message_id);
+                                    }
+                                    tracing::debug!(
+                                        event = "outbox_reconnect_failure",
+                                        message_id = %message_id,
+                                        error = %error,
+                                        "Reconnect-flush request failed; entry is eligible on next reconnect"
+                                    );
                                 } else if let Some(message_id) = request_to_message.remove(&request_id) {
                                     if let Some(pending) = pending_messages.remove(&message_id) {
                                         tracing::warn!(
@@ -5628,7 +5752,23 @@ pub async fn start_swarm_with_config(
                                     if let Some(pk_hex) = &public_key_hex {
                                         if let Some(c) = &core_handle {
                                             if let Some(c_arc) = c.upgrade() {
-                                                c_arc.handle_peer_connection_event(pk_hex, true);
+                                                // R1-A1/A3: only register while a connection to
+                                                // this peer is actually live (a late identify
+                                                // event for an already-closed peer must not
+                                                // leave a stale "connected" registration), and
+                                                // register BEFORE the flush so the flush's
+                                                // send_to_peer lookup can resolve a transport.
+                                                if connection_tracker.get_connection(&peer_id).is_some() {
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        pk_hex,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -5784,7 +5924,43 @@ pub async fn start_swarm_with_config(
                                         }
 
                                         if !had_active_connection {
-                                            c_arc.handle_peer_connection_event(&peer_id.to_string(), true);
+                                            // RCA drop-hop fix: register the peer under its
+                                            // canonical key (the Ed25519 key embedded in the
+                                            // peer id) before flushing. The bare libp2p peer id
+                                            // string is base58 -- hex::decode() of it fails
+                                            // inside the flush (outbox_peer_id_decode_failed)
+                                            // and without a registration the flush's
+                                            // send_to_peer returns PeerNotFound forever.
+                                            let canonical_pk = crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                                &peer_id.to_string(),
+                                            );
+                                            match canonical_pk {
+                                                Some(pk_hex) => {
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        &pk_hex,
+                                                    );
+                                                }
+                                                None => {
+                                                    // R1-A5: a peer id that does not embed an
+                                                    // Ed25519 key cannot be registered/flushed by
+                                                    // canonical key at this site. The old base58
+                                                    // string call was a guaranteed silent no-op
+                                                    // (hex::decode fails inside the flush) -- log
+                                                    // loudly instead of pretending a flush ran.
+                                                    // The identify site registers such peers from
+                                                    // identify's own public key when connected.
+                                                    tracing::warn!(
+                                                        "Cannot derive canonical Ed25519 key from peer id {} -- deferring registration/flush to identify",
+                                                        peer_id
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -6045,6 +6221,21 @@ pub async fn start_swarm_with_config(
                                 pending_ledger_exchanges.remove(&peer_id);
                                 reported_peer_discoveries.remove(&peer_id);
                                 reported_peer_info.remove(&peer_id);
+
+                                // RCA drop-hop fix (R1-A3): mirror the last-connection
+                                // teardown into the transport manager, de-registering by the
+                                // key this loop REGISTERED (map-tracked) rather than
+                                // re-deriving from the peer id -- derivation fails for hashed
+                                // peer ids that the identify site registered, which would
+                                // otherwise leak a stale "connected" registration.
+                                flushed_this_connection.remove(&peer_id);
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
 
                                 // P0.13: Clear relay tracking so we can re-reserve on reconnect
                                 if let Some(listener_id) = successful_relay_reservations.remove(&peer_id) {
@@ -7401,6 +7592,12 @@ pub async fn start_swarm_with_config(
             libp2p::request_response::OutboundRequestId,
             mpsc::Sender<Result<(), String>>,
         > = HashMap::new();
+        // Reconnect-flush requests have no caller reply channel; retain their
+        // message IDs so transport failures can make the outbox eligible again.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
+        > = HashMap::new();
 
         let mut bound_addresses = Vec::new();
         let mut pending_reflections: HashMap<
@@ -7438,6 +7635,12 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // R8-F4: same lifecycle contracts as the native loop -- canonical pk
+        // (hex) this loop registered per wire peer, and the once-per-connection
+        // flush gate. Both are owned by this single-threaded select task.
+        let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+        let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+            std::collections::HashSet::new();
         // wasm/browser transport has no TCP/UDP listeners, so the observer
         // keeps its accept-all default here: there is no listen-port set to
         // filter against (V040-T14 P0 does not apply to a node that cannot
@@ -7855,6 +8058,22 @@ pub async fn start_swarm_with_config(
                                                         &reason,
                                                     );
                                                 }
+                                            } else if let Some(message_id) =
+                                                reconnect_request_to_message.remove(&request_id)
+                                            {
+                                                if !response.accepted {
+                                                    if let Some(core) =
+                                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                    {
+                                                        core.retry_outbox_message_now(&message_id);
+                                                    }
+                                                }
+                                                tracing::debug!(
+                                                    event = "outbox_reconnect_response",
+                                                    message_id = %message_id,
+                                                    accepted = response.accepted,
+                                                    "WASM reconnect-flush request completed"
+                                                );
                                             } else if let Some(reply_tx) =
                                                 pending_direct_replies.remove(&request_id)
                                             {
@@ -7876,6 +8095,20 @@ pub async fn start_swarm_with_config(
                                                 &dispatch.destination_peer.to_string(),
                                                 &dispatch.custody_id,
                                                 &reason,
+                                            );
+                                        } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if let Some(core) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {
+                                                core.retry_outbox_message_now(&message_id);
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_failure",
+                                                message_id = %message_id,
+                                                error = %error,
+                                                "WASM reconnect-flush request failed; entry is eligible on next reconnect"
                                             );
                                         } else if let Some(reply_tx) =
                                             pending_direct_replies.remove(&request_id)
@@ -8387,6 +8620,36 @@ pub async fn start_swarm_with_config(
                                 }
 
                                 let public_key_hex = info.public_key.clone().try_into_ed25519().map(|pk| hex::encode(pk.to_bytes())).ok();
+
+                                // R11-F1: hashed PeerIds do not carry an Ed25519 key,
+                                // so the WASM connect arm cannot register them. Identify
+                                // carries the verified public key even for those PeerIds;
+                                // use it as the canonical transport-manager key while the
+                                // connection tracker still proves that this peer is live.
+                                // For self-certifying peers, ConnectionEstablished already
+                                // registered and flushed the peer. Only use this Identify
+                                // fallback when that event could not derive a canonical key
+                                // (hashed PeerId); otherwise this branch needlessly repeats
+                                // the registration bookkeeping.
+                                if !registered_swarm_peers.contains_key(&peer_id) {
+                                    if let Some(pk_hex) = &public_key_hex {
+                                        if connection_tracker.get_connection(&peer_id).is_some() {
+                                            if let Some(core_arc) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {                                                    register_and_flush_swarm_peer(
+                                                        &core_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        pk_hex,
+                                                    );
+                                            }
+                                        }
+                                    }
+                                }
+
                                 let _ = event_tx.send(SwarmEvent2::PeerIdentified {
                                     peer_id,
                                     public_key: public_key_hex,
@@ -8408,6 +8671,11 @@ pub async fn start_swarm_with_config(
                                 // Clone the remote address before `endpoint` is consumed
                                 // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // R8-F4: the zero-to-one connection transition drives the
+                                // reconnect flush on native; capture the same signal here
+                                // BEFORE this path joins the tracker.
+                                let had_active_connection =
+                                    connection_tracker.get_connection(&peer_id).is_some();
                                 connection_tracker.add_connection(
                                     peer_id,
                                     remote_addr.clone(),
@@ -8417,6 +8685,41 @@ pub async fn start_swarm_with_config(
                                     },
                                     connection_id.to_string(),
                                 );
+                                // R8-F4: mirror the native register-and-flush lifecycle.
+                                // Without this the transport manager never learns swarm
+                                // peers on wasm, prepare_message's is_peer_connected gate
+                                // always routes Full-mode sends to the outbox, and nothing
+                                // ever flushes them (the drop-hop class, wasm variant).
+                                if !had_active_connection {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        match crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                            &peer_id.to_string(),
+                                        ) {
+                                            Some(pk_hex) => {
+                                                register_and_flush_swarm_peer(
+                                                    &core_arc,
+                                                    &mut swarm,
+                                                    &mut registered_swarm_peers,
+                                                    &mut flushed_this_connection,
+                                                    &mut reconnect_request_to_message,
+                                                    peer_id,
+                                                    &pk_hex,
+                                                );
+                                            }
+                                            None => {
+                                                // R1-A5 policy: hashed peer ids carry no
+                                                // recoverable Ed25519 key; skip registration
+                                                // rather than fabricate a key (WASM).
+                                                tracing::debug!(
+                                                    "Peer {} has no embedded Ed25519 key; skipping swarm registration (WASM)",
+                                                    peer_id
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 dispatch_pending_custody_for_peer(
                                     &mut swarm,
                                     &relay_custody_store,
@@ -8544,6 +8847,17 @@ pub async fn start_swarm_with_config(
                                 connection_tracker.remove_connection(&peer_id);
                                 ledger_exchanged_peers.remove(&peer_id);
                                 pending_ledger_exchanges.remove(&peer_id);
+                                // R8-F4: mirror the native teardown -- de-register by the
+                                // key the connect arm registered (map-tracked), re-arm the
+                                // flush gate, and clear the manager's connected state.
+                                flushed_this_connection.remove(&peer_id);
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
                                 let stale_dispatches: Vec<libp2p::request_response::OutboundRequestId> =
                                     pending_custody_dispatches
                                         .iter()
