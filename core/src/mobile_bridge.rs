@@ -172,6 +172,17 @@ pub struct MeshService {
     pub(crate) nearby_ble_peers: Arc<Mutex<HashSet<String>>>,
     core: std::sync::Arc<Mutex<Option<std::sync::Arc<crate::IronCore>>>>,
     platform_bridge: std::sync::Arc<Mutex<Option<Box<dyn PlatformBridge>>>>,
+    /// Bumped on every write to `platform_bridge` (set_platform_bridge and
+    /// detached-notify windows) so a window restores the bridge only when
+    /// no other write happened meanwhile (R10-F1).
+    bridge_generation: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Depth of active detached-notify windows: incremented while the
+    /// bridge is taken out of the slot, decremented on restore (R10-F2).
+    notify_window_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Device profile reported while a detached-notify window hid the
+    /// platform bridge; replayed once all windows close so a concurrent
+    /// update is never silently dropped (R10-F2).
+    pending_device_profile: Mutex<Option<DeviceProfile>>,
     storage_path: Option<String>,
     log_directory: Option<String>,
     swarm_bridge: std::sync::Arc<SwarmBridge>,
@@ -200,6 +211,9 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
             storage_path: None,
             log_directory: None,
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -227,6 +241,9 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
             storage_path: Some(storage_path),
             log_directory: None,
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -258,6 +275,9 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
             storage_path: Some(storage_path),
             log_directory: Some(log_directory),
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -402,6 +422,10 @@ impl MeshService {
         }
 
         // Initialize WiFi Aware and WiFi Direct transports if enabled and platform bridge is set
+        // Detached-notify audit (R10-F4): the lock is dropped before any
+        // PlatformBridge method runs; the bridge handle handed to the
+        // transports does not synchronously re-enter MeshService. Verified
+        // non-reentrant.
         if self.platform_bridge.lock().is_some() {
             let aware_bridge = Arc::new(PlatformWifiAwareBridge::new_platform_ref(
                 self.platform_bridge.clone(),
@@ -513,12 +537,32 @@ impl MeshService {
 
     pub fn pause(&self) {
         tracing::info!("MeshService paused (activity reduced)");
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            // A notify window is already open (platform callback in
+            // flight); the outermost notification covers this event.
+            // Re-notifying here could recurse unboundedly if the callback
+            // re-registered a bridge (R10-F5).
+            return;
+        }
         self.notify_bridge_detached(|bridge| bridge.on_entering_background());
+        self.replay_pending_device_profile();
     }
 
     pub fn resume(&self) {
         tracing::info!("MeshService resumed (full activity)");
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            return; // see pause(): nested notifications are suppressed
+        }
         self.notify_bridge_detached(|bridge| bridge.on_entering_foreground());
+        self.replay_pending_device_profile();
     }
 
     pub fn get_state(&self) -> ServiceState {
@@ -538,6 +582,8 @@ impl MeshService {
     }
 
     pub fn set_platform_bridge(&self, bridge: Option<Box<dyn PlatformBridge>>) {
+        self.bridge_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *self.platform_bridge.lock() = bridge;
     }
 
@@ -1292,6 +1338,19 @@ impl MeshService {
     }
 
     pub fn update_device_state(&self, profile: DeviceProfile) {
+        // Pure-echo filter (R10-F5): a re-entrant report of the profile
+        // this service just applied carries no new information; process
+        // it as a no-op so an echoing platform cannot loop the
+        // stash/replay path below.
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+            && *self.current_device_profile.lock() == Some(profile.clone())
+        {
+            tracing::debug!("Echoed device profile during notify window: ignored");
+            return;
+        }
         let new_state = DeviceState::from_profile(&profile);
 
         // Read old state for transition logging (cheap read-lock).
@@ -1415,17 +1474,37 @@ impl MeshService {
         // This ensures the platform (Android/iOS) UI stays in sync with core adjustments.
         // Detached notify: the platform callback echoes back into
         // update_device_state (UniFFI re-entry), which must observe the
-        // bridge as absent rather than self-deadlock on this mutex.
-        self.notify_bridge_detached(|bridge| {
-            bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
-            bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
-            bridge.on_motion_changed(profile.motion_state);
-        });
+        // bridge as absent rather than self-deadlock on this mutex. A
+        // report arriving while the bridge is hidden is stashed and
+        // replayed once all windows close (R10-F2), so no state update
+        // is ever dropped.
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            // A notify window is open: the callback would re-enter the
+            // same window. Drop the echo (identical profile, nothing lost)
+            // unless the caller is a genuinely concurrent report, in which
+            // case stashing replays it after the window closes (R10-F2).
+            *self.pending_device_profile.lock() = Some(profile);
+            tracing::debug!("Notify window open: device profile stashed for replay");
+        } else {
+            self.notify_bridge_detached(|bridge| {
+                bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
+                bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
+                bridge.on_motion_changed(profile.motion_state);
+            });
+        }
 
         // B1_CORE_ENTRY_007: Periodic routing engine maintenance
         // Advance the routing engine by one tick to maintain up-to-date routing state.
         // Called on device state changes to ensure routing stays synchronized with network conditions.
         let _ = self.routing_tick();
+
+        // R10-F2: a report stashed while the bridge was detached replays
+        // once this (possibly re-entrant) call unwinds out of all windows.
+        self.replay_pending_device_profile();
     }
 
     /// Return the recommended behavior adjustments for the *current* device state.
@@ -1945,6 +2024,9 @@ impl MeshService {
             );
             return;
         }
+        // Detached-notify audit (R10-F4): sendProximityPacket dispatches
+        // async on the Kotlin side (scope.launch) and does not synchronously
+        // re-enter MeshService. Verified non-reentrant.
         if let Some(bridge) = self.platform_bridge.lock().as_ref() {
             bridge.send_proximity_packet(peer_id, transport, data);
         }
@@ -1970,13 +2052,40 @@ impl MeshService {
     where
         F: FnOnce(&dyn PlatformBridge),
     {
+        let generation_at_detach = self
+            .bridge_generation
+            .load(std::sync::atomic::Ordering::Acquire);
         let bridge = self.platform_bridge.lock().take();
+        self.notify_window_depth
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let _restore = RestoreBridgeGuard {
             slot: self.platform_bridge.clone(),
+            slot_generation: self.bridge_generation.clone(),
+            generation_at_detach,
+            window_depth: self.notify_window_depth.clone(),
             bridge,
         };
         if let Some(b) = _restore.bridge.as_deref() {
             f(b);
+        }
+    }
+
+    /// Replay a device profile stashed during a detached-notify window, if
+    /// any. A report that arrived while the bridge was hidden still
+    /// reaches the platform once every window has closed (R10-F2). The
+    /// depth gate makes this a no-op when called from inside a re-entrant
+    /// update during an open window (the outermost call replays).
+    fn replay_pending_device_profile(&self) {
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            return;
+        }
+        if let Some(pending) = self.pending_device_profile.lock().take() {
+            tracing::info!("Replaying device profile stashed during detached notify");
+            self.update_device_state(pending);
         }
     }
 
@@ -2196,18 +2305,35 @@ impl crate::CoreDelegate for MeshServiceCoreDelegate {
 }
 
 /// Restores a platform bridge swapped out for a notify-detached callback
-/// window, even if the callback panics. Nested `set_platform_bridge` calls
-/// during the window win over the restored value (latest-write semantics).
+/// window, even if the callback panics. The restore fires only when the
+/// slot generation still matches the snapshot taken at detach: any
+/// explicit `set_platform_bridge` write (Some or None) during the window
+/// bumps the generation and wins over the restore (R10-F1).
 struct RestoreBridgeGuard {
     slot: std::sync::Arc<Mutex<Option<Box<dyn PlatformBridge>>>>,
+    slot_generation: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    generation_at_detach: usize,
+    window_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bridge: Option<Box<dyn PlatformBridge>>,
 }
 
 impl Drop for RestoreBridgeGuard {
     fn drop(&mut self) {
-        let mut guard = self.slot.lock();
-        if guard.is_none() {
-            *guard = self.bridge.take();
+        self.window_depth
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if self
+            .slot_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            == self.generation_at_detach
+        {
+            let mut guard = self.slot.lock();
+            if guard.is_none() {
+                if self.bridge.is_some() {
+                    self.slot_generation
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
+                *guard = self.bridge.take();
+            }
         }
     }
 }
@@ -2427,7 +2553,7 @@ impl WifiAwarePlatformBridge for PlatformWifiAwareBridge {
 // AUTO-ADJUST ENGINE
 // ============================================================================
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeviceProfile {
     pub battery_pct: u8,
     pub is_charging: bool,
@@ -4573,7 +4699,10 @@ mod tests {
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
             callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
         });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
         service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
 
         service.pause(); // self-deadlocked the caller before the fix
@@ -4589,6 +4718,99 @@ mod tests {
             2,
             "bridge must be restored after the callback window"
         );
+    }
+
+    /// R10-F1: an explicit `set_platform_bridge(None)` during the detached
+    /// window must WIN over the restore -- the bridge stays dropped.
+    #[test]
+    fn set_none_during_detached_window_wins() {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+        bridge
+            .action
+            .set_none
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        service.pause();
+
+        // The callback set None explicitly; the guard must NOT resurrect
+        // the bridge, and a later notify must not fire.
+        assert!(service.platform_bridge.lock().is_none());
+        let before = bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst);
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "no notification may fire after an explicit None"
+        );
+    }
+
+    /// R10-F1 (nested-window shape): an explicit `set_platform_bridge(Some)`
+    /// during the window wins, and a second pause then notifies the NEW
+    /// bridge exactly once.
+    #[test]
+    fn set_some_during_detached_window_wins() {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+        bridge
+            .action
+            .set_self
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        service.pause();
+
+        // The replacement bridge is in the slot; a later notify fires on it.
+        assert!(service.platform_bridge.lock().is_some());
+        let before = bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst);
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            before + 1,
+            "replacement bridge must receive subsequent notifications"
+        );
+    }
+
+    /// R10-F5: an echoed profile identical to the one just applied must be
+    /// ignored, not stashed-and-replayed forever.
+    #[test]
+    fn echoed_profile_during_window_is_ignored() {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let profile = DeviceProfile {
+            battery_pct: 80,
+            is_charging: false,
+            has_wifi: true,
+            motion_state: MotionState::Still,
+            peer_id: None,
+            device_id: None,
+        };
+
+        service.update_device_state(profile.clone());
+
+        // Simulate the echo arriving while a window is open: replay_pending
+        // would loop if the echo were stashed.
+        service
+            .notify_window_depth
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        service.update_device_state(profile); // identical -> ignored
+        service
+            .notify_window_depth
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(service.pending_device_profile.lock().is_none());
     }
 
     /// Oversize payloads must be rejected (dropped, not silently truncated,
@@ -4703,9 +4925,19 @@ mod tests {
     /// Mock whose `on_entering_background` echoes back into
     /// `MeshService::pause`, reproducing the AndroidPlatformBridge re-entry
     /// that self-deadlocked before the detached-notify fix.
+    /// Action a test wants the callback to perform while the notify
+    /// window is open (R10-F1/F2 coverage).
+    #[derive(Default)]
+    struct WindowAction {
+        set_none: std::sync::atomic::AtomicBool,
+        set_self: std::sync::atomic::AtomicBool,
+    }
+
     struct ReentrantEchoBridge {
         service: std::sync::Weak<MeshService>,
         callbacks: std::sync::atomic::AtomicUsize,
+        action: WindowAction,
+        handle: parking_lot::Mutex<Option<std::sync::Weak<ReentrantEchoBridge>>>,
     }
 
     struct ReentrantEchoHandle(std::sync::Arc<ReentrantEchoBridge>);
@@ -4719,7 +4951,31 @@ mod tests {
             self.0
                 .callbacks
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if let Some(service) = self.0.service.upgrade() {
+            let service = self.0.service.upgrade();
+            if self
+                .0
+                .action
+                .set_none
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(s) = service.as_ref() {
+                    s.set_platform_bridge(None);
+                }
+            } else if self
+                .0
+                .action
+                .set_self
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(s) = service.as_ref() {
+                    if let Some(weak) = self.0.handle.lock().clone() {
+                        if let Some(arc) = weak.upgrade() {
+                            s.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(arc))));
+                        }
+                    }
+                }
+            }
+            if let Some(service) = service {
                 service.pause();
             }
         }
