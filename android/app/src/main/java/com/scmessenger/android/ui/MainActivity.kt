@@ -340,9 +340,9 @@ class MainActivity : ComponentActivity() {
         Timber.d("MainActivity resumed")
         platformBridge.notifyForeground()
         checkPermissions()
-        ensureMeshForegroundService()
         if (meshRepository.hasRequiredRuntimePermissions()) {
             meshRepository.onRuntimePermissionsGranted()
+            ensureMeshForegroundService()
         }
     }
 
@@ -362,7 +362,14 @@ class MainActivity : ComponentActivity() {
             startForegroundService(intent)
             Timber.d("Mesh foreground service ensured (ACTION_START)")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to start mesh foreground service")
+            // R1-6: background-start restrictions and permission gaps land here.
+            // Distinguish them from unexpected failures so a systematic denial
+            // is visible instead of silently swallowed.
+            if (e is IllegalStateException) {
+                Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
+            } else {
+                Timber.e(e, "Failed to start mesh foreground service")
+            }
         }
     }
 

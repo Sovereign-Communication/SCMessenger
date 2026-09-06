@@ -192,9 +192,13 @@ class NetworkDetector @Inject constructor(
             // back null. That is a transient framework state, not proof of
             // offline; degrading to UNKNOWN here latched the classifier on a
             // healthy WiFi network (observed live: dumpsys VALIDATED while the
-            // app reported UNKNOWN with no update log). Fall back to the most
-            // recent cached capabilities snapshot before concluding anything.
-            val cached = networkCapabilities.values.firstOrNull()
+            // app reported UNKNOWN with no update log). Fall back to the best
+            // cached capabilities snapshot before concluding anything.
+            // R1-2: pick deterministically (validated > unvalidated, wifi/
+            // ethernet > cellular > other) so a stale cellular snapshot cannot
+            // mask an active wifi.
+            val cached = networkCapabilities.values
+                .maxByOrNull { fallbackRank(it) }
             if (cached != null) {
                 Timber.w(
                     "activeNetwork capabilities null; using cached snapshot -> %s",
@@ -202,25 +206,50 @@ class NetworkDetector @Inject constructor(
                 )
                 updateNetworkType(classifyNetworkType(cached))
             } else {
-                Timber.w("activeNetwork capabilities null and no cached snapshot; keeping %s", _networkType.value)
+                // R1-4: no current evidence AND no cache. Keep the prior type
+                // only briefly (the next callback or periodic redetection will
+                // resolve it); log loudly so the degenerate state is visible.
+                Timber.w(
+                    "activeNetwork capabilities null and no cached snapshot; retaining %s until next redetection",
+                    _networkType.value
+                )
             }
         } else {
             // RCA-D2: this branch used to set UNKNOWN silently. Visibility
             // fails open: log the transition and re-check every registered
             // network before concluding the device is offline.
-            val anyKnown = connectivityManager.allNetworks.firstNotNullOfOrNull { net ->
-                connectivityManager.getNetworkCapabilities(net)
-                    ?.takeIf { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-            }
-            if (anyKnown != null) {
-                Timber.w("activeNetwork null but an INTERNET-capable network exists; classifying that instead")
-                updateNetworkType(classifyNetworkType(anyKnown))
+            // R1-3: deterministic pick (validated wifi/ethernet > validated
+            // cellular > any INTERNET-capable) to prevent cross-type flapping.
+            val best = connectivityManager.allNetworks
+                .mapNotNull { net -> connectivityManager.getNetworkCapabilities(net) }
+                .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                .maxByOrNull { fallbackRank(it) }
+            if (best != null) {
+                Timber.w("activeNetwork null but INTERNET-capable network(s) exist; classifying best candidate")
+                updateNetworkType(classifyNetworkType(best))
             } else {
                 Timber.w("activeNetwork null and no INTERNET-capable network found; setting UNKNOWN")
                 _networkType.value = NetworkType.UNKNOWN
                 _blockedPorts.value = emptySet()
             }
         }
+    }
+
+    /**
+     * Deterministic preference order for fallback candidates (higher wins):
+     * validated first, then wifi/ethernet, then cellular, then anything else.
+     * Shared by both RCA-D2 fallback paths so neither can flap between
+     * different network types across redetections.
+     */
+    private fun fallbackRank(capabilities: NetworkCapabilities): Int {
+        var rank = 0
+        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) rank += 100
+        when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> rank += 20
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> rank += 10
+        }
+        return rank
     }
 
     /**

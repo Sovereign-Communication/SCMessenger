@@ -10481,6 +10481,7 @@ open class MeshRepository(
 
         var anySuccess = false
         var anyBreakerBlocked = false
+        var anyDialAttempted = false
         for (addr in addresses) {
             try {
                 // Check circuit breaker before attempting
@@ -10495,6 +10496,7 @@ open class MeshRepository(
                     continue
                 }
                 if (!shouldAttemptDial(addr)) continue
+                anyDialAttempted = true
                 bridge.dial(addr)
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
@@ -10512,11 +10514,15 @@ open class MeshRepository(
 
         // P1_ANDROID_013: Update consecutive failure tracking and backoff.
         // RCA-D3: when every candidate was skipped by the breaker, no new
-        // evidence about reachability exists — do not grow the failure ladder;
-        // retry on the breaker's own short cadence so it can half-open.
-        if (!anySuccess && anyBreakerBlocked) {
-            nextBootstrapAttemptMs = nowMs + 5_000L
-            Timber.i("Bootstrap: all candidates breaker-blocked; re-probing in 5000ms (no failure counted)")
+        // evidence about reachability exists — do not grow the failure ladder.
+        // Re-probe on the breaker's own half-open cadence (30 s, matching
+        // CircuitBreakerConfig.halfOpenTimeoutMs) so the breaker gets probe
+        // attempts without a 5 s hot loop (R1-5).
+        // R1-1: the no-evidence path applies only when ZERO real dials were
+        // attempted; a round with real failures still books backoff.
+        if (!anySuccess && anyBreakerBlocked && !anyDialAttempted) {
+            nextBootstrapAttemptMs = nowMs + 30_000L
+            Timber.i("Bootstrap: all candidates breaker-blocked; re-probing in 30000ms (no failure counted)")
         } else if (!anySuccess) {
             consecutiveBootstrapFailures++
             val backoffMs = when {
