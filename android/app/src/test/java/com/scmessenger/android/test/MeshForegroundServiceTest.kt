@@ -130,6 +130,39 @@ class MeshForegroundServiceTest {
     }
 
     @Test
+    fun `stop is honored even when latch already set`() {
+        MeshForegroundService.userStoppedForSession = true
+        try {
+            // R4-M1: a repeated or late STOP must complete teardown, not be
+            // swallowed by the latch.
+            val result = MeshForegroundService.decideCommand(
+                action = MeshForegroundService.ACTION_STOP,
+                serviceRunning = true,
+                repositoryRunning = true
+            )
+            assertEquals(MeshForegroundService.Companion.StartDecision.Stop, result)
+        } finally {
+            MeshForegroundService.userStoppedForSession = false
+        }
+    }
+
+    @Test
+    fun `ensure action never clears the user stop latch`() {
+        MeshForegroundService.userStoppedForSession = true
+        try {
+            val result = MeshForegroundService.decideCommand(
+                action = MeshForegroundService.ACTION_ENSURE,
+                serviceRunning = false,
+                repositoryRunning = false
+            )
+            assertEquals(MeshForegroundService.Companion.StartDecision.NoOp, result)
+            assertEquals(true, MeshForegroundService.userStoppedForSession)
+        } finally {
+            MeshForegroundService.userStoppedForSession = false
+        }
+    }
+
+    @Test
     fun `explicit start resolves to Start`() {
         val result = MeshForegroundService.decideCommand(
             action = MeshForegroundService.ACTION_START,

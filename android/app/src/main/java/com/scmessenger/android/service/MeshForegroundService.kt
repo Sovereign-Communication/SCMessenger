@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -697,7 +698,15 @@ class MeshForegroundService : Service() {
         @Volatile
         internal var userStoppedForSession: Boolean = false
 
+        /**
+         * R4-L1: observable record of the most recent ensure/start attempt
+         * (true = last attempt failed). Lives on the companion so it survives
+         * activity recreation; collect it for UI/diagnostics surfacing.
+         */
+        internal val fgsStartFailed = MutableStateFlow(false)
+
         const val ACTION_START = "com.scmessenger.android.service.START"
+        const val ACTION_ENSURE = "com.scmessenger.android.service.ENSURE"
         const val ACTION_STOP = "com.scmessenger.android.service.STOP"
         const val ACTION_PAUSE = "com.scmessenger.android.service.PAUSE"
         const val ACTION_RESUME = "com.scmessenger.android.service.RESUME"
@@ -715,10 +724,17 @@ class MeshForegroundService : Service() {
             serviceRunning: Boolean,
             repositoryRunning: Boolean
         ): StartDecision {
-            // R3-F1: after a user stop, only an explicit ACTION_START may
-            // restart the mesh. Every other trigger (null action from a
-            // restart, unknown actions) is treated as Start normally when no
-            // stop happened, and as NoOp while the stop is in effect.
+            // R4-M1: STOP is always honored -- a repeated or late stop must be
+            // able to complete teardown even if the latch is already set.
+            if (action == ACTION_STOP) {
+                return StartDecision.Stop
+            }
+            // R3-F1 / R4-M2: after a user stop, only an explicit ACTION_START
+            // (user-initiated from the service view model) may restart the
+            // mesh and clear the latch. ACTION_ENSURE (automatic ensure from
+            // the activity) must never resurrect a stopped mesh and cannot
+            // clear the latch, so a STOP that races ahead of a queued ENSURE
+            // still wins.
             if (userStoppedForSession && action != ACTION_START) {
                 Timber.d("decideCommand: user stop in effect; ignoring action=%s", action ?: "null")
                 return StartDecision.NoOp
@@ -729,6 +745,7 @@ class MeshForegroundService : Service() {
             return when (action) {
                 null -> StartDecision.Start
                 ACTION_START -> StartDecision.Start
+                ACTION_ENSURE -> StartDecision.Start
                 ACTION_STOP -> StartDecision.Stop
                 ACTION_PAUSE -> if (serviceRunning || repositoryRunning) {
                     StartDecision.Pause

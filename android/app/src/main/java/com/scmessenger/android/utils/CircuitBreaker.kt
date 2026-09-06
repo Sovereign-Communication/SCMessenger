@@ -27,6 +27,13 @@ class CircuitBreaker @Inject constructor(
     /** Per-relay circuit state entries */
     private val entries = ConcurrentHashMap<String, CircuitEntry>()
 
+    /**
+     * R4-L3: half-open cadence from the ACTIVE config so consumers re-probe
+     * in lockstep with this breaker instance even if a non-default config is
+     * ever injected.
+     */
+    val halfOpenTimeoutMs: Long get() = config.halfOpenTimeoutMs
+
     /** Mutex for state transitions */
     private val mutex = Mutex()
 

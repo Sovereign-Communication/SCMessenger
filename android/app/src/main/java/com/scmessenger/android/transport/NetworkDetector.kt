@@ -238,8 +238,9 @@ class NetworkDetector @Inject constructor(
                 updateNetworkType(classifyNetworkType(best))
             } else {
                 Timber.w("activeNetwork null and no INTERNET-capable network found; setting UNKNOWN")
-                _networkType.value = NetworkType.UNKNOWN
-                _blockedPorts.value = emptySet()
+                // R4-L2: route through updateNetworkType so every
+                // state-transition side effect (blocked ports) has one owner.
+                updateNetworkType(NetworkType.UNKNOWN)
             }
         }
     }

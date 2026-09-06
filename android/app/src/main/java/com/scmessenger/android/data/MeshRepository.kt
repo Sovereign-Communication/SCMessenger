@@ -65,14 +65,6 @@ open class MeshRepository(
         private const val IDENTITY_BACKUP_PREFS = "identity_backup_prefs"
         private const val IDENTITY_BACKUP_KEY = "identity_backup_v1"
 
-        /**
-         * Re-probe cadence when a bootstrap round produced zero real dials
-         * (RCA-D3 / R2-5): matches [com.scmessenger.android.utils.CircuitBreaker]
-         * half-open cadence (30 s) so probe attempts align with the breaker's
-         * own OPEN -> HALF_OPEN transition instead of hot-looping.
-         */
-        private val BOOTSTRAP_BREAKER_REPROBE_MS = CircuitBreaker.HALF_OPEN_TIMEOUT_MS
-
         // P0: Cache key identity fields in SharedPreferences for instant UI load.
         // Eliminates 30-60s "Unavailable" gap while service starts up.
         private const val IDENTITY_CACHE_PREFS = "identity_cache_prefs"
@@ -10538,10 +10530,13 @@ open class MeshRepository(
         if (!anySuccess && anyBreakerBlocked && !anyDialAttempted) {
             // R2-5: reuse the breaker's own half-open cadence instead of a
             // hard-coded value so the probe rate tracks the breaker config.
-            nextBootstrapAttemptMs = nowMs + BOOTSTRAP_BREAKER_REPROBE_MS
+            // R4-L3: read the cadence from the active breaker instance, not a
+            // companion constant, so the two cannot silently diverge.
+            val reprobeMs = relayCircuitBreaker.halfOpenTimeoutMs
+            nextBootstrapAttemptMs = nowMs + reprobeMs
             Timber.i(
                 "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
-                BOOTSTRAP_BREAKER_REPROBE_MS
+                reprobeMs
             )
         } else if (!anySuccess) {
             consecutiveBootstrapFailures++

@@ -57,13 +57,6 @@ class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
     private val permissionRequestInProgress = AtomicBoolean(false)
-
-    /**
-     * R3-F1: observable record of the most recent foreground-service start
-     * attempt. True means the last attempt failed; surfaced so a systematic
-     * start denial is state, not just a log line.
-     */
-    private val meshForegroundStartFailed = AtomicBoolean(false)
     private val permissionRequestDebounceMs = 500L
     private val handler = Handler(Looper.getMainLooper())
 
@@ -368,23 +361,26 @@ class MainActivity : ComponentActivity() {
      */
     private fun ensureMeshForegroundService() {
         // R3-F1: never resurrect a mesh the user explicitly stopped this
-        // session. Only an in-app Start (which sends ACTION_START through the
-        // service) clears the latch.
+        // session. Only an in-app Start (ACTION_START via the service view
+        // model) clears the latch.
         if (MeshForegroundService.userStoppedForSession) {
             Timber.d("Mesh start skipped: user stop in effect this session")
             return
         }
         try {
+            // R4-M2: ACTION_ENSURE starts the mesh but cannot clear the
+            // user-stop latch, so a STOP racing ahead of this queued intent
+            // still wins.
             val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
-                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_START }
+                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_ENSURE }
             startForegroundService(intent)
-            meshForegroundStartFailed.set(false)
-            Timber.d("Mesh foreground service ensured (ACTION_START)")
+            MeshForegroundService.fgsStartFailed.value = false
+            Timber.d("Mesh foreground service ensured (ACTION_ENSURE)")
         } catch (e: Exception) {
-            // R1-6 + R3-F1: background-start restrictions and permission gaps
-            // land here; record the failure as observable state so a
-            // systematic denial is visible instead of silently swallowed.
-            meshForegroundStartFailed.set(true)
+            // R1-6 + R4-L1: background-start restrictions and permission gaps
+            // land here; record the failure as observable companion state
+            // (survives activity recreation) instead of silently swallowing.
+            MeshForegroundService.fgsStartFailed.value = true
             if (e is IllegalStateException) {
                 Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
             } else {
