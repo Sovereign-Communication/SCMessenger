@@ -17,6 +17,27 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use web_time::{Duration, Instant};
 
+/// How long a peer stays dead after 3 failed dial attempts before the
+/// dial-policy auto-revives it. "Dead" is a bounded backoff state, not a
+/// lifetime sentence: a peer that was down and comes back must be retried
+/// within a minute (bootstrap sweep cadence), not held out until a
+/// ConnectionEstablished/liveness event or the 1-hour hygiene prune.
+/// 2026-09-03: 3-node validation showed the 5-minute dead cycle -- secondary
+/// address failures dead-marked a peer whose live path identify kept
+/// confirming. Fix A/B/C stop dead-marks on live peers; this window bounds
+/// the dead state for genuinely unreachable peers.
+///
+/// Anti-hammer bound (review A3, 2026-09-03): a revive is NOT a free dial
+/// burst. A revived entry starts from zero strikes, but the FIRST failure
+/// immediately re-applies the 1s/2s/4s backoff ladder and the 3rd strike
+/// re-marks it dead -- so a genuinely unreachable address gets at most ~3
+/// attempts within the seconds after a revive, then stays dead until the
+/// next 60s window. Worst case is ~3 dial attempts/minute per dead address,
+/// and the window itself is a single shared constant used by both
+/// `is_eligible` (read) and `maybe_revive` (mutate), so no path can observe
+/// a different revive predicate.
+pub const DEAD_REVIVE_AFTER: Duration = Duration::from_secs(60);
+
 /// Per-peer backoff state tracking.
 #[derive(Debug, Clone)]
 pub struct PerPeerBackoffState {
@@ -26,8 +47,12 @@ pub struct PerPeerBackoffState {
     pub last_attempt_ts: Instant,
     /// Current backoff duration (1s → 2s → 4s → 8s → 16s → 30s capped).
     pub backoff_duration: Duration,
-    /// Whether this peer is marked as dead for this session (permanent failure).
+    /// Whether this peer is marked as dead (bounded: auto-revives after
+    /// [`DEAD_REVIVE_AFTER`]).
     pub is_dead: bool,
+    /// When the dead mark was applied; `None` when not dead. Drives the
+    /// bounded auto-revive window.
+    pub dead_since: Option<Instant>,
     /// Optional peer ID if known at registration time.
     pub peer_id: Option<PeerId>,
 }
@@ -40,14 +65,21 @@ impl PerPeerBackoffState {
             last_attempt_ts: Instant::now(),
             backoff_duration: Duration::from_secs(1),
             is_dead: false,
+            dead_since: None,
             peer_id,
         }
     }
 
     /// Check if this peer is eligible for a dial attempt right now.
+    ///
+    /// Dead is bounded: once the revive window has elapsed the entry reads as
+    /// eligible again (the caller then dials; the persistent state is revived
+    /// by [`Self::maybe_revive`] inside `register_dial_attempt`).
     pub fn is_eligible(&self) -> bool {
         if self.is_dead {
-            return false;
+            return self
+                .dead_since
+                .is_some_and(|since| since.elapsed() >= DEAD_REVIVE_AFTER);
         }
         if self.attempt_count >= 3 {
             return false;
@@ -57,6 +89,28 @@ impl PerPeerBackoffState {
             return true;
         }
         Instant::now() >= self.last_attempt_ts + self.backoff_duration
+    }
+
+    /// Revive a dead entry whose window has elapsed, resetting strike count
+    /// and backoff. Returns true when a revive actually happened.
+    pub fn maybe_revive(&mut self) -> bool {
+        if self.is_dead {
+            if let Some(since) = self.dead_since {
+                if since.elapsed() >= DEAD_REVIVE_AFTER {
+                    self.is_dead = false;
+                    self.dead_since = None;
+                    self.attempt_count = 0;
+                    self.backoff_duration = Duration::from_secs(1);
+                    self.last_attempt_ts = Instant::now();
+                    debug!(
+                        peer_id=?self.peer_id,
+                        "[DIAL-BACKOFF] Dead entry auto-revived after revive window"
+                    );
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Record a failed dial attempt: increment attempt_count and double backoff (capped at 30s).
@@ -75,19 +129,21 @@ impl PerPeerBackoffState {
             "[DIAL-BACKOFF] Incremented attempt count and backoff"
         );
 
-        // After 3 attempts, mark as dead for this session.
+        // After 3 attempts, mark as dead (bounded by DEAD_REVIVE_AFTER).
         if self.attempt_count >= 3 {
             warn!(
                 peer_id=?self.peer_id,
                 "[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts"
             );
             self.is_dead = true;
+            self.dead_since = Some(Instant::now());
         }
     }
 
     /// Record a permanent dial failure (mark peer as dead immediately).
     pub fn on_permanent_failure(&mut self) {
         self.is_dead = true;
+        self.dead_since = Some(Instant::now());
         self.attempt_count = 3;
         warn!(
             peer_id=?self.peer_id,
@@ -102,6 +158,7 @@ impl PerPeerBackoffState {
         self.backoff_duration = Duration::from_secs(1);
         self.last_attempt_ts = Instant::now();
         self.is_dead = false;
+        self.dead_since = None;
 
         info!(
             peer_id=?self.peer_id,
@@ -144,6 +201,11 @@ impl DialPolicyManager {
             debug!(addr_key=%addr_key, "[DIAL-POLICY] Registering new peer backoff state");
             PerPeerBackoffState::new(peer_id)
         });
+
+        // Bounded dead state: once the revive window has elapsed, clear the
+        // dead mark so a peer that came back is dialed again (nimble
+        // recovery instead of session-long exclusion).
+        state.maybe_revive();
 
         // Check eligibility: not dead, attempt_count < 3, backoff elapsed.
         if !state.is_eligible() {
@@ -230,6 +292,17 @@ impl DialPolicyManager {
     /// and marked dead — so the addr-keyed reset misses it. An established
     /// connection is proof of liveness regardless of transport path, so clear
     /// every entry attributed to this peer.
+    ///
+    /// Deliberate scope (review A1, 2026-09-03): the reset clears address-scoped
+    /// dead marks when ANY path proves the peer is alive, rather than only the
+    /// address that showed liveness. The alternative (keeping a stale address
+    /// dead while the peer is demonstrably up) is exactly the 5-minute dead
+    /// cycle being fixed -- a NAT-reflected address's dead mark suppressed
+    /// hint-dials and relay pulls for a peer whose live path was fine. Cost of
+    /// the broad reset: at most one dial attempt per stale address per revive
+    /// window, immediately re-escalated by the failure path. Bounded: only
+    /// entries whose stored peer_id matches, and only entries with is_dead or
+    /// attempt_count > 0.
     pub fn reset_peer_backoff(&self, peer_id: PeerId) {
         let mut backoff = self.peer_backoff.write();
         let mut reset_count = 0u32;
@@ -493,6 +566,54 @@ mod tests {
         state.on_permanent_failure();
         assert!(state.is_dead);
         assert_eq!(state.attempt_count, 3);
+    }
+
+    #[test]
+    fn test_dead_revive_after_window() {
+        let mut state = PerPeerBackoffState::new(None);
+        state.on_dial_failure();
+        state.on_dial_failure();
+        state.on_dial_failure();
+        assert!(state.is_dead);
+        assert!(state.dead_since.is_some());
+        assert!(!state.is_eligible()); // within the revive window
+
+        // Simulate the revive window elapsing (clock is wall-time based).
+        state.dead_since = Some(Instant::now() - DEAD_REVIVE_AFTER - Duration::from_secs(1));
+        assert!(state.is_eligible()); // bounded dead: eligible again after the window
+
+        // maybe_revive clears the dead mark persistently and resets strikes.
+        assert!(state.maybe_revive());
+        assert!(!state.is_dead);
+        assert_eq!(state.attempt_count, 0);
+        assert_eq!(state.backoff_duration, Duration::from_secs(1));
+        assert!(!state.maybe_revive()); // already alive: no-op
+    }
+
+    #[test]
+    fn test_manager_revives_dead_entry_on_register() {
+        let manager = DialPolicyManager::new();
+        let key = "/ip4/10.0.0.9/tcp/9000".to_string();
+        manager.register_dial_attempt(&key, None);
+        manager.record_dial_failure(&key, None);
+        manager.record_dial_failure(&key, None);
+        manager.record_dial_failure(&key, None);
+        let dead = manager.get_backoff_state(&key).expect("state");
+        assert!(dead.is_dead);
+        assert!(!manager.register_dial_attempt(&key, None)); // window not elapsed
+
+        // Force the dead_since back so the window has elapsed.
+        {
+            let mut backoff = manager.peer_backoff.write();
+            if let Some(st) = backoff.get_mut(&key) {
+                st.dead_since =
+                    Some(web_time::Instant::now() - DEAD_REVIVE_AFTER - Duration::from_secs(1));
+            }
+        }
+        assert!(manager.register_dial_attempt(&key, None)); // revived -> allowed
+        let revived = manager.get_backoff_state(&key).expect("state");
+        assert!(!revived.is_dead);
+        assert_eq!(revived.attempt_count, 0);
     }
 
     #[test]

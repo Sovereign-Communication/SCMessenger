@@ -218,35 +218,32 @@ impl LocalCell {
         let mut peers: Vec<&PeerInfo> = self
             .peers
             .values()
-            .filter(|p| {
-                if let PeerStatus::Active { .. } = p.status {
-                    p.reachable_hints.contains(hint)
-                } else {
-                    false
-                }
+            .filter(|peer| {
+                matches!(peer.status, PeerStatus::Active { .. })
+                    && peer.reachable_hints.contains(hint)
             })
             .collect();
-        peers.sort_by(|a, b| {
-            b.reliability_score
-                .partial_cmp(&a.reliability_score)
-                .expect("f64 reliability scores should always be comparable")
-        });
+        Self::sort_by_reliability(&mut peers);
         peers
     }
 
-    /// Get all active peers sorted by reliability (highest first)
+    /// Get all active peers sorted by the shared reliability policy.
     pub fn active_peers(&self) -> Vec<&PeerInfo> {
         let mut peers: Vec<&PeerInfo> = self
             .peers
             .values()
-            .filter(|p| matches!(p.status, PeerStatus::Active { .. }))
+            .filter(|peer| matches!(peer.status, PeerStatus::Active { .. }))
             .collect();
+        Self::sort_by_reliability(&mut peers);
+        peers
+    }
+
+    fn sort_by_reliability(peers: &mut Vec<&PeerInfo>) {
         peers.sort_by(|a, b| {
             b.reliability_score
-                .partial_cmp(&a.reliability_score)
-                .expect("f64 reliability scores should always be comparable")
+                .total_cmp(&a.reliability_score)
+                .then_with(|| a.peer_id.cmp(&b.peer_id))
         });
-        peers
     }
 
     /// Get gateway peers (for Layer 2 gossip)
@@ -350,14 +347,13 @@ impl LocalCell {
             return;
         }
 
-        let peer_to_evict = *self
-            .peers
-            .values()
-            .min_by(|a, b| {
-                a.reliability_score
-                    .partial_cmp(&b.reliability_score)
-                    .expect("f64 reliability scores should always be comparable")
-            })
+        // Same ordering as sort_by_reliability: lowest score first, peer-id
+        // tie-break, so equal-score eviction is deterministic, not
+        // HashMap-iteration-order dependent.
+        let mut ranked: Vec<&PeerInfo> = self.peers.values().collect();
+        Self::sort_by_reliability(&mut ranked);
+        let peer_to_evict = *ranked
+            .last()
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 
@@ -631,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn test_active_peers_sorted_by_reliability() {
+    fn active_peer_selection_contract() {
         let local_id = make_peer_id(1);
         let mut cell = LocalCell::new(local_id);
         let peer1 = make_peer_id(2);
@@ -642,18 +638,21 @@ mod tests {
         cell.peer_seen(peer2, TransportType::BLE);
         cell.peer_seen(peer3, TransportType::BLE);
 
-        // Set reliability scores
         cell.update_reliability(&peer1, true);
         cell.update_reliability(&peer1, true);
         cell.update_reliability(&peer2, true);
         cell.update_reliability(&peer3, false);
 
         let active = cell.active_peers();
-        assert_eq!(active.len(), 3);
+        assert_eq!(
+            active.iter().map(|peer| peer.peer_id).collect::<Vec<_>>(),
+            vec![peer1, peer2, peer3]
+        );
 
-        // Should be sorted by reliability (descending)
-        assert!(active[0].reliability_score >= active[1].reliability_score);
-        assert!(active[1].reliability_score >= active[2].reliability_score);
+        let hint = make_hint(100);
+        cell.update_peer_hints(&peer1, vec![hint]);
+        cell.update_peer_hints(&peer2, vec![hint]);
+        assert_eq!(cell.peers_for_hint(&hint)[0].peer_id, peer1);
     }
 
     #[test]

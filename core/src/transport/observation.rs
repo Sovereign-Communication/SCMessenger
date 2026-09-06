@@ -4,6 +4,7 @@
 // Implements consensus-based address discovery without relying on external STUN servers.
 
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -26,14 +27,15 @@ pub struct AddressObservation {
 pub struct AddressObserver {
     /// Observations indexed by observer peer ID
     observations: HashMap<PeerId, AddressObservation>,
-    /// Cached consensus result (recalculated when observations change)
-    cached_external_addresses: Vec<SocketAddr>,
-    /// Ports this node actually listens on. Observations whose port is not in
-    /// this set are the NAT-mapped *source* ports of outbound flows --
-    /// ephemeral and never dialable -- and are dropped at the source
+    /// Ports currently bound by this node. This is the single source of truth
+    /// for whether an observed address can be advertised. Observations whose
+    /// port is not in this set are the NAT-mapped *source* ports of outbound
+    /// flows -- ephemeral and never dialable -- and are dropped at the source
     /// (V040-T14 P0). Empty set = accept all (browser/wasm transport has no
     /// listeners).
     listen_ports: Vec<u16>,
+    /// Cached consensus result (recalculated when observations change)
+    cached_external_addresses: Vec<SocketAddr>,
 }
 
 impl Default for AddressObserver {
@@ -47,20 +49,21 @@ impl AddressObserver {
     pub fn new() -> Self {
         Self {
             observations: HashMap::new(),
-            cached_external_addresses: Vec::new(),
             listen_ports: Vec::new(),
+            cached_external_addresses: Vec::new(),
         }
     }
 
-    /// Restrict accepted observations to addresses whose port is in `ports`
-    /// (our own listen ports). Call whenever the listener set changes.
-    /// Already-stored observations are re-filtered immediately.
-    pub fn set_listen_ports(&mut self, ports: Vec<u16>) {
-        self.listen_ports = ports;
+    /// Replace the local listener port set. Observations on other ports are
+    /// excluded from the consensus immediately (re-filtered on recalc).
+    pub fn set_listen_ports(&mut self, ports: impl IntoIterator<Item = u16>) {
+        self.listen_ports = ports.into_iter().collect();
         self.recalculate_consensus();
     }
 
-    /// Record an observation from a peer
+    /// Record an observation from a peer. Observations are accepted only for
+    /// ports this node currently listens on; an empty allowlist accepts all
+    /// (V040-T14 P0: browser/wasm transport has no listeners).
     pub fn record_observation(&mut self, observer: PeerId, address: SocketAddr) {
         // V040-T14 P0: an observed address whose port is not one we listen on
         // is the NAT-mapped source port of an outbound flow -- ephemeral and
@@ -157,7 +160,7 @@ impl AddressObserver {
         // observation win promotion over an equally-voted legitimate one
         // depending on the run (V040-T14 P0 audit).
         let mut addresses: Vec<(SocketAddr, u32)> = address_counts.into_iter().collect();
-        addresses.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        addresses.sort_by_key(|(address, count)| (Reverse(*count), *address));
 
         // Cache the sorted addresses
         self.cached_external_addresses = addresses.into_iter().map(|(addr, _)| addr).collect();
@@ -319,28 +322,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_address_observer_consensus() {
+    fn address_observer_contract() {
         let mut observer = AddressObserver::new();
-
+        observer.set_listen_ports([1234, 5678]);
         let peer1 = PeerId::random();
         let peer2 = PeerId::random();
-        let peer3 = PeerId::random();
-
         let addr1: SocketAddr = "1.2.3.4:1234".parse().unwrap();
         let addr2: SocketAddr = "5.6.7.8:5678".parse().unwrap();
 
-        // Three peers observe addr1
-        observer.record_observation(peer1, addr1);
-        observer.record_observation(peer2, addr1);
-        observer.record_observation(peer3, addr1);
-
-        // One peer observes addr2
+        for peer in [peer1, peer2] {
+            observer.record_observation(peer, addr1);
+        }
         observer.record_observation(PeerId::random(), addr2);
 
-        // Consensus should be addr1 (3 votes vs 1)
         assert_eq!(observer.primary_external_address(), Some(addr1));
-        assert_eq!(observer.external_addresses().len(), 2);
-        assert_eq!(observer.external_addresses()[0], addr1);
+        assert_eq!(observer.external_addresses(), &[addr1, addr2]);
     }
 
     #[test]
@@ -447,9 +443,17 @@ mod tests {
 
     #[test]
     fn test_extract_socket_addr() {
-        let addr: Multiaddr = "/ip4/1.2.3.4/tcp/1234".parse().unwrap();
-        let socket_addr = ConnectionTracker::extract_socket_addr(&addr);
-        assert_eq!(socket_addr, Some("1.2.3.4:1234".parse().unwrap()));
+        let cases = [
+            ("/ip4/1.2.3.4/tcp/1234", Some("1.2.3.4:1234")),
+            ("/ip6/2001:db8::1/udp/5678", Some("[2001:db8::1]:5678")),
+            ("/dns4/example.com/tcp/1234", None),
+        ];
+        for (multiaddr, expected) in cases {
+            let addr: Multiaddr = multiaddr.parse().unwrap();
+            let actual =
+                ConnectionTracker::extract_socket_addr(&addr).map(|socket| socket.to_string());
+            assert_eq!(actual, expected.map(str::to_string));
+        }
     }
 
     #[test]

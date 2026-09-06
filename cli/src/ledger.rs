@@ -590,6 +590,30 @@ impl ConnectionLedger {
         }
     }
 
+    /// Release the claims of a dial the swarm deliberately did not dispatch
+    /// (the "skipped:" reply from the core dial guard -- target is self, peer
+    /// already connected, or address is our own).
+    ///
+    /// A skip is NEITHER a success nor a failure: recording success would
+    /// inflate the peer's connection slot and reap the peer's other addresses
+    /// as stale; recording failure would burn backoff on a dial we never
+    /// dispatched (and, for poisoned self-address entries keyed under a real
+    /// peer id, would throttle that peer's OTHER addresses through the shared
+    /// `DialKey::Peer` state). This mirrors the rollback shape of
+    /// `try_begin_dial`'s early returns: release the dial-policy slot, the
+    /// address-level slot, and the peer-level slot, without touching
+    /// success/failure counters or the backoff ladder.
+    pub fn complete_dial_skipped(&mut self, key: &DialKey) {
+        let (addr_key, _pid_opt) = self.key_to_policy_args(key);
+        self.dial_policy.complete_dial_attempt(&addr_key);
+        if let Some(addr_state) = self.addr_dial_states.get_mut(&addr_key) {
+            addr_state.in_flight = false;
+        }
+        if let Some(state) = self.peer_dial_states.get_mut(key) {
+            state.in_flight = false;
+        }
+    }
+
     /// Record a disconnected peer, releasing its concurrent connection slot.
     ///
     /// Fired from the `SwarmEvent::PeerDisconnected` handler (one event per
@@ -1068,6 +1092,36 @@ mod tests {
         let state = l.peer_dial_states.get(&key).expect("state kept");
         assert!(state.next_attempt_after > t);
         assert!(!state.in_flight);
+    }
+
+    /// A "skipped:" dial (core guard: target is self / peer connected / our
+    /// own address) must release every in-flight claim WITHOUT burning backoff
+    /// or recording a phantom connection -- neither the success side effects
+    /// (reap of the peer's other addresses, slot inflation) nor the failure
+    /// side effects (backoff ladder on a dial that never happened) apply.
+    #[test]
+    fn test_complete_dial_skipped_releases_claims_neutrally() {
+        let mut l = ledger();
+        let pid = PeerId::random();
+        let key = DialKey::Peer(pid);
+        let t = now();
+
+        assert!(l.try_begin_dial(key.clone(), t, false));
+        l.complete_dial_skipped(&key);
+
+        // In-flight claims released, no connection counted, no success state.
+        let state = l.peer_dial_states.get(&key).expect("state kept");
+        assert!(!state.in_flight);
+        assert_eq!(state.connections, 0);
+        assert!(!state.is_known_good);
+        // Backoff untouched: an immediate re-dial is allowed (a failure would
+        // have set next_attempt_after into the future).
+        assert!(state.next_attempt_after <= t);
+
+        // And a fresh dial right after the skip is accepted -- no phantom
+        // in-flight claim lingers.
+        assert!(l.try_begin_dial(key.clone(), t, false));
+        l.complete_dial_skipped(&key);
     }
 
     #[test]
