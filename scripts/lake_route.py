@@ -53,11 +53,12 @@ RR_STATE_PATH = "tmp/lakes/round_robin_state.json"
 # real implementation/analysis work, not mechanical tasks), so FLASH and
 # MORPH ladders are unchanged. A lake with no key file is skipped silently
 # by _lake_has_key, so this is a safe no-op when qwenpaid.env is absent.
+# Cerebras is a metered fixed-credit backup and remains disabled for automatic routing.
 TIER_LADDERS = {
-    "FLASH":  ["groq", "qwen", "openrouter", "openrouter_direct", "gemini", "ollama"],
-    "CODER":  ["qwenpaid", "qwen", "groq", "openrouter", "openrouter_direct", "gemini", "ollama"],
-    "THINK":  ["qwenpaid", "qwen", "gemini", "openrouter", "groq"],
-    "MAX":    ["qwenpaid", "qwen", "gemini", "openrouter"],
+    "FLASH":  ["groq", "qwen", "nvidia", "cerebras", "openrouter", "openrouter_direct", "gemini", "ollama"],
+    "CODER":  ["qwenpaid", "qwen", "nvidia", "groq", "cerebras", "openrouter", "openrouter_direct", "gemini", "ollama"],
+    "THINK":  ["qwenpaid", "qwen", "nvidia", "gemini", "cerebras", "openrouter", "groq"],
+    "MAX":    ["qwenpaid", "qwen", "nvidia", "gemini", "cerebras", "openrouter"],
     "MORPH":  ["openrouter"],
 }
 
@@ -118,15 +119,35 @@ def _save_rr(rr_state):
 def _lake_has_key(lake, lake_cfg):
     """Registry rule: 'A lake with no key file is skipped silently by the
     router.' ollama (and any lake with an empty key_env list) needs no key."""
-    key_envs = lake_cfg.get("key_env", [])
-    if not key_envs:
+    key_envs = list(lake_cfg.get("key_env", []))
+    if lake == "gemini":
+        for k in ("AISTUDIO_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            if k not in key_envs:
+                key_envs.append(k)
+
+    if not key_envs and lake != "gemini":
         return True
     for name in key_envs:
         if os.environ.get(name):
             return True
-    key_file = lake_cfg.get("key_file")
-    if key_file:
-        path = os.path.expanduser(key_file)
+
+    if lake == "gemini":
+        key_files = ["~/.config/scmorc/AIstudio.env", "~/.config/scmorc/gemini.env"]
+    else:
+        key_files = []
+        kf = lake_cfg.get("key_file")
+        if isinstance(kf, list):
+            key_files.extend(kf)
+        elif isinstance(kf, str):
+            key_files.append(kf)
+        kfs = lake_cfg.get("key_files", [])
+        if isinstance(kfs, list):
+            for f in kfs:
+                if f not in key_files:
+                    key_files.append(f)
+
+    for file_path in key_files:
+        path = os.path.expanduser(file_path)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -186,6 +207,10 @@ def route(tier):
         lake_cfg = registry.get("lakes", {}).get(lake)
         if not lake_cfg:
             # Not in registry; fall through
+            continue
+
+        if lake_cfg.get("enabled", True) is False:
+            # Skip operator-disabled, metered, or currently unhealthy entries.
             continue
 
         if not _lake_has_key(lake, lake_cfg):
