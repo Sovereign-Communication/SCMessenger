@@ -513,16 +513,12 @@ impl MeshService {
 
     pub fn pause(&self) {
         tracing::info!("MeshService paused (activity reduced)");
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
-            bridge.on_entering_background();
-        }
+        self.notify_bridge_detached(|bridge| bridge.on_entering_background());
     }
 
     pub fn resume(&self) {
         tracing::info!("MeshService resumed (full activity)");
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
-            bridge.on_entering_foreground();
-        }
+        self.notify_bridge_detached(|bridge| bridge.on_entering_foreground());
     }
 
     pub fn get_state(&self) -> ServiceState {
@@ -1417,11 +1413,14 @@ impl MeshService {
 
         // P0_RELIABILITY_001: Notify platform bridge of state change if it's subscribed.
         // This ensures the platform (Android/iOS) UI stays in sync with core adjustments.
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
+        // Detached notify: the platform callback echoes back into
+        // update_device_state (UniFFI re-entry), which must observe the
+        // bridge as absent rather than self-deadlock on this mutex.
+        self.notify_bridge_detached(|bridge| {
             bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
             bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
             bridge.on_motion_changed(profile.motion_state);
-        }
+        });
 
         // B1_CORE_ENTRY_007: Periodic routing engine maintenance
         // Advance the routing engine by one tick to maintain up-to-date routing state.
@@ -1954,6 +1953,33 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Invoke `f` with the platform bridge detached from its mutex.
+    ///
+    /// Platform callbacks may re-enter `MeshService` synchronously through
+    /// the UniFFI FFI: the Android bridge echoes `on_entering_background`
+    /// back into `pause()` and the device-state notifications back into
+    /// `update_device_state()`. Holding the non-reentrant `platform_bridge`
+    /// mutex across such a callback self-deadlocks the calling thread --
+    /// observed as Android main-thread ANRs (RCA 2026-09-06). Detaching the
+    /// bridge for the callback window makes any re-entrant call observe no
+    /// bridge and return immediately.
+    ///
+    /// Lives in the non-UniFFI impl block: `#[uniffi::export]` rewrites
+    /// this impl and cannot emit generic methods.
+    fn notify_bridge_detached<F>(&self, f: F)
+    where
+        F: FnOnce(&dyn PlatformBridge),
+    {
+        let bridge = self.platform_bridge.lock().take();
+        let _restore = RestoreBridgeGuard {
+            slot: self.platform_bridge.clone(),
+            bridge,
+        };
+        if let Some(b) = _restore.bridge.as_deref() {
+            f(b);
+        }
+    }
+
     /// Apply the local (synchronous) side of a relay-budget change: persist
     /// the budget and toggle drift protocol state. Shared by the async FFI
     /// `set_relay_budget` and the internal non-blocking variant.
@@ -2165,6 +2191,23 @@ impl crate::CoreDelegate for MeshServiceCoreDelegate {
             if let Some(delegate) = service.external_delegate.lock().as_ref() {
                 delegate.on_receipt_received(message_id, status);
             }
+        }
+    }
+}
+
+/// Restores a platform bridge swapped out for a notify-detached callback
+/// window, even if the callback panics. Nested `set_platform_bridge` calls
+/// during the window win over the restored value (latest-write semantics).
+struct RestoreBridgeGuard {
+    slot: std::sync::Arc<Mutex<Option<Box<dyn PlatformBridge>>>>,
+    bridge: Option<Box<dyn PlatformBridge>>,
+}
+
+impl Drop for RestoreBridgeGuard {
+    fn drop(&mut self) {
+        let mut guard = self.slot.lock();
+        if guard.is_none() {
+            *guard = self.bridge.take();
         }
     }
 }
@@ -4519,6 +4562,35 @@ mod tests {
         ]
     }
 
+    /// Regression (RCA 2026-09-06, Android ANR): a platform callback that
+    /// re-enters `MeshService` synchronously must not self-deadlock on the
+    /// non-reentrant `platform_bridge` mutex. The notify sites detach the
+    /// bridge for the callback window, so the echo observes no bridge and
+    /// returns; the bridge is restored afterwards.
+    #[test]
+    fn pause_reentrant_platform_callback_does_not_deadlock() {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+
+        service.pause(); // self-deadlocked the caller before the fix
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "echo must observe the detached bridge exactly once"
+        );
+
+        service.pause(); // bridge restored: the notification fires again
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "bridge must be restored after the callback window"
+        );
+    }
+
     /// Oversize payloads must be rejected (dropped, not silently truncated,
     /// not panicking) for every `ProximityTransport` variant, matching each
     /// transport's `max_payload_size`.
@@ -4626,6 +4698,68 @@ mod tests {
         assert_eq!(sent[2].0, "peer-ble-legacy");
         assert_eq!(sent[2].1, ProximityTransport::Ble);
         assert_eq!(sent[2].2, b"legacy-ble".to_vec());
+    }
+
+    /// Mock whose `on_entering_background` echoes back into
+    /// `MeshService::pause`, reproducing the AndroidPlatformBridge re-entry
+    /// that self-deadlocked before the detached-notify fix.
+    struct ReentrantEchoBridge {
+        service: std::sync::Weak<MeshService>,
+        callbacks: std::sync::atomic::AtomicUsize,
+    }
+
+    struct ReentrantEchoHandle(std::sync::Arc<ReentrantEchoBridge>);
+
+    impl PlatformBridge for ReentrantEchoHandle {
+        fn on_battery_changed(&self, _battery_pct: u8, _is_charging: bool) {}
+        fn on_network_changed(&self, _has_wifi: bool, _has_cellular: bool) {}
+        fn on_motion_changed(&self, _motion: MotionState) {}
+        fn on_ble_data_received(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_entering_background(&self) {
+            self.0
+                .callbacks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(service) = self.0.service.upgrade() {
+                service.pause();
+            }
+        }
+        fn on_entering_foreground(&self) {}
+        fn send_ble_packet(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_proximity_data_received(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn send_proximity_packet(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn wifi_aware_publish(&self, _service_name: String, _service_info: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_subscribe(&self, _service_name: String) -> bool {
+            false
+        }
+        fn wifi_aware_create_data_path(&self, _peer_id: String, _pmk: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_stop(&self) {}
+        fn wifi_direct_discover_peers(&self) -> bool {
+            false
+        }
+        fn wifi_direct_stop_discovery(&self) {}
+        fn wifi_direct_connect(&self, _device_address: String) -> bool {
+            false
+        }
+        fn wifi_direct_create_group(&self, _group_name: String) -> bool {
+            false
+        }
+        fn wifi_direct_remove_group(&self) {}
     }
 
     /// Thin wrapper for the mock: `PlatformBridge` requires `Box<dyn
