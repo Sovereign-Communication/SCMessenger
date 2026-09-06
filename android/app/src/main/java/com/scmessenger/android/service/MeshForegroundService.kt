@@ -124,14 +124,18 @@ class MeshForegroundService : Service() {
                 StartDecision.Pause -> pauseMeshService()
                 StartDecision.Resume -> resumeMeshService()
                 StartDecision.NoOp -> {
-                    Timber.w("Ignoring start request while user stop is in effect (action=%s)", action ?: "null")
-                    // R6-2: a latched ACTION_ENSURE arrived via
-                    // startForegroundService() -- the foreground promotion
-                    // above satisfied the contract, but the mesh must stay
-                    // stopped and the just-shown notification must go away.
+                    // R6-2/R7-1: a latched ACTION_ENSURE arrived via
+                    // startForegroundService(); the synchronous promotion
+                    // above satisfied the 5-second contract. Stop only if no
+                    // newer command has arrived since (stopSelfResult(startId));
+                    // otherwise the newer command owns the foreground state.
                     if (action == ACTION_ENSURE) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
+                        Timber.w("Latched ACTION_ENSURE (startId=%d): mesh stays stopped after foreground promotion", startId)
+                        if (!stopSelfResult(startId)) {
+                            Timber.d("Newer command arrived before ENSURE cleanup; leaving foreground state to it")
+                        }
+                    } else {
+                        Timber.w("Ignoring %s request while service is not running", action ?: "null action")
                     }
                 }
             }
