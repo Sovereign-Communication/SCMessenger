@@ -98,7 +98,11 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        val shouldStartForeground = action == null || action == ACTION_START || action == ACTION_RESUME
+        // R6-2: ACTION_ENSURE is delivered via startForegroundService() too,
+        // so the 5-second startForeground() contract applies even when the
+        // user-stop latch later resolves the delivery to NoOp.
+        val shouldStartForeground =
+            action == null || action == ACTION_START || action == ACTION_RESUME || action == ACTION_ENSURE
 
         // Android 12+ requires startForeground() within 5 seconds of onStartCommand returning.
         // Promote to foreground synchronously; async initialization continues in the coroutine.
@@ -119,7 +123,17 @@ class MeshForegroundService : Service() {
                 StartDecision.Stop -> stopMeshService()
                 StartDecision.Pause -> pauseMeshService()
                 StartDecision.Resume -> resumeMeshService()
-                StartDecision.NoOp -> Timber.w("Ignoring pause request while service is not running")
+                StartDecision.NoOp -> {
+                    Timber.w("Ignoring start request while user stop is in effect (action=%s)", action ?: "null")
+                    // R6-2: a latched ACTION_ENSURE arrived via
+                    // startForegroundService() -- the foreground promotion
+                    // above satisfied the contract, but the mesh must stay
+                    // stopped and the just-shown notification must go away.
+                    if (action == ACTION_ENSURE) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
             }
         }
 
