@@ -10480,11 +10480,18 @@ open class MeshRepository(
         Timber.i("Bootstrap: attempting ${addresses.size} proven ledger relay candidate(s)")
 
         var anySuccess = false
+        var anyBreakerBlocked = false
         for (addr in addresses) {
             try {
                 // Check circuit breaker before attempting
                 if (!relayCircuitBreaker.allowRequest(addr)) {
                     Timber.d("Circuit breaker blocked %s, skipping", addr)
+                    // RCA-D3 (2026-09-06): a breaker skip is not a dial failure.
+                    // Counting it as one grew the backoff ladder while zero real
+                    // dials were attempted, pinning the node offline until the
+                    // breaker's own half-open timer happened to align with the
+                    // backoff. Track skips separately instead.
+                    anyBreakerBlocked = true
                     continue
                 }
                 if (!shouldAttemptDial(addr)) continue
@@ -10503,8 +10510,14 @@ open class MeshRepository(
             }
         }
 
-        // P1_ANDROID_013: Update consecutive failure tracking and backoff
-        if (!anySuccess) {
+        // P1_ANDROID_013: Update consecutive failure tracking and backoff.
+        // RCA-D3: when every candidate was skipped by the breaker, no new
+        // evidence about reachability exists — do not grow the failure ladder;
+        // retry on the breaker's own short cadence so it can half-open.
+        if (!anySuccess && anyBreakerBlocked) {
+            nextBootstrapAttemptMs = nowMs + 5_000L
+            Timber.i("Bootstrap: all candidates breaker-blocked; re-probing in 5000ms (no failure counted)")
+        } else if (!anySuccess) {
             consecutiveBootstrapFailures++
             val backoffMs = when {
                 consecutiveBootstrapFailures <= 1 -> 10_000L

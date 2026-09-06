@@ -340,8 +340,29 @@ class MainActivity : ComponentActivity() {
         Timber.d("MainActivity resumed")
         platformBridge.notifyForeground()
         checkPermissions()
+        ensureMeshForegroundService()
         if (meshRepository.hasRequiredRuntimePermissions()) {
             meshRepository.onRuntimePermissionsGranted()
+        }
+    }
+
+    /**
+     * RCA-D1 (2026-09-06): the mesh service was only ever started from
+     * BootReceiver, the AnrWatchdog recovery path, or the Settings retry
+     * button — so a normal app launch left no foreground service running and
+     * Android froze the whole process (mesh core included) once the activity
+     * left the foreground. The mesh must run whenever the app runs. Starting
+     * the service is idempotent: onStartCommand with ACTION_START while the
+     * mesh is already running just refreshes the notification.
+     */
+    private fun ensureMeshForegroundService() {
+        try {
+            val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
+                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_START }
+            startForegroundService(intent)
+            Timber.d("Mesh foreground service ensured (ACTION_START)")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to start mesh foreground service")
         }
     }
 

@@ -186,10 +186,40 @@ class NetworkDetector @Inject constructor(
             if (capabilities != null) {
                 val type = classifyNetworkType(capabilities)
                 updateNetworkType(type)
+                return
+            }
+            // RCA-D2 (2026-09-06): activeNetwork resolved but capabilities came
+            // back null. That is a transient framework state, not proof of
+            // offline; degrading to UNKNOWN here latched the classifier on a
+            // healthy WiFi network (observed live: dumpsys VALIDATED while the
+            // app reported UNKNOWN with no update log). Fall back to the most
+            // recent cached capabilities snapshot before concluding anything.
+            val cached = networkCapabilities.values.firstOrNull()
+            if (cached != null) {
+                Timber.w(
+                    "activeNetwork capabilities null; using cached snapshot -> %s",
+                    classifyNetworkType(cached)
+                )
+                updateNetworkType(classifyNetworkType(cached))
+            } else {
+                Timber.w("activeNetwork capabilities null and no cached snapshot; keeping %s", _networkType.value)
             }
         } else {
-            _networkType.value = NetworkType.UNKNOWN
-            _blockedPorts.value = emptySet()
+            // RCA-D2: this branch used to set UNKNOWN silently. Visibility
+            // fails open: log the transition and re-check every registered
+            // network before concluding the device is offline.
+            val anyKnown = connectivityManager.allNetworks.firstNotNullOfOrNull { net ->
+                connectivityManager.getNetworkCapabilities(net)
+                    ?.takeIf { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+            }
+            if (anyKnown != null) {
+                Timber.w("activeNetwork null but an INTERNET-capable network exists; classifying that instead")
+                updateNetworkType(classifyNetworkType(anyKnown))
+            } else {
+                Timber.w("activeNetwork null and no INTERNET-capable network found; setting UNKNOWN")
+                _networkType.value = NetworkType.UNKNOWN
+                _blockedPorts.value = emptySet()
+            }
         }
     }
 
