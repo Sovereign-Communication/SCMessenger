@@ -65,6 +65,14 @@ open class MeshRepository(
         private const val IDENTITY_BACKUP_PREFS = "identity_backup_prefs"
         private const val IDENTITY_BACKUP_KEY = "identity_backup_v1"
 
+        /**
+         * Re-probe cadence when a bootstrap round produced zero real dials
+         * (RCA-D3 / R2-5): matches [com.scmessenger.android.utils.CircuitBreaker]
+         * half-open cadence (30 s) so probe attempts align with the breaker's
+         * own OPEN -> HALF_OPEN transition instead of hot-looping.
+         */
+        private const val BOOTSTRAP_BREAKER_REPROBE_MS = 30_000L
+
         // P0: Cache key identity fields in SharedPreferences for instant UI load.
         // Eliminates 30-60s "Unavailable" gap while service starts up.
         private const val IDENTITY_CACHE_PREFS = "identity_cache_prefs"
@@ -475,6 +483,7 @@ open class MeshRepository(
 
     // P0_NETWORK_001: Circuit breaker for relay failure tracking
     private val relayCircuitBreaker = CircuitBreaker()
+
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
     private val networkDetector = NetworkDetector(context)
     // P0_ANDROID_007: Diagnostics reporter for connectivity analysis
@@ -10495,7 +10504,13 @@ open class MeshRepository(
                     anyBreakerBlocked = true
                     continue
                 }
-                if (!shouldAttemptDial(addr)) continue
+                // R2-3: the dial throttle (shouldAttemptDial) is also a
+                // no-evidence skip, not a reachability result — a round where
+                // every candidate was throttled must not book backoff either.
+                if (!shouldAttemptDial(addr)) {
+                    anyBreakerBlocked = true
+                    continue
+                }
                 anyDialAttempted = true
                 bridge.dial(addr)
                 Timber.d("Bootstrap dial initiated: %s", addr)
@@ -10521,8 +10536,13 @@ open class MeshRepository(
         // R1-1: the no-evidence path applies only when ZERO real dials were
         // attempted; a round with real failures still books backoff.
         if (!anySuccess && anyBreakerBlocked && !anyDialAttempted) {
-            nextBootstrapAttemptMs = nowMs + 30_000L
-            Timber.i("Bootstrap: all candidates breaker-blocked; re-probing in 30000ms (no failure counted)")
+            // R2-5: reuse the breaker's own half-open cadence instead of a
+            // hard-coded value so the probe rate tracks the breaker config.
+            nextBootstrapAttemptMs = nowMs + BOOTSTRAP_BREAKER_REPROBE_MS
+            Timber.i(
+                "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
+                BOOTSTRAP_BREAKER_REPROBE_MS
+            )
         } else if (!anySuccess) {
             consecutiveBootstrapFailures++
             val backoffMs = when {

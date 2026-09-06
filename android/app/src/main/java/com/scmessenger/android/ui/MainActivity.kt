@@ -97,6 +97,9 @@ class MainActivity : ComponentActivity() {
 
         if (meshRepository.hasRequiredRuntimePermissions()) {
             meshRepository.onRuntimePermissionsGranted()
+            // R2-4: first-launch path — permissions were just granted through
+            // this callback, so this is the moment the FGS can legally start.
+            ensureMeshForegroundService()
         }
     }
 

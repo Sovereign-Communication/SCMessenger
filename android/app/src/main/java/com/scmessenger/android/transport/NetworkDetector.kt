@@ -194,10 +194,11 @@ class NetworkDetector @Inject constructor(
             // healthy WiFi network (observed live: dumpsys VALIDATED while the
             // app reported UNKNOWN with no update log). Fall back to the best
             // cached capabilities snapshot before concluding anything.
-            // R1-2: pick deterministically (validated > unvalidated, wifi/
-            // ethernet > cellular > other) so a stale cellular snapshot cannot
-            // mask an active wifi.
+            // R1-2/R2-1: pick deterministically, restricted to snapshots that
+            // still look usable (INTERNET-capable) so a stale or degraded
+            // snapshot cannot latch the classifier.
             val cached = networkCapabilities.values
+                .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
                 .maxByOrNull { fallbackRank(it) }
             if (cached != null) {
                 Timber.w(
@@ -245,8 +246,10 @@ class NetworkDetector @Inject constructor(
         var rank = 0
         if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) rank += 100
         when {
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> rank += 20
+            // R2-2: ethernet > wifi > cellular — stable tie-breaker so equal-
+            // ranked candidates cannot flap on enumeration order.
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> rank += 30
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> rank += 20
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> rank += 10
         }
         return rank
