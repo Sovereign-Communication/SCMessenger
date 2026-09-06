@@ -124,18 +124,18 @@ class MeshForegroundService : Service() {
                 StartDecision.Pause -> pauseMeshService()
                 StartDecision.Resume -> resumeMeshService()
                 StartDecision.NoOp -> {
-                    // R6-2/R7-1: a latched ACTION_ENSURE arrived via
-                    // startForegroundService(); the synchronous promotion
-                    // above satisfied the 5-second contract. Stop only if no
-                    // newer command has arrived since (stopSelfResult(startId));
-                    // otherwise the newer command owns the foreground state.
-                    if (action == ACTION_ENSURE) {
-                        Timber.w("Latched ACTION_ENSURE (startId=%d): mesh stays stopped after foreground promotion", startId)
-                        if (!stopSelfResult(startId)) {
-                            Timber.d("Newer command arrived before ENSURE cleanup; leaving foreground state to it")
-                        }
-                    } else {
-                        Timber.w("Ignoring %s request while service is not running", action ?: "null action")
+                    // R6-2/R8-1: while the user-stop latch is active the mesh
+                    // must stay down, so ANY NoOp delivery should terminate
+                    // the service if it is still the most recent request
+                    // (stopSelfResult). This covers a latched ACTION_ENSURE
+                    // that promoted to foreground, a latched START_STICKY
+                    // restart delivering a null intent, and a stray PAUSE --
+                    // whichever delivery is newest takes the transient
+                    // foreground state with it; none can strand the service
+                    // in foreground with the mesh stopped.
+                    Timber.w("Ignoring %s request while service is not running", action ?: "null action")
+                    if (userStoppedForSession && stopSelfResult(startId)) {
+                        Timber.d("Service stopped after NoOp while user stop in effect (startId=%d)", startId)
                     }
                 }
             }
