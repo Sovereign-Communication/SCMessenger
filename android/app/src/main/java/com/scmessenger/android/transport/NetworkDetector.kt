@@ -197,9 +197,17 @@ class NetworkDetector @Inject constructor(
             // R1-2/R2-1: pick deterministically, restricted to snapshots that
             // still look usable (INTERNET-capable) so a stale or degraded
             // snapshot cannot latch the classifier.
-            val cached = networkCapabilities.values
-                .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-                .maxByOrNull { fallbackRank(it) }
+            // Prefer the active network's cached snapshot. If it has not
+            // delivered capabilities yet, consider only snapshots keyed by
+            // networks that Android still reports as current; never let a
+            // departed network's capabilities classify the device.
+            val cached = networkCapabilities[activeNetwork]
+                ?.takeIf { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                ?: connectivityManager.allNetworks
+                    .asSequence()
+                    .mapNotNull { networkCapabilities[it] }
+                    .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                    .maxByOrNull { fallbackRank(it) }
             if (cached != null) {
                 Timber.w(
                     "activeNetwork capabilities null; using cached snapshot -> %s",
