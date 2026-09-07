@@ -418,17 +418,16 @@ class AndroidPlatformBridge @Inject constructor(
     }
 
     override fun onEnteringBackground() {
-        Timber.i("App entering background")
-
-        // Pause mesh service to conserve battery
-        meshRepository.pauseMeshService()
+        // Rust-initiated notification (MeshService::pause): do NOT echo
+        // back into the FFI -- the echo re-entered pause() on the same
+        // thread and self-deadlocked the main thread (RCA 2026-09-06,
+        // R10-F3). Core has already applied the pause.
+        Timber.i("App entering background (core-initiated)")
     }
 
     override fun onEnteringForeground() {
-        Timber.i("App entering foreground")
-
-        // Resume full mesh service activity
-        meshRepository.resumeMeshService()
+        // Rust-initiated notification: no echo back into the FFI (R10-F3).
+        Timber.i("App entering foreground (core-initiated)")
     }
 
     // ========================================================================

@@ -186,11 +186,82 @@ class NetworkDetector @Inject constructor(
             if (capabilities != null) {
                 val type = classifyNetworkType(capabilities)
                 updateNetworkType(type)
+                return
+            }
+            // RCA-D2 (2026-09-06): activeNetwork resolved but capabilities came
+            // back null. That is a transient framework state, not proof of
+            // offline; degrading to UNKNOWN here latched the classifier on a
+            // healthy WiFi network (observed live: dumpsys VALIDATED while the
+            // app reported UNKNOWN with no update log). Fall back to the best
+            // cached capabilities snapshot before concluding anything.
+            // R1-2/R2-1: pick deterministically, restricted to snapshots that
+            // still look usable (INTERNET-capable) so a stale or degraded
+            // snapshot cannot latch the classifier.
+            // Prefer the active network's cached snapshot. If it has not
+            // delivered capabilities yet, consider only snapshots keyed by
+            // networks that Android still reports as current; never let a
+            // departed network's capabilities classify the device.
+            val cached = networkCapabilities[activeNetwork]
+                ?.takeIf { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                ?: connectivityManager.allNetworks
+                    .asSequence()
+                    .mapNotNull { networkCapabilities[it] }
+                    .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                    .maxByOrNull { fallbackRank(it) }
+            if (cached != null) {
+                Timber.w(
+                    "activeNetwork capabilities null; using cached snapshot -> %s",
+                    classifyNetworkType(cached)
+                )
+                updateNetworkType(classifyNetworkType(cached))
+            } else {
+                // R1-4: no current evidence AND no cache. Keep the prior type
+                // only briefly (the next callback or periodic redetection will
+                // resolve it); log loudly so the degenerate state is visible.
+                Timber.w(
+                    "activeNetwork capabilities null and no cached snapshot; retaining %s until next redetection",
+                    _networkType.value
+                )
             }
         } else {
-            _networkType.value = NetworkType.UNKNOWN
-            _blockedPorts.value = emptySet()
+            // RCA-D2: this branch used to set UNKNOWN silently. Visibility
+            // fails open: log the transition and re-check every registered
+            // network before concluding the device is offline.
+            // R1-3: deterministic pick (validated wifi/ethernet > validated
+            // cellular > any INTERNET-capable) to prevent cross-type flapping.
+            val best = connectivityManager.allNetworks
+                .mapNotNull { net -> connectivityManager.getNetworkCapabilities(net) }
+                .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                .maxByOrNull { fallbackRank(it) }
+            if (best != null) {
+                Timber.w("activeNetwork null but INTERNET-capable network(s) exist; classifying best candidate")
+                updateNetworkType(classifyNetworkType(best))
+            } else {
+                Timber.w("activeNetwork null and no INTERNET-capable network found; setting UNKNOWN")
+                // R4-L2: route through updateNetworkType so every
+                // state-transition side effect (blocked ports) has one owner.
+                updateNetworkType(NetworkType.UNKNOWN)
+            }
         }
+    }
+
+    /**
+     * Deterministic preference order for fallback candidates (higher wins):
+     * validated first, then wifi/ethernet, then cellular, then anything else.
+     * Shared by both RCA-D2 fallback paths so neither can flap between
+     * different network types across redetections.
+     */
+    private fun fallbackRank(capabilities: NetworkCapabilities): Int {
+        var rank = 0
+        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) rank += 100
+        when {
+            // R2-2: ethernet > wifi > cellular — stable tie-breaker so equal-
+            // ranked candidates cannot flap on enumeration order.
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> rank += 30
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> rank += 20
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> rank += 10
+        }
+        return rank
     }
 
     /**
@@ -200,11 +271,17 @@ class NetworkDetector @Inject constructor(
         val previousType = _networkType.value
         _networkType.value = newType
 
+        // R3-F5b: one owner for the blocked-ports derivation. UNKNOWN (no
+        // verified network evidence) must not silently retain a previous
+        // network's port-blocking posture; clearing it here is the only
+        // place blocked ports are set or cleared.
         if (newType == NetworkType.CELLULAR || newType == NetworkType.CELLULAR_RESTRICTED) {
             _blockedPorts.value = commonlyBlockedPorts
             Timber.w("Cellular network detected (%s) after %dms stability — blocking ports: %s",
                 newType, networkStabilityMs, commonlyBlockedPorts)
         } else {
+            // UNKNOWN also clears: with no verified network evidence the prior
+            // port posture is stale, not conservative.
             _blockedPorts.value = emptySet()
         }
 

@@ -475,6 +475,7 @@ open class MeshRepository(
 
     // P0_NETWORK_001: Circuit breaker for relay failure tracking
     private val relayCircuitBreaker = CircuitBreaker()
+
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
     private val networkDetector = NetworkDetector(context)
     // P0_ANDROID_007: Diagnostics reporter for connectivity analysis
@@ -10480,14 +10481,29 @@ open class MeshRepository(
         Timber.i("Bootstrap: attempting ${addresses.size} proven ledger relay candidate(s)")
 
         var anySuccess = false
+        var anyBreakerBlocked = false
+        var anyDialAttempted = false
         for (addr in addresses) {
             try {
                 // Check circuit breaker before attempting
                 if (!relayCircuitBreaker.allowRequest(addr)) {
                     Timber.d("Circuit breaker blocked %s, skipping", addr)
+                    // RCA-D3 (2026-09-06): a breaker skip is not a dial failure.
+                    // Counting it as one grew the backoff ladder while zero real
+                    // dials were attempted, pinning the node offline until the
+                    // breaker's own half-open timer happened to align with the
+                    // backoff. Track skips separately instead.
+                    anyBreakerBlocked = true
                     continue
                 }
-                if (!shouldAttemptDial(addr)) continue
+                // R2-3: the dial throttle (shouldAttemptDial) is also a
+                // no-evidence skip, not a reachability result — a round where
+                // every candidate was throttled must not book backoff either.
+                if (!shouldAttemptDial(addr)) {
+                    anyBreakerBlocked = true
+                    continue
+                }
+                anyDialAttempted = true
                 bridge.dial(addr)
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
@@ -10503,8 +10519,26 @@ open class MeshRepository(
             }
         }
 
-        // P1_ANDROID_013: Update consecutive failure tracking and backoff
-        if (!anySuccess) {
+        // P1_ANDROID_013: Update consecutive failure tracking and backoff.
+        // RCA-D3: when every candidate was skipped by the breaker, no new
+        // evidence about reachability exists — do not grow the failure ladder.
+        // Re-probe on the breaker's own half-open cadence (30 s, matching
+        // CircuitBreakerConfig.halfOpenTimeoutMs) so the breaker gets probe
+        // attempts without a 5 s hot loop (R1-5).
+        // R1-1: the no-evidence path applies only when ZERO real dials were
+        // attempted; a round with real failures still books backoff.
+        if (!anySuccess && anyBreakerBlocked && !anyDialAttempted) {
+            // R2-5: reuse the breaker's own half-open cadence instead of a
+            // hard-coded value so the probe rate tracks the breaker config.
+            // R4-L3: read the cadence from the active breaker instance, not a
+            // companion constant, so the two cannot silently diverge.
+            val reprobeMs = relayCircuitBreaker.halfOpenTimeoutMs
+            nextBootstrapAttemptMs = nowMs + reprobeMs
+            Timber.i(
+                "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
+                reprobeMs
+            )
+        } else if (!anySuccess) {
             consecutiveBootstrapFailures++
             val backoffMs = when {
                 consecutiveBootstrapFailures <= 1 -> 10_000L

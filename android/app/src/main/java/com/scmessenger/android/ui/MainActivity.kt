@@ -11,6 +11,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import com.scmessenger.android.service.AndroidPlatformBridge
+import com.scmessenger.android.service.MeshForegroundService
 import com.scmessenger.android.service.AnrWatchdog
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.theme.SCMessengerTheme
@@ -97,6 +98,9 @@ class MainActivity : ComponentActivity() {
 
         if (meshRepository.hasRequiredRuntimePermissions()) {
             meshRepository.onRuntimePermissionsGranted()
+            // R2-4: first-launch path — permissions were just granted through
+            // this callback, so this is the moment the FGS can legally start.
+            ensureMeshForegroundService()
         }
     }
 
@@ -342,6 +346,46 @@ class MainActivity : ComponentActivity() {
         checkPermissions()
         if (meshRepository.hasRequiredRuntimePermissions()) {
             meshRepository.onRuntimePermissionsGranted()
+            ensureMeshForegroundService()
+        }
+    }
+
+    /**
+     * RCA-D1 (2026-09-06): the mesh service was only ever started from
+     * BootReceiver, the AnrWatchdog recovery path, or the Settings retry
+     * button — so a normal app launch left no foreground service running and
+     * Android froze the whole process (mesh core included) once the activity
+     * left the foreground. The mesh must run whenever the app runs. Starting
+     * the service is idempotent: onStartCommand with ACTION_START while the
+     * mesh is already running just refreshes the notification.
+     */
+    private fun ensureMeshForegroundService() {
+        // R3-F1: never resurrect a mesh the user explicitly stopped this
+        // session. Only an in-app Start (ACTION_START via the service view
+        // model) clears the latch.
+        if (MeshForegroundService.userStoppedForSession) {
+            Timber.d("Mesh start skipped: user stop in effect this session")
+            return
+        }
+        try {
+            // R4-M2: ACTION_ENSURE starts the mesh but cannot clear the
+            // user-stop latch, so a STOP racing ahead of this queued intent
+            // still wins.
+            val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
+                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_ENSURE }
+            startForegroundService(intent)
+            MeshForegroundService.fgsStartFailed.value = false
+            Timber.d("Mesh foreground service ensured (ACTION_ENSURE)")
+        } catch (e: Exception) {
+            // R1-6 + R4-L1: background-start restrictions and permission gaps
+            // land here; record the failure as observable companion state
+            // (survives activity recreation) instead of silently swallowing.
+            MeshForegroundService.fgsStartFailed.value = true
+            if (e is IllegalStateException) {
+                Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
+            } else {
+                Timber.e(e, "Failed to start mesh foreground service")
+            }
         }
     }
 

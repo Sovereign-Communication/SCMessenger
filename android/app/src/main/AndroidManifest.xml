@@ -17,6 +17,17 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- WiFi Aware (API 26+) -->
+    <!-- D1-enabler (2026-09-06 live deploy): Permissions.required includes
+         ACCESS_FINE/COARSE_LOCATION (WiFi Aware's pre-T requirement and
+         scan-gate on T+), but the manifest never declared them, so
+         hasRequiredRuntimePermissions() could never be true on a fresh
+         install and the permission-gated FGS start (RCA-D1 fix) could not
+         fire. neverForLocation on NEARBY_WIFI_DEVICES only removes the
+         location *derivation* requirement for nearby scans on T+; the
+         location permissions themselves are still required by
+         WiFi Aware on <T and by our own required-set on all API levels. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
