@@ -2059,7 +2059,7 @@ impl MeshService {
         // re-entry is a pure re-derivation of it (the AndroidPlatformBridge
         // echo), so neither dispatch nor stash -- otherwise the drain would
         // redeliver forever (the 17-count regression this round caught).
-        if NOTIFYING_LIFECYCLE.with(|c| c.get()) == Some(event) {
+        if NOTIFYING_LIFECYCLE.lock().map(|(e, _)| e) == Some(event) {
             return;
         }
         if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
@@ -2071,17 +2071,17 @@ impl MeshService {
     /// re-entrant call for the SAME event terminates instead of looping
     /// (R11-4); distinct events coalesce into `pending_lifecycle`.
     ///
-    /// R12-F3: the marker is thread-local with RAII stack discipline -- it
-    /// restores on drop (unwind-safe), and being per-thread it cannot go
-    /// stale across interleaved threads. Clearing-on-return was the R11
-    /// drain-loop defect; restore-on-drop is the fix.
+    /// R12-F3/R13-F3: the marker is a global (event, thread) pair with RAII
+    /// stack discipline -- restored on drop (unwind-safe) and recognised on
+    /// ANY thread the bridge callback re-enters from. Clearing-on-return was
+    /// the R11 drain-loop defect; restore-on-drop is the fix.
     fn notify_lifecycle(&self, event: PendingLifecycle) -> BridgeDispatch {
-        if NOTIFYING_LIFECYCLE.with(|c| c.get().is_some()) {
-            // Same-event echo on this thread: terminate without dispatch.
+        if NOTIFYING_LIFECYCLE.lock().is_some() {
+            // Same-event echo (any thread): terminate without dispatch.
             return BridgeDispatch::WindowOpen;
         }
         let _marker = LifecycleNotifyGuard;
-        NOTIFYING_LIFECYCLE.with(|c| c.set(Some(event)));
+        *NOTIFYING_LIFECYCLE.lock() = Some((event, std::thread::current().id()));
         let outcome = match event {
             PendingLifecycle::Background => {
                 self.dispatch_bridge_event(|bridge| bridge.on_entering_background())
@@ -2094,43 +2094,64 @@ impl MeshService {
         outcome
     }
 
-    /// R12-F1/F5: the ONE drain owner, replacing the per-site tail drains
-    /// whose nested round-counter resets let a recursively stashing bridge
-    /// multiply the delivery bound. Non-reentrant via `drain_budget`
-    /// (1 = a drain is already running; nested calls return immediately and
-    /// the outer loop's next iteration observes their stashes). Iterates
-    /// both queues to a fixed point in the required precedence (device
-    /// profile before lifecycle), bounded by DRAIN_ROUNDS_CAP.
+    /// R12-F1/F5 / R13-F1/F2/F4: the ONE drain owner, replacing the
+    /// per-site tail drains whose nested round-counter resets let a
+    /// recursively stashing bridge multiply the delivery bound.
+    ///
+    /// - Non-reentrant via `drain_budget` (1 = a drain is running; nested
+    ///   calls return immediately and the outer loop's next iteration
+    ///   observes their stashes). The budget is held by an RAII guard, so a
+    ///   panic inside a delivery cannot leak it and lock out all future
+    ///   drains (R13-F1).
+    /// - Iterates both queues to a fixed point in the required precedence
+    ///   (device profile before lifecycle), bounded by DRAIN_ROUNDS_CAP
+    ///   (R12-F5).
+    /// - Lifecycle delivery goes through `notify`, so an event taken just
+    ///   before a window races open is RE-STASHED (WindowOpen path), never
+    ///   dropped (R13-F2).
+    /// - After the loop, the budget is released and the queues rechecked:
+    ///   a stash that landed during the final iteration is drained by this
+    ///   same call instead of waiting for a future caller (R13-F4). The
+    ///   recheck loop itself is bounded by the same cap.
+    /// - Cap exit leaves anything still pending stashed for the next
+    ///   drain: a single-slot latest-wins queue cannot grow, so this
+    ///   defers rather than accumulates (R13-F5 contract).
     fn drain_to_fixed_point(&self) {
         use std::sync::atomic::Ordering;
-        if self
-            .drain_budget
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
-        }
-        for _round in 0..DRAIN_ROUNDS_CAP {
-            if self.notify_window_depth.load(Ordering::Acquire) > 0 {
-                break;
-            }
-            let profile = self.pending_device_profile.lock().take();
-            let lifecycle = self.pending_lifecycle.lock().take();
-            match (profile, lifecycle) {
-                (None, None) => break,
-                (p, l) => {
-                    if let Some(profile) = p {
-                        tracing::info!("Replaying device profile stashed during detached notify");
-                        self.update_device_state(profile);
-                    }
-                    if let Some(event) = l {
-                        tracing::info!("Delivering coalesced lifecycle event: {:?}", event);
-                        self.notify_lifecycle(event);
+        let _budget = DrainBudgetGuard(&self.drain_budget);
+        for _outer in 0..2 {
+            for _round in 0..DRAIN_ROUNDS_CAP {
+                if self.notify_window_depth.load(Ordering::Acquire) > 0 {
+                    break;
+                }
+                let profile = self.pending_device_profile.lock().take();
+                let lifecycle = self.pending_lifecycle.lock().take();
+                match (profile, lifecycle) {
+                    (None, None) => break,
+                    (p, l) => {
+                        if let Some(profile) = p {
+                            tracing::info!(
+                                "Replaying device profile stashed during detached notify"
+                            );
+                            self.update_device_state(profile);
+                        }
+                        if let Some(event) = l {
+                            tracing::info!("Delivering coalesced lifecycle event: {:?}", event);
+                            // notify() re-stashes on WindowOpen (R13-F2).
+                            self.notify(event);
+                        }
                     }
                 }
             }
+            if self.pending_device_profile.lock().is_none()
+                && self.pending_lifecycle.lock().is_none()
+            {
+                break;
+            }
+            tracing::warn!("Drain cap reached with pending stashes; deferring to the next drain");
+            // R13-F4: recheck-and-continue once a nested drain released the
+            // budget; the outer bound keeps this from spinning.
         }
-        self.drain_budget.store(0, Ordering::Release);
     }
 
     /// Invoke `f` with the platform bridge detached from its mutex.
@@ -2472,21 +2493,35 @@ impl Drop for RestoreBridgeGuard {
     }
 }
 
-thread_local! {
-    /// R12-F3: the lifecycle event currently being notified on THIS thread.
-    /// Per-thread + RAII (restored on drop/unwind), replacing the shared
-    /// mutex marker that could go stale across interleaved threads.
-    static NOTIFYING_LIFECYCLE: std::cell::Cell<Option<PendingLifecycle>> =
-        const { std::cell::Cell::new(None) };
-}
+/// R13-F3: GLOBAL in-flight lifecycle marker, keyed on (event, notifying
+/// thread). A thread-local marker is defeated when a bridge callback
+/// re-enters MeshService on a DIFFERENT thread (UniFFI/JNI callback hop):
+/// that re-entry sees an empty thread-local and the same-event echo is
+/// re-dispatched/re-stashed. Keying on the notifying thread id means the
+/// echo is recognised wherever it lands; a legitimate CONCURRENT delivery
+/// of the same event from another thread is still allowed (different
+/// marker value), and the marker is RAII-restored on drop/unwind.
+static NOTIFYING_LIFECYCLE: Mutex<Option<(PendingLifecycle, std::thread::ThreadId)>> =
+    Mutex::new(None);
 
-/// RAII marker for `notify_lifecycle` (R12-F3): restores on drop, so a
-/// panicking bridge callback cannot leave a stale marker behind.
+/// RAII marker for `notify_lifecycle` (R12-F3/R13-F3): restores on drop, so
+/// a panicking bridge callback cannot leave a stale marker behind.
 struct LifecycleNotifyGuard;
+
+/// RAII holder for the non-reentrant drain budget (R13-F1): releases on
+/// drop, so a panic inside a drained delivery cannot leak the budget and
+/// permanently lock out all future drains.
+struct DrainBudgetGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for DrainBudgetGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, std::sync::atomic::Ordering::Release);
+    }
+}
 
 impl Drop for LifecycleNotifyGuard {
     fn drop(&mut self) {
-        NOTIFYING_LIFECYCLE.with(|c| c.set(None));
+        *NOTIFYING_LIFECYCLE.lock() = None;
     }
 }
 
