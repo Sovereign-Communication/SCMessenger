@@ -2059,7 +2059,15 @@ impl MeshService {
         // re-entry is a pure re-derivation of it (the AndroidPlatformBridge
         // echo), so neither dispatch nor stash -- otherwise the drain would
         // redeliver forever (the 17-count regression this round caught).
-        if NOTIFYING_LIFECYCLE.lock().map(|(e, _)| e) == Some(event) {
+        // R14-F3 (refute-with-contract): suppression fires ONLY when the
+        // in-flight delivery is of this EXACT event. That duplicate is
+        // idempotent under latest-wins (the in-flight delivery already
+        // carries this state to the platform), so nothing is lost. A
+        // distinct repeat -- including the Background -> Foreground ->
+        // Background sequence -- does NOT match the marker and is stashed
+        // via the WindowOpen path below, then delivered exactly once
+        // (proven by distinct_lifecycle_event_during_window_is_coalesced).
+        if NOTIFYING_LIFECYCLE.lock().as_ref() == Some(&event) {
             return;
         }
         if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
@@ -2076,12 +2084,18 @@ impl MeshService {
     /// ANY thread the bridge callback re-enters from. Clearing-on-return was
     /// the R11 drain-loop defect; restore-on-drop is the fix.
     fn notify_lifecycle(&self, event: PendingLifecycle) -> BridgeDispatch {
-        if NOTIFYING_LIFECYCLE.lock().is_some() {
-            // Same-event echo (any thread): terminate without dispatch.
-            return BridgeDispatch::WindowOpen;
-        }
-        let _marker = LifecycleNotifyGuard;
-        *NOTIFYING_LIFECYCLE.lock() = Some((event, std::thread::current().id()));
+        // R14-F2: check-and-set is ONE lock critical section (no TOCTOU),
+        // and the guard restores the previous value rather than clearing.
+        let previous = {
+            let mut marker = NOTIFYING_LIFECYCLE.lock();
+            if marker.is_some() {
+                // Single-flight: a delivery is in flight; the caller
+                // stashes via notify()'s WindowOpen path.
+                return BridgeDispatch::WindowOpen;
+            }
+            marker.replace(event)
+        };
+        let _marker = LifecycleNotifyGuard(previous);
         let outcome = match event {
             PendingLifecycle::Background => {
                 self.dispatch_bridge_event(|bridge| bridge.on_entering_background())
@@ -2115,10 +2129,18 @@ impl MeshService {
     ///   recheck loop itself is bounded by the same cap.
     /// - Cap exit leaves anything still pending stashed for the next
     ///   drain: a single-slot latest-wins queue cannot grow, so this
-    ///   defers rather than accumulates (R13-F5 contract).
+    ///   defers rather than accumulates (R13-F5/R14-F5 contract). The
+    ///   "next drain" is GUARANTEED: every window-opening entry point
+    ///   (pause/resume/update_device_state) runs this drain as its tail
+    ///   after the dispatch returns -- i.e. after the window has closed --
+    ///   so a window close is always followed by a drain.
     fn drain_to_fixed_point(&self) {
         use std::sync::atomic::Ordering;
-        let _budget = DrainBudgetGuard(&self.drain_budget);
+        // R14-F1: acquisition IS the CAS; a nested/concurrent drain (budget
+        // already 1) gets None and returns immediately.
+        let Some(_budget) = DrainBudgetGuard::acquire(&self.drain_budget) else {
+            return;
+        };
         for _outer in 0..2 {
             for _round in 0..DRAIN_ROUNDS_CAP {
                 if self.notify_window_depth.load(Ordering::Acquire) > 0 {
@@ -2493,25 +2515,41 @@ impl Drop for RestoreBridgeGuard {
     }
 }
 
-/// R13-F3: GLOBAL in-flight lifecycle marker, keyed on (event, notifying
-/// thread). A thread-local marker is defeated when a bridge callback
-/// re-enters MeshService on a DIFFERENT thread (UniFFI/JNI callback hop):
-/// that re-entry sees an empty thread-local and the same-event echo is
-/// re-dispatched/re-stashed. Keying on the notifying thread id means the
-/// echo is recognised wherever it lands; a legitimate CONCURRENT delivery
-/// of the same event from another thread is still allowed (different
-/// marker value), and the marker is RAII-restored on drop/unwind.
-static NOTIFYING_LIFECYCLE: Mutex<Option<(PendingLifecycle, std::thread::ThreadId)>> =
-    Mutex::new(None);
+/// R13-F3/R14-F2/F4: GLOBAL single-flight marker for lifecycle delivery.
+/// Exactly one lifecycle notification may be in flight platform-wide: the
+/// marker makes the detached-notify window's serialization explicit (a
+/// distinct event raised while one is in flight is STASHED by notify()'s
+/// WindowOpen path and delivered after -- never dropped, never interleaved).
+/// RAII restore-on-drop makes a panicking callback unable to leave a stale
+/// marker, and the guard restores the PREVIOUS value rather than clearing,
+/// so it cannot erase a marker it does not own (single-flight: previous is
+/// None at construction, but the code is correct by construction).
+static NOTIFYING_LIFECYCLE: Mutex<Option<PendingLifecycle>> = Mutex::new(None);
 
-/// RAII marker for `notify_lifecycle` (R12-F3/R13-F3): restores on drop, so
-/// a panicking bridge callback cannot leave a stale marker behind.
-struct LifecycleNotifyGuard;
+/// RAII marker for `notify_lifecycle` (R12-F3/R14-F2): atomically checked
+/// and set under ONE lock acquisition in `notify_lifecycle`; restores the
+/// previous marker value on drop (unwind-safe, no cross-owner erase).
+struct LifecycleNotifyGuard(Option<PendingLifecycle>);
 
-/// RAII holder for the non-reentrant drain budget (R13-F1): releases on
-/// drop, so a panic inside a drained delivery cannot leak the budget and
-/// permanently lock out all future drains.
+/// RAII holder for the non-reentrant drain budget (R13-F1/R14-F1):
+/// acquisition is the CAS itself (0 -> 1) and only the acquired owner is
+/// constructed, so the release-on-drop can never clear another owner's
+/// budget and a panic inside a drained delivery cannot leak it.
 struct DrainBudgetGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl DrainBudgetGuard<'_> {
+    fn acquire(budget: &std::sync::atomic::AtomicUsize) -> Option<DrainBudgetGuard<'_>> {
+        budget
+            .compare_exchange(
+                0,
+                1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| DrainBudgetGuard(budget))
+    }
+}
 
 impl Drop for DrainBudgetGuard<'_> {
     fn drop(&mut self) {
@@ -2521,7 +2559,7 @@ impl Drop for DrainBudgetGuard<'_> {
 
 impl Drop for LifecycleNotifyGuard {
     fn drop(&mut self) {
-        *NOTIFYING_LIFECYCLE.lock() = None;
+        *NOTIFYING_LIFECYCLE.lock() = self.0.take();
     }
 }
 
