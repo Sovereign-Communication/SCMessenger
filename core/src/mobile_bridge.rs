@@ -2054,20 +2054,23 @@ impl MeshService {
     /// WindowOpen, which stashes here -- a same-event stash is a no-op
     /// re-write of the value already pending (latest-wins coalescing).
     fn notify(&self, event: PendingLifecycle) {
-        // R12: same-event echo suppression. The thread-local marker says a
-        // delivery of exactly this event is in flight on this thread; the
-        // re-entry is a pure re-derivation of it (the AndroidPlatformBridge
-        // echo), so neither dispatch nor stash -- otherwise the drain would
-        // redeliver forever (the 17-count regression this round caught).
-        // R14-F3 (refute-with-contract): suppression fires ONLY when the
-        // in-flight delivery is of this EXACT event. That duplicate is
-        // idempotent under latest-wins (the in-flight delivery already
-        // carries this state to the platform), so nothing is lost. A
-        // distinct repeat -- including the Background -> Foreground ->
-        // Background sequence -- does NOT match the marker and is stashed
-        // via the WindowOpen path below, then delivered exactly once
-        // (proven by distinct_lifecycle_event_during_window_is_coalesced).
-        if NOTIFYING_LIFECYCLE.lock().as_ref() == Some(&event) {
+        // R12: same-event echo suppression, correlated by R15-F1/F2.
+        // Suppression fires ONLY for a synchronous echo: the SAME variant
+        // re-entering on the SAME thread that dispatched the in-flight
+        // delivery (the platform callback invoked by it). That duplicate is
+        // a pure re-derivation -- idempotent under latest-wins -- so neither
+        // dispatch nor stash (else the drain redelivers forever; the
+        // 17-count regression). EVERYTHING else -- including an external
+        // same-variant event from another thread (R15-F1 scenario) or the
+        // Background -> Foreground -> Background sequence -- fails the
+        // correlation check and is stashed via the WindowOpen path, then
+        // delivered exactly once (proven by
+        // external_same_variant_event_from_another_thread_is_not_lost and
+        // distinct_lifecycle_event_during_window_is_coalesced).
+        let is_echo = NOTIFYING_LIFECYCLE.lock().as_ref().is_some_and(|m| {
+            m.event == event && m.dispatching_thread == std::thread::current().id()
+        });
+        if is_echo {
             return;
         }
         if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
@@ -2075,14 +2078,14 @@ impl MeshService {
         }
     }
 
-    /// Notify one lifecycle event with the same-event echo marker set, so a
-    /// re-entrant call for the SAME event terminates instead of looping
-    /// (R11-4); distinct events coalesce into `pending_lifecycle`.
+    /// Notify one lifecycle event with the single-flight marker set, so a
+    /// re-entrant call while a delivery is in flight is stashed via
+    /// notify()'s WindowOpen path instead of deadlocking or interleaving
+    /// (R11-4, R14-F4).
     ///
-    /// R12-F3/R13-F3: the marker is a global (event, thread) pair with RAII
-    /// stack discipline -- restored on drop (unwind-safe) and recognised on
-    /// ANY thread the bridge callback re-enters from. Clearing-on-return was
-    /// the R11 drain-loop defect; restore-on-drop is the fix.
+    /// R15-F1/F2: the marker records (event, dispatching thread) with RAII
+    /// stack discipline -- restored on drop (unwind-safe, no cross-owner
+    /// erase). notify() correlates echoes on the dispatching thread only.
     fn notify_lifecycle(&self, event: PendingLifecycle) -> BridgeDispatch {
         // R14-F2: check-and-set is ONE lock critical section (no TOCTOU),
         // and the guard restores the previous value rather than clearing.
@@ -2093,7 +2096,10 @@ impl MeshService {
                 // stashes via notify()'s WindowOpen path.
                 return BridgeDispatch::WindowOpen;
             }
-            marker.replace(event)
+            marker.replace(MarkerEntry {
+                event,
+                dispatching_thread: std::thread::current().id(),
+            })
         };
         let _marker = LifecycleNotifyGuard(previous);
         let outcome = match event {
@@ -2129,11 +2135,13 @@ impl MeshService {
     ///   recheck loop itself is bounded by the same cap.
     /// - Cap exit leaves anything still pending stashed for the next
     ///   drain: a single-slot latest-wins queue cannot grow, so this
-    ///   defers rather than accumulates (R13-F5/R14-F5 contract). The
-    ///   "next drain" is GUARANTEED: every window-opening entry point
-    ///   (pause/resume/update_device_state) runs this drain as its tail
-    ///   after the dispatch returns -- i.e. after the window has closed --
-    ///   so a window close is always followed by a drain.
+    ///   defers rather than accumulates (R13-F5/R14-F5/R15-F3 contract).
+    ///   The "next drain" is GUARANTEED by these exact call sites, all in
+    ///   this file: `MeshService::pause` (tail), `MeshService::resume`
+    ///   (tail), and `MeshService::update_device_state` (tail after the
+    ///   dispatch returns, i.e. after the window has closed) -- the three
+    ///   functions that open notify windows. A window close is therefore
+    ///   always followed by a drain call on the closing thread.
     fn drain_to_fixed_point(&self) {
         use std::sync::atomic::Ordering;
         // R14-F1: acquisition IS the CAS; a nested/concurrent drain (budget
@@ -2515,21 +2523,29 @@ impl Drop for RestoreBridgeGuard {
     }
 }
 
-/// R13-F3/R14-F2/F4: GLOBAL single-flight marker for lifecycle delivery.
-/// Exactly one lifecycle notification may be in flight platform-wide: the
-/// marker makes the detached-notify window's serialization explicit (a
-/// distinct event raised while one is in flight is STASHED by notify()'s
-/// WindowOpen path and delivered after -- never dropped, never interleaved).
-/// RAII restore-on-drop makes a panicking callback unable to leave a stale
-/// marker, and the guard restores the PREVIOUS value rather than clearing,
-/// so it cannot erase a marker it does not own (single-flight: previous is
-/// None at construction, but the code is correct by construction).
-static NOTIFYING_LIFECYCLE: Mutex<Option<PendingLifecycle>> = Mutex::new(None);
+/// R15-F1/F2: one lifecycle notification in flight platform-wide, recorded
+/// as (event, dispatching thread). The dispatching thread IS the echo
+/// correlation: the only code that can observe the marker while it is held
+/// and re-enter with the SAME variant on the SAME thread is the platform
+/// callback invoked by that dispatch (synchronous re-entry), because the
+/// dispatch holds the detached-notify window open on that thread. Any
+/// other origin -- an external platform event on a different thread, the
+/// drain, another caller -- has a different thread id and is therefore
+/// STASHED via notify()'s WindowOpen path and delivered after the window
+/// closes: latest-wins is never violated (R15-F1 scenario fixed).
+static NOTIFYING_LIFECYCLE: Mutex<Option<MarkerEntry>> = Mutex::new(None);
+
+/// In-flight lifecycle marker entry (R15-F1/F2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MarkerEntry {
+    event: PendingLifecycle,
+    dispatching_thread: std::thread::ThreadId,
+}
 
 /// RAII marker for `notify_lifecycle` (R12-F3/R14-F2): atomically checked
 /// and set under ONE lock acquisition in `notify_lifecycle`; restores the
-/// previous marker value on drop (unwind-safe, no cross-owner erase).
-struct LifecycleNotifyGuard(Option<PendingLifecycle>);
+/// previous marker entry on drop (unwind-safe, no cross-owner erase).
+struct LifecycleNotifyGuard(Option<MarkerEntry>);
 
 /// RAII holder for the non-reentrant drain budget (R13-F1/R14-F1):
 /// acquisition is the CAS itself (0 -> 1) and only the acquired owner is
@@ -4913,6 +4929,16 @@ mod tests {
         ]
     }
 
+    /// The lifecycle single-flight marker is a process-wide global, and
+    /// cargo runs tests in parallel threads. Every test below that drives
+    /// pause/resume/update_device_state through an installed bridge holds
+    /// this lock for its duration so one test's in-flight window (the R15
+    /// blocking-echo test can hold it for seconds) cannot make another
+    /// test's delivery observe a foreign marker and stash-cap instead of
+    /// dispatch. Production code is unaffected: single-flight is exactly
+    /// the platform-wide contract being tested.
+    static BRIDGE_TEST_SERIAL: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     /// Regression (RCA 2026-09-06, Android ANR): a platform callback that
     /// re-enters `MeshService` synchronously must not self-deadlock on the
     /// non-reentrant `platform_bridge` mutex. The notify sites detach the
@@ -4920,6 +4946,7 @@ mod tests {
     /// returns; the bridge is restored afterwards.
     #[test]
     fn pause_reentrant_platform_callback_does_not_deadlock() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
@@ -4949,6 +4976,7 @@ mod tests {
     /// window must WIN over the restore -- the bridge stays dropped.
     #[test]
     fn set_none_during_detached_window_wins() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
@@ -4982,6 +5010,7 @@ mod tests {
     /// bridge exactly once.
     #[test]
     fn set_some_during_detached_window_wins() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
@@ -5016,6 +5045,7 @@ mod tests {
     /// no-op (budget guard) and the outer loop delivers the follow-up.
     #[test]
     fn reentrant_restash_during_drain_is_bounded_and_delivered() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         use std::sync::atomic::{AtomicUsize, Ordering};
         struct RestashBridge {
             service: std::sync::Weak<MeshService>,
@@ -5150,6 +5180,174 @@ mod tests {
         assert!(service.pending_lifecycle.lock().is_none());
     }
 
+    /// R15-F1: an external SAME-VARIANT lifecycle event arriving from a
+    /// DIFFERENT thread while that variant's delivery is in flight must be
+    /// STASHED and delivered (latest-wins), never suppressed by variant
+    /// equality. Pre-fix, `notify` matched the marker on event alone and
+    /// silently dropped it (obsolete state delivered).
+    #[test]
+    fn external_same_variant_event_from_another_thread_is_not_lost() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::mpsc;
+        use std::sync::Arc as StdArc;
+        struct BlockingEchoBridge {
+            service: std::sync::Weak<MeshService>,
+            callbacks: std::sync::atomic::AtomicUsize,
+            in_flight_tx: parking_lot::Mutex<mpsc::Sender<()>>,
+            release_rx: parking_lot::Mutex<mpsc::Receiver<()>>,
+        }
+        impl PlatformBridge for BlockingEchoBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self
+                    .callbacks
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // Hold the window open; the test drives an external
+                    // pause() from another thread meanwhile.
+                    self.in_flight_tx.lock().send(()).expect("test channel");
+                    self.release_rx
+                        .lock()
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("test released the in-flight callback");
+                }
+                // Synchronous same-thread echo (suppressed, must not loop).
+                if let Some(s) = self.service.upgrade() {
+                    s.pause();
+                }
+            }
+            fn on_entering_foreground(&self) {}
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct BlockingEchoHandle(StdArc<BlockingEchoBridge>);
+        impl PlatformBridge for BlockingEchoHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = StdArc::new(MeshService::new(test_mesh_service_config()));
+        let (in_tx, in_rx) = mpsc::channel();
+        let (rel_tx, rel_rx) = mpsc::channel();
+        let bridge = StdArc::new(BlockingEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            in_flight_tx: parking_lot::Mutex::new(in_tx),
+            release_rx: parking_lot::Mutex::new(rel_rx),
+        });
+        service.set_platform_bridge(Some(Box::new(BlockingEchoHandle(bridge.clone()))));
+
+        // Main thread: pause() -> dispatch -> callback blocks in-flight.
+        let main = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        in_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("callback signalled in-flight");
+
+        // External SAME-VARIANT (Background) event from ANOTHER thread while
+        // the main thread's Background delivery is in flight. Pre-R15 fix:
+        // suppressed by variant equality and lost. Post-fix: stashed.
+        let ext = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        ext.join().expect("external pause joins");
+        rel_tx.send(()).expect("release the in-flight callback");
+        main.join().expect("main pause joins");
+
+        // The stashed external Background is delivered exactly once more by
+        // the closing thread's drain tail (2 total); nothing left pending.
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "external same-variant event must be delivered, not dropped"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
     /// R10-F5: an echoed profile identical to the one just applied must be
     /// ignored, not stashed-and-replayed forever.
     #[test]
@@ -5185,6 +5383,7 @@ mod tests {
     /// re-delivering it is the R10-F5 recursion hazard.
     #[test]
     fn nested_same_event_echo_is_suppressed_not_redelivered() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
@@ -5213,6 +5412,7 @@ mod tests {
     /// window closes -- neither dropped nor recursed into.
     #[test]
     fn distinct_lifecycle_event_during_window_is_coalesced() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
         let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
         let bridge = std::sync::Arc::new(ReentrantEchoBridge {
             service: std::sync::Arc::downgrade(&service),
