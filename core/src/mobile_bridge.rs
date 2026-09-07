@@ -184,8 +184,10 @@ pub struct MeshService {
     /// update is never silently dropped (R10-F2).
     pending_device_profile: Mutex<Option<DeviceProfile>>,
     /// Lifecycle event coalesced while a notify window was open (R11-4);
-    /// latest event wins, delivered by the next drain.
-    pending_lifecycle: Mutex<Option<PendingLifecycle>>,
+    /// latest event wins, delivered by the next drain. R17-F1: each entry
+    /// records the thread that stashed it -- an echo may overwrite only a
+    /// same-thread stash (see StashedLifecycle).
+    pending_lifecycle: Mutex<Option<StashedLifecycle>>,
     /// Non-reentrant budget for drain_to_fixed_point (R12-F1): 1 = a drain
     /// is already running on this thread; nested calls return immediately
     /// so recursive re-entry cannot multiply the delivery bound.
@@ -2080,13 +2082,31 @@ impl MeshService {
             // until the cap (the 33-count regression this exact commit's
             // first test run caught).
             let mut pending = self.pending_lifecycle.lock();
-            if pending.as_ref().is_some_and(|p| p != &event) {
-                *pending = Some(event);
+            if let Some(stashed) = pending.as_ref() {
+                // R17-F1: an echo may overwrite a stash only when BOTH the
+                // event differs AND the stash belongs to this same thread
+                // (one thread's own real transition sequence, e.g. the
+                // resume();pause() chain -- latest-wins within that thread).
+                // A stash from ANOTHER thread is newer external state; this
+                // echo re-derives the already-in-flight delivery and must
+                // never clobber it (the R17 lost-state cell).
+                if stashed.event != event && stashed.owner == std::thread::current().id() {
+                    *pending = Some(StashedLifecycle {
+                        event,
+                        owner: std::thread::current().id(),
+                    });
+                }
             }
             return;
         }
         if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
-            *self.pending_lifecycle.lock() = Some(event);
+            // R17-F1: record the stashing thread so a later same-thread
+            // echo may overwrite (its thread's own latest-wins sequence)
+            // but a cross-thread echo cannot.
+            *self.pending_lifecycle.lock() = Some(StashedLifecycle {
+                event,
+                owner: std::thread::current().id(),
+            });
         }
     }
 
@@ -2167,7 +2187,7 @@ impl MeshService {
                     break;
                 }
                 let profile = self.pending_device_profile.lock().take();
-                let lifecycle = self.pending_lifecycle.lock().take();
+                let lifecycle = self.pending_lifecycle.lock().take().map(|s| s.event);
                 match (profile, lifecycle) {
                     (None, None) => break,
                     (p, l) => {
@@ -2491,6 +2511,17 @@ enum PendingLifecycle {
     Foreground,
 }
 
+/// R17-F1: a stashed lifecycle event plus the thread that stashed it. The
+/// owner closes the R17 lost-state cell: a same-thread echo may overwrite
+/// (one thread's own transition sequence is a real latest-wins chain); a
+/// cross-thread echo never may -- the stash is newer external state, the
+/// echo re-derives the already-in-flight delivery.
+#[derive(Debug, Clone, Copy)]
+struct StashedLifecycle {
+    event: PendingLifecycle,
+    owner: std::thread::ThreadId,
+}
+
 /// Drain bounds: a pathological bridge that re-stashes events during its own
 /// notification is terminated after this many deliveries (R11-3).
 /// R12-F1/F5: the shared fixed-point round cap for `drain_to_fixed_point`.
@@ -2558,6 +2589,16 @@ impl Drop for RestoreBridgeGuard {
 /// process (production instantiates a single bridge service; the test
 /// suite serializes multi-instance access via BRIDGE_TEST_SERIAL). The
 /// process-wide marker is therefore unambiguous.
+///
+/// R17-F2 (drain-span contract): the marker is held across the ENTIRE
+/// take-and-dispatch of a drain delivery -- notify() sets it before the
+/// queue item is consumed by the callback and drops it only after the
+/// dispatch closure returns -- so no external caller can observe a marker
+/// gap between "stash taken" and "dispatch in flight". An external event
+/// arriving during a drain delivery therefore hits the held marker (not
+/// an empty state), fails the same-thread correlation, and is stashed for
+/// the next drain round; `pending == None` inside a dispatch callback is
+/// thus always the pure-echo case the suppression relies on.
 static NOTIFYING_LIFECYCLE: Mutex<Option<MarkerEntry>> = Mutex::new(None);
 
 /// In-flight lifecycle marker entry (R15-F1/F2).
@@ -5511,6 +5552,191 @@ mod tests {
             bridge.background_callbacks.load(Ordering::SeqCst),
             2,
             "final same-variant transition must overwrite the stale stash"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R17-F1/F3: a stash made by ANOTHER thread (external event) must NOT
+    /// be overwritten by the dispatching thread's same-variant echo.
+    /// Sequence: T1's Background delivery is in flight (callback blocked);
+    /// T2 externally resumes (stashes Foreground, owned by T2); T1's
+    /// callback then echoes pause() -- pre-fix that echo overwrote T2's
+    /// newer stash (Foreground lost, obsolete Background delivered).
+    #[test]
+    fn cross_thread_stash_survives_same_thread_echo() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        use std::sync::Arc as StdArc;
+        struct CrossThreadEchoBridge {
+            service: std::sync::Weak<MeshService>,
+            background_callbacks: AtomicUsize,
+            foreground_callbacks: AtomicUsize,
+            in_flight_tx: parking_lot::Mutex<mpsc::Sender<()>>,
+            release_rx: parking_lot::Mutex<Option<mpsc::Receiver<()>>>,
+        }
+        impl PlatformBridge for CrossThreadEchoBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self.background_callbacks.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // Hold the window open; the test stashes an external
+                    // Foreground from another thread meanwhile.
+                    self.in_flight_tx.lock().send(()).expect("test channel");
+                    let release_rx = self
+                        .release_rx
+                        .lock()
+                        .take()
+                        .expect("release receiver available once");
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("test released the in-flight callback");
+                    // Same-thread echo of the in-flight variant AFTER the
+                    // cross-thread stash exists. Pre-R17: overwrote it.
+                    if let Some(s) = self.service.upgrade() {
+                        s.pause();
+                    }
+                }
+            }
+            fn on_entering_foreground(&self) {
+                self.foreground_callbacks.fetch_add(1, Ordering::SeqCst);
+            }
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct CrossThreadEchoHandle(StdArc<CrossThreadEchoBridge>);
+        impl PlatformBridge for CrossThreadEchoHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = StdArc::new(MeshService::new(test_mesh_service_config()));
+        let (in_tx, in_rx) = mpsc::channel();
+        let (rel_tx, rel_rx) = mpsc::channel();
+        let bridge = StdArc::new(CrossThreadEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            background_callbacks: AtomicUsize::new(0),
+            foreground_callbacks: AtomicUsize::new(0),
+            in_flight_tx: parking_lot::Mutex::new(in_tx),
+            release_rx: parking_lot::Mutex::new(Some(rel_rx)),
+        });
+        service.set_platform_bridge(Some(Box::new(CrossThreadEchoHandle(bridge.clone()))));
+
+        // T1: pause() -> dispatch -> callback blocks in-flight.
+        let main = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        in_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("callback signalled in-flight");
+
+        // T2: external Foreground (resume) while T1's Background is in
+        // flight -> stashed, owned by T2.
+        let ext = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.resume();
+            })
+        };
+        ext.join().expect("external resume joins");
+
+        // Release T1's callback: it echoes pause() on the dispatching
+        // thread. Pre-fix this overwrote T2's Foreground stash.
+        rel_tx.send(()).expect("release the in-flight callback");
+        main.join().expect("main pause joins");
+
+        // Exactly one Background (T1's original; the echo suppressed) and
+        // exactly one Foreground (T2's stash, delivered by the drain) --
+        // nothing lost, nothing duplicated.
+        assert_eq!(
+            bridge.background_callbacks.load(Ordering::SeqCst),
+            1,
+            "the dispatching thread's echo must not add a delivery"
+        );
+        assert_eq!(
+            bridge.foreground_callbacks.load(Ordering::SeqCst),
+            1,
+            "the cross-thread stash must survive the same-thread echo"
         );
         assert!(service.pending_lifecycle.lock().is_none());
     }
