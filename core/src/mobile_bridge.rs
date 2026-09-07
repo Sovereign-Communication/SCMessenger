@@ -2071,6 +2071,18 @@ impl MeshService {
             m.event == event && m.dispatching_thread == std::thread::current().id()
         });
         if is_echo {
+            // R16-F1: stash-aware suppression (see comment block above).
+            // Overwrite ONLY when a DIFFERENT event is stashed (an
+            // intervening distinct transition made this call a later real
+            // state). pending == None means the pure echo of the in-flight
+            // delivery -- including a drain delivery, whose queue it just
+            // consumed -- and must be suppressed, else the drain redelivers
+            // until the cap (the 33-count regression this exact commit's
+            // first test run caught).
+            let mut pending = self.pending_lifecycle.lock();
+            if pending.as_ref().is_some_and(|p| p != &event) {
+                *pending = Some(event);
+            }
             return;
         }
         if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
@@ -2533,6 +2545,19 @@ impl Drop for RestoreBridgeGuard {
 /// drain, another caller -- has a different thread id and is therefore
 /// STASHED via notify()'s WindowOpen path and delivered after the window
 /// closes: latest-wins is never violated (R15-F1 scenario fixed).
+///
+/// R16-F2 (dispatch contract): UniFFI synchronous callback re-entry
+/// executes ON the dispatching Rust thread (verified in the 2026-09-06 ANR
+/// stacks: the main thread deadlocked with itself through the synchronous
+/// up-call). If a future platform marshals callbacks to a different
+/// thread, the correlation degrades safely: echoes are no longer matched,
+/// so each re-entry is stashed and delivered once -- bounded extra
+/// deliveries, never a lost state.
+///
+/// R16-F3 (instance contract): exactly one MeshService is ACTIVE per
+/// process (production instantiates a single bridge service; the test
+/// suite serializes multi-instance access via BRIDGE_TEST_SERIAL). The
+/// process-wide marker is therefore unambiguous.
 static NOTIFYING_LIFECYCLE: Mutex<Option<MarkerEntry>> = Mutex::new(None);
 
 /// In-flight lifecycle marker entry (R15-F1/F2).
@@ -5194,7 +5219,7 @@ mod tests {
             service: std::sync::Weak<MeshService>,
             callbacks: std::sync::atomic::AtomicUsize,
             in_flight_tx: parking_lot::Mutex<mpsc::Sender<()>>,
-            release_rx: parking_lot::Mutex<mpsc::Receiver<()>>,
+            release_rx: parking_lot::Mutex<Option<mpsc::Receiver<()>>>,
         }
         impl PlatformBridge for BlockingEchoBridge {
             fn on_battery_changed(&self, _b: u8, _c: bool) {}
@@ -5209,8 +5234,14 @@ mod tests {
                     // Hold the window open; the test drives an external
                     // pause() from another thread meanwhile.
                     self.in_flight_tx.lock().send(()).expect("test channel");
-                    self.release_rx
+                    // R16-F4: receiver TAKEN out so no lock is held across
+                    // the blocking wait.
+                    let release_rx = self
+                        .release_rx
                         .lock()
+                        .take()
+                        .expect("release receiver available once");
+                    release_rx
                         .recv_timeout(std::time::Duration::from_secs(10))
                         .expect("test released the in-flight callback");
                 }
@@ -5310,7 +5341,7 @@ mod tests {
             service: std::sync::Arc::downgrade(&service),
             callbacks: std::sync::atomic::AtomicUsize::new(0),
             in_flight_tx: parking_lot::Mutex::new(in_tx),
-            release_rx: parking_lot::Mutex::new(rel_rx),
+            release_rx: parking_lot::Mutex::new(Some(rel_rx)),
         });
         service.set_platform_bridge(Some(Box::new(BlockingEchoHandle(bridge.clone()))));
 
@@ -5344,6 +5375,142 @@ mod tests {
             bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "external same-variant event must be delivered, not dropped"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R16-F1: a same-thread callback that performs resume() then pause()
+    /// between the outer pause()'s dispatch is NOT a pure echo: the final
+    /// pause is a LATER real transition and must overwrite the stashed
+    /// Foreground (latest-wins). Pre-fix the final pause matched the marker
+    /// on (event, thread) alone, was dropped, and the drain delivered the
+    /// obsolete Foreground.
+    #[test]
+    fn same_thread_echo_after_intervening_stash_keeps_latest_state() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct ChainBridge {
+            service: std::sync::Weak<MeshService>,
+            background_callbacks: AtomicUsize,
+        }
+        impl PlatformBridge for ChainBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self.background_callbacks.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // Same-thread re-entry chain: resume() stashes a distinct
+                    // Foreground; pause() then matches the marker (same
+                    // variant, same thread) and -- post-fix -- OVERWRITES the
+                    // stash instead of being dropped.
+                    if let Some(s) = self.service.upgrade() {
+                        s.resume();
+                        s.pause();
+                    }
+                }
+            }
+            fn on_entering_foreground(&self) {}
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct ChainHandle(std::sync::Arc<ChainBridge>);
+        impl PlatformBridge for ChainHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ChainBridge {
+            service: std::sync::Arc::downgrade(&service),
+            background_callbacks: AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(ChainHandle(bridge.clone()))));
+
+        service.pause();
+
+        // Background delivered twice (outer + the chain's final pause as the
+        // newest state); the interim Foreground stash was overwritten, so it
+        // is never delivered. Latest-wins holds.
+        assert_eq!(
+            bridge.background_callbacks.load(Ordering::SeqCst),
+            2,
+            "final same-variant transition must overwrite the stale stash"
         );
         assert!(service.pending_lifecycle.lock().is_none());
     }
