@@ -76,6 +76,12 @@ use crate::IronCoreError;
 // - `transport` — Wired as `transport_manager` field.
 // - `relay` — Wired as `bootstrap_manager` field.
 //
+// State ownership rule: IronCore owns subsystem lifetimes and cross-subsystem
+// wiring; each subsystem owns its internal mutable state. Bridges and UI layers
+// issue commands and consume snapshots, but never duplicate core state.
+// Data flows inward through IronCore APIs and outward through immutable return
+// values or delegate events.
+//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Delegate trait for protocol events that consumers (like MeshService) implement

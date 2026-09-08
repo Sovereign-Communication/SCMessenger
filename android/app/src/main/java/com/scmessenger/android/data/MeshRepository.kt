@@ -3170,6 +3170,9 @@ open class MeshRepository(
             return
         }
 
+        // Ensure recovery and rescan have a manager before component wiring.
+        ensureTransportManager()
+
         // BLE GATT Client: must exist before scanner callbacks to avoid missing first identity reads.
         if (bleGattClient == null) {
             bleGattClient = com.scmessenger.android.transport.ble.BleGattClient(
@@ -6566,13 +6569,19 @@ open class MeshRepository(
     fun triggerTransportRescan() {
         repoScope.launch {
             try {
-                // Restart BLE scanning
+                initializeAndStartBle()
                 transportManager?.let { tm ->
                     tm.stopAll()
                     delay(200)
-                    tm.startAll()
+                    val settings = loadSettings()
+                    tm.initialize(
+                        bleEnabled = settings.bleEnabled,
+                        wifiAwareEnabled = settings.wifiAwareEnabled,
+                        wifiDirectEnabled = settings.wifiDirectEnabled
+                    )
+                    tm.startAll(enableMdns = settings.internetEnabled)
                 }
-                Timber.d("triggerTransportRescan: BLE + WiFi restarted")
+                Timber.d("triggerTransportRescan: repository BLE + manager transports restarted")
             } catch (e: Exception) {
                 Timber.w(e, "triggerTransportRescan failed")
             }

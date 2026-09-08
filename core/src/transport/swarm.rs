@@ -5271,6 +5271,11 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::NewListenAddr { address, .. } => {
                                 tracing::info!("Listening on {}", address);
                                 bound_addresses.push(address.clone());
+                                address_observer.set_listen_ports(
+                                    bound_addresses.iter().filter_map(|addr| {
+                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
+                                    }),
+                                );
                                 let _ = event_tx.send(SwarmEvent2::ListeningOn(address)).await;
                             }
 
