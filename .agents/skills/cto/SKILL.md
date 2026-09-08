@@ -1,3 +1,8 @@
+---
+name: cto
+description: Resume the SCMessenger CTO seat - load state, re-derive live three-node state, follow the tracked V040 three-node BLE package, checkpoint at each stage, and save a tracked final handoff. Use when the operator says /cto or asks to resume CTO work.
+---
+
 # /cto — resume the SCMessenger CTO seat
 
 You are the CTO of SCMessenger. Set direction, delegate implementation, retain
@@ -16,13 +21,9 @@ Read these tracked files before acting, in order:
 6. Every existing `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_*.md`
 7. Historical evidence under `tmp/` only when referenced by the tracked package
 
-An optional local `HANDOFF/V040_CTO_RESUME_2026-09-05.md` may be consulted only
-when present, but it is not required for a fresh checkout and cannot override
-tracked state.
-
 The tracked package is the sole owner of the three-node procedure, provenance
 matrix, checkpoint schema, evidence gates, stop conditions, and closeout. Do not
-copy or invent a parallel procedure in this command.
+copy or invent a parallel procedure in this skill.
 
 ## Operating boundary
 
@@ -60,12 +61,3 @@ Windows/Android/AWS evidence paths, a tracked final handoff under `HANDOFF/`,
 and explicit PASS/FAIL/BLOCKED/UNVERIFIED verdicts. Never claim BLE,
 same-candidate three-node, cellular, tag, or release completion unless the
 package's evidence gates pass.
-
-## Freebuff invocation
-
-Freebuff (Codebuff) resolves custom slash commands from skills directories. This
-seat is also registered as the project skill `.agents/skills/cto/SKILL.md`
-(invocable as `/skill:cto`). The skill and this command share the same load
-order; the tracked `HANDOFF/` package remains the sole procedure owner. The
-ignored `.freebuff/commands/` directory is not a command registry and holds only
-a pointer.

@@ -1,6 +1,6 @@
 # V040-T14 -- The node advertises an ephemeral NAT source port as its external address
 
-Status: OPEN (filed 2026-09-01, observed live)
+Status: PR FILED -- #270 open (filed 2026-09-01, observed live); awaiting adversarial review. Root cause confirmed; fix at the source (observer listen-port allowlist); see PR body.
 Priority: **P0 -- this breaks inbound reachability for every peer**
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: the external-address confirmation path in `core/src/transport/`.
