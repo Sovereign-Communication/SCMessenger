@@ -38,25 +38,25 @@ Mission: V040 three-node BLE certification (AWS + Windows CLI + Pixel 6a).
 
 ## CEO session log
 
-- 2026-09-08 ~12:10-12:45Z: Operator ordered the 125-file uncommitted tree
-  committed before anything else. Executed in two commits on this branch
-  (local only): `c5f51134` (124 files: V040 package/template/architecture,
-  /ceo + /cto skills, /drive command, the blocked 120957Z preflight checkpoint
-  + final handoff, Freebuff inbox/queue/review dispatches, beach-join plan,
-  APK output-metadata, EVIDENCE-3NODE, pr251.diff) and `5275e41d` (freebuff
-  README continuation pointer, T10/T14/T8 ticket statuses, Qwen quota ledger
-  2026-09-04 refresh). EXCLUDED by design, left untracked: node-storage
-  backups `.codebuff_deploy/windows/backup-*` (contain relay_network_key.pb,
-  runtime custody data, 97 MB) and the live mesh-driver captures
-  `scratch/driver/` (inbox events, outbox, state, watcher). Reviewed and
-  deliberately deferred: the 8-file code group (Android BLE-stack ownership
-  fix in TransportManager/MeshRepository, AddressObserver listen-port
-  allowlist wired at swarm.rs:5274 = T14 mitigation, routing deterministic
-  ordering + dead-field cleanup) -- cargo was mid-build on the host so the
-  `cargo test -p scmessenger-core` gate for that group has NOT run yet; commit
-  follows when the build finishes. Repo state before commits: 25 ahead of
-  main, upstream origin/cto/t2-disk-ruling-2026-08-31 gone; branch stays
-  local per AGENTS rule 5 (Freebuff lane has no push authority).
+- 2026-09-08 ~12:10-13:05Z: Operator ordered the 125-file uncommitted tree
+  committed before anything else. Executed in FIVE commits on this branch
+  (local only, upstream gone; AGENTS rule 5 bars Freebuff-lane push):
+  `c5f51134` (124 files: V040 package/template/architecture, /ceo + /cto
+  skills, /drive command, the blocked 120957Z preflight checkpoint + final
+  handoff, Freebuff inbox/queue/review dispatches, beach-join plan, APK
+  output-metadata, EVIDENCE-3NODE, pr251.diff), `5275e41d` (freebuff README
+  continuation pointer + quota ledger), `6b5818ba` (this state file),
+  `0a33c009` (the 8-file code group AFTER its gates ran: cargo test
+  observation:: 5/5, routing::local:: 13/13, cargo check -p scmessenger-cli
+  clean, :app:compileDebugKotlin exit 0), `8be5f19d` (AWS cutover scripts,
+  secret-free; CTO resume + merge log). Branch now 30 ahead of main.
+  EXCLUDED by design, left untracked: node-storage backups
+  `.codebuff_deploy/windows/backup-*` (contain relay_network_key.pb, runtime
+  custody data, 97 MB) and the live mesh-driver captures `scratch/driver/`
+  (inbox events, outbox, state, watcher). Rule-8 note: `0a33c009` touches
+  core/src/transport + routing; per AGENTS rule 8 its adversarial review is
+  NOT on file -- flagged to the operator, T14 review dispatch exists as
+  lane context but the merged-tree review is outstanding.
 - 2026-09-08 ~12:12Z: CTO takeover now EVIDENCED. Audited
   `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260908T120957Z_PREFLIGHT.md`
   against the package schema: three node identities present (AWS
