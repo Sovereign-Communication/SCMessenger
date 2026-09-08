@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-08T12:45Z
+Last updated: 2026-09-08T21:05Z
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -69,6 +69,28 @@ Mission: V040 three-node BLE certification (AWS + Windows CLI + Pixel 6a).
   /version = candidate 85cb4c67); Pixel read PASS (package 0.4.0/vc14, APK
   hash equality). Escalated to operator per package next action: start ONE
   approved candidate Windows CLI, then CTO reruns Phase 0/1 fresh.
+- 2026-09-08 ~21:00Z: Audit of BOTH new NODE_READY checkpoints (171520Z,
+  174811Z) PASSes the package schema: three node identities, artifact SHA256s,
+  explicit verdicts, evidence paths that resolve on disk. Live re-derivation at
+  20:56Z agrees: Windows CLI UP (identity 985a25f9..., /version 85cb4c67,
+  process hash 1a736ac9... == recorded), AWS healthy (exact candidate
+  85cb4c67 full-sha), Pixel attached. Cross-checks: candidate ref resolves to
+  85cb4c67, exact-candidate binary re-hashes to 1a736ac9..., AWS/Windows
+  diagnostics JSONs exist and are unmodified. Verdicts BLOCKED/UNVERIFIED are
+  correctly conservative (Windows LE advertisement success unproven,
+  AWS binary hash uncollected, Pixel provenance by APK-equality only). CTO is
+  ACTIVE at 20:35-20:52Z on Phase 2 evidence: four fresh ADB/logcat captures in
+  tmp/cto/ (BLE_RELAY_COMPARE 204743Z, LOG_PULL 205057Z, FOCUSED 205239Z), all
+  READ-ONLY (no am/input/svc/settings commands), within the ANDROID.md passive-
+  log-collection scope. Fresh logcat: mesh service RUNNING (uptime 14346s),
+  BleAdvertiser advertising, BleGattServer identity beacon 430B, BLE scan
+  active, identity 12D3KooWR9io... stable. Remaining gates: operator must still
+  perform Phase 2 service control through the real app UI (the CTO cannot shell-
+  force it), then Phase 3 isolation / Phase 4 probe. NOTE: fresh logcat shows
+  Pixel failing to dial Windows LAN peer 192.168.0.222:9001/9002 (IO error,
+  10:51:44) -- flagged for CTO attention, does not gate BLE (separate path).
+  Committed the two checkpoints (see git log); tmp/cto evidence stays untracked
+  by design.
 - 2026-09-08: Imported `/cto` as `.agents/skills/cto/SKILL.md` after discovering
   `.freebuff/commands/` is not a Codebuff/Freebuff registry; skills directories
   are. Updated tracked docs that claimed Freebuff could not resolve commands.
