@@ -5,11 +5,21 @@ Last updated: 2026-08-31
 Rules: `docs/rules/FREEBUFF.md` -- read it before adding a task file here.
 Plan this queue executes: `SHIP_PLAN.md` section 6.
 
+## Durable CTO continuation
+
+The tracked `/cto` entry point is `.claude/commands/CTO.md`. Its single-owner
+three-node BLE workflow is `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`,
+with ownership/data flow in `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`.
+Fresh sessions must read those tracked files and create append-only
+`HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_<UTC-BASIC>_<STAGE>.md` files. Files under
+`tmp/` are historical evidence references only. Freebuff is interactive and has
+no headless dispatch mode under the current lane rules, so the operator pastes
+the tracked command/package contents into Freebuff; no ignored `.freebuff/`
+file is authoritative.
+
 This is the unmetered implementation lane. Models: **DeepSeek V4 Flash**, MiMo,
-GLM 5.3 Flash. The `freebuff` CLI has no headless mode, so **the operator is the
-transport**: an agent writes the task file, the operator pastes it into Freebuff
-desktop. Every paste cycle costs operator attention -- a task file that sends the
-model down the wrong path is the expensive failure here.
+GLM 5.3 Flash. The `freebuff` CLI has no headless mode, so **the operator is the transport**: an agent writes the task file, the operator pastes it into Freebuff desktop. Every paste cycle costs operator attention -- a task file that sends the model down the wrong path is the expensive failure here.
+
 
 ```
 queue/   ready to paste, run in the order below
@@ -41,10 +51,23 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 | T14 | `V040_T14_EPHEMERAL_PORT_ADVERTISED_AS_EXTERNAL.md` | **P0.** The node advertises an ephemeral NAT source port as its external address, so peers dial a port where nothing listens. Observed live the moment the seed dial went in | Ahead of T13 rework | **Rule-8** |
 | T13 | `V040_T13_RULE8_FOLLOWUPS_262_263.md` | Rule-8 follow-ups: the `locally_verified` primitive is seeded from a legacy flag that meant the opposite; wire-supplied `last_seen` steers eviction in the now-capped store; the DHT bypasses the disclosure rule entirely | After #262/#263 merge | **Rule-8 again** |
 | T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
+| BJ | `V040_BEACH_JOIN_CONTINUATION_2026-09-05.md` | **Finish current mission first, then execute the beach-join plan** (QR hotspot share -> seed import -> trust wiring). Full audit: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md` | After the in-flight mission (incl. #276/3-node) reports DONE | **Rule-8 mandatory for Phases 2-3** |
 
 T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
 a new IP rejoins the mesh with no human action, and its new address propagates by
 ledger gossip to nodes that never contacted it directly.
+
+### Review dispatches -- qwen free lane (2026-09-01) -- PASTE FIRST, before any implementation task
+
+Five lane PRs are blocked on non-author adversarial reviewers. Three dispatch files
+sit in `queue/`; the operator routes each to the named qwen free model. Paste in
+this order: the F-DHT gate review unblocks the doctrine PR the other audits inherit.
+
+| Dispatch | Model | Quota left | Why |
+|---|---|---|---|
+| `V040_REVIEW_DISPATCH_267_FDHT_QWEN_2026-09-01.md` | qwen3-coder-plus | 118,765 | hardest & rework; one deep pass fits |
+| `V040_REVIEW_DISPATCH_270_EPHEMERAL_QWEN_2026-09-01.md` | qwen-max | 754,647 | P0 transport; deep pass |
+| `V040_REVIEW_DISPATCH_268_269_QWEN_2026-09-01.md` | qwen3.5-plus-2026-02-15 | 1,000,000 | mechanical pair; fresh quota |
 
 ### Order -- RULED 2026-08-31, revised after the lane's clarification
 
@@ -89,6 +112,15 @@ handset + AWS relay -- there is no second phone), and the current order.
 **Order: T12, then T10. Hold T9 until T12 lands. Do not touch #262** -- it is
 awaiting a Rule-8 decision and one rebase at merge time, neither of which is the
 lane's call.
+
+## >> CONTINUATION (2026-09-05): `queue/V040_BEACH_JOIN_CONTINUATION_2026-09-05.md`
+
+Finish the in-flight mission first (report DONE per the inbox contract), then
+execute the beach-join plan Phase 0 -> 1 -> 2 -> 3, one PR per step, no
+self-merge. Design authority: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md`
+(read it whole before coding). Operator rulings: auto-hotspot flow; trust
+(verify_bundle wiring + Rule-8 APPROVE) ships in the same package and blocks
+beach use. Device proofs need the Pixel 6a + a second handset.
 
 ## Never idle -- node availability tiers
 
