@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T01:20Z (CEO: T14/BLE-01 audit + commit; disk-full event)
+Last updated: 2026-09-09T01:45Z (CEO: CTO stopped; RCA + next-run package delivered)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -17,6 +17,26 @@ state, holds the consensus rule, and never bypasses the CTO package's gates.
   against that package; it never runs a parallel procedure.
 - This file owns CEO-seat state only. Update it immediately on any important
   change (section 0-rule), not batched to session end.
+
+## Current state (2026-09-09T01:45Z)
+
+- CTO session STOPPED by the operator. CEO has delivered the prep for the next
+  run: `HANDOFF/V040_3NODE_RCA_2026-09-09.md` (21 issues, per-node, evidence-
+  cited) and `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md` (entry gates E1-E9,
+  fix order, run-shape deltas, lane rules). The next `/cto` session loads the
+  next-run package as its whole brief.
+- Parity status at 01:29Z (fresh commands): Windows `ba474a7a` healthy with T14
+  live (external_addrs == ["147.81.41.188:9001"], 1 peer, outbox 0); AWS healthy
+  at `85cb4c67` (one tree behind, RCA A1); Pixel without the BLE-01 fix (staged
+  APK 2f07ed91, RCA P1). Three different artifact generations = parity NOT yet
+  achieved; E3+E5 close it.
+- Operator actions to unblock the next run: dispatch the rule-8 review (E1),
+  install the staged BLE-01 APK (E5), retire/rename the stopped duplicate
+  `scm-always-on-node` EC2 instance (A3). Everything else is CTO work.
+- Live node: PID 16548 from `target/release/scmessenger-cli.exe` (829efe2c,
+  /version ba474a7a) -- keep running. Rollback note: 1a736ac9 binary reclaimed;
+  d2f75243 artifact + rebuild from pushed 85cb4c67 are the surviving rollback
+  paths (RCA W4).
 
 ## Current state (2026-09-08 ~11:50Z)
 
