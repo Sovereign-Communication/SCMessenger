@@ -5259,8 +5259,21 @@ pub async fn start_swarm_with_config(
                                     None => true,
                                 };
 
+                                // D2 (live 2026-09-09): the application layer (Kotlin delegate
+                                // candidate sets, UI) must never receive loopback or link-local
+                                // listeners a peer advertised from its own multiport binds —
+                                // dialing them resolves into the DIALER's host. The kademlia and
+                                // Rust ledger-ingest paths already filter; this closes the last
+                                // unfiltered consumer.
+                                let discoverable_listen_addrs: Vec<Multiaddr> = info
+                                    .listen_addrs
+                                    .iter()
+                                    .filter(|a| is_discoverable_multiaddr(a))
+                                    .cloned()
+                                    .collect();
+
                                 if should_report {
-                                    reported_peer_info.insert(peer_id, (info.agent_version.clone(), info.listen_addrs.clone()));
+                                    reported_peer_info.insert(peer_id, (info.agent_version.clone(), discoverable_listen_addrs.clone()));
                                     // Emit event for application layer
                                     let public_key_hex = info.public_key.clone().try_into_ed25519().map(|pk| hex::encode(pk.to_bytes())).ok();
                                     // Site-3: flush outbox now that peer identity is confirmed.
@@ -5275,7 +5288,7 @@ pub async fn start_swarm_with_config(
                                         peer_id,
                                         public_key: public_key_hex,
                                         agent_version: info.agent_version.clone(),
-                                        listen_addrs: info.listen_addrs.clone(),
+                                        listen_addrs: discoverable_listen_addrs,
                                         protocols: info.protocols.iter().map(|p| p.to_string()).collect(),
                                     }).await;
                                 }
@@ -5283,7 +5296,27 @@ pub async fn start_swarm_with_config(
 
                             SwarmEvent::NewListenAddr { address, .. } => {
                                 tracing::info!("Listening on {}", address);
-                                bound_addresses.push(address.clone());
+                                // D2 (live 2026-09-09): the multiport sweep binds dual-stack
+                                // wildcards (/ip4/0.0.0.0 + /ip6/::), and every per-interface
+                                // listener address libp2p reports for them — including loopback
+                                // (127.0.0.1, ::1) and link-local (fe80::) — is auto-confirmed
+                                // into the external-address book and advertised via Identify.
+                                // Remote peers then dial those addresses and land on the DIALER's
+                                // own loopback listener (libp2p aborts with "Unexpected peer ID";
+                                // 255 self-dial aborts on the AWS relay in 26h). Keep the startup
+                                // event (mobile await_listener gates on the FIRST NewListenAddr,
+                                // which may legitimately be loopback on an offline device) but
+                                // veto the external confirmation and keep the address out of the
+                                // local bound set that feeds advertisement/ledger bookkeeping.
+                                if is_discoverable_multiaddr(&address) {
+                                    bound_addresses.push(address.clone());
+                                } else {
+                                    tracing::debug!(
+                                        "[D2] Listener not routable for peers, suppressing from advertised set: {}",
+                                        address
+                                    );
+                                    swarm.remove_external_address(&address);
+                                }
                                 address_observer.set_listen_ports(
                                     bound_addresses.iter().filter_map(|addr| {
                                         ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())

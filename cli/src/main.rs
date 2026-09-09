@@ -2112,7 +2112,15 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         event_tx,
         Some(multiport_config),
         relay_bootstrap,
-        None,
+        // A4 fix (live 2026-09-09): the swarm owns the real custody engine, and
+        // with storage_path = None its relay-custody store fell back to a peer-id
+        // default location instead of the node's data dir — so the custody audit
+        // history (relay_custody_audit_*) reset on every redeploy on AWS (the
+        // engine's own store lived in the ephemeral container layer while custody
+        // CONTENT in /data/storage survived). Point it at the same data dir the
+        // CLI's IronCore already uses so the audit trail is persistent like the
+        // custody records themselves.
+        Some(path_to_string(&storage_path)?),
         Some(Arc::downgrade(&core)),
         false,
         Some(discovery_config),
@@ -3516,7 +3524,10 @@ async fn cmd_relay(
         event_tx,
         Some(multiport_config),
         bootstrap_multiaddrs,
-        None,
+        // A4 fix (live 2026-09-09): same as cmd_start - persist the custody
+        // audit trail inside the node's data dir instead of a peer-id default
+        // location that dies with the container on redeploy.
+        Some(path_to_string(&storage_path)?),
         Some(Arc::downgrade(&core)),
         true,
         Some(discovery_config),

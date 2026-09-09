@@ -6307,7 +6307,26 @@ open class MeshRepository(
         ledgerManager?.recordConnection(multiaddr, peerId)
     }
 
-    fun recordConnectionFailure(multiaddr: String) {
+    fun recordConnectionFailure(multiaddr: String, detail: String? = null) {
+        // D3c fix: the ledger failure counter is a near-permanent statistic
+        // (LEDGER_DEAD_FAILURE_THRESHOLD=3 in core excludes the entry from the
+        // proven set forever). Local/epoch-specific conditions are NOT evidence
+        // about the endpoint's health: "Device offline" was recorded against the
+        // cloud relay during WiFi flaps until it fell out of the candidate set
+        // entirely (live 2026-09-09: bootstrap deadlocked with zero candidates
+        // and never dialed the cloud node from cellular). Only endpoint-fault
+        // evidence (refused/timeout/TLS/unreachable-with-route) poisons the
+        // ledger; circuit breaker + metrics still record everything.
+        val localEpochFailure = detail != null && (
+            detail.contains("Device offline") ||
+                detail.contains("No route to host") ||
+                detail.contains("carrier filtering non-standard ports") ||
+                detail.contains("carrier blocking QUIC/UDP")
+            )
+        if (localEpochFailure) {
+            Timber.d("Ledger failure not recorded for %s (local/epoch condition: %s)", multiaddr, detail)
+            return
+        }
         ledgerManager?.recordFailure(multiaddr)
     }
 
@@ -10488,7 +10507,7 @@ open class MeshRepository(
                 Timber.w("Bootstrap dial failed for $addr - $errorDetail")
                 relayCircuitBreaker.recordFailure(addr, errorDetail)
                 networkFailureMetrics.recordFailure(addr, errorDetail, e)
-                recordConnectionFailure(addr)
+                recordConnectionFailure(addr, errorDetail)
             }
         }
 
@@ -10646,7 +10665,7 @@ open class MeshRepository(
                             val detail = classifyBootstrapError(e, addr)
                             relayCircuitBreaker.recordFailure(addr, detail)
                             networkFailureMetrics.recordFailure(addr, detail, e)
-                            recordConnectionFailure(addr)
+                            recordConnectionFailure(addr, detail)
                             Timber.d("Bootstrap race attempt failed for $addr: $detail")
                             BootstrapAttempt.Failure(addr, e.message ?: "unknown")
                         }
@@ -10781,11 +10800,18 @@ open class MeshRepository(
                     Timber.i("Network type changed: %s → %s (flap=%d, cooldown=%dms)",
                         previousType, newType, networkFlapCount, cooldownMs)
 
-                    // Only reset circuits when transitioning TO a healthy network.
+                    // D3d fix: reset circuit breakers on EVERY network-type change,
+                    // not only recovery-to-WiFi. Breaker state describes the OLD
+                    // network epoch; failures observed on WiFi (e.g. "Device offline"
+                    // during a radio flap) must not block candidates in the new epoch.
+                    // Live 2026-09-09: on cellular the racing bootstrap refused every
+                    // candidate with "No candidate addresses available (all
+                    // circuit-breaker-blocked or throttled)" and never dialed the
+                    // cloud node. The breaker still guards within-epoch retry storms.
+                    relayCircuitBreaker.resetAll()
                     val isRecovery = newType == com.scmessenger.android.transport.NetworkType.WIFI ||
                         newType == com.scmessenger.android.transport.NetworkType.ETHERNET
                     if (isRecovery) {
-                        relayCircuitBreaker.resetAll()
                         if (swarmBridge == null) {
                             Timber.i("Network recovered to WiFi/Ethernet and swarm is inactive — attempting recovery restart")
                             repoScope.launch {
