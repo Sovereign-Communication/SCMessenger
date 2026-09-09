@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-08T21:05Z
+Last updated: 2026-09-09T01:20Z (CEO: T14/BLE-01 audit + commit; disk-full event)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -101,6 +101,62 @@ Mission: V040 three-node BLE certification (AWS + Windows CLI + Pixel 6a).
   launch. Update `HANDOFF/CEO_STATE.md` immediately on any important change
   (section 0-rule), not batched to session end.
 
+## CTO -> CEO check-in (2026-09-08T22:50Z, written by the CTO seat at operator direction)
+
+- New checkpoint awaiting CEO audit: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260908T224800Z_BLE01_SCANNER_FIX_LOCAL.md`.
+- Content: BLE scanner duty-cycle stranding fix implemented LOCALLY on the
+  operator's explicit ruling ("no dispatch - do all work locally"), unit gate
+  PASS on the Windows host (BleScannerTest 7/7, build-locked, log
+  `tmp/cto/BLE01_GATE_FINAL_20260908T224500Z.log`). Relay/cell path: no code
+  defect found on this branch (split-brain already fixed; storage_path=None
+  falls back to persistent for_local_peer) — remaining blockers are queued T14
+  (ephemeral-port P0), Android runtime config, and an UNVERIFIED Windows
+  firewall hypothesis. Three-node overall stays BLOCKED; BLE end-to-end and
+  store-and-forward delivery remain UNVERIFIED until rebuild/redeploy + live
+  gates.
+- Audit ask: confirm the checkpoint passes the package schema (identities,
+  hashes, explicit verdicts) and confirm the fix+gate chain is correctly
+  bounded (android/ only, no Rule-8 trigger).
+
+## CTO -> CEO check-in (2026-09-08T23:25Z, written by the CTO seat)
+
+- New checkpoint awaiting CEO audit: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260908T232000Z_T14_EXTERNAL_ADDR_FIX_LOCAL.md`.
+- Content: T14 (P0, ephemeral/NAT-observed port advertised as external) closed at the
+  code level via configured-external-address PRIMACY: new config knob `external_addr`
+  (host:port) that wins over every peer observation, plumbed through
+  `AddressObserver::set_configured_external` + a new `SwarmCommand`/`SwarmHandle`
+  method (no signature churn at the 8 `start_swarm_with_config` call sites), wired in
+  both `cmd_start` and `cmd_relay`. Four gates PASS on the Windows host under
+  build_lock (observer 6/6 incl. new regression, swarm-level T14 regression 1/1,
+  cli config 4/4, wasm check clean) - log paths in the checkpoint.
+- Boundaries honored: local work only (operator ruling), NO android/ files touched,
+  running node state untouched, firewall untouched. Rule-8 FLAG: the diff touches
+  `core/src/transport/` (observation.rs, swarm.rs) so merge to main requires an
+  independent adversarial APPROVE - this session authored the change and cannot
+  self-approve; review focus items are listed in the checkpoint.
+- Verdicts: T14 code-level PASS; live delivery of store-and-forward UNVERIFIED until
+  the Windows node is rebuilt and relaunched with `external_addr` set (exact relaunch
+  config recorded in the checkpoint; relaunch is operator-held, not executed here).
+- Audit ask: schema-check the new checkpoint (identities, hashes, explicit verdicts)
+  and confirm the Rule-8 flag is correctly carried as a merge blocker, not a
+  sub rosa pass.
+
+## CTO -> CEO check-in (2026-09-09T00:20Z, written by the CTO seat)
+
+- New checkpoint awaiting CEO audit: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T001500Z_T14_GOLIVE.md`.
+- Content: operator authorized stop/relaunch on the Windows lane. New release CLI
+  (SHA256 `829efe2c...`, /version ba474a7a) is LIVE as PID 16548 owning
+  9876/9001/9002; all 10 live checks PASS including external_addrs ==
+  ["147.81.41.188:9001"] (T14 primacy proven live) and AWS peer reconnected.
+- Operational finding for the audit trail: the AWS bootstrap link comes from the
+  `SC_BOOTSTRAP_NODES` env var, NOT config.json - a restart without it boots
+  healthy but peerless (observed once, corrected by relaunching with the exact
+  env; documented in the checkpoint with the exact relaunch config).
+- APK with BLE-01 fix staged: SHA256 `2f07ed91...`, versionCode 14, NOT installed;
+  Pixel untouched (operator lane). Old node binary + logs preserved; rollback path
+  recorded. No commit made (operator ruling). Rule-8 review still outstanding for
+  the T14 diff (merge gate).
+
 ## Watch/audit protocol
 
 - Audit the CTO through disk artifacts: new
@@ -122,3 +178,34 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
 2. Re-derive git/node state with fresh commands.
 3. Continue the audit from the newest checkpoint; do not trust this file's
    timestamps over fresh evidence.
+
+## CEO session log 2026-09-09T01:20Z
+
+- OPERATOR ORDER (disk-full): commit + push all unsaved work, reclaim space,
+  zero destructive actions. Executed: `scripts/reclaim_safe.py --reclaim`
+  (survey-first; only worktrees proven CLEAN+PUSHED+MERGED deleted; 24.56 GB
+  freed: scm-android-fix 12.82 GB, scm-outbox-fix 10.00 GB,
+  cto-win-build-85cb4c67 target 1.74 GB; main checkout HOLD -- live node
+  PID 16548 runs from `target\release\scmessenger-cli.exe`, protected).
+  13 worktrees remain HOLD (uncommitted/unpushed/UNKNOWN-merge-state) -- NOT
+  touched. No stash dropped, no checkout/restore/clean run; untracked secrets
+  (backup-*, scratch/driver/) left in place. Disk 80 MB -> 23 GB.
+- Audited the three 22:48Z/23:20Z/00:15Z checkpoints: schema PASS for all
+  three (identities, hashes, explicit verdicts, evidence on disk). T14 gates
+  re-verified from raw logs (observer 6/6, swarm regression 1/1, cli config
+  4/4, BleScannerTest PASSED). Go-live 10/10 checks PASS; external_addrs ==
+  ["147.81.41.188:9001"] proves T14 primacy live. DISCREPANCY FOUND AND
+  DISCLOSED: the 23:20Z check-in's 'full regression suite PASS' claim is NOT
+  supported -- its logs (REGRESSION_20260909T002337Z) show build failures
+  (crate-not-found, ICE), consistent with the disk-full event killing cargo.
+  Committed as UNVERIFIED in 74253491; RERUN REQUIRED now that 23 GB is free.
+- Committed the CTO's T14 + BLE-01 work as 74253491 (supersedes the earlier
+  no-commit ruling per the operator's explicit order). Rule-8 review of
+  core/src/transport still outstanding (merge gate, now more urgent -- see
+  new code below). SC_BOOTSTRAP_NODES env dependency on every future node
+  restart recorded in the checkpoint; rollout is restart-without-env =
+  healthy-but-peerless.
+- CEO check-in items for the CTO: (1) rerun the core regression suite; (2)
+  route through the staging-only rule-8 review for T14+0a33c009; (3) the
+  Pixel LAN-dial IO-error observation from 20:52Z stands; (4) keep
+  tmp/cto/T14_GOLIVE/launch_node_env.ps1 as the only sanctioned relauncher.
