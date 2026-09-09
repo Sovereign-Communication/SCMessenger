@@ -1148,11 +1148,7 @@ impl LedgerManager {
             // Dead-counter demotion first: healthy-but-stale outranks flapping.
             a.failure_count
                 .cmp(&b.failure_count)
-                .then_with(|| {
-                    b.last_seen
-                        .unwrap_or(0)
-                        .cmp(&a.last_seen.unwrap_or(0))
-                })
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
                 .then_with(|| {
                     let a_total = a.success_count as u64 + a.failure_count as u64;
                     let b_total = b.success_count as u64 + b.failure_count as u64;
@@ -1304,11 +1300,7 @@ impl LedgerManager {
         preferred.sort_by(|a, b| {
             a.failure_count
                 .cmp(&b.failure_count)
-                .then_with(|| {
-                    b.last_seen
-                        .unwrap_or(0)
-                        .cmp(&a.last_seen.unwrap_or(0))
-                })
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
         });
         preferred.truncate(limit as usize);
         preferred
@@ -3780,8 +3772,14 @@ mod tests {
         assert!(dialable.iter().any(|e| e.multiaddr == healthy));
         assert!(dialable.iter().any(|e| e.multiaddr == flapping));
         // ...but the healthy one outranks the flapping one.
-        let healthy_pos = dialable.iter().position(|e| e.multiaddr == healthy).unwrap();
-        let flapping_pos = dialable.iter().position(|e| e.multiaddr == flapping).unwrap();
+        let healthy_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
         assert!(
             healthy_pos < flapping_pos,
             "healthy entry must rank above the failure-demoted one"
@@ -3790,8 +3788,14 @@ mod tests {
         let preferred = mgr.get_preferred_relays(5);
         assert!(preferred.iter().any(|e| e.multiaddr == healthy));
         assert!(preferred.iter().any(|e| e.multiaddr == flapping));
-        let healthy_pos = preferred.iter().position(|e| e.multiaddr == healthy).unwrap();
-        let flapping_pos = preferred.iter().position(|e| e.multiaddr == flapping).unwrap();
+        let healthy_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
         assert!(
             healthy_pos < flapping_pos,
             "healthy entry must rank above the failure-demoted one in relays"

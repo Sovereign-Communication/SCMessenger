@@ -1929,11 +1929,7 @@ mod tests {
                 .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
                 .unwrap();
             store
-                .mark_dispatch_failed(
-                    "destination-peer",
-                    &accepted.custody_id,
-                    "no_response",
-                )
+                .mark_dispatch_failed("destination-peer", &accepted.custody_id, "no_response")
                 .unwrap();
         }
         // Guard tripped: the 13th dispatch is refused.
@@ -1959,11 +1955,7 @@ mod tests {
                 .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
                 .expect("attempts 2..=12 must be accepted within the episode");
             store
-                .mark_dispatch_failed(
-                    "destination-peer",
-                    &accepted.custody_id,
-                    "no_response",
-                )
+                .mark_dispatch_failed("destination-peer", &accepted.custody_id, "no_response")
                 .unwrap();
         }
         // Attempt 12 is the last allowed; the 13th must be refused.

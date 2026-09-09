@@ -377,7 +377,10 @@ mod tests {
         assert_eq!(config.external_addr.as_deref(), Some("147.81.41.188:9001"));
         let json = serde_json::to_string(&config).unwrap();
         let restored: Config = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.external_addr.as_deref(), Some("147.81.41.188:9001"));
+        assert_eq!(
+            restored.external_addr.as_deref(),
+            Some("147.81.41.188:9001")
+        );
         assert_eq!(
             config.get("external_addr").as_deref(),
             Some("147.81.41.188:9001")

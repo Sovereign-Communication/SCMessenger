@@ -2137,7 +2137,10 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     if let Some(external) = config.external_addr.as_deref() {
         match external.parse::<std::net::SocketAddr>() {
             Ok(socket) => {
-                if let Err(e) = swarm_handle.set_configured_external_address(Some(socket)).await {
+                if let Err(e) = swarm_handle
+                    .set_configured_external_address(Some(socket))
+                    .await
+                {
                     tracing::warn!("Failed to register configured external address: {}", e);
                 } else {
                     println!("{} External address configured: {}", "[OK]".green(), socket);
@@ -3541,7 +3544,10 @@ async fn cmd_relay(
     if let Some(external) = config.external_addr.as_deref() {
         match external.parse::<std::net::SocketAddr>() {
             Ok(socket) => {
-                if let Err(e) = swarm_handle.set_configured_external_address(Some(socket)).await {
+                if let Err(e) = swarm_handle
+                    .set_configured_external_address(Some(socket))
+                    .await
+                {
                     tracing::warn!("Failed to register configured external address: {}", e);
                 } else {
                     println!("{} External address configured: {}", "[OK]".green(), socket);
