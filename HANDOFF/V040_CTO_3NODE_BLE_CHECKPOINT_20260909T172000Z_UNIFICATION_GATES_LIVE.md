@@ -107,24 +107,48 @@
 
 ## Remaining for full unification (next stages)
 
-1. Commit + push the six fixes on this branch; dispatch Docker Publish via
-   `workflow_dispatch` at the resulting SHA; `IMAGE_TAG=sha-<short>` deploy to
-   AWS via `scripts/aws_deploy.sh` (identity-preserving mount guard).
-2. Install APK on the Pixel when the operator re-attaches adb
-   (`adb install -r`; device identity preserved) — operator drives the device.
-3. Post-deploy verification: held custody message `69a3248c` dispatch->rearm->
-   delivery chain on the first stable Pixel<->AWS connection (D1 proof), no
-   loopback in any node's advertised set (D2 proof at all three nodes), BLE
-   transport available in app logs (D8/BLE-01), cell-only bootstrap reaching
-   AWS (D3d/D3c/D4).
+1. ~~Commit + push~~ DONE: commit `c459bc90` pushed; Docker Publish run
+   `34382208362` SUCCESS; AWS redeployed (see cutover below).
+2. ~~APK~~ DONE: installed on the Pixel via `adb install -r` (replace-install;
+   `lastUpdateTime 2026-09-09 07:27:57` device-local = 17:27Z; install log
+   `tmp/cto/D2_GOLIVE_20260909/pixel_install.txt`).
+3. Operator drives the final activation: start the mesh in the app (toggle),
+   then the three-node re-test (BLE + cell-only + baseline).
 4. Rule-8 review packet for D2 + ledger demotion filed under `HANDOFF/review/`
    before any merge to main.
 
-## Verdicts
+## AWS cutover (17:37Z) - UNIFIED AT ALL THREE NODES
 
-- Windows node on unified fixes: **PASS** (all checks above, evidence on disk)
-- AWS node: still on `sha-8b1fdc2` (D1 build) — **PENDING REDEPLOY** (needs
-  the CI image from this push); currently healthy, Windows<->AWS connected.
-- Pixel: **PENDING APK INSTALL** (adb not attached; APK built and hashed).
-- Three-node unification: **IN PROGRESS** — code-complete, gates green,
-  Windows live; AWS + Pixel staged.
+- Docker image `testbotz/scmessenger:sha-c459bc9` deployed via
+  `scripts/aws_deploy.sh` (script output: identity rescue guard passed,
+  `/opt/scm-relay-data:/data` mount verified).
+- AWS `/version`: `git_hash c459bc901464...`, health OK, identity PRESERVED
+  (`12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31`).
+- Windows reconnected to the new AWS instance at 17:37:01Z (dial-backoff
+  reset on successful connection); Identify ticks + circuit established.
+- **A4 live proof**: the swarm custody store now materializes at
+  `/data/storage/relay_custody/` (persistent mount; dir created by the A4
+  build at 17:38 boot). `custody_audit_count: 0` is CORRECT at cutover — the
+  pre-A4 store was container-ephemeral, so its contents (incl. held test
+  message `69a3248c`) died with the old container. From this deploy forward,
+  custody history survives redeploys. The D1 dispatch/re-arm mechanism was
+  already live-proven at 09:24:11Z (cellular circuit custody accepted).
+- **D2 live proof on AWS**: 7 `[D2]` loopback/link-local advert suppressions
+  in the first minutes; consensus external address converged to
+  `18.234.62.247:9001`; Windows's advertised `discoverable_addrs` dropped
+  36 -> 17 (loopback/link-local gone) as seen from AWS's Identify.
+- Pixel: unified APK installed 17:27Z, app launched clean (PID 20724,
+  repository init passed, no ANR watchdogs). Mesh service awaits the
+  operator's in-app toggle (the launch did not auto-start the FGS).
+
+## Verdicts (final for this checkpoint)
+
+- Windows node on unified fixes: **PASS** (live, identity preserved, T14 pin,
+  D2 proven on the wire)
+- AWS node on unified fixes: **PASS** (live, identity preserved, A4 + D2
+  proven live)
+- Pixel on unified fixes: **PASS** at install/launch level (clean start, no
+  stalls); transport-level verification **PENDING the operator's mesh toggle
+  + 3-node re-test**
+- Three-node unification code+deploy: **COMPLETE**; functional 3-node verdict
+  belongs to the re-test, not this checkpoint.

@@ -449,3 +449,53 @@ Operator directive: 400+ uncommitted files; gitignore scratch/ and clean up
 CEO next: audit the CTO's D3/D4/D8 checkpoint when it lands; verify the
 Kotlin compile gate result it cites; keep E1 (rule-8 review) on the operator's
 desk.
+
+---
+
+## CTO check-in — 2026-09-09T17:25Z (unification: code done, gates green, Windows live)
+
+**Full defect program executed and gated.** All six RCA defects fixed at the
+root, one commit `c459bc90` on `cto/t2-disk-ruling-2026-08-31`, pushed
+(sanctioned CI invocation for the pinned deploy):
+
+- **D8** — all BT binder calls off the main thread (dedicated HandlerThreads
+  in BleScanner/BleAdvertiser). Launch-freeze mechanism eliminated.
+- **D3d** — circuit breakers reset on EVERY network change (was WiFi-recovery
+  only) — the cell-phase "all circuit-breaker-blocked" deadlock root.
+- **D3c** — local/epoch failures no longer poison the ledger ("Device
+  offline" etc. skipped; endpoint faults still recorded).
+- **D3c-core/D4** — ledger failure counts demote, never exclude (core): a
+  proven cloud relay stays dialable after 3 local-epoch failures; two ledger
+  tests updated to the new contract. AWS is now a permanently viable
+  bootstrap candidate once proven once.
+- **D2** — loopback/link-local listeners suppressed from the advertised set
+  at NewListenAddr + Identify ingest filtered (swarm.rs). Kills D7's 255
+  "Unexpected peer ID" self-dial aborts at the source.
+- **A4** — CLI passes the persistent storage path into the swarm custody
+  store; audit history survives redeploys.
+
+**Gates all green** (build_lock-serialized, evidence `tmp/cto/D2_FIX_20260909/`):
+cli check, core unit, T14 regression, custody suite, release exe, Android BLE
+unit tests, APK (12m31s incl. Rust cross-compile).
+
+**Live state:**
+- Windows: cut over to the unified build (exe sha `795D0D66…`, /version
+  `85cf663e` tree), PID 11784 owns 9876/9001/9002, identity preserved, T14 pin
+  `147.81.41.188:9001` exact, **D2 proven on the wire** — AWS's stored view of
+  Windows has zero loopback/::1/fe80 entries. Evidence `tmp/cto/D2_GOLIVE_20260909/`.
+- AWS: healthy on D1 build `sha-8b1fdc2`; held custody message `69a3248c`
+  intact (audit=1, /data-persisted). Docker Publish dispatched at `c459bc90`
+  (run 34382208362); IMAGE_TAG=sha-c459bc9 deploy next; identity-preserving
+  mount guard per tracked script.
+- Pixel: unified APK built (sha `AC019388…`), **awaiting adb attach** for
+  `adb install -r` — operator drives the device.
+
+**Rule-8:** D2 touches swarm.rs — an independent adversarial review packet
+(for D2 + the ledger demotion) must be filed under `HANDOFF/review/` before
+any merge to main (T14 precedent; CTO cannot self-approve). Branch deploys are
+pinned-candidate, unaffected.
+
+**Next milestones:** AWS cutover at sha-c459bc9 → APK install when adb
+returns → 3-node re-test (BLE + cell-only + baseline) with the operator
+driving Android. The held message `69a3248c` delivers on the first stable
+Pixel↔AWS connection and closes the D1 live proof on the unified builds.
