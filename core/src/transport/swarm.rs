@@ -1998,6 +1998,9 @@ pub enum SwarmCommand {
     GetExternalAddresses {
         reply: mpsc::Sender<Vec<SocketAddr>>,
     },
+    /// Set or clear the operator-configured external address (T14). The
+    /// configured address takes primacy over all peer observations.
+    SetConfiguredExternalAddress { addr: Option<SocketAddr> },
     /// Dial a peer at a specific address
     Dial {
         addr: Multiaddr,
@@ -2394,6 +2397,16 @@ impl SwarmHandle {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))
+    }
+
+    /// Set or clear the operator-configured external address (T14). The
+    /// configured address wins over every observed address and is registered
+    /// in the swarm's external-address registry immediately.
+    pub async fn set_configured_external_address(&self, addr: Option<SocketAddr>) -> Result<()> {
+        self.command_tx
+            .send(SwarmCommand::SetConfiguredExternalAddress { addr })
+            .await
+            .map_err(|_| anyhow::anyhow!("Swarm task not running"))
     }
 
     /// Add a known address for a peer in the DHT
@@ -6137,6 +6150,18 @@ pub async fn start_swarm_with_config(
                                                 let addresses = address_observer.external_addresses().to_vec();
                                                 let _ = reply.send(addresses).await;
                                             }
+                                            SwarmCommand::SetConfiguredExternalAddress { addr } => {
+                                                address_observer.set_configured_external(addr);
+                                                if let Some(configured) = addr {
+                                                    let (ip, port) = (configured.ip(), configured.port());
+                                                    let maddr: Multiaddr = match ip {
+                                                        std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                        std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                                    };
+                                                    swarm.add_external_address(maddr);
+                                                    tracing::info!("Configured external address registered: {}", configured);
+                                                }
+                                            }
 
                                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
                                                 if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
@@ -7042,6 +7067,9 @@ pub async fn start_swarm_with_config(
                             SwarmCommand::GetExternalAddresses { reply } => {
                                 let addresses = address_observer.external_addresses().to_vec();
                                 let _ = reply.send(addresses).await;
+                            }
+                            SwarmCommand::SetConfiguredExternalAddress { addr } => {
+                                address_observer.set_configured_external(addr);
                             }
                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
                                 if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(

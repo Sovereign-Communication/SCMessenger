@@ -30,6 +30,11 @@ pub struct AddressObserver {
     /// Ports currently bound by this node. This is the single source of truth
     /// for whether an observed address can be advertised.
     listen_ports: Vec<u16>,
+    /// Operator-configured external address (T14). When set, it takes primacy
+    /// over every peer observation: it is always the consensus primary and the
+    /// first address reported, so an ephemeral or NAT-mangled observed port can
+    /// never outrank the configured external endpoint.
+    configured_external: Option<SocketAddr>,
     /// Cached consensus result (recalculated when observations change)
     cached_external_addresses: Vec<SocketAddr>,
 }
@@ -46,6 +51,7 @@ impl AddressObserver {
         Self {
             observations: HashMap::new(),
             listen_ports: Vec::new(),
+            configured_external: None,
             cached_external_addresses: Vec::new(),
         }
     }
@@ -56,6 +62,16 @@ impl AddressObserver {
         self.listen_ports = ports.into_iter().collect();
         self.observations
             .retain(|_, observation| self.listen_ports.contains(&observation.address.port()));
+        self.recalculate_consensus();
+    }
+
+    /// Set or clear the operator-configured external address (T14). The
+    /// configured address wins over every peer observation: it is pinned to the
+    /// front of the consensus list so `primary_external_address()` — the value
+    /// every advertisement and diagnostics path reads — is always the
+    /// configured endpoint while one is set.
+    pub fn set_configured_external(&mut self, addr: Option<SocketAddr>) {
+        self.configured_external = addr;
         self.recalculate_consensus();
     }
 
@@ -138,7 +154,17 @@ impl AddressObserver {
         addresses.sort_by_key(|(address, count)| (Reverse(*count), *address));
 
         // Cache the sorted addresses
-        self.cached_external_addresses = addresses.into_iter().map(|(addr, _)| addr).collect();
+        let mut cached: Vec<SocketAddr> = addresses.into_iter().map(|(addr, _)| addr).collect();
+
+        // T14: the configured external address has primacy over every
+        // observation. Deduplicate it out of the consensus list and pin it at
+        // the front so the primary entry is always the configured endpoint.
+        if let Some(configured) = self.configured_external {
+            cached.retain(|addr| *addr != configured);
+            cached.insert(0, configured);
+        }
+
+        self.cached_external_addresses = cached;
     }
 }
 
@@ -309,6 +335,30 @@ mod tests {
             observer.primary_external_address(),
             Some("203.0.113.5:9001".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn configured_external_wins_over_consensus() {
+        let mut observer = AddressObserver::new();
+        observer.set_listen_ports([9001]);
+        let configured: SocketAddr = "147.81.41.188:9001".parse().unwrap();
+        observer.set_configured_external(Some(configured));
+
+        // Peers consistently observe a different (wrong) address; consensus
+        // alone would rank it first, but the configured endpoint must win.
+        let wrong: SocketAddr = "203.0.113.5:9001".parse().unwrap();
+        for _ in 0..5 {
+            observer.record_observation(PeerId::random(), wrong);
+        }
+
+        assert_eq!(observer.primary_external_address(), Some(configured));
+        assert_eq!(observer.external_addresses().first(), Some(&configured));
+        // The observed address is still reported, but only after the configured one.
+        assert!(observer.external_addresses().contains(&wrong));
+
+        // Clearing the configured address restores pure observation consensus.
+        observer.set_configured_external(None);
+        assert_eq!(observer.primary_external_address(), Some(wrong));
     }
 
     #[test]

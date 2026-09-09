@@ -511,13 +511,25 @@ class BleScanner(
     @SuppressLint("MissingPermission")
     private fun stopScanningInternal() {
         val s = scanner
-        if (s == null) return
+        if (s == null) {
+            // Duty-cycle fix: even a missing scanner must not strand the flag,
+            // or the scheduled startScanningInternal() restart never fires.
+            isScanning = false
+            return
+        }
 
         try {
             s.stopScan(scanCallback)
             Timber.v("BLE scan window ended")
+            // Duty-cycle fix: startDutyCycle()'s scheduled restart only runs
+            // startScanningInternal() when isScanning is false. Leaving the
+            // flag true here stranded scanning after the first duty-cycle
+            // window (live logcat: "BLE scan window ended" then
+            // "peersDiscovered=0" forever).
+            isScanning = false
         } catch (e: Exception) {
             Timber.e(e, "Failed to stop BLE scan window")
+            isScanning = false
         }
     }
 

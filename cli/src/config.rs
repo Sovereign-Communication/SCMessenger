@@ -17,6 +17,13 @@ pub struct Config {
     #[serde(default)]
     pub listen_port: u16,
 
+    /// Operator-configured external address advertised to peers (host:port).
+    /// When set, it wins over every peer-observed address (T14): the swarm
+    /// pins it as the primary external address instead of an ephemeral or
+    /// NAT-mangled observed port.
+    #[serde(default)]
+    pub external_addr: Option<String>,
+
     /// Enable mDNS for local network discovery
     #[serde(alias = "mdns", default)]
     pub enable_mdns: bool,
@@ -79,6 +86,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             listen_port: 9000, // Default to 9000 instead of random
+            external_addr: None,
             enable_mdns: true,
             enable_ble: true,
             enable_wifi_aware: true,
@@ -183,6 +191,18 @@ impl Config {
             "listen_port" => {
                 self.listen_port = value.parse().context("Invalid port number")?;
             }
+            "external_addr" => {
+                if value.is_empty() {
+                    self.external_addr = None;
+                } else {
+                    // Fail fast on malformed values so a typo cannot silently
+                    // leave the node advertising an unparseable address.
+                    value
+                        .parse::<std::net::SocketAddr>()
+                        .context("Invalid external address (expected host:port)")?;
+                    self.external_addr = Some(value.to_string());
+                }
+            }
             "enable_mdns" => {
                 self.enable_mdns = value.parse().context("Invalid boolean value")?;
             }
@@ -238,6 +258,7 @@ impl Config {
     pub fn get(&self, key: &str) -> Option<String> {
         match key {
             "listen_port" => Some(self.listen_port.to_string()),
+            "external_addr" => self.external_addr.clone(),
             "enable_mdns" => Some(self.enable_mdns.to_string()),
             "enable_ble" => Some(self.enable_ble.to_string()),
             "enable_wifi_aware" => Some(self.enable_wifi_aware.to_string()),
@@ -257,6 +278,12 @@ impl Config {
     pub fn list(&self) -> Vec<(String, String)> {
         vec![
             ("listen_port".to_string(), self.listen_port.to_string()),
+            (
+                "external_addr".to_string(),
+                self.external_addr
+                    .clone()
+                    .unwrap_or_else(|| "(observed)".to_string()),
+            ),
             ("enable_mdns".to_string(), self.enable_mdns.to_string()),
             ("enable_ble".to_string(), self.enable_ble.to_string()),
             (
@@ -336,8 +363,32 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.listen_port, 9000);
+        assert!(config.external_addr.is_none());
         assert!(config.enable_mdns);
         assert!(config.enable_dht);
+    }
+
+    #[test]
+    fn test_external_addr_config_roundtrip_and_validation() {
+        let mut config = Config::default();
+
+        // Valid host:port is accepted and survives serialization.
+        config.set("external_addr", "147.81.41.188:9001").unwrap();
+        assert_eq!(config.external_addr.as_deref(), Some("147.81.41.188:9001"));
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.external_addr.as_deref(), Some("147.81.41.188:9001"));
+        assert_eq!(
+            config.get("external_addr").as_deref(),
+            Some("147.81.41.188:9001")
+        );
+
+        // Malformed values fail closed.
+        assert!(config.set("external_addr", "not-an-addr").is_err());
+
+        // Empty value clears the knob.
+        config.set("external_addr", "").unwrap();
+        assert!(config.external_addr.is_none());
     }
 
     #[test]

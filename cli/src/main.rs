@@ -2123,6 +2123,24 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // ── WebSocket P2P Bridge for WASM ────────────────────────────────────
     // Redundant explicit bind removed; handled by MultiPortConfig.
 
+    // T14: push the operator-configured external address (config key
+    // `external_addr`) into the swarm so the configured endpoint wins over
+    // every peer observation before any reflection traffic arrives.
+    if let Some(external) = config.external_addr.as_deref() {
+        match external.parse::<std::net::SocketAddr>() {
+            Ok(socket) => {
+                if let Err(e) = swarm_handle.set_configured_external_address(Some(socket)).await {
+                    tracing::warn!("Failed to register configured external address: {}", e);
+                } else {
+                    println!("{} External address configured: {}", "[OK]".green(), socket);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Ignoring invalid external_addr {:?}: {}", external, e);
+            }
+        }
+    }
+
     println!("{} Network started", "[OK]".green());
 
     // btleplug's CoreBluetooth adapter starts a worker for each adapters()
@@ -3506,6 +3524,23 @@ async fn cmd_relay(
     )
     .await?;
     println!("{} P2P swarm started on {}", "[OK]".green(), listen_addr);
+
+    // T14: same configured-external-address primacy as `cmd_start`; the
+    // headless relay must also advertise the operator-configured endpoint.
+    if let Some(external) = config.external_addr.as_deref() {
+        match external.parse::<std::net::SocketAddr>() {
+            Ok(socket) => {
+                if let Err(e) = swarm_handle.set_configured_external_address(Some(socket)).await {
+                    tracing::warn!("Failed to register configured external address: {}", e);
+                } else {
+                    println!("{} External address configured: {}", "[OK]".green(), socket);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Ignoring invalid external_addr {:?}: {}", external, e);
+            }
+        }
+    }
 
     // Subscribe to topics
     for topic in known_topics {
