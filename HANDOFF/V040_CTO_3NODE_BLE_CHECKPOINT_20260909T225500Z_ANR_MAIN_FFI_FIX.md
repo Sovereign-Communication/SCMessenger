@@ -95,3 +95,68 @@ this fix guarantees.
    behavior (follows T14 packet precedent in HANDOFF/review/).
 3. Config-rewrite regression (external_addr nulled) still open from prior
    checkpoint.
+
+## POST-GATE LIVE VERIFICATION (2026-09-09T22:58Z)
+
+Installed `app-debug.apk` (sha256 `3334b461...`) on the Pixel via the TLS adb
+serial `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp` (replace-install,
+data preserved), launched via monkey, observed passively:
+
+- Window 1 (startup, 4683 lines): ONE `Skipped 31 frames` at 12:49:35.307
+  (one-time Compose/Application init, ~0.5 s, BEFORE service init) — vs the
+  defect signature of repeated 79+ frame skips and 10-20 s ANR blocks.
+- Window 2 (~3.5 min steady state): **0** `ANR detected`, **0** input-dispatch
+  timeouts, **0** skipped-frames, watchdog silent, PID stable (10431).
+- Service healthy: `MeshRepository service state: RUNNING`; BLE advertising
+  started (mode=1, txPower=2), GATT identity beacon 430 bytes refreshed,
+  BLE scanner duty-cycling on worker threads.
+- Logs: `tmp/cto/ANR_FIX_20260909/logcat_postfix_window{1,2}.log`
+- VERDICT: UI-hang defect FIXED (live, passive-log evidence, E8-grade for
+  the ANR axis: absence of the failure signature across a steady-state
+  window plus the root-cause fix, not just an absence claim).
+
+## SECOND ROOT CAUSE FOUND DURING VERIFY (not fixed this session - rule-8 queued)
+
+Post-fix passive logs show the Pixel NOT rejoining the mesh:
+`peersDiscovered=0`, `Bootstrap: no proven ledger relay candidates`, and the
+Pixel's `ledger.json` is empty (`[]`). LAN re-seed also failed: mDNS started,
+self-resolve correctly filtered (`mDNS: ignoring self-resolved service`),
+but the phone NEVER discovers the Windows node's service.
+
+Root-cause chain (evidence: `tmp/cto/D2_GOLIVE_20260909/node-out.log`
+18:31-18:33Z + vendored libp2p-mdns 0.48.0 source):
+
+1. Windows node mDNS response contains a nested self-circuit route listen
+   address: `/ip4/192.168.0.222/tcp/9001/p2p/<self>/p2p-circuit/p2p/<AWS>/
+   p2p-circuit/p2p/<self>` -> `TxtRecordTooLong` exclusion warnings, plus
+   `os error 10040` datagram overflow on the mdns read path.
+2. Vendored source proves mdns advertises the swarm's ListenAddresses
+   verbatim (`libp2p-swarm-0.47.1/src/behaviour/listen_addresses.rs`: only
+   NewListenAddr/ExpiredListenAddr mutate it) — so a nested-circuit listen
+   address can only come from `listen_on()` being called with a circuit base
+   whose host:port was the node's OWN address (relay-reservation path,
+   swarm.rs:5225 via relay_reservation_multiaddr/build_routable_relay_addrs
+   — the is_self_address guard missed because bound_addresses was incomplete
+   in an early-startup window).
+3. Effect: Windows' LAN advertisement is degraded/oversized; the phone's
+   NsdManager never receives a usable response; with the ledger empty the
+   phone has no relay candidates either -> isolated from the mesh on every
+   transport except BLE (which is up and healthy).
+
+REQUIRED FIX (queued, rule-8 gated, core/src/transport/swarm.rs):
+- At the reservation call site, validate the normalized reservation base
+  against the CURRENT swarm listen/external set before `listen_on`, and skip
+  self-matching bases (defense in depth beyond the identify-time snapshot).
+- Add regression test: a nested self-circuit base must never produce a
+  listen_on, and listen addresses containing /p2p-circuit/ must never reach
+  the mDNS advertisement set.
+- This follows the T14 packet precedent: implement on the PR branch with
+  tests, file HANDOFF/review packet, independent verdict before merge.
+
+## FINAL VERDICTS (this checkpoint)
+
+- ANR main-thread FFI fix: PASS (gated + live-verified above)
+- APK `3334b461...` installed and running: PASS
+- Mesh rejoin (LAN/cell) from the Pixel: FAIL — second root cause documented
+  above, fix queued as rule-8 gated work (next session's first task)
+- BLE transport availability on Pixel: PASS (advertising + scanning live)
