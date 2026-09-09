@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T02:20Z (CEO: fix order executing -- E1/E2/E6/E7 closed, E3/E4/E5 open)
+Last updated: 2026-09-09T02:10Z (CEO -> CTO coordination posted: sweep verdict + gate state)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -36,7 +36,9 @@ state, holds the consensus rule, and never bypasses the CTO package's gates.
 - Live node: PID 16548 from `target/release/scmessenger-cli.exe` (829efe2c,
   /version ba474a7a) -- keep running. Rollback note: 1a736ac9 binary reclaimed;
   d2f75243 artifact + rebuild from pushed 85cb4c67 are the surviving rollback
-  paths (RCA W4).
+  paths (RCA W4). SUPERSEDED 01:47Z: node intentionally restarted for the E6
+  proof, now PID 23508, same binary, no env var -- see the CEO -> CTO
+  coordination block above and tmp/cto/E6_RESTART_PROOF/.
 
 ## Current state (2026-09-08 ~11:50Z)
 
