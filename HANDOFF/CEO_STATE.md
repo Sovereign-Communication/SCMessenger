@@ -208,4 +208,11 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
 - CEO check-in items for the CTO: (1) rerun the core regression suite; (2)
   route through the staging-only rule-8 review for T14+0a33c009; (3) the
   Pixel LAN-dial IO-error observation from 20:52Z stands; (4) keep
-  tmp/cto/T14_GOLIVE/launch_node_env.ps1 as the only sanctioned relauncher.
+  tmp/cto/T14_GOLIVE/launch_node_env.ps1 as the only  sanctioned relauncher.
+- 2026-09-09T01:3xZ PUSH: operator ordered push-to-GitHub for all unsaved work.
+  This branch `cto/t2-disk-ruling-2026-08-31` pushed (34 commits ahead of
+  origin/main; CI will run). Other seats' branches with unpushed commits and
+  all 11 local stashes backed up as clearly-labeled backup branches and pushed
+  (additive refs only; no force, no deletes). tmp/cto evidence remains
+  disk-only (gitignored by design) -- flagged as a follow-up preservation
+  question for the operator.
