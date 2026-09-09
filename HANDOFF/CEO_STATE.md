@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T01:45Z (CEO: CTO stopped; RCA + next-run package delivered)
+Last updated: 2026-09-09T02:20Z (CEO: fix order executing -- E1/E2/E6/E7 closed, E3/E4/E5 open)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -254,6 +254,22 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
     via SSH), E5 (Pixel BLE-01 APK install -- OPERATOR).
   - Live node now PID 23508 (no-env relaunch); relaunch config recorded in
     tmp/cto/E6_RESTART_PROOF/restart_record.txt.
+  - E2 CLOSED 2026-09-09T02:15Z (X2/X3): the first rerun
+    (E2_REGRESSION_RERUN_20260909T0150Z.log, detached, build_lock bypassed --
+    sole build on host, 0 cargo procs verified pre-launch) found exactly one
+    failure: test_consensus_with_multiple_observations predated the 0a33c009
+    allowlist (recorded observations against an empty, now fail-closed,
+    allowlist). Test contract fixed in 6c007b47 (check-mark glyphs -> [OK]
+    too; the rules hook caught 2 stragglers on the first commit attempt).
+    Full rerun after the fix UNDER build_lock: 41 binaries, 1653 passed /
+    0 failed / 24 ignored, zero compile errors
+    (tmp/cto/E2_REGRESSION_RERUN_20260909T0210Z.log). Live binary 829efe2c
+    predates the test-only commit; no product code changed, rebuild at
+    PREFLIGHT folds it in.
+  - Remaining after E2: E3 (AWS redeploy at run tree), E4 (AWS binary hash via
+    SSH), E5 (Pixel BLE-01 APK install -- OPERATOR); E1 packet ready, reviewer
+    selection is the operator's call.
+- 2026-09-09T01:3xZ PUSH: operator ordered push-to-GitHub for all unsaved work.
   This branch `cto/t2-disk-ruling-2026-08-31` pushed (34 commits ahead of
   origin/main; CI will run). Other seats' branches with unpushed commits and
   all 11 local stashes backed up as clearly-labeled backup branches and pushed

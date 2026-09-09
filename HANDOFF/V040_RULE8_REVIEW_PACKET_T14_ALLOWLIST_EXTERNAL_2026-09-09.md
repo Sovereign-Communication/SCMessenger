@@ -92,11 +92,15 @@ independently re-derived):
   ba474a7a-family) reports `external_addrs == ["147.81.41.188:9001", ...]`
   with the configured address pinned first; go-live 10/10 checks PASS
   (`HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T001500Z_T14_GOLIVE.md`).
-- Full core regression suite: UNVERIFIED at the time of the fix (disk-full
-  killed cargo — `tmp/cto/REGRESSION_20260909T002337Z/`); a rerun is in
-  progress (`tmp/cto/E2_REGRESSION_RERUN_20260909T0150Z.log`, E2 gate). The
-  reviewer should consult its final `test result:` lines; a suite failure
-  inside the touched modules is a REJECT condition for the merge verdict.
+- Full core regression suite: first rerun (disk now healthy) found exactly one
+  failure — `test_consensus_with_multiple_observations` in
+  `test_address_observation.rs` recorded observations without arming the
+  listen-port allowlist, which 0a33c009 made fail-closed by design. Test
+  contract updated in `6c007b47`. Full rerun after the fix: 41 binaries,
+  1653 passed / 0 failed / 24 ignored, zero compile errors
+  (`tmp/cto/E2_REGRESSION_RERUN_20260909T0210Z.log`, under build_lock). The
+  reviewer should read that log's `test result:` lines; a suite failure inside
+  the touched modules remains a REJECT condition for the merge verdict.
 
 ## Related review history (for context, not a substitute)
 

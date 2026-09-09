@@ -24,10 +24,11 @@ PREFLIGHT checkpoint. Do not skip; a failed gate means STOP and report.
 - **E1 (X1) Rule-8 review on file.** Independent adversarial APPROVE covering
   `0a33c009` + `74253491` (both touch `core/src/transport`). Merge gate; the
   CTO must not self-approve and must not merge without it.
-- **E2 (X2/X3) Full core regression suite green.** Rerun
-  `cargo test -p scmessenger-core --tests` (the run killed by the disk-full
-  event) with 33 GB free; paste the `test result:` lines into the gate log.
-  Targeted gates alone are not sufficient evidence.
+- **E2 (X2/X3) Full core regression suite green.** CLOSED 2026-09-09T02:15Z:
+  41 binaries, 1653 passed / 0 failed (`tmp/cto/
+  E2_REGRESSION_RERUN_20260909T0210Z.log`), including the stale-allowlist-test
+  fix `6c007b47`. Future runs still require a fresh full-suite pass on the
+  exact run tree — targeted gates alone are not sufficient evidence.
 - **E3 (A1) AWS on the run tree.** Redeploy the cloud node at the frozen
   run commit using `.codebuff_deploy/aws/` scripts; `/version` git_hash must
   equal the run commit exactly.
@@ -37,13 +38,16 @@ PREFLIGHT checkpoint. Do not skip; a failed gate means STOP and report.
 - **E5 (P1) BLE-01 APK installed on the Pixel.** Operator installs the staged
   APK `2f07ed91` (or its successor from the run tree); record `pm path` APK
   SHA256 == expected, and the app service identity afterwards.
-- **E6 (W2) Bootstrap link no longer env-only.** AWS multiaddr persisted into
-  `%APPDATA%\scmessenger\config.json` `bootstrap_nodes`; prove a no-env restart
-  keeps the AWS peer (this was observed healthy-but-peerless once; do not
-  repeat it during the run).
-- **E7 (W4) Rollback staged outside target/.** Copy the previous-run exe to
-  `tmp/radio-<commit>/rollback/` (or equivalent non-`target/` path) before any
-  cutover; record SHA256.
+- **E6 (W2) Bootstrap link no longer env-only.** CLOSED 2026-09-09T01:47Z:
+  AWS multiaddr persisted in `%APPDATA%\scmessenger\config.json`
+  `bootstrap_nodes` (backup `config.json.bak-e6-20260909T014640Z`); no-env
+  restart PROVEN — PID 23508 dialed exactly the config node and connected to
+  AWS (`tmp/cto/E6_RESTART_PROOF/`, identity stable, custody preserved,
+  outbox flushed 5->0).
+- **E7 (W4) Rollback staged outside target/.** CLOSED 2026-09-09T01:45Z for
+  the live binary: `tmp/radio-829efe2c/rollback/scmessenger-cli-829efe2c.exe`
+  + `SHA256SUMS.txt`. Any future cutover must repeat this for the
+  then-current binary BEFORE stopping the running node.
 - **E8 (W5) Advertisement-confirmation evidence defined.** The run's BLE
   readiness = Pixel-side observation of the Windows SCM beacon and/or a
   confirmed-advertising log line — start markers are explicitly insufficient.
