@@ -272,14 +272,19 @@ class AndroidPlatformBridge @Inject constructor(
 
         motionReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                // ANR-2026-09-09 fix: onReceive runs on the MAIN thread; the
+                // downstream updateDeviceState FFI has been observed blocking
+                // long enough to trip SCREEN_ON/OFF broadcast ANRs (10s) and
+                // input-dispatch ANRs. All device-state FFI work is dispatched
+                // to the IO scope; only the cheap volatile state set stays here.
                 when (intent.action) {
                     Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
                         currentMotionState = uniffi.api.MotionState.WALKING
-                        onMotionChanged(currentMotionState)
+                        scope.launch { onMotionChanged(currentMotionState) }
                     }
                     Intent.ACTION_SCREEN_OFF -> {
                         currentMotionState = uniffi.api.MotionState.STILL
-                        onMotionChanged(currentMotionState)
+                        scope.launch { onMotionChanged(currentMotionState) }
                     }
                 }
             }
@@ -420,15 +425,35 @@ class AndroidPlatformBridge @Inject constructor(
     override fun onEnteringBackground() {
         Timber.i("App entering background")
 
-        // Pause mesh service to conserve battery
-        meshRepository.pauseMeshService()
+        // ANR-2026-09-09 fix: this override is invoked on the MAIN thread from
+        // MainActivity.onPause (notifyBackground) AND from the Rust core via
+        // the uniffi PlatformBridge callback. The pause() FFI has been caught
+        // blocking main for >10s in 47 captured ANR stacks
+        // (uniffi_scmessenger_core_fn_method_meshservice_pause). Dispatch off
+        // main; never call it synchronously from a lifecycle/callback path.
+        scope.launch {
+            try {
+                meshRepository.pauseMeshService()
+            } catch (e: Exception) {
+                Timber.w(e, "pauseMeshService failed")
+            }
+        }
     }
 
     override fun onEnteringForeground() {
         Timber.i("App entering foreground")
 
-        // Resume full mesh service activity
-        meshRepository.resumeMeshService()
+        // ANR-2026-09-09 fix: same main-thread re-entrancy as
+        // onEnteringBackground — resume() FFI blocked main for >10s in 10
+        // captured ANR stacks (meshservice_resume), including the 12:00:56Z
+        // system ANR fired from the Rust-driven uniffi callback itself.
+        scope.launch {
+            try {
+                meshRepository.resumeMeshService()
+            } catch (e: Exception) {
+                Timber.w(e, "resumeMeshService failed")
+            }
+        }
     }
 
     // ========================================================================
@@ -644,15 +669,31 @@ class AndroidPlatformBridge @Inject constructor(
 
     /**
      * Manually trigger battery state check (for periodic adjustments).
+     *
+     * ANR-2026-09-09 fix: serialized onto the IO scope with the same mutex as
+     * the broadcast-driven path so this can never run on the caller's (possibly
+     * main) thread and can never interleave with concurrent device-state FFI
+     * updates.
      */
     fun checkBatteryState() {
-        updateBatteryState()
+        scope.launch {
+            deviceStateMutex.withLock {
+                updateBatteryState()
+            }
+        }
     }
 
     /**
      * Manually trigger network state check (for periodic adjustments).
+     *
+     * ANR-2026-09-09 fix: see checkBatteryState — same off-main, mutex-
+     * serialized dispatch.
      */
     fun checkNetworkState() {
-        updateNetworkState()
+        scope.launch {
+            deviceStateMutex.withLock {
+                updateNetworkState()
+            }
+        }
     }
 }

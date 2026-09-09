@@ -646,3 +646,35 @@ the code regressed. Specifically:
    the 21:23Z passive-log analysis is the CTO's in-flight append -- left
    untouched for its own commit, per lane discipline.
 
+6. **CTO check-in 2026-09-09T21:39Z — passive transport verification, standardized + scored.**
+   The CTO ran a standardization pass that wrote two raw evidence files so the current
+   state is inspectable/replayable:
+   - `tmp/cto/TRANSPORT_20260909T213941Z/windows_diagnostics.json` — raw
+     `/version` + `/health` + `/api/diagnostics` from the live Windows node
+     (127.0.0.1:9876), captured 21:39:42Z.
+   - `tmp/cto/TRANSPORT_20260909T213942Z/aws_tail.log` — raw output of the existing
+     `tmp/cto/aws_custody_state.sh`, `aws_postdeploy_verify.sh`, `aws_logs.sh` plus a
+     current `curl http://18.234.62.247:9876/api/diagnostics`, captured 21:39:42Z.
+   Result on current evidence:
+   - Windows: PASS on current snapshot — /version `2b84879f`, /health healthy, T14 pin
+     first in external_addrs, 2 peers (Pixel + AWS), both AWS and Pixel circuit listeners
+     registered. On-disk node-out.log is stale (last transport line 18:33Z); the live
+     snapshot is accepted as sufficient for the Windows passive verdict; a current
+     node-out window is still wanted but not worth a restart.
+   - AWS: PASS on current evidence — relay registered, circuit active, Identify every 60s
+     with `discoverable_addrs:19`, D2 suppressions=7, /api/diagnostics shows 1 peer
+     (Windows), running, undelivered_count=0.
+   - Pixel: UNVERIFIED — adb empty this session; only the stale TRANSPORT_VERIFY window
+     (2026-09-08) is on disk, and that window is E8-incomplete for BLE (advertiser +
+     GATT beacon + duty-cycle present, but no E8 confirmation class; no clean
+     NetworkDetector line). No current Pixel logcat, so current BLE + current-network +
+     current-LAN/cell transit all stay unverified.
+   - Delivery-outcome flag (NOT a transport-availability FAIL): current Windows shows
+     outbox_count=8, undelivered_count=194 while AWS shows 0/0. That is a delivery
+     backlog/outcome question for the active user test, not evidence that any transport
+     leg is unavailable.
+   The checkpoint `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T190000Z_PR279_FULLGREEN.md`
+   now carries the scored per-leg table and the honest open items. The one blocker
+   between this passive pass and 'all aspects' is evidence access to the Pixel (adb), not
+   a code regression.
+
