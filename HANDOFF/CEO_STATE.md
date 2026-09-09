@@ -499,3 +499,31 @@ pinned-candidate, unaffected.
 returns → 3-node re-test (BLE + cell-only + baseline) with the operator
 driving Android. The held message `69a3248c` delivers on the first stable
 Pixel↔AWS connection and closes the D1 live proof on the unified builds.
+---
+
+## CTO check-in — 2026-09-09T19:00Z (PR #279 open, full green, nodes re-rolled)
+
+1. **Full green achieved on the run tree `2b84879f`** (fresh target/ after
+   cleaning the gradle cargo-ndk contamination): fmt PASS, clippy PASS (CI-exact
+   invocation), full workspace suite **1849/0/25 across 57 binaries**. Evidence
+   `tmp/cto/FULLGREEN_20260909T180736Z/`. Lint-hygiene commit `2b84879f`
+   (fmt-only + one unused test-module import).
+2. **PR #279 opened** (base main, 46 commits, full defect program + lane
+   records). Disclosed verified conflict family: 10 files vs main incl. all 5
+   gated core files — main landed its own reviewed T14 versions (#269/#270);
+   same family vs #272's head. Reconcile is rule-8 gated; NOT auto-resolved.
+3. **Re-rollout done**: Windows rebuilt at 2b84879f (exe `49B5717A…`, identity
+   preserved, healthy) — note the exe-lock ordering trap (build must follow the
+   node stop, os error 5 otherwise). **T14 pin regression caught and fixed**:
+   something rewrote `%APPDATA%\scmessenger\config.json` and nulled
+   `external_addr` during today's node churn; restored `147.81.41.188:9001`
+   (backup `config.json.bak-t14restore-20260909T184436Z`), verified live,
+   AWS reconnect confirmed. Ticket: find the config rewriter. AWS stays on
+   `sha-c459bc9` (functionally identical; re-cut ships with next functional
+   deploy). Pixel APK installed, clean launch.
+4. **All three nodes READY for the operator's 3-node test** (baseline /
+   BLE-only / cell-only). E1 rule-8 verdict (T14/allowlist packet) + D2/ledger
+   packets remain the merge gate for #279/#272 — on your desk per E1.
+
+CEO next: keep E1 on the operator desk; audit the #279 reconcile plan when the
+review verdicts land.
