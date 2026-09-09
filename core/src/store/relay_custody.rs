@@ -759,6 +759,48 @@ impl RelayCustodyStore {
         Ok(())
     }
 
+    /// Re-arm dispatch attempts for every pending custody record addressed to
+    /// `destination_peer_id` (delivery_attempts -> 0).
+    ///
+    /// Rationale (D1, live 2026-09-09): dispatch attempts consumed at the
+    /// periodic-pull cadence (~15s) exhaust the 12-attempt guard in ~5
+    /// minutes. Without a re-arm, a custody entry whose destination is merely
+    /// RESTARTING an app (or briefly dropping cell) gets wedged forever -
+    /// "Max delivery attempts (12) exceeded" refused on every later periodic
+    /// pull while the destination sat connected. Store-and-forward must
+    /// outlive short destination absences, so a FRESH connection episode
+    /// re-arms the counter; the per-episode cap still prevents infinite
+    /// retry churn against a connected-but-not-accepting destination.
+    pub fn reset_delivery_attempts_for_destination(&self, destination_peer_id: &str) -> usize {
+        let prefix = destination_prefix(destination_peer_id);
+        let records: Vec<CustodyMessage> = self
+            .backend
+            .scan_prefix(prefix.as_bytes())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(_, value)| bincode::deserialize::<CustodyMessage>(&value).ok())
+            .filter(|record| {
+                record.state != CustodyState::Delivered && record.delivery_attempts > 0
+            })
+            .collect();
+
+        let mut reset = 0usize;
+        for mut record in records {
+            record.delivery_attempts = 0;
+            if self.put_message(&record).is_ok() {
+                reset += 1;
+            }
+        }
+        if reset > 0 {
+            tracing::info!(
+                "[CUSTODY-REARM] reset delivery_attempts for {} pending custody record(s) to {}",
+                reset,
+                destination_peer_id
+            );
+        }
+        reset
+    }
+
     pub fn mark_dispatch_failed(
         &self,
         destination_peer_id: &str,
@@ -1858,6 +1900,108 @@ mod tests {
         assert!(store
             .pending_for_destination("destination-peer", 100)
             .is_empty());
+    }
+
+    /// D1 regression (live failure 2026-09-09): dispatch attempts burned at the
+    /// periodic-pull cadence while the destination was restarting, the guard
+    /// tripped, and the entry was refused FOREVER afterwards ("Max delivery
+    /// attempts (12) exceeded" every 5s while the destination sat connected).
+    /// A fresh connection episode must re-arm the counter so store-and-forward
+    /// outlives short destination absences; the per-episode cap must still stop
+    /// runaway retries within one episode.
+    #[test]
+    fn fresh_connection_re_arms_exhausted_custody_dispatch_attempts() {
+        let store = RelayCustodyStore::in_memory();
+        let accepted = store
+            .accept_custody(
+                "source-peer".to_string(),
+                "destination-peer".to_string(),
+                "relay-msg-d1".to_string(),
+                vec![9, 9, 9],
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Burn through the per-episode guard exactly as the periodic pull did.
+        for _ in 0..12 {
+            store
+                .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+                .unwrap();
+            store
+                .mark_dispatch_failed(
+                    "destination-peer",
+                    &accepted.custody_id,
+                    "no_response",
+                )
+                .unwrap();
+        }
+        // Guard tripped: the 13th dispatch is refused.
+        assert!(store
+            .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+            .is_err());
+
+        // Fresh connection episode re-arms the destination's pending custody.
+        let re_armed = store.reset_delivery_attempts_for_destination("destination-peer");
+        assert_eq!(re_armed, 1, "the one pending entry must be re-armed");
+
+        // Dispatch succeeds again after the re-arm, and the per-episode cap
+        // still holds after 12 more attempts within the SAME episode.
+        store
+            .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+            .expect("post-re-arm dispatch must succeed");
+        // 12 more failed attempts within the SAME episode (the first
+        // mark_dispatching above consumed attempt 1 while already Dispatching
+        // the record was left Accepted by each failure, so iterations here
+        // burn attempts 2..=12).
+        for _ in 0..11 {
+            store
+                .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+                .expect("attempts 2..=12 must be accepted within the episode");
+            store
+                .mark_dispatch_failed(
+                    "destination-peer",
+                    &accepted.custody_id,
+                    "no_response",
+                )
+                .unwrap();
+        }
+        // Attempt 12 is the last allowed; the 13th must be refused.
+        store
+            .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+            .expect("attempt 12 must still be accepted");
+        store
+            .mark_dispatch_failed("destination-peer", &accepted.custody_id, "no_response")
+            .unwrap();
+        assert!(
+            store
+                .mark_dispatching("destination-peer", &accepted.custody_id, "periodic_pull")
+                .is_err(),
+            "per-episode cap must still stop runaway retries after re-arm"
+        );
+    }
+
+    #[test]
+    fn custody_rearm_skips_delivered_records() {
+        let store = RelayCustodyStore::in_memory();
+        let accepted = store
+            .accept_custody(
+                "source-peer".to_string(),
+                "destination-peer".to_string(),
+                "relay-msg-delivered".to_string(),
+                vec![1, 1, 1],
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .mark_delivered("destination-peer", &accepted.custody_id, "recipient_ack")
+            .unwrap();
+        assert_eq!(
+            store.reset_delivery_attempts_for_destination("destination-peer"),
+            0,
+            "delivered records must not be resurrected by a re-arm"
+        );
     }
 
     #[test]

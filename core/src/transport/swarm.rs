@@ -5311,6 +5311,22 @@ pub async fn start_swarm_with_config(
                                 // Complete the dial attempt since it succeeded
                                 dial_policy_manager.complete_dial_attempt(&addr_key);
 
+                                // D1 (live 2026-09-09): a FRESH connection episode re-arms
+                                // custody dispatch attempts for this destination. Attempts
+                                // burn at the periodic-pull cadence (~15s) and hit the
+                                // 12-attempt guard in ~5 minutes while the destination is
+                                // merely restarting; without a re-arm the entry is wedged
+                                // forever ("Max delivery attempts (12) exceeded" refused on
+                                // every later pull while the destination sat connected).
+                                // Gated on the 0->1 transition (same per-path storm guard as
+                                // the outbox flush above): one re-arm per connection episode,
+                                // not per path. The per-episode cap still prevents infinite
+                                // retry churn against a connected-but-not-accepting peer.
+                                if !had_active_connection {
+                                    relay_custody_store
+                                        .reset_delivery_attempts_for_destination(&peer_id.to_string());
+                                }
+
                                 // Prune resolved_to_dns mappings for this peer / hostname
                                 let stripped_remote: Multiaddr = remote_addr.iter().filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_))).collect();
                                 let mut dns_to_prune = None;

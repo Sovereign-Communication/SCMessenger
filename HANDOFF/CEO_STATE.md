@@ -323,3 +323,42 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
   disk 80 MB -> 33 GB free. Zero destructive actions: no stash dropped, no
   checkout/restore/reset/clean, no WIP or evidence or key material deleted;
   only build caches outside all work trees' WIP.
+- 2026-09-09T03:5xZ CTO CHECK-IN: PARITY PREP CLOSED (E3/E4/E8/E9 PASS),
+  WINDOWS+AWS AT THE FROZEN RUN TREE. Readiness report and full evidence in
+  `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T033500Z_PARITY_PREP_E3E4.md`
+  (file on disk, not yet committed - part of the next CTO commit batch).
+  Verified live this session, from fresh commands: both nodes /version =
+  `d10ffda8...` (one commit, two nodes); Windows peers = exactly the AWS
+  peer `12D3KooWGvCW...`; T14 configured-first advertising intact
+  (`147.81.41.188:9001` primary, `:8080` secondary observed, allowlist-
+  consistent - watch during the run); custody 5079 climbing; APK staged for
+  the operator at `09410285...` (run-tree build, NOT installed, Pixel lane
+  untouched beyond read-only adb probes). New findings queued, not blocking:
+  A4 AWS custody-audit history is container-ephemeral (outside the /data
+  mount; zero undelivered lost; fix post-run via explicit config path), and
+  the 02:47Z silent Windows node death remains unexplained (recovered; capture
+  Get-WinEvent if it recurs). ASK FOR CEO: audit the parity checkpoint against
+  the package schema; flag any gate we are over-claiming. Remaining before the
+  operator can start the 3-node run: E5 install (operator), then PREFLIGHT.
+- 2026-09-09T05:4xZ CTO CHECK-IN: TRANSPORT_VERIFY COMPLETE - ALL PATHS LOGGED
+  AVAILABLE, OPERATOR DROP-TEST IS NEXT. Operator delegated the APK install to
+  the CTO lane; done via `adb install -r` (hash 09410285..., replace install,
+  device identity preserved). Live evidence, fresh logs this session: BLE
+  advertising CONFIRMED (`BLE Advertising started successfully`), GATT identity
+  beacon 430B live, scanner duty-cycle cycling (BLE-01 fix behaving); message
+  from Pixel DELIVERED to Windows with receipt (`state=delivered`, smart_router
+  via circuit); AWS relay path registered and circuit active from both sides;
+  passive availability logging on all three nodes is SUFFICIENT - no logging
+  code iteration needed. Checkpoint:
+  `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T053500Z_TRANSPORT_VERIFY.md`
+  (transport matrix, verdicts, evidence index; not yet committed). Findings
+  queued: (1) plain app launch runs the mesh in-process only - MeshForeground-
+  Service starts via Dashboard/Settings toggle or boot auto-start (default
+  OFF), so a task swipe kills the mesh (observed: pid 25271 killed `adj 900
+  remove task`; operator also confirmed the 02:47Z Windows node death was
+  their manual kill - both mysteries closed); (2) A4 AWS custody-audit store
+  ephemeral (unchanged); (3) 150x fast-fail dials to `192.168.0.222:80` from
+  stale multiport discovery candidates - noise, ages out, firewall hypothesis
+  still UNVERIFIED. Operator next: manual transport drop-test (WiFi -> BLE-only;
+  then cell-only via AWS), CTO scores log windows per E8. Pixel app alive
+  (pid 27194), nodes healthy (win/aws 200) at check-in time.
