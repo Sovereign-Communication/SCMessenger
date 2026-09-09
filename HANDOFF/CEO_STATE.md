@@ -678,3 +678,22 @@ the code regressed. Specifically:
    between this passive pass and 'all aspects' is evidence access to the Pixel (adb), not
    a code regression.
 
+
+---
+
+## CTO check-in 2026-09-09T23:59Z - ANR root fix live; LAN-discovery defect queued
+
+UI-hang RCA'd from 19 system ANR records: main thread blocked in
+meshservice_pause/resume/update_device_state FFI (uniffi PlatformBridge
+callbacks re-entering Rust on main). Fixed in AndroidPlatformBridge.kt
+(all paths now IO-dispatched, mutex serialization preserved), gated
+(compile/unit/APK green under build lock), installed on Pixel, verified
+live: 0 ANR signatures + 0 frame skips in steady state, BLE healthy.
+Commits c6f7ce2f + d6d9d3dd pushed to PR #279 head.
+
+RESIDUAL (next session, rule-8): Pixel not rejoining mesh - nested
+self-circuit listen address degrades Windows mDNS advertisement
+(TxtRecordTooLong/10040) while phone ledger is empty; full evidence +
+fix plan in HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T225500Z_ANR_MAIN_FFI_FIX.md.
+Also open: Rust-side pause/resume blocking (rule-8 packet pending),
+config external_addr rewrite source.
