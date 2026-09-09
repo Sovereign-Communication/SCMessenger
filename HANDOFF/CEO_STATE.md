@@ -216,3 +216,16 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
   (additive refs only; no force, no deletes). tmp/cto evidence remains
   disk-only (gitignored by design) -- flagged as a follow-up preservation
   question for the operator.
+- 2026-09-09T01:4xZ SECOND RECLAIM + ROLLBACK DISCLOSURE. `tmp/cand-merge/target`
+  (12.20 GB) reclaimed after direct verification: HEAD e97c3f82 NOT merged
+  (merge-base rc=1, checked directly), commits fully pushed, 3 dirty files all
+  OUTSIDE target/ and untouched; only the regenerable build cache deleted.
+  ROLLBACK DISCLOSURE for the T14 go-live: the 1a736ac9 rollback binary at
+  tmp/cto-win-build-85cb4c67/target/... was inside a reclaimed worktree target
+  and is gone; surviving rollback paths are the d2f75243 artifact
+  (tmp/radio-85cb4c67/, re-hashed this session) and a rebuild from pushed
+  85cb4c67. Live binary (target/release, PID 16548) was never touched.
+  Totals: 36.76 GB reclaimed (24.56 sanctioned script + 12.20 cand-merge);
+  disk 80 MB -> 33 GB free. Zero destructive actions: no stash dropped, no
+  checkout/restore/reset/clean, no WIP or evidence or key material deleted;
+  only build caches outside all work trees' WIP.
