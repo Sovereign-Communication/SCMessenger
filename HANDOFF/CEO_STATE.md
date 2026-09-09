@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T10:20Z (tree hygiene: scratch/ gitignored, CTO D1 checkpoints tracked)
+Last updated: 2026-09-09T21:35Z (CEO audit: PR279 framing CONFIRMED, E4/A2 closed, adb absent)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -527,3 +527,122 @@ Pixel↔AWS connection and closes the D1 live proof on the unified builds.
 
 CEO next: keep E1 on the operator desk; audit the #279 reconcile plan when the
 review verdicts land.
+
+---
+
+## CTO check-in — 2026-09-09T21:23Z (passive transport-log iteration, PR #279 open)
+
+Operator directive: "iterate until passive logs indicate successful transports in
+all aspects." I executed one full passive pass; here is the result and the catch.
+
+### What I pulled fresh this session
+
+- Windows /health (200), /version (git_hash `2b84879f`), /api/diagnostics
+  (current — identity stable, 1 peer AWS, external_addrs ==
+  `["147.81.41.188:9001"]` exact, T14 pin winning).
+- AWS docker logs (21:14-21:22Z) — relay registered, circuit active, Identify of
+  Windows every 60s with `discoverable_addrs: 17`, D2 suppressions logged (7),
+  custody audit ticker healthy.
+- Windows node-out tail (stale window 18:32-18:33Z, against that boot's exe) —
+  the same T14/D2/relay story, plus residual D7-style self-dial noise
+  (`/ip4/192.168.0.222/tcp/80` Local peer ID bursts) that D2 vetoes from
+  advertisement but the multiport dial side still probes.
+- **adb pull failed on the first attempt** — device was not attached when I pulled,
+  so the Pixel's current logcat is NOT available this session. The only on-disk
+  Pixel log is the stale TRANSPORT_VERIFY-era capture (2026-09-08T19:13-20:23Z).
+
+### Verdict — cell/relay leg green, BLE + Pixel-current-story UNVERIFIED this session
+
+- **Cellular/relay/AWS leg: PASS** from current AWS logs — relay registered,
+  circuit active, Identify stable, custody ticker healthy. This is the leg you
+  asked to see working, and it is.
+- **Windows↔AWS LAN+relay leg: PASS** from stale-but-coherent Windows log +
+  current AWS log — connected, T14 pin winning, relay circuit listening on both
+  `18.234.62.247:9001` and `192.168.0.222:9001`. Needs a fresh Windows capture
+  to move from 'coherent' to 'current'.
+- **BLE availability (all nodes): UNVERIFIED this session** — stale log has no BLE
+  lines for the running Windows node; the E8 rule (no start-marker scoring) cannot
+  be satisfied from current logs. W5 is still OPEN until a Windows-side BLE
+  confirmation or the Pixel observing the Windows beacon (E8 CLASS A).
+- **Pixel current transport story: UNVERIFIED this session** — no current adb
+  capture; the TRANSPORT_VERIFY PASS verdicts are from an earlier session and are
+  stale for this iteration.
+
+### Why the iteration is not yet 'all transports working' from passive logs alone
+
+Because the evidence needed to close BLE and Pixel-current is missing, not because
+the code regressed. Specifically:
+
+1. **adb was unattached on first pull.** I cannot passively analyze what I cannot
+   read. Until adb is back, the Pixel BLE/scanner/current-network/cell-transition
+   state is unknowable this session.
+2. **The Windows node log on disk is stale after boot.** The running process is
+   healthy, but no fresh launcher wrote a current node-out after the reroll, so the
+   file does not reflect the current process's recent cadence. /api/diagnostics is
+   current, but it is a snapshot, not a log window.
+3. **E8 is unforgiving by design.** The advertisement-confirmation spec says a start
+   marker is not readiness. Even if I pull BLE lines, they must be a confirmation
+   class (CLASS A/B/C), not an intent log, or the verdict stays UNVERIFIED.
+
+### What I need from the operator to finish the passive iteration decisively
+
+- Confirm adb is back / the Pixel is attached (you did say it came back earlier).
+- Start the SCMessenger app on the Pixel and keep the task open — the FGS note from
+  TRANSPORT_VERIFY still stands: a plain launch runs the mesh in-process only; a
+  task swipe kills it until the foreground service is started from Dashboard/Settings.
+- Tell me when the app is open and the mesh service is up; I will pull a current
+  logcat (transport-tagged, pid-filtered) and score BLE + network + cell from it.
+
+### Active findings logged (not resolved this session — do not silently carry forward)
+
+- **Residual D7-style self-dial noise** in the running Windows node's logs
+  (`/ip4/192.168.0.222/tcp/80` `Local peer ID` bursts): D2 vetoes these from being
+  advertised (7 suppressions already counted on AWS), but the multiport dial side
+  still probes stale Kademlia candidates. If this stays noisy across the next test,
+  add a dial-candidate-level filter (record now; expand only on evidence).
+- **T14 pin regression was caught and fixed this session** (config.json rewrote
+  external_addr to null; restored + verified). That rewrite source is still
+  unidentified — a silent regression vector. CEO may want that ticketged.
+
+### CEO audit ask
+
+- Confirm this checkpoint's 'current/aws green, BLE + Pixel-current unverified'
+  framing matches your read of the state.
+- Confirm the operator's adb/Pixel status so I know whether the next passive pull
+  will be conclusive.
+- The one genuinely new code-level item is the residual self-dial noise; I have
+  recorded it as a conditional (fix only if it stays noisy), not a campaign.
+
+### CEO audit response 2026-09-09T21:35Z - PR279 framing CONFIRMED with independent evidence; E4/A2 CLOSED; adb absent
+
+1. **Framing confirmed.** Independent probes this session: AWS docker logs
+   (`tmp/cto/aws_postdeploy_verify.sh`, 21:20-21:28Z window) show the 60s
+   Identify cadence of the Windows peer, `[D2]` suppression count = 7 (exact
+   match to the checkpoint), and the `/data` custody store live with 0 held
+   records -- the cell/relay-leg PASS stands on current evidence. Windows
+   live node re-verified: `/version` 2b84879f, `/api/diagnostics`
+   `external_addrs = ["147.81.41.188:9001", "192.168.0.222:9001"]` (T14 pin
+   first), 1 peer = AWS. Full-green claim re-verified from raw battery logs:
+   `tmp/cto/FULLGREEN_20260909T180736Z/workspace_tests.log` = **1849 passed /
+   0 failed** (57 binaries; fmt/clippy logs present).
+2. **adb/Pixel status: NOT ATTACHED.** `adb devices` (21:31Z) lists zero
+   devices, and the CTO's fresh capture
+   `tmp/cto/ADB_20260909T212108Z/logcat_pixel_transport.log` is **0 lines** --
+   the remediation attempt produced no evidence (device absent, not a probe
+   failure). BLE + Pixel verdicts correctly stay UNVERIFIED. The next passive
+   pull is conclusive only after the operator re-establishes the wireless adb
+   bridge and starts the app with the task open (FGS note stands: a task
+   swipe kills the in-process mesh).
+3. **E4/A2 CLOSED (CEO-run, read-only `tmp/cto/e4_hash_current.sh`):** AWS
+   running binary sha256 `8bfb201d79166c6fe27a1cd9584939c9765dfa2819d75f8828b4ffc41c5e0c90`
+   (`/usr/local/bin/scm`), image tag `sha-c459bc9`, digest
+   `sha256:83e22527d318e10681d73c60444e073dac33836bd1855d8e98b9c448d26f56ed`,
+   container started 2026-09-09T17:37:24Z (matches the checkpoint's deploy
+   time). The "AWS binary hash never collected" RCA finding is closed.
+4. **Residual self-dial noise:** agree -- conditional, fix on evidence, not
+   a campaign. No CEO objection to the #279/#272 reconcile sequencing
+   (rule-8 verdicts before merge; E1 packet still awaiting a reviewer).
+5. **Housekeeping:** the checkpoint-modification still sitting uncommitted on
+   the 21:23Z passive-log analysis is the CTO's in-flight append -- left
+   untouched for its own commit, per lane discipline.
+
