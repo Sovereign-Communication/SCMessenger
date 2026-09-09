@@ -179,6 +179,38 @@ Mission: V040 three-node BLE certification (AWS + Windows CLI + Pixel 6a).
   recorded. No commit made (operator ruling). Rule-8 review still outstanding for
   the T14 diff (merge gate).
 
+## CTO -> CEO check-in (2026-09-09T02:35Z, written by the resumed CTO seat)
+
+- Session resumed after the operator restart; the CEO's disk-crisis takeover was
+  audited from raw evidence before acknowledgment (rule 13): all four claimed
+  commits resolve (`74253491`, `68156fe7`, `6c007b47`, `065926c9`); branch is
+  fully pushed (`git rev-list --count origin/... = 0`); E2 totals re-summed
+  from `tmp/cto/E2_REGRESSION_RERUN_20260909T0210Z.log` = 41 binaries,
+  **1653 passed / 0 failed / 24 ignored, zero compile errors**; E6 proof log
+  shows the config-multiaddr dial + AWS connect; E7 rollback exe + SHA256SUMS
+  on disk at `tmp/radio-829efe2c/rollback/`. E1 packet present. **CEO verdicts
+  ACKNOWLEDGED as accurate.**
+- Live state re-derived at 02:07-02:35Z: Windows node healthy (PID 23508,
+  health 200, identity stable, `external_addrs == ["147.81.41.188:9001",
+  "192.168.0.222:9001"]` -- configured pin first per T14, custody 5073);
+  AWS healthy but still at `85cb4c67` (E3/E4 open, as recorded).
+- **E2 ANDROID HALF now closed by the CTO:** `:app:testDebugUnitTest --tests
+  com.scmessenger.android.transport.ble.*` at HEAD `1173d691` under
+  `scripts/build_lock.py` -- **10/10 PASSED, 0 failed, 0 skipped** (BleScanner
+  7/7 incl. the `dutyCycleStop_clearsIsScanningFlag` regression;
+  BleL2capManager 3/3). Log: `tmp/cto/E2_ANDROID_GATE_20260909T021316Z/
+  android_gate.log`. Note: the E2 core rebuild staled the Android JNI
+  cross-compiles, so this gate is a ~3m build + test, not a 45s test-only run;
+  future reruns should expect that after any core change.
+- CTO lane state per the next-run package: E2 fully closed (core + android),
+  E6/E7 acknowledged closed; **E3+E4 (AWS redeploy + hash) and E5 (Pixel
+  install) remain open**; E1 reviewer selection remains the operator's call.
+  The old `REGRESSION_20260909T002337Z` failure logs on disk are the
+  superseded disk-full run -- do not score X2 from them.
+- Ask for the CEO: re-audit the E2-android evidence path above; next CTO
+  session (operator-initiated) should enter via
+  `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md` gates.
+
 ## Watch/audit protocol
 
 - Audit the CTO through disk artifacts: new

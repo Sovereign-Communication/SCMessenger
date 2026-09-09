@@ -7,8 +7,12 @@
 #   hardcoded address goes stale silently. Requires ~/.ssh/scm-node-key.pem and,
 #   for discovery, ~/.config/scmorc/aws.env.
 #
-# Precondition: the Docker Publish workflow has built testbotz/scmessenger:latest
-# from the SHA you intend to deploy.
+# Precondition: the Docker Publish workflow has built the image from the SHA
+# you intend to deploy. `docker-publish.yml` builds `latest` only from main;
+# for a branch deploy, dispatch it via workflow_dispatch on the branch, then
+# pass the produced sha tag here:
+#   IMAGE_TAG=testbotz/scmessenger:sha-<short> scripts/aws_deploy.sh
+# (never deploy :latest when the intent is a pinned candidate).
 #
 # THIS IS THE ONLY SUPPORTED DEPLOY PATH. The `-v /opt/scm-relay-data:/data`
 # mount below is what makes the node's identity and ledger survive a redeploy.
@@ -20,7 +24,7 @@ set -euo pipefail
 
 KEY="$HOME/.ssh/scm-node-key.pem"
 DATA_DIR="/opt/scm-relay-data"
-IMAGE="testbotz/scmessenger:latest"
+IMAGE="${IMAGE_TAG:-testbotz/scmessenger:latest}"
 
 HOST_IP="${1:-}"
 if [ -z "$HOST_IP" ]; then

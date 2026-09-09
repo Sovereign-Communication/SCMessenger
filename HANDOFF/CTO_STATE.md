@@ -1,10 +1,32 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-01 (v0.4.0 endgame session: ledger unification + D6 merged, Freebuff lane established)
+Last updated: 2026-09-09T02:35Z (V040 three-node campaign: T14 + BLE-01 fixed/live, E2 core+android green, next run gated)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-01) =====
+# ===== RESUME HERE (2026-09-09) =====
+
+The next `/cto` session's whole brief is `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md`
+(with `HANDOFF/V040_3NODE_RCA_2026-09-09.md` as its issue index and the
+2026-09-08 controller package unchanged for checkpoint schema/stages).
+
+State at this update, all verified from fresh commands 2026-09-09T02:07-02:35Z:
+
+- LIVE: Windows node PID 23508, binary `target/release/scmessenger-cli.exe`
+  (829efe2c, /version ba474a7a), T14 primacy proven (`external_addrs ==
+  ["147.81.41.188:9001", "192.168.0.222:9001"]`, configured first), identity
+  stable, custody 5073, AWS peer connected via config bootstrap (E6 proven,
+  no env var needed).
+- GATES: E2 CLOSED (core 41 binaries 1653/0/24 + android BLE 10/10 at
+  `1173d691`); E6 CLOSED (config bootstrap + no-env restart proof);
+  E7 CLOSED (rollback staged outside target/); E1 packet ready, reviewer
+  selection = operator. OPEN: E3+E4 (AWS redeploy at run tree + binary hash),
+  E5 (Pixel BLE-01 APK install - operator only).
+- Parity NOT yet achieved: AWS runs 85cb4c67, Pixel runs pre-BLE-01 APK.
+- Do not score X2 (regression suite) from the old
+  `tmp/cto/REGRESSION_20260909T002337Z/` logs - superseded disk-full run.
+
+# ===== PREVIOUS RESUME POINT (2026-09-01, historical) =====
 
 ## Read these three, in this order
 
