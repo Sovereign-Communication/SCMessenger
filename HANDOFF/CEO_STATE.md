@@ -229,7 +229,31 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
   route through the staging-only rule-8 review for T14+0a33c009; (3) the
   Pixel LAN-dial IO-error observation from 20:52Z stands; (4) keep
   tmp/cto/T14_GOLIVE/launch_node_env.ps1 as the only  sanctioned relauncher.
-- 2026-09-09T01:3xZ PUSH: operator ordered push-to-GitHub for all unsaved work.
+- 2026-09-09T01:45-02:00Z EXECUTING THE NEXT-RUN FIX ORDER (operator: "continue"):
+  - E7 DONE: live binary staged outside target/ at
+    tmp/radio-829efe2c/rollback/scmessenger-cli-829efe2c.exe (829efe2c...,
+    SHA256SUMS.txt recorded) -- future reclaims cannot strand rollback again.
+  - E6 DONE (W2 CLOSED, config-only, no code change): config.json
+    bootstrap_nodes = [/ip4/18.234.62.247/tcp/9001/p2p/12D3KooWGvCW...]
+    (backup config.json.bak-e6-20260909T014640Z). PROOF: stopped PID 16548,
+    relaunched with NO SC_BOOTSTRAP_NODES as PID 23508 (same 829efe2c binary);
+    log shows "Dialing 1 bootstrap node(s)" -> the config multiaddr ->
+    "Connected to 12D3KooWGvCW... via /ip4/18.234.62.247/tcp/9001"; identity
+    stable, custody 5073 preserved, outbox flushed 5->0 (store-and-forward
+    continuity bonus). Evidence: tmp/cto/E6_RESTART_PROOF/. The env-var-only
+    bootstrap defect is closed; launch_node_env.ps1 no longer required.
+  - E1 DONE (packet ready for dispatch): HANDOFF/V040_RULE8_REVIEW_PACKET_
+    T14_ALLOWLIST_EXTERNAL_2026-09-09.md -- scope 0a33c009+74253491, six focus
+    questions, verdict-per-commit requirement, stale Qwen T14 reviews called
+    out as superseded. Operator/lane picks the reviewer.
+  - E2 IN PROGRESS: full core regression suite rerunning detached (wrapper
+    tmp/cto/e2_run.cmd -> tmp/cto/E2_REGRESSION_RERUN_20260909T0150Z.log).
+    RECORDED DEVIATION: build_lock.py bypassed -- sole build on host (CTO
+    stopped, 0 cargo procs verified pre-launch).
+  - Remaining entry gates: E3 (AWS redeploy at run tree), E4 (AWS binary hash
+    via SSH), E5 (Pixel BLE-01 APK install -- OPERATOR).
+  - Live node now PID 23508 (no-env relaunch); relaunch config recorded in
+    tmp/cto/E6_RESTART_PROOF/restart_record.txt.
   This branch `cto/t2-disk-ruling-2026-08-31` pushed (34 commits ahead of
   origin/main; CI will run). Other seats' branches with unpushed commits and
   all 11 local stashes backed up as clearly-labeled backup branches and pushed
