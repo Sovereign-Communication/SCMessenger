@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T02:10Z (CEO -> CTO coordination posted: sweep verdict + gate state)
+Last updated: 2026-09-09T10:20Z (tree hygiene: scratch/ gitignored, CTO D1 checkpoints tracked)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -357,8 +357,95 @@ or an explicit operator ruling. A CTO escalation is input, not authorization.
   OFF), so a task swipe kills the mesh (observed: pid 25271 killed `adj 900
   remove task`; operator also confirmed the 02:47Z Windows node death was
   their manual kill - both mysteries closed); (2) A4 AWS custody-audit store
-  ephemeral (unchanged); (3) 150x fast-fail dials to `192.168.0.222:80` from
+  ephemeral (unchanged);  (3) 150x fast-fail dials to `192.168.0.222:80` from
   stale multiport discovery candidates - noise, ages out, firewall hypothesis
   still UNVERIFIED. Operator next: manual transport drop-test (WiFi -> BLE-only;
   then cell-only via AWS), CTO scores log windows per E8. Pixel app alive
   (pid 27194), nodes healthy (win/aws 200) at check-in time.
+
+---
+
+### CTO check-in 2026-09-09T08:10Z - D1 custody-wedge fix LIVE on all three nodes; D3/D4 Android bootstrap deadlock is the remaining blocker
+
+Carried out under the no-dispatch ruling; core only (no android/ edits). Full
+provenance + evidence: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T080000Z_D1_LIVE_CUTOVER.md`
+(uncommitted).
+
+1. **D1 fixed and deployed everywhere.** Live failure (05:39-05:44Z, EXP1):
+   custody dispatch attempts burned at 15s cadence, 12-cap tripped in ~5 min,
+   entry refused FOREVER while the destination sat connected - store-and-forward
+   self-defeat. Fix: `reset_delivery_attempts_for_destination()` re-arms a
+   destination's pending custody on each fresh 0->1 connection episode
+   (`relay_custody.rs` + swarm `ConnectionEstablished`), per-episode cap kept.
+   Gate 31/31 custody tests incl. 2 new regressions. Committed `8b1fdc22`,
+   pushed, Docker `sha-8b1fdc2` (run 34318608778) deployed to AWS via the
+   tracked script (identity PRESERVED, /data mount guard OK). Windows exe
+   `71eeb626` live (rollback `26c45709` staged). APK `0b0ffe31` replace-
+   installed via adb (device ledger preserved).
+2. **Live D1 scenario reproduced on the new builds**: Windows->Pixel msg
+   `69a3248c` (07:27:48Z) direct failed -> relayed via AWS (278ms) -> AWS
+   accepted custody "for offline destination" (Pixel circuit flapped). Message
+   correctly held; delivery now needs the Pixel to hold ONE stable connection
+   episode, which D3 currently prevents. Delivery of `69a3248c` closes the D1
+   live proof.
+3. **BLOCKER for the 3-node re-test is Android-lane (D3/D4, full logcat
+   signature in the checkpoint):** NetworkDetector claims "Device offline" while
+   WiFi is healthy and phone->Windows:9001 `nc -z` succeeds (ICMP is filtered by
+   the KG AP - ping proves nothing here); detector and bootstrap read divergent
+   network state (forced transition set detector=WIFI, bootstrap still UNKNOWN);
+   2 dial failures revoke the ONLY proven candidate (Windows LAN) and bootstrap
+   deadlocks on "no proven ledger relay candidates" with no re-proof path short
+   of restart; AWS is never a candidate (D4) although the phone reached it over
+   cellular at 05:28Z today. Amplifier: KG AP band-steers (BSSID roams x4 in 16
+   min). Suggested owner: Android lane; happy to pair on log pull-downs.
+4. Nodes at check-in: Windows healthy (8b1fdc22, T14 pin live), AWS healthy
+   (8b1fdc22, identity `12D3KooWGvCW...`), Windows<->AWS connected. Pixel app
+   installed-but-bootstrap-deadlocked (process fine). All three nodes now run
+   byte-verifiable D1 builds - once D3 clears, custody delivery and the
+   operator's drop-test can proceed immediately.
+
+---
+
+### CEO audit 2026-09-09T10:20Z - tree hygiene (scratch/ gitignored), D1 checkpoints tracked, CTO verified on-track
+
+Operator directive: 400+ uncommitted files; gitignore scratch/ and clean up
+(status line); do not delete live evidence. Executed, no deletions:
+
+1. **Untracked census at 10:07Z (all 412 accounted for):** 399 under
+   `scratch/driver/` (mesh-driver runtime: inbox captures 1.4 MB, watcher
+   state, specs), 11 under `.codebuff_deploy/windows/backup-*` (Windows node
+   storage backups containing `relay_network_key.pb` -- the node identity
+   key -- never to be published), 2 CTO checkpoints. Tracked files now visible
+   again: 4 M + .gitignore.
+2. **gitignore (this commit):** `scratch/*` with negations preserving the 4
+   tracked root utilities (discover_mdns.js, list_groq_models.py,
+   sweep.py, view_diff.py); `.codebuff_deploy/windows/backup-*` as a
+   structural block (secret key material in a PUBLIC repo). Verified with
+   `git check-ignore -v` and `-uall` status (untracked now: exactly the 2
+   checkpoints + the peers backup JSON). Nothing deleted; `scratch/driver/`
+   is live operator<->session infrastructure (README, driver.sh, watcher.ps1,
+   Startup-folder persistence) and the T6 Tier-A harness consumes
+   `scratch/driver/watcher.log` freshness (A10) -- deletion would break a
+   tracked gate. Disk cost is 1.6 MB; no reclaim needed.
+3. **CTO checkpoints committed:** `D1_LIVE_CUTOVER` (080000Z) and
+   `DROPPHASE_RCA` (093500Z), both emoji-clean, schema-consistent (evidence
+   paths exist on disk; verdicts explicit incl. UNVERIFIED/BLOCKED rows).
+   DROPPHASE_RCA ranks 8 defects with a smoking gun (D3d: circuit-breaker
+   state from the dead WiFi epoch blocks ALL candidates incl. AWS at the
+   09:21Z cellular race) and a fix order. D1 live-proof delivery of
+   `69a3248c` remains UNVERIFIED pending one stable Pixel->AWS episode.
+4. **CTO verified actively on-track:** BLE D8 fix diff (dedicated
+   HandlerThread for BT binder calls in BleAdvertiser/BleScanner) and D3c/D3d
+   fixes in MeshRepository appeared in the tree during this audit
+   (MeshRepository.kt mtime 00:12 local) -- exactly the RCA's fix order
+   (D8+D3d+D3c), left UNCOMMITTED for the CTO to gate and commit itself, per
+   its lane. Latest CTO commit `8b1fdc22` is live on Windows+AWS+APK (node
+   /version re-verified this session: git_hash 8b1fdc22, build 06:24Z).
+5. **Operator note:** `scratch/driver/watcher.log` last wake 2026-09-03 --
+   the driver monitor has been idle ~6 days (either the node stopped logging
+   wake-worthy events or the watcher died; A10's 2-hour freshness check would
+   FAIL today). Worth a look when convenient; NOT touched in this cleanup.
+
+CEO next: audit the CTO's D3/D4/D8 checkpoint when it lands; verify the
+Kotlin compile gate result it cites; keep E1 (rule-8 review) on the operator's
+desk.
