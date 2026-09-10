@@ -40,6 +40,7 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 | T12 | `V040_T12_CI_CONCURRENCY_AND_PATH_FILTERS.md` | No concurrency groups anywhere, so every push queues a fresh matrix and nothing cancels the superseded one; a one-file docs change runs 27 checks | Any time -- CI config only | none, but read its section 3 trap |
 | T13 | `V040_T13_RULE8_FOLLOWUPS_262_263.md` | Rule-8 follow-ups: the `locally_verified` primitive is seeded from a legacy flag that meant the opposite; wire-supplied `last_seen` steers eviction in the now-capped store; the DHT bypasses the disclosure rule entirely | After #262/#263 merge | **Rule-8 again** |
 | T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
+| BJ | `V040_BEACH_JOIN_CONTINUATION_2026-09-05.md` | **Finish current mission first, then execute the beach-join plan** (QR hotspot share -> seed import -> trust wiring). Full audit: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md` | After the in-flight mission (incl. #276/3-node) reports DONE | **Rule-8 mandatory for Phases 2-3** |
 
 T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
 a new IP rejoins the mesh with no human action, and its new address propagates by
@@ -88,6 +89,15 @@ handset + AWS relay -- there is no second phone), and the current order.
 **Order: T12, then T10. Hold T9 until T12 lands. Do not touch #262** -- it is
 awaiting a Rule-8 decision and one rebase at merge time, neither of which is the
 lane's call.
+
+## >> CONTINUATION (2026-09-05): `queue/V040_BEACH_JOIN_CONTINUATION_2026-09-05.md`
+
+Finish the in-flight mission first (report DONE per the inbox contract), then
+execute the beach-join plan Phase 0 -> 1 -> 2 -> 3, one PR per step, no
+self-merge. Design authority: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md`
+(read it whole before coding). Operator rulings: auto-hotspot flow; trust
+(verify_bundle wiring + Rule-8 APPROVE) ships in the same package and blocks
+beach use. Device proofs need the Pixel 6a + a second handset.
 
 ## Never idle -- node availability tiers
 
