@@ -423,42 +423,20 @@ class AndroidPlatformBridge @Inject constructor(
     }
 
     override fun onEnteringBackground() {
-        Timber.i("App entering background")
-
-        // BACKGROUND-PAUSE REMOVAL (2026-09-10, operator ruling): this override
-        // previously called meshRepository.pauseMeshService() every time the
-        // activity backgrounded, tearing the mesh down to zero transports while
-        // the foreground service stayed alive. Live evidence: peersDiscovered
-        // pinned at 0 and outbox retries failing with transports=0 for the
-        // entire backgrounded window — the end user had to manually re-toggle
-        // mesh to restore connectivity. SCMessenger is store-and-forward: a
-        // backgrounded node MUST keep custody, relay, and discovery alive, or
-        // the product's core delivery guarantee is void. Battery and resource
-        // adaptation remains the job of the duty-cycle system
-        // (on_battery_changed / on_motion_changed / behavior adjustments), and
-        // the user can still pause explicitly via the notification action —
-        // only the automatic lifecycle-driven pause is removed.
-        //
-        // ANR-2026-09-09 fix note kept for provenance: any FFI work triggered
-        // from this path must stay off the main thread (this override is
-        // invoked on MAIN from MainActivity.onPause and from the Rust core
-        // callback). The removed call was the only work launched here.
+        // Unified 2026-09-10: CTO operator ruling + v040 R10-F3.
+        // (1) Do NOT pause the mesh on lifecycle backgrounding — store-and-forward
+        //     custody/relay/discovery must stay alive (CTO, operator 2026-09-10).
+        // (2) Do NOT echo back into the FFI — MeshService::pause already applied
+        //     on the core side; re-entering pause() deadlocked main (R10-F3).
+        // Battery adaptation stays with the duty-cycle system; explicit pause
+        // remains available via the notification action.
+        Timber.i("App entering background (no automatic pause, no FFI echo)")
     }
 
     override fun onEnteringForeground() {
-        Timber.i("App entering foreground")
-
-        // ANR-2026-09-09 fix: same main-thread re-entrancy as
-        // onEnteringBackground — resume() FFI blocked main for >10s in 10
-        // captured ANR stacks (meshservice_resume), including the 12:00:56Z
-        // system ANR fired from the Rust-driven uniffi callback itself.
-        scope.launch {
-            try {
-                meshRepository.resumeMeshService()
-            } catch (e: Exception) {
-                Timber.w(e, "resumeMeshService failed")
-            }
-        }
+        // Unified 2026-09-10: no FFI echo (R10-F3). Resume is core-owned; any
+        // future app-driven resume must stay off the main thread (ANR 2026-09-09).
+        Timber.i("App entering foreground (no FFI echo)")
     }
 
     // ========================================================================

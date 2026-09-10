@@ -54,6 +54,11 @@ dirs = "5.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-appender = { workspace = true }
+# Local interface enumeration for the dial self-address guard (already in
+# the lock as a transitive dep of the libp2p transport stack; native only -
+# the crate cannot compile for wasm32). Used to catch poisoned ledger
+# entries naming OUR interface IPs on OUR listen ports.
+if-addrs = "0.15"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }

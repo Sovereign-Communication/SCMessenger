@@ -95,6 +95,11 @@ async fn test_consensus_with_multiple_observations() {
     use std::net::SocketAddr;
 
     let mut observer = AddressObserver::new();
+    // V040 address admission contract: observations are only recorded for
+    // ports this node currently listens on (empty allowlist fails closed).
+    // Declare the two ports under test so consensus is exercised, matching
+    // the swarm wiring that calls set_listen_ports from NewListenAddr.
+    observer.set_listen_ports([1234, 5678]);
 
     // Since 0a33c009 the observer fails closed with an empty allowlist:
     // observations are only accepted for ports this node currently binds.

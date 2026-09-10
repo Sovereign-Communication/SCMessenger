@@ -640,6 +640,16 @@ impl DialScheduler {
                         };
                         l.complete_dial(&key, true, now2, learned);
                     }
+                    Err(msg) if msg.to_string().starts_with("skipped:") => {
+                        // The core dial guard deliberately did not dispatch
+                        // this dial (target is self / peer already connected /
+                        // address is our own). NEITHER success nor failure:
+                        // release the in-flight claims neutrally so no phantom
+                        // connection slot, stale-address reap, or backoff burn
+                        // follows a dial that never happened.
+                        tracing::debug!("Dial to {} {}", addr_str, msg);
+                        l.complete_dial_skipped(&key);
+                    }
                     Err(_) => {
                         l.record_failure(&addr_str);
                         l.complete_dial(&key, false, now2, None);

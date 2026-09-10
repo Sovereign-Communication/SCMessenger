@@ -239,8 +239,7 @@ impl LocalCell {
     fn sort_by_reliability(peers: &mut Vec<&PeerInfo>) {
         peers.sort_by(|a, b| {
             b.reliability_score
-                .partial_cmp(&a.reliability_score)
-                .expect("f64 reliability scores should always be comparable")
+                .total_cmp(&a.reliability_score)
                 .then_with(|| a.peer_id.cmp(&b.peer_id))
         });
     }
@@ -346,14 +345,13 @@ impl LocalCell {
             return;
         }
 
-        let peer_to_evict = *self
-            .peers
-            .values()
-            .min_by(|a, b| {
-                a.reliability_score
-                    .partial_cmp(&b.reliability_score)
-                    .expect("f64 reliability scores should always be comparable")
-            })
+        // Same ordering as sort_by_reliability: lowest score first, peer-id
+        // tie-break, so equal-score eviction is deterministic, not
+        // HashMap-iteration-order dependent.
+        let mut ranked: Vec<&PeerInfo> = self.peers.values().collect();
+        Self::sort_by_reliability(&mut ranked);
+        let peer_to_evict = *ranked
+            .last()
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 

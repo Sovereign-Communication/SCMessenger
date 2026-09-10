@@ -223,6 +223,7 @@ open func setNickname(peerId: String, nickname: String?)throws   {try rustCallWi
 open func setPlatformBridge(bridge: PlatformBridge?)  {try! rustCall() {
 open func setPrivacyConfig(json: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func setRelayBudget(messagesPerHour: UInt32)async   {
+open func setSwarmPeerConnection(publicKeyHex: String, connected: Bool)  {try! rustCall() {
 open func shutdown()async   {
 open func signData(data: Data)throws  -> SignatureResult  {
 open func start()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
