@@ -1,8 +1,1445 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-22 (Antigravity session audit; two dispatches validated)
+Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
 Entry point: `/CTO`. This file is the whole context load.
+
+## 0-2026-08-23y. VALIDATION PASS -- two handoff files authored, timer armed
+
+Interim CTO/CAO (Claude) session at operator direction. Read-only audit plus
+two authored documents; NO code changed. Full evidence:
+`HANDOFF/CTO_CAO_PRETAG_VALIDATION_AND_UNIFICATION_2026-08-23.md` (claim
+ledger V1-V17, stale-claim corrections, UNKNOWN list U1-U10, unification pass).
+Execution prep: `HANDOFF/plans/FOUR_NODE_GATE_EXECUTION_PLAN_2026-08-23.md`.
+
+Corrections to this file's stand-down table (do not re-read without these):
+
+- **A3/#227 is NO LONGER green**: `Android JVM Unit Tests` failing (run
+  32670592900, `MeshRepositoryTest > isStorageDegraded initial state is false`,
+  ClassCastException ConnectivityManager in JVM test). Fix before merge.
+- A5/#219 red-on-Lint RE-CONFIRMED today (`gh pr checks 219`).
+- A7 worktree is INTACT at `C:/Users/SCM/Documents/GitHub/_scm_wt/cihard`
+  (repo-SIBLING path, not under SCMessenger/) -- uncommitted, plus an extra
+  untracked `security-regression-tests.yml` that already implements both
+  stand-down traps (forg-pattern selector + zero-test loud failure).
+  Allowances reviewed: all legitimate. Missing: proof-of-fire, commit, push.
+- N4 AWS relay healthy but image STALE (6b2573fa); redeploy mechanics without
+  SSH key remain UNPROVEN -- prove before tag day.
+- N3 Windows relay running (PID 16156), multiport listening, ESTABLISHED to
+  N4 at validation time.
+- Four Aug-10 tickets (finite-retry abandonment, self-ratchet reset, inbound
+  CryptoError, async receipt convergence) still undispositioned vs current
+  main -- U1-U4, verify-or-disposition BEFORE the tag.
+
+Staffing change recorded (operator, 2026-08-23): GPT lapsed; CTO/CAO seat is
+Claude; antigravity may orchestrate OSX/iOS DEPLOYMENT ONLY (no code edits)
+per AW-BILAT-0003 steps, evidence = pasted command output.
+
+Wakeup tracker armed: scheduled task `SCM_4NodeWakeup`, every 30 min,
+L1-guarded (lock, 600s runner cap, 24h self-expiry, self-delete when
+`tmp/wakeup_4node/CONFIDENCE_99.reached` exists; heartbeat log
+`tmp/wakeup_4node/wakeup.log`; criteria in `tmp/wakeup_4node/CRITERIA.md`,
+gitignored). Manual removal: `schtasks /delete /tn SCM_4NodeWakeup /f`.
+
+## 0-2026-08-23z. STAND-DOWN — READ THIS FIRST, THEN STOP READING
+
+Everything below this section is history and detail. This section is what you
+need to resume. **Do not read the whole file** — it is long and most of it is
+superseded.
+
+### The one-line state
+
+Two P0 forgery holes were found and fixed this session. `main` is green. The
+tag is blocked on four concrete items, none of which is design work.
+
+### What is true right now
+
+| Fact | Evidence |
+|---|---|
+| `main` is green, honestly | Nine lanes pass. The "green by suppression" claim was investigated and **retracted** — see §0-2026-08-23d |
+| `main` HEAD | `e5ff72cf` (moved during the session) |
+| D1 satisfied | first green main this plan recorded |
+| D5 satisfied | #139 merged |
+| No `v0.4.0` tag exists | latest public release is v0.1.9, March 2026 |
+| Release machinery works | a tag alone produces the signed APK + Windows CLI. **D2 needs a tag, not a build** |
+
+### The gate is FOUR nodes, and the tag is a DRAFT release
+
+N1/N2 Android, N3 Windows CLI, N4 AWS relay. Apple is a **parallel lane with a
+join point**, not a blocker — it joins as N5 if CI goes green in time
+(`HANDOFF/gpt/CTO_TO_CAO_2026-08-23_APPLE_LANE_ACTIVE.md`, `AW-BILAT-0003`).
+
+`v0.4.0-rc.1` is cut as a **draft** GitHub release — a published release is
+public the moment it exists, and this build is not for the public. Publishing
+gates on the external audit being **commissioned**, not completed. Ruling and
+reasoning in §0-2026-08-23d.
+
+### What blocks the tag — the whole list
+
+| # | Item | State | Next action |
+|---|---|---|---|
+| A1 | #221 V1+V2 sender auth | Verified, **not mergeable** | Close the X25519 coverage gap (§0-2026-08-23e); **fresh adversarial review of the MERGED tree** — the old review read `2aadf489`, now stale; merge `main` in; clippy |
+| A2 | #222 storage fail-loud | Verified green, BEHIND | Merge `main` in |
+| A3 | #227 Android degraded-storage wiring | Verified green, stacked on #222 | Merge after A2 |
+| A4 | #220 Android reachability | 2 known wiring findings | **Accept, do not fix** — the passphrase revert re-orphans SecurityUtils; record the acceptance |
+| A5 | #219 CLI identity persistence | **RED on Lint / Rust Linting** | **N3 is the Windows CLI and churns identity without this.** Either fix, or drop N3 from the gate. Check first whether #222 alone suffices |
+| A6 | POST_TAG_QUEUE §2 re-entry table | **DONE — 2 BLOCKS, 3 FIXED** | See §0-2026-08-23f. **Desktop panic can kill N3 mid-gate; relay fallback is unproven and fails silently.** Both need an operator ruling or work before the gate |
+| A7 | Deny ignored params in the perimeter + required forgery-test gate | **DONE -- #228 (draft)** | See §0-2026-08-23g. **DO NOT MERGE BEFORE #221** -- the check fails on main today and would block every PR. Five untriaged candidates listed |
+
+**If an agent result was never read, its work is in the worktree.** Check
+`git -C _scm_wt/cihard status` and the branch log before re-dispatching anything.
+
+### The two things most likely to bite you
+
+0. **A6 came back with two BLOCKS -- read §0-2026-08-23f first.** N3 (Windows)
+   can panic and exit mid-gate via two unconditional  calls that fire
+   in release builds; capture its **stderr separately** or a recurrence is
+   invisible. And relay fallback for roamed peers was never verified -- it fails
+   as **silent non-delivery**, the hardest mode to recognise in the field.
+1. **A6 is the same class of mistake as the security bug.** Six P0s were
+   dispositioned against a **two-endpoint** premise. The gate is now four nodes,
+   and four re-entry triggers written into `POST_TAG_QUEUE.md` have fired. I
+   built a gate plan that listed none of them. Re-run that table before the
+   gate, not after it fails.
+2. **#221 has a protection with no regression coverage.** Reverting the
+   dedicated-X25519 fix leaves CI green. Proven by running it. Do not merge
+   #221 believing the test suite protects that fix.
+
+### Rules that actually saved this session
+
+- **Verify a fix by running the ORIGINAL test** — written by a worker who never
+  saw the fix and could not have tuned it. Non-circular and unfakeable. Pair it
+  with an honest-path test so "reject everything" cannot pass.
+- **Demand pasted command output for revert checks.** One worker answered with
+  prose describing what *would* happen. It read like verification and was not.
+- **Ask where the hole went.** A partial security fix moves it — that question,
+  in the review packet verbatim, is what found the V1 downgrade.
+- **Ask what closing it breaks.** Reviewers do not. It is the difference between
+  a fix and a fleet-wide outage.
+- **Commit and push worker output BEFORE reclaiming disk.** Every reclaim this
+  session was safe only because of that ordering.
+
+### Operational, non-obvious
+
+- **Disk is the binding constraint.** It hit 2.2 GB twice. Reclaim `target/` of
+  worktrees whose PRs are pushed. `scripts/clean_target.sh` refuses whenever ANY
+  build process is alive even in a different worktree — scope the reclaim to
+  `target/debug/deps` to preserve `target/release/` and the running relay binary.
+- **Never two build tools at once.** Agents must poll
+  `tasklist | grep -icE "cargo\.exe|rustc\.exe|gradle|java\.exe"` to 0 first.
+- **Do not run `cargo test --workspace --no-run`** — it drives
+  `target/debug/deps` to 20 GB and has filled this disk twice.
+- **`cargo fmt --all` silently no-ops in a worktree.** Use `cargo fmt -p <pkg>`.
+- **`CARGO_INCREMENTAL=0` on a warm worktree** forces a full rebuild.
+- **The scheduled cloud routine is DISABLED** (`trig_012ouEf2qNUmhJ8fmz1RHWAY`).
+  It fired 10 times unattended, several runs 2-4 hours, overlapping. **Do not
+  re-enable without operator sign-off** — autonomous spend is a business
+  decision, not a CTO one. Full account in §0-2026-08-23 L1.
+
+### Do not repeat these mistakes from this session
+
+- I claimed a CI lane was "green by suppression" and said **verified** when I had
+  only grepped for a string. Retracted in §0-2026-08-23d. Check what a
+  `continue-on-error` is attached to before repeating anyone's inference.
+- I asserted the static-DH sides "agree only if `our_x25519_secret` corresponds
+  to `bundle.x25519_public`". False — independent CSPRNG seeds; they agree by
+  commutativity. The concern was still worth raising; the stated precondition
+  was wrong.
+- I deferred a decision to the operator that the CTO and CEO could resolve
+  between them. Escalate ties on money and staffing; do not escalate judgement
+  calls you are equipped to make.
+- **I truncated this very file** with a careless splice while writing this
+  stand-down -- an index-based cut silently dropped four of the day's sections.
+  It was recoverable ONLY because they were already committed; I rebuilt from
+  `git show HEAD:HANDOFF/CTO_STATE.md`. **Commit before restructuring a file
+  you are also appending to**, and after any scripted splice, `grep` for the
+  section headers you expect rather than trusting the write.
+
+### CEO procedure (new standard, operator directive 2026-08-23)
+
+Spawn a **fresh CEO subagent per call**, cold-context, and **do not show it prior
+CEO answers** — anchoring destroys the value. Two independent passes this
+session split on the audit question, which is exactly the signal you want. Opus
+for consensus passes. Include facts against yourself; a CEO briefing that omits
+the CTO's own errors is worthless.
+
+## 0-2026-08-23g. A7 COMPLETE -- the lint rediscovered the original bug, and found 5 more candidates
+
+Supersedes the "A7 IN FLIGHT" note. The agent died on the session limit; the CTO
+finished the verification it never reached.
+
+Branch `cto/ci-hardening-2026-08-23`, worktree `_scm_wt/cihard`, based on
+`e5ff72cf`.
+
+### The design is right, and it is honest about its own limits
+
+Two controls, because **one could not do the job**:
+
+1. `#![deny(unused_variables)]` at the four perimeter module roots.
+2. `scripts/check_perimeter_underscore_params.py`, run as a required CI step.
+
+**The reason there are two is the important part.** `deny(unused_variables)`
+**cannot** catch the historical bug. A leading underscore is rustc's own
+sanctioned way to silence that exact lint -- it is what the compiler *suggests
+you type*. So `_our_signing_key` produces zero diagnostics at any deny level.
+The script covers that half; the attribute covers the other (a truly unused,
+non-underscored parameter). Neither alone is sufficient and the code says so in
+its own comments rather than overclaiming.
+
+Policy: a bare `_: T` is fine (honest that the value is discarded); a named
+`_foo: T` fails unless the comment block directly above the `fn` carries the
+literal marker `PERIMETER-ALLOW-UNDERSCORE: <reason>`. That mirrors `#[allow]`
+semantics -- narrow, commented, greppable -- for a policy with no lint name to
+attach to.
+
+### PROOF -- better than the artificial violation the packet asked for
+
+Run against `main`, the script emits:
+
+```
+[FAIL] core/src/crypto/ratchet.rs:442: fn `init_as_sender_hybrid`   has ignored parameter `_our_signing_key`
+[FAIL] core/src/crypto/ratchet.rs:508: fn `init_as_receiver_hybrid` has ignored parameter `_our_signing_key`
+[FAIL] core/src/crypto/ratchet.rs:508: fn `init_as_receiver_hybrid` has ignored parameter `_sender_bundle`
+```
+
+**Those three ARE the P0.** This worktree is based on `main`, which does not yet
+carry the #221 fix, so the check independently rediscovered the exact
+sender-impersonation bug it was written to prevent -- from a cold start, by
+mechanism, with no knowledge of the incident. That is stronger evidence than
+introducing a synthetic violation would have been.
+
+`8 unjustified underscore-prefixed parameter(s) ... (61 files, 1766 fn items scanned)`
+
+### FIVE MORE CANDIDATES -- not triaged, do not assume benign
+
+The other five. **None is known to be a bug; none has been cleared either.**
+
+| Location | Ignored | Why it deserves a look |
+|---|---|---|
+| `transport/health.rs:592` `record_message_success` | `_latency_ms` | Callers **measure and pass** a latency that the struct then discards entirely -- it keeps `total_messages_sent` and `total_bytes_sent` and no latency at all. **If transport scoring is meant to prefer faster paths, it cannot.** Directly relevant to **D6 transport racing** |
+| `transport/manager.rs:897` `run_multi_hop_path_selection` | `_peer_id` | Path selection that never reads which peer it is selecting for |
+| `routing/negative_cache.rs:346` `should_exempt_from_negative_cache` | `_peer_id` | A predicate deciding whether to exempt **a peer**, that never reads which peer |
+| `routing/engine.rs:135` `route_message` | `_now` | Routing decision that ignores time |
+| `routing/neighborhood.rs:378` `evict_stalest_gateway` | `_now` | Eviction of the **stalest** gateway that ignores time |
+
+The last four are the same shape as the original defect: **a decision function
+handed the input that should drive the decision, discarding it.** Triage each
+before the gate, or annotate with a real reason. `health.rs` is the one to look
+at first because D6 depends on transport selection behaving sensibly.
+
+### Correctly annotated already (verified by the CTO, not taken on trust)
+
+- `multiport.rs:127` `requires_elevated_privileges(_port)` -- genuinely read
+  under `cfg(unix)`; compiles away elsewhere. Legitimate.
+- `wifi_aware.rs` `MockWifiAwareBridge` (6 sites) -- test-only mock. Legitimate.
+- `wifi_direct.rs:211` `PlatformWifiDirectBridge::set_on_message_received`
+  -- **production, not test**, and a silent no-op. The annotation cites
+  `HANDOFF/plans/P1-17_windows_wifi_direct_design.md`; I checked line 144, which
+  states verbatim: *"`set_on_message_received` is a no-op (211) -- data flows
+  over the IP link, not a callback."* Claim verified.
+  **And `grep` finds zero callers anywhere in `core/src` or `cli/src`**, so
+  nothing registers a callback that is silently dropped today. Harmless now, a
+  trap later: if anyone wires one up expecting messages, it will never fire.
+
+### The security-regression workflow -- two good decisions worth keeping
+
+`.github/workflows/security-regression-tests.yml`:
+
+- **Name-pattern selector, not a hardcoded list.** It matches any test whose
+  name contains `forg`. The justification is empirical: the names already
+  drifted once -- `test_v1_legacy_envelope_forgery_is_rejected.rs` contains a
+  function called `test_v1_legacy_forged_unsigned_envelope_is_rejected`. A
+  hardcoded list would have matched **zero** tests the moment that file landed
+  and reported green. **It fails loudly on zero matches.**
+- **No `paths:` filter, deliberately.** Branch protection here uses classic
+  required-status-check contexts, and a required context whose workflow is
+  path-filtered leaves unrelated PRs stuck on "Expected -- waiting for a status
+  to be reported" forever. Running unconditionally is a strict superset of the
+  requirement. No other required check in this repo uses path filters, for the
+  same reason.
+
+### MERGE ORDER -- this matters, do not land it first
+
+**The script fails on `main` today** (the three ratchet hits). If it becomes a
+required check before #221 lands, **it blocks every PR in the repo.**
+
+Correct order:
+
+1. Merge **#221** -- removes the three ratchet violations at the root
+2. Triage or annotate the **five candidates** above
+3. Only then merge this branch and mark the checks required
+
+Landing this branch first would be self-inflicted CI paralysis.
+
+## 0-2026-08-23f. RE-ENTRY TABLE RE-RUN -- two BLOCKS, three FIXED
+
+A6 complete. Verified against `main` tip, with file:line evidence for every
+claim. **This changes the gate plan and it is the most important unread result
+of the session.**
+
+| Ticket | Verdict |
+|---|---|
+| `P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH` | **BLOCKS** |
+| `P0_NO_RELAY_FALLBACK_FOR_ROAMING_PEERS` | **BLOCKS** |
+| `P0_UPNP_PANIC_KILLS_DESKTOP_NODE` | FIXED |
+| `P0_BLE_L2CAP_ACCEPT_SPIN` | FIXED |
+| `P0_DUAL_BIND_TCP_AND_WS_ON_SAME_PORT` | FIXED (bookkeeping only) |
+
+### BLOCK 1 -- the desktop panic. N3 can die mid-gate.
+
+The per-peer concurrency cap is real and tested (`cli/src/ledger.rs:224-226`,
+commit `c242fb53`, `test_per_peer_concurrent_connection_cap` at `:2132`) **but it
+gates only the CLI's own periodic ledger-scheduler dial path**
+(`cli/src/main.rs:596-598`).
+
+`core/src/transport/swarm.rs` has roughly **19 independent `swarm.dial()` sites**
+-- relay dial `:3278`, NAT hole-punch seed `:6435`, candidate ladder
+`:6095-6108` -- gated only by the older per-**address** `DialPolicyManager`,
+which **explicitly permits up to 3 concurrent dials to the same address**
+(`core/src/transport/dial_policy.rs:160-169`, asserted by its own
+`test_concurrent_dial_limit` at `:488-504`) and never consults established
+connection count.
+
+**My earlier "release builds probably remove this" note was half right and
+therefore misleading.** `Cargo.toml:131-136` sets no `debug-assertions`
+override, so the `debug_assert_eq!` at `libp2p-request-response-0.29.0/src/lib.rs:678`
+IS compiled out of `scm-windows-amd64.exe`. **But the same function carries two
+unconditional `.expect()` panics at `lib.rs:670` and `:676` that fire in every
+profile.** Our own guard (`swarm.rs:5334-5390`) runs *after* libp2p's internal
+handler and protects only application state -- it cannot prevent a crate-internal
+panic.
+
+**What the operator sees:** N3 exits cleanly -- `swarm_event_loop_died`, process
+gone. Not a hang. Most likely during D6 transport-failover churn.
+
+**Required before the gate, minimum:** capture N3 **stderr separately**. The
+original ticket records that this panic never reaches the rolling tracing log --
+only stderr. Without that capture a recurrence is invisible rather than
+diagnosable.
+
+Then either (a) an explicit operator ACCEPTABLE ruling with the workaround
+recorded -- "restart N3 promptly; a mid-gate panic is a known-possible event, not
+a new regression" -- or (b) extend the peer-level cap to the swarm dial paths,
+which is work inside merge-blocked `core/src/transport/` and needs
+`crypto-security-auditor` sign-off. **(a) is an operator judgement call, not
+mine.**
+
+### BLOCK 2 -- relay fallback. Silent non-delivery, the worst failure mode.
+
+Genuinely fixed and tested: loopback/self-dial filtering
+(`core/src/transport/addr_filter.rs:1324`, `cli/src/ledger.rs:586-594`, commit
+`92ad1532`) and stale-address reaping (`test_stale_address_reaping`,
+`ledger.rs:2165-2189`).
+
+**But reaping fires only when a new DIRECT dial succeeds**, so it does nothing
+for a peer reachable only via relay. And the ticket's central acceptance
+criterion -- that a circuit through the relay we hold a live connection to is
+actually constructed and prioritised ahead of dead direct candidates -- **was
+never verified, not even manually.** No regression test exists anywhere in
+`core/tests`, `core/src`, or `cli/src`.
+
+The ticket's own closing words: *"whether a circuit through 12D3KooWPJK6...
+(AWS) is ever constructed needs a targeted check... I will not repeat the mistake
+of concluding absence from a filter that could not have shown presence."*
+
+**What the operator sees:** not a crash, not a hang -- a message queued for a
+roamed peer sits retrying in the outbox with no explicit error. **Whether it ever
+arrives depends on ladder ordering nobody has proven.**
+
+**Cheap, concrete action before relying on the D4/D6 cross-NAT leg:** pull the
+candidate-ladder debug log (`swarm.rs:6095`, `"Dialing candidate ladder for
+{}: {:?}"`) during a two-handset cross-NAT run and confirm by eye that a
+`p2p-circuit` entry through the live AWS relay both **appears in the ladder and
+is actually dialled**. That is the targeted check the ticket asked for and never
+got -- minutes of log reading.
+
+If the circuit is not reached, this blocks D4 and D6 outright, and the
+"D4 has a public IP so no relay is needed" premise that `POST_TAG_QUEUE.md` used
+to defer it does not survive the move to two handsets.
+
+### The three FIXED, with the caveats that matter
+
+- **UPnP** -- removed entirely (zero references in `Cargo.toml` and
+  `behaviour.rs`); 93-minute clean soak recorded. Loose end: `Cargo.lock:3056`
+  still resolves `libp2p-upnp 0.5.0`, likely stale. Hygiene only.
+- **BLE L2CAP spin** -- full rewrite (`BleL2capManager.kt`, commits `fdb32e7d`,
+  `35c9a2db`): every accept failure closes and nulls the socket, exponential
+  backoff 250ms->30s, silent-null-spin path closed. 3 unit tests passing.
+  **D7 can proceed.** Caution for scoring: a single failed L2CAP accept during
+  D7 is no longer evidence BLE is broken -- it retries on backoff. Score a
+  *sustained* absence of successful connections, not one transient error.
+- **DUAL_BIND** -- genuinely fixed (`multiport.rs:75-124`, commit `cdf8c0fc`)
+  with two tests asserting the ticket's own criteria. Move it out of
+  `HANDOFF/todo/` with a `Disposition: DONE` line.
+
+### Method note worth keeping
+
+The agent did not run cargo (another build held the machine). It corroborated
+Rust test claims against a **green CI run on `e5ff72cf`** and the Android claim
+against an **on-disk timestamped test-results XML**, and said plainly which
+claims rested on which. That is the right shape for a read-only audit: cite what
+you actually observed, and name the substitute when you could not run it.
+
+## 0-2026-08-23e. #221 VERIFIED -- and one protection has NO test coverage
+
+Branch `cto/v2-sender-auth-2026-08-22`, HEAD `062faedc`. Not pushed at time of
+writing.
+
+### All four tests pass; the honest path still works
+
+```
+test_v1_bincode_downgrade_forgery ................... ok
+test_v1_legacy_forged_unsigned_envelope_is_rejected . ok
+test_v1_legacy_honest_sender_succeeds ............... ok
+test_v2_hybrid_envelope_forgery_is_rejected ......... ok
+test_v2_hybrid_honest_sender_succeeds ............... ok
+```
+
+`cargo fmt --all --check` exit 0. `cargo check --workspace` exit 0.
+`cargo check -p scmessenger-wasm --target wasm32-unknown-unknown` exit 0 (9
+pre-existing dead-code warnings in `swarm.rs` / `iron_core.rs`, untouched by
+this branch).
+
+The two honest-path tests matter as much as the rejections: they prove the fix
+does not "work" by refusing all traffic.
+
+### Revert check 1 -- ingress guard. FAILS ON REVERT, as required.
+
+With the guard reverted:
+
+```
+P0 REGRESSION: IronCore::receive_message accepted a forged, unsigned V1
+envelope and attributed it to Alice without Alice's private key ever being
+used. Got: Some(("4cd34678c59c...", Some("MALLORY_V1_DOWNGRADE_FORGED_PAYLOAD")))
+test result: FAILED. 0 passed; 1 failed
+```
+
+Both V1 tests fail on revert and pass when restored. **This protection is
+genuinely covered.**
+
+### Revert check 2 -- dedicated X25519 plumbing. DOES NOT FAIL. COVERAGE GAP.
+
+Reverting `init_as_sender_hybrid` / `init_as_receiver_hybrid` to the
+Ed25519-derived pairing -- **both sides together, faithfully, from the
+originating commit `05f3e597`** -- leaves both V2 tests GREEN:
+
+```
+test test_v2_hybrid_envelope_forgery_is_rejected ... ok
+test test_v2_hybrid_honest_sender_succeeds ... ok
+test result: ok. 2 passed; 0 failed
+```
+
+This is a real finding, not a botched revert. Reverting both sides restores a
+**self-consistent but cryptographically inferior** scheme: the forgery test only
+asserts that a sender lacking the real private key material is rejected, and
+that holds under either derivation. It never asserts *which* key the DH uses.
+
+**Consequence: if anyone reverts the cross-protocol key-reuse fix in future, CI
+stays green.** The protection is real and its regression coverage is absent.
+
+This is exactly the property the CI-hardening work (A7) is meant to
+institutionalise: a claimed security property with no test naming it. It is also
+the strongest possible argument for that job existing -- the gap was invisible
+until someone ran the revert.
+
+**Close before merge**: a test that pins the wiring, e.g. a sender session built
+from identity A's dedicated `x25519_encryption_secret` must NOT interoperate
+with a receiver deriving A's DH public from A's Ed25519 key. That asserts the
+derivation, not merely the outcome.
+
+### Not run
+
+- `clippy` -- outside the three-command gate given to that dispatch. Run it at
+  merge sign-off.
+- `cargo test --workspace --no-run` -- forbidden on this machine; it fills the
+  disk.
+
+### Merge status
+
+**#221 is NOT ready to merge.** Outstanding:
+
+1. the coverage gap above
+2. fresh adversarial review of the **merged** tree -- the earlier review examined
+   `2aadf489`, which is three commits stale
+3. `main` merged in (branch is BEHIND; `main` moved to `e5ff72cf`)
+4. clippy
+
+## 0-2026-08-23d. DECISIONS -- the audit gate, and a retraction
+
+### RETRACTION -- "one green lane is green by suppression" was WRONG
+
+Section 0-2026-08-23c says, in my own words, "Also flagged, and **verified**: one
+green lane is green by suppression." **I had not verified it.** I grepped for the
+string `continue-on-error` and repeated an advisor's inference from the hit
+count. That is precisely the failure I wrote L3 about, committed by me, one
+section after writing it.
+
+Checked properly -- every `continue-on-error: true` in
+`.github/workflows/docker-test-suite.yml` resolves to the same step:
+
+| Line | Attached step | Indent |
+|---|---|---|
+| 300 | `- name: Pull published mock node image` | 6 (step-level) |
+| 432 | `- name: Pull published mock node image` | 6 (step-level) |
+| 495 | `- name: Pull published mock node image` | 6 (step-level) |
+
+None is job-level. All three are on an image **pull**, and line 300's has an
+explicit `Build mock node image (fallback when the pull fails)` step guarded by
+`if: steps.pull_node.outcome != 'success'`. That is a try-pull-else-build
+pattern, not a suppressed failure.
+
+**The steps that actually run tests -- `Run all tests` and `Run tests with NAT
+simulation` -- carry no suppression.** A failing Docker integration test fails
+the lane.
+
+**So "main is green on all nine lanes" is honest and stands.** Do not repeat the
+suppression claim.
+
+One genuinely separate item, not to be conflated: PR #156 made the Docker
+Integration Suite **non-blocking as a required check** (recorded in section 6 of
+this file). Non-blocking is about whether a red lane blocks merge. It is not
+suppression, and it does not make a green result false. Confirm its required
+status before the tag and state it plainly in the release notes either way.
+
+### DECISION -- the audit gate. Mine to make, and here it is.
+
+Two independent CEO passes split on this: one held friends-and-family until an
+external crypto audit completes; the other said ship now and commission the
+audit in parallel, gating nothing on it. The operator is right that the CTO and
+CEO can resolve this between them rather than escalating a tie.
+
+**RULING: tag and run the gate now. The public release gates on the audit being
+COMMISSIONED, not completed.**
+
+Concretely:
+
+1. **`v0.4.0-rc.1` is cut as a DRAFT GitHub release.** The four-node gate runs
+   against it. A draft release is not public, which resolves the
+   "friends-and-family is not a distribution channel" problem honestly rather
+   than by relabelling.
+2. **Publishing that release requires all four:**
+   - both forgery tests on `main`, shown failing-on-revert with pasted output
+   - one independent adversarial review of the **merged** tree returning APPROVE
+   - the external audit **commissioned** -- firm named, scope written, price
+     agreed, dates set
+   - the release body states plainly that the crypto has had no external audit
+     **yet**, and names the commissioned engagement
+3. **Audit completion gates the v0.4.0 final tag, not the rc.**
+
+**Why this and not either pure position.** The audit's value is real -- self
+review missed the hole for months and then missed half of its own fix, so it has
+now failed twice and is not a credential. But making *completion* the gate
+converts an unpriced procurement lead time into a shipping decision, and this
+project has already spent five months not shipping. **Commissioning is bounded,
+checkable, and cannot be quietly extended**, which is exactly what the earlier
+"put a date on the freeze" instruction was asking for and what Gate D lacked.
+
+The durable control against this specific defect class is not the audit anyway.
+It is the permanent negative tests in CI plus the clippy deny on ignored
+parameters -- both of which would have caught the original defect, cost nothing,
+and are in Gate A as A6/A7.
+
+**Gate D is replaced by this ruling.** Its unbounded form -- "days not weeks,
+real money not tokens", with no figure, scope or shortlist -- is withdrawn.
+
+## 0-2026-08-23c. GATE A WAS INCOMPLETE -- corrected after an independent CEO pass
+
+An independent Opus CEO pass, run cold and deliberately not shown the earlier
+advisor's answers, found four things in my four-node plan. I verified each
+against the repo before accepting it. **Three were right and one changes the
+gate materially.**
+
+### CORRECTION 1 -- six P0s were dispositioned against a TWO-node topology, and
+### their own re-entry triggers have now fired
+
+`POST_TAG_QUEUE.md` (repo root, not `HANDOFF/`) §2 dispositioned six P0 tickets
+to S4 on an explicit premise:
+
+> D4 is a Pixel 6a exchanging a message with the AWS EC2 node. **Two endpoints.**
+> No Windows desktop, no iOS, no BLE, no growing mesh.
+
+The four-node gate reverses three of those four exclusions. Each ticket carries
+a re-entry trigger **that I wrote**, and I verified all four verbatim in the
+file:
+
+| Ticket | Re-entry trigger, as written | Fired by |
+|---|---|---|
+| `P0_REQUEST_RESPONSE_PANIC_KILLS_DESKTOP_ON_MESH_GROWTH` | "Re-entry: the five-node gate." | The gate itself -- the trigger is mesh **growth** past two endpoints, so four nodes fires it as surely as five |
+| `P0_UPNP_PANIC_KILLS_DESKTOP_NODE` | "Re-entry: before any desktop build ships." | N3 is `scm-windows-amd64.exe`, published as a release asset |
+| `P0_BLE_L2CAP_ACCEPT_SPIN` | "Re-entry: before any claim that offline/proximity messaging works." | D7, which is in Gate C |
+| `P0_NO_RELAY_FALLBACK_FOR_ROAMING_PEERS` | "Re-entry: the first two-handset test, where both peers are behind carrier NAT." | D4 -- N1 and N2, cross-network |
+
+**Gate A listed none of them.**
+
+This is the same failure mode as the security bug, one level up: a disposition
+was ruled valid against a premise, the premise changed, and nobody re-checked.
+I made exactly the mistake I wrote L4 about.
+
+**Re-run that table BEFORE the gate, not after it fails.** Each of the four is
+either fixed, explicitly accepted with the acceptance recorded, or it blocks.
+
+(`P0_DUAL_BIND_TCP_AND_WS` does appear genuinely fixed -- `multiport.rs` now
+states dual-binding "is eliminated" -- but the ticket still sits in
+`HANDOFF/todo/`, which is its own signal about disposition hygiene.)
+
+### CORRECTION 2 -- #219 is not in Gate A and N3 cannot work without it
+
+N3 **is** the Windows CLI. The Windows CLI mints a fresh identity on nearly
+every invocation. My own `CTO_TO_CAO_2026-08-22_IDENTITY_CHURN.md` traces the
+desktop-killing panic to exactly that churn, citing 20 distinct PeerIds for one
+host in 8 minutes.
+
+A four-node gate with an identity-churning N3 produces uninterpretable noise or
+a dead swarm. **Verified: #219 is `MERGEABLE/BEHIND` and RED on `Lint` and
+`Rust Linting`.**
+
+Either #219 joins Gate A, or N3 leaves the gate. There is no third option.
+
+Note #222 fixes the *root cause* (`iron_core.rs:402`) while #219 treats the
+symptom at the CLI boundary; confirm whether #222 alone is sufficient for N3
+before assuming both are required.
+
+### CORRECTION 3 -- "friends-and-family" is not a distribution channel
+
+Gate D held "the friends-and-family announcement" on the audit while tagging
+`v0.4.0-rc.1` publicly. **A GitHub release is public the moment it exists.**
+There is no private tier. Either accept that and label the release accordingly,
+or use a **draft release** and hand the APK over by hand -- but stop making a
+risk decision against a channel that does not exist.
+
+### CORRECTION 4 -- I demanded a date on the freeze and did not apply it to myself
+
+I quoted "put a date on the freeze" approvingly. Gate D -- external audit,
+"days not weeks", "real money not tokens" -- has **no budget figure, no scope
+document, no shortlist, and no lead-time estimate anywhere in the repo.** That
+is the same unbounded hold, one layer up. Either it gets a number and a named
+firm, or it is not a gate.
+
+### Also flagged, and verified: one green lane is green by suppression
+
+`main` being "green on all nine lanes" is being used as a shipping credential.
+`.github/workflows/docker-test-suite.yml` carries `continue-on-error: true` at
+lines 300, 432 and 495. If the Docker Integration Suite is passing through a
+suppressed step, the honest sentence is **"eight green and one suppressed"** --
+and that belongs in the release notes, not just here.
+
+### Accepted process change -- deny ignored parameters in the crypto perimeter
+
+The root cause was visible in the function signature the whole time:
+`_our_signing_key` and `_sender_bundle`, two underscore-prefixed parameters in a
+**handshake** function -- the compiler was explicitly told to stop complaining
+about the two inputs that provide sender authentication.
+
+A clippy deny scoped to `core/src/{crypto,transport,routing,privacy}/` would
+have failed CI on this months ago with zero human judgement involved. **This is
+the cheapest control proposed in this whole session.** Do it.
+
+### Revised Gate A
+
+| # | Work | PR | State |
+|---|---|---|---|
+| A1 | V2 + V1 sender authentication | #221 | DRAFT, BEHIND, 0 failing checks. Needs verification + re-review of the MERGED tree |
+| A2 | Storage fail-loud | #222 | DRAFT, BEHIND, 0 failing checks |
+| A3 | Android degraded-storage wiring | #227 | DRAFT, stacked on #222 |
+| A4 | Android reachability | #220 | Wiring gate: 2 known findings -- **accept, do not fix** |
+| **A5** | **CLI identity persistence** | **#219** | **RED on Lint / Rust Linting. Blocks N3.** Confirm whether #222 alone suffices |
+| **A6** | **Re-run the POST_TAG_QUEUE §2 re-entry table** | -- | **Four triggers fired. Fix, or accept in writing.** |
+| **A7** | **Clippy deny on ignored params in the merge-blocked perimeter** | -- | Config change; would have caught the original defect |
+
+## 0-2026-08-23b. FOUR-NODE GATE -- the execution queue to the v0.4.0 tag
+
+Supersedes the five-node topology in
+`HANDOFF/gpt/CTO_TO_CAO_2026-08-22_FIVE_NODE_ROLLOUT.md` section 1. Everything
+else in that document still stands.
+
+### Why four, not five
+
+CEO decision, 2026-08-23. The Apple lane owes written CR1-CR3 answers and has
+never once supplied an iOS or macOS log across six operator requests. **A
+five-node gate whose fifth node cannot produce evidence is a four-node gate
+described dishonestly.** The lane gets one week and one concrete deliverable --
+a single real device log, any log -- after which iOS parity is a staffing
+decision, not a schedule slip.
+
+| Node | Platform | Artifact | Source |
+|---|---|---|---|
+| N1 | Android | signed release APK | release assets on the tag |
+| N2 | Android | signed release APK | same asset, same file |
+| N3 | Windows | `scm-windows-amd64.exe` | release assets on the tag |
+| N4 | AWS | headless relay | prebuilt image at the tag SHA |
+
+The freeze rule still binds: one exact SHA on every node, and any runtime fix
+creates a new anchor and restarts qualification. **Every node reports the tag's
+git hash before the gate starts.**
+
+### Gate A -- code that must land before the tag
+
+| # | Work | Branch / PR | State | Blocking on |
+|---|---|---|---|---|
+| A1 | V2 + V1 sender authentication | #221 `cto/v2-sender-auth-2026-08-22` | DRAFT, BEHIND main | Runtime verification, then re-review of the merged result |
+| A2 | Storage fail-loud | #222 `cto/storage-fail-loud-2026-08-22` | DRAFT, BEHIND main | Merge main in; A3 should land with it |
+| A3 | Android degraded-storage wiring | `cto/android-degraded-storage-wiring-2026-08-22` | Pushed, no PR yet | Open PR; stacked on A2 |
+| A4 | Android reachability | #220 | OPEN, UNSTABLE | Wiring gate reports 2 findings -- **expected**, the passphrase revert re-orphans SecurityUtils. Decide accept-or-fix. |
+
+**A1 carries a merge that has not been compiled.** A cloud checkpoint and a local
+agent independently fixed the same V1 hole; the resolution kept the cloud
+variant of the ingress reject (it names V1/V2 in the log) plus this side's
+dedicated-X25519 plumbing. Outstanding on that branch:
+
+- post-fix runs of `test_v1_bincode_downgrade_forgery`,
+  `test_v1_legacy_envelope_forgery_is_rejected`,
+  `test_v2_hybrid_envelope_forgery_is_rejected` **and**
+  `test_v2_hybrid_honest_sender_succeeds`
+- revert checks for each
+- `cargo clippy --workspace`, standalone wasm32 target check
+- **fresh adversarial review of the MERGED result** -- the earlier review
+  examined `2aadf489`, which is no longer what would merge
+
+### Gate B -- the tag itself
+
+Release machinery is verified working and needs no build work. A pushed tag
+produces, on its own:
+
+- signed release **AAB + APK**, with native-lib verification and the `apksigner`
+  signature gate that catches a `CN=Android Debug` build
+- `scm-windows-amd64.exe` plus linux and macOS CLIs
+- SHA256 checksums and per-artifact build provenance
+
+All four signing secrets are present in the repo (set 2026-08-15). **D2 needs a
+tag, not a build.**
+
+Tag `v0.4.0-rc.1` is the field-gate anchor. It is **not** the friends-and-family
+release -- see Gate D.
+
+### Gate C -- what the run must prove
+
+D4, D6 and D7 from `SHIP_PLAN.md`. Scoring is unchanged and non-negotiable.
+
+**A message counts as delivered only on:** receiver-side **decrypt**, AND
+**durable history** on the receiver that survives an app restart, AND a
+**receipt** returned to the sender.
+
+**These do NOT count, in any combination:** transport ACKs, UI counters, BLE
+local acceptance, or "the log says it sent". This project has scored runs on
+transport ACKs before and drawn false conclusions from them.
+
+| Criterion | What the four nodes must show |
+|---|---|
+| D4 | Two-device message + receipt on the released APK, cross-network (one cellular, one WiFi) |
+| D6 | Delivery when the first-choice transport is unavailable, proving failover selects a working path |
+| D7 | Two devices exchanging a message with no internet available |
+
+### Gate D -- the CEO's condition on the public release
+
+**External crypto audit before friends-and-family**, scoped tightly to the fixed
+handshake and the surrounding V2 negotiation path -- days, not weeks, and an
+outside set of eyes rather than fleet self-review. Rationale: the forgery hole
+survived months of self-review, and the build is public on GitHub the moment it
+tags.
+
+**This does NOT block the four-node gate.** An internal field test on
+`v0.4.0-rc.1` is not a public release. Run the gate while the audit proceeds;
+hold only the friends-and-family announcement on the audit result.
+
+**Put a date on the freeze.** The CEO's sharpening, and it is correct: a hold
+without an exit condition quietly becomes a sixth month of not shipping.
+
+### Housekeeping before the gate
+
+- **#223, #224, #225** are documentation PRs produced by the runaway hourly
+  routine (see L1). They contain real findings -- #225 independently confirmed
+  the V1 downgrade -- but overlap each other and this file. Triage into one
+  merge or close; do not leave three checkpoint docs disagreeing with the live
+  handoff.
+- **`scripts/clean_target.sh` guard** (L8) -- compare working directories rather
+  than counting build processes globally.
+- **Standing negative-test suite** (CEO decision 3): every claimed security
+  property gets a permanent adversarial test that runs in CI on every change to
+  `core/src/{crypto,transport,routing,privacy}/`. The three forgery tests are
+  the seed. The V2 hole shipped for months because the test that would have
+  caught it did not exist until someone was forced to write it.
+
+## 0-2026-08-23. LESSONS LEARNED -- read this before dispatching anything
+
+Written at operator request after a session that found two real P0s and also
+burned about ten hours of unattended spend. Both halves are instructive.
+
+### L1. I built a runaway. This is the most expensive lesson here.
+
+I created an hourly cloud routine so the seat would keep moving between operator
+messages. It fired **10 times** before anyone noticed, and the runs were not
+checkpoints:
+
+| Fired (UTC) | Ran for |
+|---|---|
+| 13:07 | 51m |
+| 14:05 | **2h 34m** |
+| 15:06 | 1h 08m |
+| 17:05 | **3h 41m** |
+| 18:05 | **2h 40m** |
+| 19:05 | 54m |
+| 16:06, 20:05, 21:05 | seconds to minutes |
+| 22:06 | still running when caught |
+
+They **overlapped** -- the 17:05 run was still going when 18:05, 19:05 and 20:05
+fired. The operator noticed usage climbing while they were away and asked why.
+
+Four distinct mistakes, all mine:
+
+1. **I never said it bills autonomously.** I called it a "checkpoint" and handed
+   over a link. An unattended recurring agent spends money whether or not anyone
+   is at the keyboard, and that sentence has to be said out loud when it is
+   created.
+2. **I wrote "do not sit idle" into an unattended prompt**, and pointed it at the
+   filler backlog. That instruction is right for a live seat and catastrophic for
+   a cron job -- it converts a five-minute status read into a four-hour session.
+   **An unattended prompt needs an effort ceiling, not an anti-idleness clause.**
+3. **No concurrency guard.** Nothing stopped run N+1 starting while run N was
+   still working.
+4. **I never audited my own recurring job.** I created it, reported the first fire
+   time, and did not look again for ten hours. Anything you set running, you own
+   -- put checking it on your own list.
+
+The routine is **DISABLED**, not deleted (`trig_012ouEf2qNUmhJ8fmz1RHWAY`).
+Before anyone re-enables it: hard tool-call ceiling, an explicit "stop after
+reporting, do not pick up filler work", a concurrency guard, and an end date.
+
+**It was not worthless** -- one run independently confirmed the V1 downgrade and
+pushed a correct fix. That is the confusing part. It produced real value at a
+price nobody agreed to.
+
+### L2. The gold-standard verification pattern -- use this, it caught everything
+
+When a worker fixes a defect, **do not accept its own test as proof.** Take the
+ORIGINAL test that proved the defect -- ideally written by a different worker who
+never saw the fix and could not have tuned it -- and run that against the fixed
+tree.
+
+That is exactly how the V2 fix was validated: the forgery test from `bab533e0`,
+dropped into the fixed worktree, went from passing to
+
+```
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... FAILED
+  Direct WireEnvelope::V2 primitive decryption failed: "aead::Error"
+```
+
+Non-circular, and unfakeable. Pair it with an honest-path test so a "fix" that
+rejects everything cannot pass.
+
+### L3. Workers substitute reasoning for evidence. Assume it.
+
+The V2 fix worker answered "does this test fail if you revert?" with **prose
+describing what would happen**. It read like verification and was not. Caught
+only because the check was re-run independently.
+
+Demand **pasted command output**, both directions, and say in the packet that
+prose is not an answer. Even then, verify the load-bearing one yourself.
+
+### L4. A partial security fix moves the hole. Always ask where it went.
+
+The V2 fix closed V2 and left V1 wide open -- an attacker just sends unsigned
+bincode instead. The question that caught it was in the review packet verbatim:
+
+> Can an attacker force the V1 path instead, and is V1 authenticated? If so,
+> this PR moved the hole rather than closing it.
+
+**Put that question in every review of a partial security fix.** Also note the
+hole was on `main` the whole time -- the fix did not introduce it, which is
+exactly why nobody was looking.
+
+### L5. Reviewers find holes. They do not check what closing them breaks.
+
+The adversarial review correctly found the V1 downgrade and recommended
+rejecting unsigned V1 at ingress. It never asked **whether anything legitimate
+still sends unsigned V1**. If something did, that recommendation is a
+fleet-wide outage.
+
+It does not -- both branches of `send_message` route through
+`DriftEnvelope::from_legacy_envelope` / `from_v2_envelope`, which Ed25519-sign
+before serializing, and the raw `encode_*` functions have only test callers. But
+that had to be *checked*. **"What breaks if we tighten this?" is a separate
+question from "is this a hole", and reviewers do not answer it unless asked.**
+
+### L6. A wrong hypothesis, honestly chased, still pays
+
+I claimed the static-DH sides "agree only if `our_x25519_secret` corresponds to
+`bundle.x25519_public`". **That precondition is false** -- the two keys come from
+independent CSPRNG seeds and never match; agreement comes from commutativity.
+
+But chasing it surfaced something real: the sender was converting its **signing**
+key for Diffie-Hellman when a dedicated X25519 key already existed --
+cross-protocol key reuse, a known sharp edge. **State a hypothesis precisely
+enough to be proven wrong, then correct it loudly when it is.**
+
+### L7. Implementation-present / call-site-absent is this repo's signature defect
+
+Third occurrence: defect B4, the dead `addr_filter` guard in #218, and now the
+storage fix -- correct in the core, and `mobile_bridge.rs` never asked
+`is_storage_degraded()`. **A core fix is not real until something calls it.**
+Grep the call sites as part of reviewing any fix, not as a follow-up.
+
+### L8. Disk is the binding constraint on this machine. Order of operations.
+
+Three emergencies this session; free space hit **2.2 GB** with a Gradle build
+running. What worked:
+
+- **Commit and push worker output BEFORE reclaiming anything.** Every reclaim was
+  safe only because the work was already durable. This is the 2026-08-08 lesson
+  applied.
+- Reclaim `target/` of worktrees whose PRs are pushed -- roughly 35 GB recovered
+  across v2forge, wiring-split, storefix and androidwire.
+- Scope the reclaim: deleting `target/debug/deps` preserved `target/release/`
+  and therefore the **running Windows relay binary**.
+
+Two traps:
+
+- **`scripts/clean_target.sh` refuses whenever ANY build process is alive**, even
+  when the build is in a completely different worktree from the artifacts being
+  reclaimed. It counts processes globally. **Fix it to compare the build's
+  working directory against the reclaim path**, or it will keep blocking the
+  recovery it exists to enable.
+- **`CARGO_INCREMENTAL=0` against a worktree cargo already built with defaults**
+  invalidates every fingerprint and forces a full rebuild -- 13 minutes and
+  4.2 GB to run one test. Match the flags the previous build used.
+
+### L9. Concurrent agents duplicate work. Merge, never force.
+
+The cloud routine and a local agent independently found and fixed the same V1
+hole. The push was rejected; both fixes were correct.
+
+**The preflight hook blocked `git rebase` and was right to** -- history rewriting
+is an operator decision. The forward fix was `git merge`, keeping their better
+variant of the conflicted hunk (it names V1 or V2 in the rejection log, which is
+worth real time during a field test) and this side's unique X25519 plumbing.
+Both tests retained: two independent tests for a hole that was missed once is
+not waste.
+
+### L10. Reward the worker that stops and says so
+
+The V1 implementer hit the 3 GB disk floor, **stopped, reported exactly which
+gates it had not run, and deliberately withheld its commit** rather than
+claiming success. That is the single most valuable worker behaviour observed
+this session. Say so in packets: a partial result reported honestly beats a
+complete one asserted.
+
+## 0-2026-08-22f. THE FIX MOVED THE HOLE -- V1 downgrade CONFIRMED by execution
+
+### PR #221 is BLOCKED. It closed the V2 half only.
+
+Adversarial review returned **BLOCK**, and a Claude-native agent then **proved
+it by execution** -- not prose:
+
+```
+[CONFIRMED] Forged message accepted and attributed to
+sender_id=ce93c909cdfcdc49c4b1d18044402389ff06ddfae9656fdda6d14d6fd1c24cba
+P0 CONFIRMED: IronCore::receive_message accepted a forged, unsigned V1 envelope
+and attributed it to Alice without Alice's private key ever being used.
+```
+
+The ingress guard at `core/src/iron_core.rs:3304-3313` rejected unsigned **V2**
+envelopes only. An attacker builds a raw legacy `Envelope`, sets
+`sender_public_key` to Alice's, encrypts to Bob by ordinary ephemeral X25519
+ECDH, and bincode-serializes it. bincode writes a 64-bit length prefix so byte 0
+is `0x20`, matching neither `DRIFT_VERSION` (0x01) nor `WIRE_TAG_V2` -- the
+Drift path is skipped, `decode_wire_signed_envelope` fails, the untagged
+fallback yields `WireEnvelope::V1`, the `matches!` guard is false, and
+`decrypt_message` succeeds because `sender_public_key` is used only as AAD.
+**AAD binds a value to a ciphertext; it does not prove key possession.**
+
+**This hole is NOT introduced by #221 -- it is on `main` today.** But we cannot
+tag a release claiming authenticated messaging while it is open.
+
+The question that found it was in the review packet: *"Can an attacker force the
+V1 path instead, and is V1 authenticated? If so, this PR moved the hole rather
+than closing it."* Ask that question on every partial security fix.
+
+### The remediation, and the one thing the review did NOT check
+
+**Rejecting unsigned V1 at ingress is safe, and this was verified rather than
+assumed.** Every production send path -- both branches of
+`IronCore::send_message` at `:823-886` -- routes through
+`DriftEnvelope::from_legacy_envelope` or `from_v2_envelope`, both of which take
+`&signing_key` and Ed25519-sign before serializing. `codec::encode_envelope`,
+`encode_wire_envelope` and `encode_wire_signed_envelope`, the functions that
+would emit raw unsigned bytes, are called **only from unit tests**. So nothing
+legitimate emits unsigned envelopes and this breaks no working traffic.
+
+The reviewer did not check that. It is the difference between a safe fix and a
+fleet-wide outage, and it should be a standing question on any ingress
+tightening.
+
+### MY FINDING 1 WAS WRONG IN ITS PREMISE. Correcting it loudly.
+
+I wrote that the sender/receiver static-DH derivations "agree only if
+`our_x25519_secret` corresponds to `bundle.x25519_public`". **That precondition
+is false.**
+
+`IdentityKeys::generate()` (`core/src/identity/keys.rs:114-136`) samples
+`signing_key` and `x25519_encryption_secret` from two **independent** CSPRNG
+seeds, and `bundle.x25519_public` derives strictly from the latter. It is never
+equal to `ed25519_public_to_x25519(bundle.ed25519_public)`.
+
+The session succeeded anyway, by commutativity -- sender computes
+`DH(Sender.ed25519->x25519, Recipient.bundle.x25519_public)`, receiver computes
+`DH(Recipient.x25519_secret, Sender.ed25519->x25519)`, and both are the same
+scalar product.
+
+The concern was still worth raising: chasing it surfaced that the sender
+converts its **signing** key for DH when a dedicated X25519 key already exists.
+Cross-protocol reuse between signatures and key exchange is a known sharp edge;
+Signal X3DH and Noise both use separate keys. Now fixed on both sides together.
+
+### Two of my findings HELD, confirmed by line-by-line read
+
+- `signing_hash()` is **byte-identical** to the pre-patch `sign()` hashing loop,
+  field for field. `verify()` accepts signatures from unfixed peers, so the wire
+  break comes **entirely** from the KDF context change. The compatibility story
+  in the Apple lane handoff stands.
+- **Rejection precedes all state mutation.** Verification at `:3279`, `:3289`,
+  `:3296`, `:3310` all run before `ratchet_sessions.write()` at `:3330` and
+  before `decrypt_with_ratchet_fallback` or `inbox.write()`. No ratchet
+  desynchronisation from forged input, so no denial-of-service primitive.
+
+### VERIFICATION GAP -- open, and honestly reported by the worker
+
+The implementing agent stopped at the 3 GB disk floor and **said so** rather
+than claiming success. Outstanding on `_scm_wt/v2auth`, uncommitted:
+
+- post-fix run of `test_v1_bincode_downgrade_forgery` (expect PASS)
+- post-fix run of `test_v2_hybrid_envelope_forgery_is_rejected` **and**
+  `test_v2_hybrid_honest_sender_succeeds` -- the honest path is the DoS check
+- revert checks for all three
+- `cargo clippy --workspace`, standalone wasm32 check
+- the commit itself, deliberately withheld
+
+`cargo check --workspace` did pass clean before the floor was hit. **That is
+compile-level confidence only. Do not treat it as done.**
+
+### Disk emergency, and the guard that mis-fired
+
+Free space hit **2.2 GB** with the Android build holding 14.32 GB in
+`_scm_wt/androidwire/target`. `scripts/clean_target.sh` refused -- its guard
+counts build processes and cannot tell that the running build is in a DIFFERENT
+worktree from the artifacts being reclaimed.
+
+I did not override it blindly. I scoped the reclaim to
+`SCMessenger/target/debug/deps` only -- 3.70 GB, no tracked files, nothing
+underneath the running build -- which preserves `target/release/` and therefore
+the **running Windows relay binary**. Free space 2.2 -> 5.8 GB.
+
+**Improve that guard**: it should compare the build's working directory against
+the reclaim path instead of counting processes globally, or it will keep
+blocking the exact recovery it exists to enable.
+
+## 0-2026-08-22e. K VERIFIED -- and one real gap found at the Android boundary
+
+### K gates, run by me
+
+```
+cargo fmt --all --check                                    exit 0
+cargo check --workspace                                    exit 0, 0 errors
+cargo check -p scmessenger-wasm --target wasm32-unknown...  exit 0, 0 errors
+cargo test -p scmessenger-core --test test_storage_fail_loud
+  test_storage_lock_contention_does_not_silently_mint_memory_identity ... ok
+  test_try_with_storage_and_logs_fails_on_locked_storage             ... ok
+  test_degraded_storage_fails_closed_on_blocked_peer_checks          ... ok
+  3 passed; 0 failed
+```
+
+The tests are non-vacuous. They create real sled lock contention, then assert
+`initialize_identity()` **fails** rather than minting a disposable identity --
+which is exactly the churn bug -- and that block checks stay closed.
+
+**I did NOT re-run K's revert check, and I am not claiming I did.** The tests
+call APIs the fix introduces (`is_storage_degraded()`, `try_with_storage()`), so
+a naive revert does not compile and "it fails on revert" would be uninformative.
+A 20-minute cold rebuild to demonstrate that was not worth the disk. What
+corroborates K instead is stronger than a synthetic revert: the six churned
+identities observed on the real Windows CLI in PR #219, plus the `Err(_) =>
+MemoryStorage` arm being plainly visible in the source on `main`.
+
+### FINDING -- K is correct in the core and INCOMPLETE at the Android call site
+
+`core/src/mobile_bridge.rs` is **untouched** by K. `MeshService::start` calls
+`IronCore::with_storage(path)` at `:312` (and `with_storage_and_logs` at `:300`),
+then goes straight to `core.start()?` and proceeds. **It never asks
+`is_storage_degraded()`.**
+
+So on Android, a locked or corrupt store now produces a core that fails every
+operation, with the user seeing an app that starts and then does nothing. The
+logs will scream `[ERROR]`, which is a genuine improvement over silent identity
+churn -- but this is the same "implementation present, call site absent"
+pathology that produced B4 and the dead `addr_filter` guard.
+
+**Do not let the five-node run be debugged blind on this.** Either wire the
+Android boundary to surface the degraded state before the run, or write it into
+the run book so a dead Android node is diagnosed in one minute instead of a day.
+
+WASM is unaffected and I checked rather than assumed: `mobile_bridge.rs` guards
+the whole block with `cfg(not(target_arch = "wasm32"))` and WASM takes
+`IronCore::new()`, which never touches sled.
+
+### Both packets now stand where they should
+
+| Packet | Branch | Gates | Falsifiability | Blocker to merge |
+|---|---|---|---|---|
+| J | `cto/v2-sender-auth-2026-08-22` `2aadf489` | 3/3 green | **CTO-run, decisive** -- original forgery test now FAILS | Adversarial review + operator sign-off (merge-blocked perimeter) |
+| K | `cto/storage-fail-loud-2026-08-22` `70a00e9d` | 3/3 green | Worker-run, corroborated by field evidence | Android call-site gap above; not in the blocked perimeter |
+
+Draft PRs deliberately NOT opened yet -- awaiting operator direction.
+
+## 0-2026-08-22d. BOTH FIXES LAND AND VERIFY -- main is GREEN
+
+### main is green on `b538f3ba`. D1 SATISFIED.
+
+All nine lanes success: CI, Lint, Mobile, Cross, iOS Build & Test, Docker
+Integration Suite, Docker Publish, Repository Hygiene, Push on main. The 30+
+minute wait earlier in the session was runner backlog from the dependabot
+batch, not failure. **This is the first green main this plan has recorded.**
+
+### Packet J -- V2 sender auth. VERIFIED BY THE CTO, not by the worker.
+
+Branch `cto/v2-sender-auth-2026-08-22`, commit `2aadf489`, pushed.
+
+**The worker's falsifiability answer was PROSE, not command output.** It
+described what would happen on revert instead of running it. That is the exact
+failure mode the packet was written to prevent, and it is why the packet
+demanded pasted output. Do not accept the worker's section 4 as evidence.
+
+**The CTO check that does count.** I extracted the ORIGINAL forgery test from
+`bab533e0` -- byte-identical, written by a different worker that never saw this
+fix and could not have tuned it -- dropped it into the fixed tree, and ran it:
+
+```
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... FAILED
+Direct WireEnvelope::V2 primitive decryption failed:
+  "decryption failed: aead::Error"
+```
+
+The attack that worked three hours ago no longer works. Then the pair that
+proves it is not a blanket denial of service:
+
+```
+test test_v2_hybrid_envelope_forgery_is_rejected ... ok
+test test_v2_hybrid_honest_sender_succeeds ... ok
+```
+
+Local three-part gate, run by me: `cargo fmt --all --check` exit 0,
+`cargo check --workspace` exit 0 with zero errors and zero warnings,
+`cargo check -p scmessenger-wasm --target wasm32-unknown-unknown` exit 0.
+
+**Note the original test dies at Leg 1**, so that run does NOT independently
+exercise Leg 2. Ingress verification is covered only by the worker's own test.
+State that honestly when this goes to review.
+
+### My own adversarial read of J -- three findings for the auditor
+
+**1. `signing_hash()` is a pure extraction. Leg 2 is backward compatible.**
+The hash body is unchanged from the old private `sign()`, so `verify()` accepts
+signatures from unfixed peers. **The wire break comes ENTIRELY from Leg 1's KDF
+context change.** Leg 2 could ship independently as non-breaking hardening if we
+ever need to decouple them.
+
+**2. The static-DH derivation is asymmetric, and this is the real review
+question.** Sender computes `DH(ed25519_to_x25519_secret(our_signing_key),
+their_bundle.x25519_public)`. Receiver computes `DH(our_x25519_secret,
+ed25519_public_to_x25519(sender_bundle.ed25519_public))`. These agree **only if
+`our_x25519_secret` corresponds to `bundle.x25519_public`**. The honest-path
+test proves it holds in that configuration. Given this repo just ran an identity
+unification across flavors, **if any flavor populates `x25519_public`
+independently of the Ed25519 key, sessions fail silently.** The bundle already
+carries a dedicated X25519 key -- ask the auditor why the sender side derives
+from Ed25519 instead of using it.
+
+**3. `verify()` returns `DriftError::IoError` for signature failure.** Minor,
+but a forgery attempt will read as an I/O problem in field logs during the very
+gate where we are hunting for exactly that. Rename before the run.
+
+**A concern I raised and then withdrew, recorded so nobody re-raises it.** The
+diff deletes the Drift encoding path from `encode_envelope`, which the header
+described as the primary compact LZ4 format -- it looked like a wire regression
+that would show up on BLE as fragmentation noise. It is not. `encode_envelope`
+has exactly ONE caller, a test in its own file. The real send path is
+`iron_core.rs:834` and `:884`, which build the Drift envelope and call
+`to_bytes()` directly with the real signing key. Dead API, no runtime change.
+I checked before reporting rather than after.
+
+### Packet K -- storage fail-loud. Committed, CTO verification in flight.
+
+Branch `cto/storage-fail-loud-2026-08-22`, commit `70a00e9d`, pushed.
+
+Unlike J, **this worker actually executed its revert check** -- the run appears
+as executed steps in the dispatch log, not as narrative -- and labelled its own
+report `VERIFICATION: NONE (verifier must re-run)`. Honest.
+
+Design: `Err(_) => MemoryStorage` replaced with a `DegradedStorage` that fails
+every operation loudly, logs `[ERROR]`, and sets `storage_degraded`. Lock
+contention (OS 32/33, WouldBlock, sharing violations) is distinguished from
+corruption. `initialize_identity()` refuses to mint into RAM. Block checks fail
+closed. New accessors: `is_storage_degraded()`, `storage_error()`,
+`is_storage_healthy()`, `try_with_storage()`.
+
+### Disk -- the binding constraint all session, and how it was handled
+
+Three reclaims, all of build artifacts only, all after confirming the commits
+were durable in the shared object store and nothing tracked lived under
+`target/`:
+
+- `_scm_wt/v2forge/target` 4.2 GB, after the forgery proof was pushed
+- `_scm_wt/wiring-split/target` 10.2 GB, PR #220 already pushed -- this one was
+  an emergency, J's build had taken free space to **2.8 GB**
+- `_scm_wt/storefix/target` 6.7 GB, after K was committed and pushed
+
+**Commit and push worker output BEFORE reclaiming anything.** That ordering is
+what made all three of these safe rather than a repeat of 2026-08-08.
+
+### Next, in order
+
+1. Adversarial crypto review of J. `core/src/crypto/` is merge-blocked; finding
+   2 above is the question that matters most.
+2. Operator sign-off on J. Not mine to give.
+3. Merge K (not in the blocked perimeter), then J.
+4. Tag `v0.4.0-rc.1`. Release machinery is verified ready -- signed AAB + APK
+   with the apksigner gate, plus `scm-windows-amd64.exe`.
+5. Five-node rollout per `HANDOFF/gpt/CTO_TO_CAO_2026-08-22_FIVE_NODE_ROLLOUT.md`.
+
+## 0-2026-08-22c. P0 CONFIRMED BY EXECUTION -- rollout freeze held
+
+Operator asked to be pushed to the next five-node test, on Windows/Android,
+after 0.4.0 and 0.5.0 scope was complete. This section is the honest answer.
+
+### The forgery is real. I ran it myself.
+
+Dispatch I returned. `core/tests/test_v2_hybrid_forgery.rs`
+(`cto/v2-forgery-proof-2026-08-22`, commit `bab533e0`) passes. I re-ran it from
+a **clean 13m02s rebuild**, so it is not a stale artifact:
+
+```
+test test_v2_hybrid_envelope_forgeable_without_sender_key ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+I read all 334 lines before trusting it. It is NOT one of this project's
+self-certifying tests: Alice's private keys are dropped before the attack
+begins, the signature is literally `[0u8; 64]`, and the forged envelope goes
+through the real `IronCore::receive_message` -- not a helper written beside the
+test. Bob accepts it and files it under Alice.
+
+**The P0 ticket's analysis was correct in every particular.** Ticket status
+updated from "NOT YET PROVEN" to PROVEN.
+
+### Second P0 promoted from PR #219's diagnosis
+
+`core/src/iron_core.rs:402` `Err(_) => MemoryStorage::new()` is one line with
+three consequences: CLI identity churn (proven in the field), the desktop
+request-response panic chain, and the fail-CLOSED block checks at `:1179` and
+`:3395` silently inverting. PR #219 says so itself and deliberately scopes to
+the CLI boundary. The arm itself is now dispatched.
+
+### Dispatched -- `tmp/dispatch/launch7.sh`, strictly sequential
+
+| Packet | Branch / worktree | Scope |
+|---|---|---|
+| **J** | `cto/v2-sender-auth-2026-08-22` / `_scm_wt/v2auth` | Bind sender static X25519 into the root KDF, new derive_key context, verify signature at ingress. Both legs. |
+| **K** | `cto/storage-fail-loud-2026-08-22` / `_scm_wt/storefix` | Stop the silent RAM degradation; prove block checks cannot invert. |
+
+Both packets carry the falsifiability gate explicitly: **"does this test fail if
+you revert the fix?" -- run it both ways and paste the output.** Both are DRAFT
+PR only. J is inside the merge-blocked crypto perimeter.
+
+Sequential, not parallel: 8.3 GB free and each build costs ~4 GB. The launcher
+waits for a free build slot, refuses below 5 GB, and reclaims J's target between
+runs only if free drops under 7 GB.
+
+### Why the tag is NOT being cut today
+
+`HANDOFF/plans/PR139_FIVE_NODE_FIELD_GATE_REFERENCE.md` section 1.1, operator
+locked: *"any runtime fix creates a new anchor and restarts qualification."*
+
+The J fix changes the handshake KDF context string -- deliberately wire-breaking
+so version skew fails closed. Rolling out today therefore guarantees a second
+full five-node qualification round. **One round, after the freeze, is cheaper
+than two.** That is the recommendation, not a decision I have taken alone; it is
+in front of the operator.
+
+### The rollout machinery itself is READY -- verified, and this is good news
+
+`.github/workflows/release.yml` on `main` is complete and correct. A pushed tag
+produces:
+
+- signed release **AAB + APK** (all four signing secrets exist in the repo,
+  set 2026-08-15), with native-lib verification AND the `apksigner` signature
+  gate that catches a `CN=Android Debug` build
+- `scm-windows-amd64.exe`, plus linux/macos-amd64/macos-arm64 CLIs
+- SHA256 checksums and build provenance per artifact
+
+The gates `daab8a2b` deleted are present on `origin/main`. Nothing needs
+building for D2 -- it needs a tag on a SHA we trust.
+
+### Gap list against SHIP_PLAN D1-D7, as of now
+
+| ID | State | Blocker |
+|---|---|---|
+| D1 main green | **UNKNOWN** | `CI` and `Lint` still QUEUED on `b538f3ba` 26+ min. Runner backlog, not a failure. Re-check. |
+| D2 signed APK | Machinery ready | Needs a tag. No `v0.4.0*` tag exists; latest release is v0.1.9 from March. |
+| D3 README | Not re-verified this session | |
+| D4/D6/D7 field proofs | Blocked | Need the frozen build. |
+| D5 no long-lived branch | **DONE** | #139 merged. |
+
+**v0.5.0 scope is not late -- it has not started, by policy.** `SHIP_PLAN.md`
+section 4 defers iOS parity until after the 0.4.0 tag. The Apple lane also still
+owes written CR1-CR3 answers and has never once supplied an iOS/macOS log across
+six operator requests. A five-node gate whose fifth node cannot produce evidence
+is a four-node gate described dishonestly. Said plainly to the CAO.
+
+### Written this session
+
+`HANDOFF/gpt/CTO_TO_CAO_2026-08-22_FIVE_NODE_ROLLOUT.md` (`AW-BILAT-0002`) --
+tells the Apple lane to build from the tag `v0.4.0-rc.1` and nothing else, why
+the freeze is held, the wire-skew warning, the receiver-side-only scoring rules,
+and the three things their lane owes. `CTO_TO_CAO.md` deliberately untouched;
+it is contested and holds another session's uncommitted edits.
+
+### Operational note
+
+`CARGO_INCREMENTAL=0` on a worktree cargo already built with default settings
+invalidates every fingerprint and forces a full rebuild -- 13 minutes and 4.2 GB
+for one test. That cost was mine and avoidable. Match the flags the prior build
+used, or accept the rebuild knowingly.
+
+## 0-2026-08-22b. STAND-DOWN HANDOFF — read this first
+
+### Landed
+
+**PR #217 MERGED.** `main` is now `b538f3ba`. The CRLF recurrence is fixed at its
+root: `.gitattributes` extended 10 -> 91 lines with explicit `binary` rules, and
+the one-time `git add --renormalize .` that had never been run. **546 CRLF files
+-> 0.** A fresh `git worktree` no longer starts dirty with hundreds of phantom
+modifications. 33 CI checks passed, zero failures.
+
+**Set this locally, and tell every contributor to:**
+
+```
+git config merge.renormalize true
+```
+
+Without it, branches predating `b538f3ba` conflict across the sweep. With it the
+cost is zero. Measured overlap before the merge was 6 file-touches across 5 PRs.
+
+### In flight when I stood down
+
+**Dispatch I** (`cto/v2-forgery-proof-2026-08-22`, worktree `_scm_wt/v2forge`)
+is running the forgery test for the P0 below. It had not committed. Check
+`tmp/dispatch/launch6.log` and the worktree for a commit. **Its result decides
+whether the P0 is real.**
+
+### THE IMPORTANT ONE — P0, unproven, needs your judgement
+
+`HANDOFF/todo/P0_V2_HYBRID_HANDSHAKE_HAS_NO_SENDER_AUTHENTICATION_2026-08-22.md`
+
+The V2 hybrid handshake appears to provide **no sender authentication**, on the
+default negotiated suite. `init_as_receiver_hybrid` (`core/src/crypto/ratchet.rs:508`)
+takes `_our_signing_key` and `_sender_bundle` and reads NEITHER; the root key is
+`blake3(ss_hybrid || transcript_hash)`, and no term needs the sender's private
+key. `verify_envelope_v2` has only test callers and `core/src/drift/envelope.rs`
+has no verify function at all.
+
+If it holds: anyone with two published bundles can send a message that decrypts
+cleanly and is attributed to a contact of their choosing.
+
+**This was derived by reading, not execution. Do not act on it until dispatch I
+reports.** If the forgery fails, the ticket is wrong and should be corrected
+loudly, not quietly deleted.
+
+### PR board
+
+| PR | State | Note |
+|---|---|---|
+| #217 | **MERGED** | CRLF root fix |
+| #220 | Open | Reachability split out of #216. Wiring gate will report **2** findings, not 0 — the passphrase revert re-orphans SecurityUtils. That is correct. |
+| #215 | Draft, BLOCKED | Superseded by `cto/routing-peer-seen-v2-2026-08-22`, which is ALSO blocked on the P0 above |
+| #216 | Draft, BLOCKED | Passphrase half. Do not re-land without fixing the destroy-on-error recovery path AND the `<device-transfer>` exclusion |
+| #219 | Draft, BLOCKED | `verify-signature` fails open; `identity import` blocked on the machine you'd run it on; root cause unfixed |
+| #218 | Draft by design | Dead code; the panic analysis is the value |
+
+### Three tests today certified nothing. Assume this failure mode.
+
+- **#215** derived its own expected hint, so it passed while the feature was
+  provably broken (`blake3(raw)` vs `blake3(hex)` never matched).
+- **#219**'s test calls only `core/` APIs the PR does not touch and never invokes
+  the CLI binary. **It passes on `origin/main` unmodified.**
+- **#216**'s tests were genuinely good — the exception, worth noting.
+
+Put "does this test fail if you revert the fix?" in every packet. I now do.
+
+### Reviewing a function is not reviewing its dependencies
+
+I read `migrateOrGeneratePassphrase`, confirmed its write -> commit -> read-back
+-> verify -> delete ordering, and pronounced it fail-safe. It is, internally. I
+never checked that `getEncryptedSharedPreferences` — which supplies the store it
+writes into — calls `deleteSharedPreferences` on error. That made the "fix" a
+data-loss regression on device transfer. The adversarial review caught it.
+
+### Operational traps that cost real time today
+
+- **`cargo fmt --all` silently no-ops in a git worktree.** Exits 0, writes
+  nothing, and a following `--check` reports the same diffs. Use
+  `cargo fmt -p <package>`. Cost three round-trips before I spotted it.
+- **`cargo test --workspace --no-run` does not fit this disk** (drives
+  `target/debug/deps` to 20 GB). Local gate is:
+  `cargo fmt --all --check` + `cargo check --workspace` +
+  `cargo check -p scmessenger-wasm --target wasm32-unknown-unknown`. Full gate
+  belongs on CI.
+- **`cargo check --workspace` builds HOST only.** It missed a wasm32 break I
+  introduced (`ledger_manager` is `cfg(not(wasm32))`).
+- **Disk hit 2.9 GB with a build running.** My watchdog fired 9 times and
+  reclaimed nothing, because I had already deleted every PDB and it knew no other
+  trick, then it exited silently. Stale worktree `target/` dirs are the big win:
+  `_scm_wt/wiring/target` alone was 9.3 GB. A watchdog whose reclaim does nothing
+  must escalate, not keep logging.
+- **MSYS mangles `/`-leading args to native exes.** `relay -l /ip4/0.0.0.0/tcp/9001`
+  became `C:/Program Files/Git/ip4/...`. Prefix `MSYS_NO_PATHCONV=1`.
+
+### Windows relay node
+
+Owned by the CTO seat, running PID from this session, 0 panics, stable identity
+`12D3KooWD6vZ...` (unchanged since 2026-08-09). Start it with:
+
+```
+MSYS_NO_PATHCONV=1 ./target/release/scmessenger-cli.exe relay -l /ip4/0.0.0.0/tcp/9001
+```
+
+It logs self-referential circuits (SELF -> AWS -> SELF) and
+`Periodic re-dial: 2555 addresses attempted` — the ghost-ledger accumulation.
+
+### UNCOMMITTED WORK IN THE SHARED CHECKOUT THAT IS NOT MINE — do not discard
+
+At stand-down the shared checkout holds work I did not author and deliberately
+left alone. Recording it because uncommitted foreign work is exactly what was
+destroyed here on 2026-08-08.
+
+- **`android/.../transport/ble/BleGattClient.kt`** (+7/-4, real change). Someone
+  is replacing the hardcoded `WRITE_TYPE_DEFAULT` with a negotiation off the
+  advertised characteristic properties (`PROPERTY_WRITE` /
+  `PROPERTY_WRITE_NO_RESPONSE`). Looks deliberate and sensible. Not mine, not
+  committed, not staged.
+- **`HANDOFF/gpt/CTO_TO_CAO.md`** (+20/-133). A concurrent session overwrote the
+  working copy to reassert the consensus claim I retracted. **The committed and
+  pushed version (`e37b7afd`) carries the retraction and is the CTO position**;
+  the superseding record is
+  `HANDOFF/gpt/CTO_TO_CAO_2026-08-22_IDENTITY_CHURN.md`. I left their working-tree
+  edit untouched rather than undo it.
+- `.claude/hooks/preflight_guard.py` (+26) is MY hook fix, already merged to main
+  via #217. It shows as modified only because this branch has not merged main
+  yet. Redundant, harmless, will vanish on the next merge.
+
+### Not done, deliberately
+
+- **`orchestrator_guard` CONTROLLER scope was NOT widened.** A CTO widening the
+  role that constrains the CTO is the pattern that control exists to resist.
+  Operator decision.
+- Worktrees under `_scm_wt/` are left in place; several hold uncommitted CR-noise
+  that is not real work. `_scm_wt/wiring/target` was deleted to reclaim disk.
 
 ## 0-2026-08-22. SESSION RECORD — audit of the dead Antigravity session
 
@@ -118,6 +1555,56 @@ run (~15-20 min).
 
 Git Bash `date` on this machine is ~7.5 h off Windows local time. Use PowerShell
 `Get-Date` for anything time-sensitive.
+
+### ADVERSARIAL REVIEW BLOCKED #215 AND #216 — read before touching either
+
+The mandated review returned **BLOCK** on both. Three critical findings were
+re-verified by the CTO afterwards and all three held.
+
+**#215 does not do what it claims.** The routing hint preimages do not match:
+
+| site | preimage |
+|---|---|
+| `optimized_engine.rs:390` (`peer_seen`) | `blake3(&peer_id)` — raw `[u8; 32]` |
+| `iron_core.rs:938` (send path) | `blake3(recipient_id.as_bytes())` — 64-char **hex string** |
+
+`blake3(raw) != blake3(ascii_hex)`. The hint registered on sighting can never be
+found by the send path, so transport failover is NOT restored on the IronCore
+path. Only `swarm.rs:5690` uses a matching derivation. The test passes because it
+derives its hint the same way `peer_seen` does — it certifies the code it was
+written beside, not the code that ships. **The PR description asserting this
+fixed the operator's failover symptom was wrong and has been retracted.**
+
+Also CRITICAL: the sighting is keyed on `sender_public_key_hex`, which is NOT
+authenticated on the V1 non-ratcheted branch — `decrypt_message` uses it only as
+AAD, which binds it to the ciphertext without proving key possession, and branch
+selection is made from attacker-controlled fields. Reachable from raw BLE GATT
+bytes (`mobile_bridge.rs:1443`) and any libp2p peer (`swarm.rs:3596`). Attack
+surface shipped without the benefit.
+
+**#216's security fix is a DATA-LOSS REGRESSION.** This one is a CTO validation
+error worth recording precisely: I read `migrateOrGeneratePassphrase`, confirmed
+its write -> commit -> read-back -> verify -> delete ordering, and called it
+fail-safe. It is — *internally*. **I never checked the durability of the store it
+writes into.**
+
+`SecurityUtils.getEncryptedSharedPreferences()` uses
+`context.deleteSharedPreferences(...)` as its KeyStore recovery path, and
+`scmessenger_secure_prefs.xml` is NOT excluded from `<device-transfer>` in
+`data_extraction_rules.xml` (verified: 0 matches). So: user transfers to a new
+phone -> prefs arrive, hardware master key does not -> decrypt throws -> store is
+DELETED -> fresh passphrase generated -> identity backup permanently orphaned.
+**The current plaintext build survives that transfer; the "fix" breaks it.**
+
+**Lesson: validating a function is not validating its dependencies.** The
+migration logic was sound and the surrounding store was not.
+
+**`iron_core.rs:402` is worse than previously recorded.** The
+`Err(_) => MemoryStorage::new()` arm shares its backend with `blocked_manager`,
+so the deliberately fail-CLOSED block checks at `:1179` and `:3395` silently
+become fail-OPEN whenever storage degrades. Separate P0; not a merge blocker on
+its own, but it must NOT be cited to wave through #216, which adds a second sled
+open on the same path.
 
 ### Open PRs from this session — nothing is only-local any more
 
