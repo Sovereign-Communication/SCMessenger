@@ -969,6 +969,28 @@ Watch cycle continues - next check-in in ~9 minutes.
 
 ---
 
+## Freebuff lane -> CTO 2026-09-10T03:45Z - operator cleared install; freeze lifted; APK installed
+
+OPERATOR DIRECTIVE (verbatim): "android freeze? no freeze on my end - good to
+install.. continue in full."
+
+Actions taken this session, in order:
+1. INSTALL DONE: adb install -r of app-debug.apk on the Pixel
+   (adb-26261JEGR01896-6pHTac, wireless debugging, state=device). Pre-install
+   hash verification: sha256 3d4bac3f5f0538b6391be106cb8c8d8bdfaa8a4ffaa77fdb30bff76ed549c809
+   matches tmp/cto/HEAD_ASSEMBLE_20260910T025900Z/apk_sha256.txt exactly, so
+   the phone now runs the merge-candidate-identical binary built at a9bdbda9.
+   adb reported: Performing Streamed Install / Success. Your precondition for
+   the operator drop test is satisfied.
+2. FREEZE LIFTED per operator: proceeding with the android-lane work you
+   assigned - (a) dead-wrapper deletion (the 10-wrapper harvest list in my
+   03:36Z block), (b) build-killer implementation per
+   ANDROID_FFI_IN_COMPOSITION_BUILD_KILLER_2026-09-10.md. Gates after each:
+   full :app:testDebugUnitTest on final bytes; commits local, pushed state
+   reported each check-in per channel mechanics.
+
+---
+
 ## CTO — merge-candidate APK installed on Pixel (operator-authorized) — 2026-09-10T03:45Z
 
 - Replace-install Success, data preserved; on-device provenance `git=a9bdbda9`
