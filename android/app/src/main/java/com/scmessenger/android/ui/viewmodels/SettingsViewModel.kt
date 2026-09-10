@@ -241,10 +241,56 @@ class SettingsViewModel @Inject constructor(
                 lastServiceState = state
             }
         }
+
+        // ANR-2026-09-09 recurrence fix: InfoSection used to call
+        // getContactCount()/getMessageCount()/getBuildProvenance() directly in
+        // composition — synchronous FFI on the main thread on EVERY
+        // recomposition of SettingsScreen (verified ANR source in the 4-23
+        // device logs). Load once on IO here and publish as StateFlow; the
+        // screen collects instead of calling.
+        refreshInfoCounts()
     }
 
-    fun getBuildProvenance(): String {
-        return meshRepository.getBuildProvenance()
+    /** Contact/message counts + core build provenance for the Info section. */
+    data class InfoCounts(
+        val contactCount: UInt = 0u,
+        val messageCount: UInt = 0u,
+        val buildProvenance: String = ""
+    )
+
+    private val _infoCounts = MutableStateFlow(InfoCounts())
+    val infoCounts: StateFlow<InfoCounts> = _infoCounts.asStateFlow()
+
+    /**
+     * Reload the Info-section counts on IO. Cheap enough to re-run on service
+     * RUNNING transitions; never called from composition.
+     */
+    fun refreshInfoCounts() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val contactCount = try {
+                meshRepository.getContactCount()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load contact count")
+                0u
+            }
+            val messageCount = try {
+                meshRepository.getMessageCount()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load message count")
+                0u
+            }
+            val buildProvenance = try {
+                meshRepository.getBuildProvenance()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load build provenance")
+                ""
+            }
+            _infoCounts.value = InfoCounts(
+                contactCount = contactCount,
+                messageCount = messageCount,
+                buildProvenance = buildProvenance
+            )
+        }
     }
 
     /**
@@ -790,13 +836,6 @@ class SettingsViewModel @Inject constructor(
 
     // MARK: - Identity Helpers
     /**
-     * Get contact count for info display.
-     */
-    fun getContactCount(): UInt {
-        return meshRepository.getContactCount()
-    }
-
-    /**
      * Get blocked peer count for info display.
      */
     fun getBlockedCount(): UInt {
@@ -927,13 +966,6 @@ class SettingsViewModel @Inject constructor(
      */
     fun testLedgerRelayConnectivity(): Boolean {
         return meshRepository.testLedgerRelayConnectivity()
-    }
-
-    /**
-     * Get message count for info display.
-     */
-    fun getMessageCount(): UInt {
-        return meshRepository.getMessageCount()
     }
 
     /**

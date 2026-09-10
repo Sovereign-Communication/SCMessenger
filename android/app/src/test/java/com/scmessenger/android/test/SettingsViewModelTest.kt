@@ -142,4 +142,38 @@ class SettingsViewModelTest {
         viewModel.clearAdjustmentOverrides()
         verify(exactly = 1) { repository.clearAdjustmentOverrides() }
     }
+
+    @Test
+    fun `infoCounts load on IO without blocking and never call repository on main thread`() = runTest {
+        // ANR-2026-09-09 recurrence fix: the Info section used to call the
+        // FFI getters synchronously in composition. The ViewModel must load
+        // them onto IO state instead.
+        every { repository.getContactCount() } returns 7u
+        every { repository.getMessageCount() } returns 42u
+        every { repository.getBuildProvenance() } returns "core-abc1234"
+
+        // Init also fires refreshInfoCounts on real Dispatchers.IO, which
+        // advanceUntilIdle cannot drain; re-trigger explicitly on the test
+        // dispatcher and then advance.
+        viewModel.refreshInfoCounts()
+        advanceUntilIdle()
+
+        assertEquals(7u, viewModel.infoCounts.value.contactCount)
+        assertEquals(42u, viewModel.infoCounts.value.messageCount)
+        assertEquals("core-abc1234", viewModel.infoCounts.value.buildProvenance)
+    }
+
+    @Test
+    fun `refreshInfoCounts survives repository failures with zeroed counts`() = runTest {
+        every { repository.getContactCount() } throws RuntimeException("FFI down")
+        every { repository.getMessageCount() } throws RuntimeException("FFI down")
+        every { repository.getBuildProvenance() } throws RuntimeException("FFI down")
+
+        viewModel.refreshInfoCounts()
+        advanceUntilIdle()
+
+        assertEquals(0u, viewModel.infoCounts.value.contactCount)
+        assertEquals(0u, viewModel.infoCounts.value.messageCount)
+        assertEquals("", viewModel.infoCounts.value.buildProvenance)
+    }
 }
