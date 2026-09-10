@@ -18,7 +18,7 @@
 //! `cfg` so it compiles identically on wasm32, Android and desktop.
 
 use libp2p::multiaddr::Protocol;
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, PeerId};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Network context for address filtering.
@@ -738,6 +738,83 @@ pub fn is_acceptable_peer_address(
     my_addrs: &[String],
 ) -> bool {
     is_dialable_multiaddr(candidate, mode, dns) && !is_self_address(candidate, my_addrs)
+}
+
+/// Returns true iff `addr` is a self-referential or self-destination circuit
+/// address — i.e. any circuit multiaddr whose final destination equals
+/// `local_peer_id`, or which routes through `local_peer_id` at any relay hop.
+///
+/// WHY THIS EXISTS (P0 mesh growth panic, 2026-08-09): when the mesh grows
+/// beyond two nodes and all nodes advertise as relays, circuit topologies
+/// multiply quickly. A node can receive or construct circuit listener/dial
+/// addresses that route through a peer and back to this same node:
+///
+///   `/ip6/::1/tcp/8080/p2p/<SELF>/p2p-circuit/p2p/<PEER>/p2p-circuit/p2p/<SELF>`
+///   `/ip6/::1/tcp/9001/p2p/<MAC>/p2p-circuit/p2p/<PEER>/p2p-circuit/p2p/<SELF>`
+///   `/ip4/1.2.3.4/tcp/443/p2p/<RELAY>/p2p-circuit/p2p/<SELF>`
+///
+/// A circuit whose final destination is this node, or which routes through
+/// this node to reach an endpoint, is pathological. Maintaining or dialing such
+/// addresses produces concurrent self-referential connection loops that cause
+/// `libp2p-request-response`'s internal connection map to desynchronise from the
+/// swarm's connection accounting, triggering
+/// `debug_assert_eq!(connections.is_empty(), remaining_established == 0)` at
+/// line 678 in debug builds.
+///
+/// This filter returns `true` (self-loop detected) if:
+/// 1. The final `/p2p/<peer-id>` destination in `addr` equals `local_peer_id`.
+/// 2. `addr` contains at least one `/p2p-circuit` hop and `local_peer_id`
+///    appears at any position (relay hop, intermediate hop, or destination).
+///
+/// Plain non-circuit addresses to other peers and legitimate circuits to
+/// different peers return `false` (unaffected).
+pub fn is_self_circuit_multiaddr_parsed(addr: &Multiaddr, local_peer_id: &PeerId) -> bool {
+    let mut has_circuit = false;
+    let mut has_self_peer = false;
+    let mut last_peer_id: Option<PeerId> = None;
+
+    for proto in addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => {
+                has_circuit = true;
+            }
+            Protocol::P2p(pid) => {
+                if pid == *local_peer_id {
+                    has_self_peer = true;
+                }
+                last_peer_id = Some(pid);
+            }
+            _ => {}
+        }
+    }
+
+    // 1. Final destination equals local peer ID.
+    if last_peer_id == Some(*local_peer_id) {
+        return true;
+    }
+
+    // 2. Any circuit address containing local peer ID at any position.
+    if has_circuit && has_self_peer {
+        return true;
+    }
+
+    false
+}
+
+/// String convenience wrapper over [`is_self_circuit_multiaddr_parsed`].
+///
+/// Unparseable input returns `false` (normalisation/syntax validation is handled
+/// by [`is_dialable_multiaddr`]).
+pub fn is_self_circuit(multiaddr: &str, local_peer_id: &PeerId) -> bool {
+    match multiaddr.parse::<Multiaddr>() {
+        Ok(addr) => is_self_circuit_multiaddr_parsed(&addr, local_peer_id),
+        Err(_) => false,
+    }
+}
+
+/// String convenience wrapper over [`is_self_circuit_multiaddr_parsed`].
+pub fn is_self_circuit_multiaddr(multiaddr: &str, local_peer_id: &PeerId) -> bool {
+    is_self_circuit(multiaddr, local_peer_id)
 }
 
 #[cfg(test)]
@@ -1557,5 +1634,133 @@ mod tests {
             Some("not-a-multiaddr"),
             &local_addrs,
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // P0 mesh growth self-circuit guard (2026-08-22)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn rejects_self_destination_single_hop_circuit() {
+        let self_peer = PeerId::random();
+        let relay_peer = PeerId::random();
+
+        // Single-hop circuit with explicit relay peer ID ending in self.
+        let self_circuit_with_relay_id = format!(
+            "/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{self_peer}"
+        );
+        assert!(
+            is_self_circuit(&self_circuit_with_relay_id, &self_peer),
+            "single-hop circuit ending in self must be rejected"
+        );
+
+        // Single-hop circuit without relay peer ID ending in self.
+        let self_circuit_no_relay_id =
+            format!("/ip4/198.51.100.1/tcp/443/p2p-circuit/p2p/{self_peer}");
+        assert!(
+            is_self_circuit(&self_circuit_no_relay_id, &self_peer),
+            "single-hop circuit ending in self (no relay pid) must be rejected"
+        );
+
+        // Single-hop circuit where relay hop is self.
+        let self_as_relay = format!(
+            "/ip4/198.51.100.1/tcp/443/p2p/{self_peer}/p2p-circuit/p2p/{relay_peer}"
+        );
+        assert!(
+            is_self_circuit(&self_as_relay, &self_peer),
+            "single-hop circuit with self as relay must be rejected"
+        );
+    }
+
+    #[test]
+    fn rejects_two_hop_self_referential_circuits() {
+        let self_peer = PeerId::random();
+        let peer = PeerId::random();
+        let mac_peer = PeerId::random();
+
+        // Exact shape 1 from P0 ticket:
+        // /ip6/::1/tcp/8080/p2p/<SELF>/p2p-circuit/p2p/<PEER>/p2p-circuit/p2p/<SELF>
+        let shape1 = format!(
+            "/ip6/::1/tcp/8080/p2p/{self_peer}/p2p-circuit/p2p/{peer}/p2p-circuit/p2p/{self_peer}"
+        );
+        assert!(
+            is_self_circuit(&shape1, &self_peer),
+            "two-hop self-referential circuit (self -> peer -> self) must be rejected"
+        );
+
+        // Exact shape 2 from P0 ticket:
+        // /ip6/::1/tcp/9001/p2p/<MAC>/p2p-circuit/p2p/<PEER>/p2p-circuit/p2p/<SELF>
+        let shape2 = format!(
+            "/ip6/::1/tcp/9001/p2p/{mac_peer}/p2p-circuit/p2p/{peer}/p2p-circuit/p2p/{self_peer}"
+        );
+        assert!(
+            is_self_circuit(&shape2, &self_peer),
+            "two-hop circuit ending in self (mac -> peer -> self) must be rejected"
+        );
+
+        // Shape with self as intermediate hop:
+        // /ip4/198.51.100.1/tcp/443/p2p/<MAC>/p2p-circuit/p2p/<SELF>/p2p-circuit/p2p/<PEER>
+        let intermediate_self = format!(
+            "/ip4/198.51.100.1/tcp/443/p2p/{mac_peer}/p2p-circuit/p2p/{self_peer}/p2p-circuit/p2p/{peer}"
+        );
+        assert!(
+            is_self_circuit(&intermediate_self, &self_peer),
+            "two-hop circuit routing through self as intermediate hop must be rejected"
+        );
+    }
+
+    #[test]
+    fn accepts_legitimate_circuit_to_different_peer() {
+        let self_peer = PeerId::random();
+        let relay_peer = PeerId::random();
+        let target_peer = PeerId::random();
+
+        let legitimate_circuit = format!(
+            "/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{target_peer}"
+        );
+        assert!(
+            !is_self_circuit(&legitimate_circuit, &self_peer),
+            "legitimate circuit to a different peer must be accepted"
+        );
+
+        let parsed: Multiaddr = legitimate_circuit
+            .parse()
+            .expect("legitimate circuit multiaddr must parse");
+        assert!(
+            !is_self_circuit_multiaddr_parsed(&parsed, &self_peer),
+            "parsed legitimate circuit to a different peer must be accepted"
+        );
+    }
+
+    #[test]
+    fn plain_non_circuit_address_is_unaffected() {
+        let self_peer = PeerId::random();
+        let other_peer = PeerId::random();
+
+        // Plain IP:port without peer ID.
+        assert!(
+            !is_self_circuit("/ip4/198.51.100.1/tcp/9001", &self_peer),
+            "plain IP:port address must be unaffected"
+        );
+
+        // Plain IP:port with other peer ID.
+        let plain_with_peer = format!("/ip4/198.51.100.1/tcp/9001/p2p/{other_peer}");
+        assert!(
+            !is_self_circuit(&plain_with_peer, &self_peer),
+            "plain address with other peer ID must be unaffected"
+        );
+
+        // Non-circuit address ending with self peer ID.
+        let plain_with_self = format!("/ip4/198.51.100.1/tcp/9001/p2p/{self_peer}");
+        assert!(
+            is_self_circuit(&plain_with_self, &self_peer),
+            "address whose final destination is self must be rejected"
+        );
+
+        // Invalid multiaddr string.
+        assert!(
+            !is_self_circuit("not-a-multiaddr", &self_peer),
+            "unparseable address must return false from is_self_circuit"
+        );
     }
 }
