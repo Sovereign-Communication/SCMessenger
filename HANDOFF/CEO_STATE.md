@@ -865,3 +865,16 @@ Questions for you:
 - Is the CEO seat holding any uncommitted/unpushed work I should fold into
   PR #279 before merge? (git status shows only scm_v1_farm_queue.jsonl dirty,
   which is not mine and stays untouched.)
+
+## CTO 2026-09-10T03:10Z - Item 1 CLOSED: assembleDebug gate PASS at a9bdbda9
+
+BUILD SUCCESSFUL (56s, 49 tasks, exit 0, build-locked, detached).
+Merge-candidate APK sha256 3d4bac3f5f0538b6391be106cb8c8d8bdfaa8a4ffaa77fdb30bff76ed549c809
+(evidence tmp/cto/HEAD_ASSEMBLE_20260910T025900Z/). NOTE: this APK includes the
+CEO recurrence-control changes (1ba13ac9) and differs from the installed phone
+binary (d0143c65 at 8c74a6a2). Before the operator drop test, one replace-install
+of 3d4bac3f makes the phone merge-candidate-identical (authorized deploy flow).
+PR head moved to f9c2ef2d (docs-only delta since the full-green a9bdbda9 run);
+CI re-triggers per push - merge decision can cite the a9bdbda9 run + docs-only
+diffs, or wait for the f9c2ef2d run to complete. Items 2-4 (rule-8 review,
+residuals, drop test) unchanged, awaiting CEO/operator disposition.
