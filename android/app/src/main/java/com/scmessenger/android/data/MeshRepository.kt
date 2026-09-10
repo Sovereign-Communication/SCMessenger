@@ -3631,13 +3631,37 @@ open class MeshRepository(
     private fun updateDiscoveredPeer(key: String, info: PeerDiscoveryInfo) {
         val normalizedKey = PeerIdValidator.normalize(key)
         _discoveredPeers.update { current ->
+            // UNIFICATION: collapse PeerID and public_key keys for the same node.
+            // Look up existing entry under the input key OR the canonical pubkey hex
+            // derived from the incoming key / publicKey / libp2pPeerId.
+            val canonIncoming = PeerIdValidator.canonicalKey(
+                info.peerId.ifBlank { normalizedKey },
+                info.publicKey
+            ).ifEmpty {
+                PeerIdValidator.canonicalKey(info.libp2pPeerId, info.publicKey)
+            }.ifEmpty { PeerIdValidator.canonicalKey(normalizedKey, info.publicKey) }
+
             val existing = current[normalizedKey]
+                ?: (if (canonIncoming.isNotEmpty()) current[canonIncoming] else null)
+                ?: current.entries.firstOrNull { (mapKey, entryVal) ->
+                    PeerIdValidator.canonicalKey(mapKey, info.publicKey) == canonIncoming ||
+                        PeerIdValidator.canonicalKey(entryVal.peerId, entryVal.publicKey) == canonIncoming ||
+                        (info.libp2pPeerId != null && PeerIdValidator.isSame(mapKey, info.libp2pPeerId!!)) ||
+                        (info.libp2pPeerId != null && entryVal.libp2pPeerId?.let { p ->
+                            PeerIdValidator.isSame(p, info.libp2pPeerId!!)
+                        } == true)
+                }?.value
+
             if (existing != null && existing.isFull && !info.isFull && (info.lastSeen - existing.lastSeen < 300u)) {
                 // Don't downgrade a full identity to headless if we've seen it recently.
                 current
             } else {
                 val merged = if (existing == null) {
-                    info
+                    info.copy(
+                        publicKey = info.publicKey ?: PeerIdValidator.normalizePublicKeyHex(
+                            info.libp2pPeerId?.let { PeerKeyUtils.extractPublicKeyFromPeerId(it) }
+                        )
+                    )
                 } else {
                     info.copy(
                         peerId = selectCanonicalPeerId(info.peerId, existing.peerId),
@@ -3659,11 +3683,24 @@ open class MeshRepository(
                         transports = info.transports + existing.transports
                     )
                 }
-                val canonicalPeerId = PeerIdValidator.normalize(merged.peerId.ifEmpty { normalizedKey })
+                // Prefer public_key as map key when we can derive it.
+                val mapKey = PeerIdValidator.canonicalKey(
+                    merged.peerId.ifEmpty { normalizedKey },
+                    merged.publicKey
+                ).ifEmpty {
+                    PeerIdValidator.canonicalKey(merged.libp2pPeerId, merged.publicKey)
+                }.ifEmpty {
+                    PeerIdValidator.normalize(merged.peerId.ifEmpty { normalizedKey })
+                }
 
-                val withCanonical = current + (canonicalPeerId to merged)
-                withCanonical.filterNot { (mapKey, _) ->
-                    mapKey != canonicalPeerId && PeerIdValidator.isSame(mapKey, canonicalPeerId)
+                val withCanonical = current + (mapKey to merged)
+                // Drop any other key that resolves to the same canonical identity.
+                withCanonical.filterNot { (k, v) ->
+                    if (k == mapKey) return@filterNot false
+                    val kCanon = PeerIdValidator.canonicalKey(k, v.publicKey)
+                        .ifEmpty { PeerIdValidator.canonicalKey(v.peerId, v.publicKey) }
+                        .ifEmpty { PeerIdValidator.canonicalKey(v.libp2pPeerId, v.publicKey) }
+                    kCanon.isNotEmpty() && kCanon == mapKey
                 }
             }
         }

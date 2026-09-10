@@ -7,6 +7,7 @@ import com.scmessenger.android.service.MeshEventBus
 import com.scmessenger.android.service.PeerEvent
 import com.scmessenger.android.utils.ContactImportParseResult
 import com.scmessenger.android.utils.PeerIdValidator
+import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.parseContactImportPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -247,6 +248,16 @@ class ContactsViewModel @Inject constructor(
 
         if (sameByPublicKey) return true
 
+        // UNIFICATION: extract pubkey from libp2p PeerIDs so 12D3… and 30d0fa…
+        // for the SAME node never appear as two nearby rows.
+        val peerCanon = PeerIdValidator.canonicalKey(peer.peerId, peer.publicKey)
+            .ifEmpty { PeerIdValidator.canonicalKey(peer.libp2pPeerId, peer.publicKey) }
+        val eventCanon = PeerIdValidator.canonicalKey(event.peerId, event.publicKey)
+            .ifEmpty { PeerIdValidator.canonicalKey(event.libp2pPeerId, event.publicKey) }
+        if (peerCanon.isNotEmpty() && eventCanon.isNotEmpty() && peerCanon == eventCanon) {
+            return true
+        }
+
         // Secondary: ID-based matching (for cases where public key may not be available)
         val incomingPeerId = PeerIdValidator.normalize(event.peerId)
         val incomingLibp2p = event.libp2pPeerId?.let { PeerIdValidator.normalize(it) }.orEmpty()
@@ -394,7 +405,7 @@ class ContactsViewModel @Inject constructor(
                                 } else null
                         val updated = NearbyPeer(
                             peerId = resolvedPeerId,
-                            publicKey = event.publicKey,
+                            publicKey = event.publicKey ?: existing?.publicKey,
                             nickname = selectAuthoritativeNickname(event.nickname, existing?.nickname),
                             blePeerId = resolvedBlePeerId,
                             libp2pPeerId = resolvedLibp2pPeerId,
@@ -420,19 +431,39 @@ class ContactsViewModel @Inject constructor(
 
                         cancelPendingNearbyRemoval(event.peerId)
                         val current = _nearbyPeers.value.toMutableList()
-                        val existingIdx = current.indexOfFirst {
-                            PeerIdValidator.isSame(it.peerId, event.peerId) ||
-                            it.libp2pPeerId?.let { libp -> PeerIdValidator.isSame(libp, event.peerId) } ?: false
+                        // UNIFICATION: match by canonical pubkey hex so a libp2p
+                        // Discovered event updates (not duplicates) a nearby entry
+                        // that was already keyed by public_key.
+                        val eventCanon = PeerIdValidator.canonicalKey(event.peerId, null)
+                        val existingIdx = current.indexOfFirst { peer ->
+                            PeerIdValidator.isSame(peer.peerId, event.peerId) ||
+                            peer.libp2pPeerId?.let { libp -> PeerIdValidator.isSame(libp, event.peerId) } ?: false ||
+                            PeerIdValidator.canonicalKey(peer.peerId, peer.publicKey) == eventCanon ||
+                            PeerIdValidator.canonicalKey(peer.libp2pPeerId, peer.publicKey) == eventCanon
                         }
                         if (existingIdx >= 0) {
                             // Update isOnline, and refine transport if we now have a definite value.
                             val existing = current[existingIdx]
                             val refinedTransport = existing.transport ?: event.transport
-                            current[existingIdx] = existing.copy(isOnline = true, transport = refinedTransport)
+                            val extractedPk = PeerIdValidator.normalizePublicKeyHex(
+                                PeerKeyUtils.extractPublicKeyFromPeerId(event.peerId)
+                            )
+                            current[existingIdx] = existing.copy(
+                                isOnline = true,
+                                transport = refinedTransport,
+                                publicKey = existing.publicKey ?: extractedPk,
+                                libp2pPeerId = existing.libp2pPeerId
+                                    ?: event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
+                            )
                             _nearbyPeers.value = current
                         } else if (!alreadyContact && !isDismissed(event.peerId)) {
+                            val extractedPk = PeerIdValidator.normalizePublicKeyHex(
+                                PeerKeyUtils.extractPublicKeyFromPeerId(event.peerId)
+                            )
                             _nearbyPeers.value = current + NearbyPeer(
-                                peerId = event.peerId,
+                                peerId = extractedPk ?: event.peerId,
+                                publicKey = extractedPk,
+                                libp2pPeerId = event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) },
                                 isOnline = true,
                                 transport = event.transport
                             )
