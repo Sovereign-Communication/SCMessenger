@@ -27,7 +27,7 @@ fn make_node() -> IronCore {
 fn make_node_with_routing() -> IronCore {
     let node = make_node();
     *node.routing_engine_handle().write() = Some(
-        scmessenger_core::routing::OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]),
+        scmessenger_core::routing::OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]),
     );
     node
 }

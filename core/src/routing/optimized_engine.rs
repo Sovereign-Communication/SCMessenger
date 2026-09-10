@@ -35,6 +35,14 @@ pub struct OptimizedRoutingEngine {
     adaptive_ttl: AdaptiveTTLManager,
     /// Multipath delivery manager for redundant route tracking
     multipath: MultiPathDelivery,
+    /// Our own peer ID. Retained for parity with `base_engine`'s copy; not read
+    /// directly today but kept for future direct access without traversing base_engine.
+    #[allow(dead_code)]
+    local_id: PeerId,
+    /// Our recipient hint. Retained for parity with `base_engine`'s copy; not read
+    /// directly today but kept for future direct access without traversing base_engine.
+    #[allow(dead_code)]
+    local_hint: [u8; 8],
     /// Current discovery phase
     current_phase: DiscoveryPhase,
     /// Whether we're in the middle of a discovery operation
@@ -43,7 +51,7 @@ pub struct OptimizedRoutingEngine {
 
 impl OptimizedRoutingEngine {
     /// Create a new optimized routing engine
-    pub fn new(local_id: PeerId, local_hint: [u8; 4]) -> Self {
+    pub fn new(local_id: PeerId, local_hint: [u8; 8]) -> Self {
         OptimizedRoutingEngine {
             base_engine: RoutingEngine::new(local_id, local_hint),
             timeout_budget: TimeoutBudget::default_500ms(),
@@ -51,6 +59,8 @@ impl OptimizedRoutingEngine {
             prefetch_manager: ResumePrefetchManager::with_defaults(),
             adaptive_ttl: AdaptiveTTLManager::with_defaults(),
             multipath: MultiPathDelivery::new(),
+            local_id,
+            local_hint,
             current_phase: DiscoveryPhase::LocalCache,
             discovery_in_progress: false,
         }
@@ -59,7 +69,7 @@ impl OptimizedRoutingEngine {
     /// Optimized route message with hierarchical discovery and negative caching
     pub fn route_message_optimized(
         &mut self,
-        recipient_hint: &[u8; 4],
+        recipient_hint: &[u8; 8],
         message_id: &[u8; 16],
         priority: u8,
         now: u64,
@@ -294,13 +304,13 @@ impl OptimizedRoutingEngine {
     /// Called when app goes to background
     pub fn on_app_background(
         &mut self,
-        current_routes: Vec<(PeerId, [u8; 4], RouteAdvertisement)>,
+        current_routes: Vec<(PeerId, [u8; 8], RouteAdvertisement)>,
     ) {
         self.prefetch_manager.on_app_background(current_routes);
     }
 
     /// Called when app resumes from background
-    pub fn on_app_resume(&mut self) -> Vec<[u8; 4]> {
+    pub fn on_app_resume(&mut self) -> Vec<[u8; 8]> {
         self.prefetch_manager.on_app_resume()
     }
 
@@ -320,7 +330,7 @@ impl OptimizedRoutingEngine {
     }
 
     /// Get active multipath delivery paths for a recipient hint.
-    pub fn active_paths(&self, hint: &[u8; 4]) -> Vec<&super::multipath::DeliveryPath> {
+    pub fn active_paths(&self, hint: &[u8; 8]) -> Vec<&super::multipath::DeliveryPath> {
         self.multipath.active_paths(hint)
     }
 
@@ -377,9 +387,9 @@ impl OptimizedRoutingEngine {
         cell.peer_seen(peer_id, transport);
 
         // Ensure peer's direct hint is reachable in local cell
-        let direct_hint: [u8; 4] = blake3::hash(&peer_id).as_bytes()[0..4]
+        let direct_hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
             .try_into()
-            .unwrap_or([0u8; 4]);
+            .unwrap_or([0u8; 8]);
         if let Some(peer) = cell.get_peer(&peer_id) {
             if !peer.reachable_hints.contains(&direct_hint) {
                 let mut hints = peer.reachable_hints.clone();
@@ -407,9 +417,9 @@ impl OptimizedRoutingEngine {
                         return true;
                     }
                 }
-                let hint: [u8; 4] = blake3::hash(&peer_id).as_bytes()[0..4]
+                let hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
                     .try_into()
-                    .unwrap_or([0u8; 4]);
+                    .unwrap_or([0u8; 8]);
                 let peers = self.base_engine.local_cell().peers_for_hint(&hint);
                 if !peers.is_empty() {
                     return true;
@@ -418,10 +428,10 @@ impl OptimizedRoutingEngine {
         }
         let hint = if peer_id_hex.len() >= 8 {
             let bytes = hex::decode(&peer_id_hex[..8]).unwrap_or_default();
-            let arr: [u8; 4] = bytes.try_into().unwrap_or([0u8; 4]);
+            let arr: [u8; 8] = bytes.try_into().unwrap_or([0u8; 8]);
             arr
         } else {
-            [0u8; 4]
+            [0u8; 8]
         };
         let peers = self.base_engine.local_cell().peers_for_hint(&hint);
         !peers.is_empty()
@@ -455,10 +465,10 @@ impl OptimizedRoutingEngine {
             arr[..bytes.len()].copy_from_slice(&bytes);
             arr
         };
-        // Derive the 4-byte recipient hint from the peer ID (first 4 bytes of blake3 hash)
-        let hint: [u8; 4] = blake3::hash(&peer_id).as_bytes()[0..4]
+        // Derive the 8-byte recipient hint from the peer ID (first 8 bytes of blake3 hash)
+        let hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
             .try_into()
-            .unwrap_or([0u8; 4]);
+            .unwrap_or([0u8; 8]);
         let path = DeliveryPath {
             path_id,
             peer_id,
@@ -521,8 +531,8 @@ mod tests {
         [id; 16]
     }
 
-    fn make_hint(id: u8) -> [u8; 4] {
-        [id, 0, 0, 0]
+    fn make_hint(id: u8) -> [u8; 8] {
+        [id, 0, 0, 0, 0, 0, 0, 0]
     }
 
     #[test]
@@ -629,9 +639,9 @@ mod tests {
         let mut engine = OptimizedRoutingEngine::new(local_id, local_hint);
 
         let peer = make_peer_id(42);
-        let peer_hint: [u8; 4] = blake3::hash(&peer).as_bytes()[0..4]
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
             .try_into()
-            .expect("4 byte hint");
+            .expect("8 byte hint");
         let msg_id = make_message_id(1);
 
         // Before sighting: StoreAndCarry with confidence 0.0

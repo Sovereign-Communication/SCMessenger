@@ -11,6 +11,7 @@ mod ble_mesh;
 mod bootstrap;
 mod config;
 mod ledger;
+mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
@@ -2002,8 +2003,13 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // ── Outbox — persistent store-and-forward queue ──────────────────────
     let outbox = Outbox::open_default(&data_dir).map_err(|e| anyhow::anyhow!(e))?;
 
-    // ── Connection Ledger — persistent peer memory ──────────────────────
-    let connection_ledger = ledger::ConnectionLedger::load(&data_dir)?;
+    // ── Connection Ledger — dial state over the single core store ───────
+    // The core store is loaded by IronCore::with_storage above; this facade
+    // attaches to the same storage-path entry state. A legacy peers.json is
+    // migrated once at the bootstrap dial sweep (where own addresses known).
+    let connection_ledger = ledger::ConnectionLedger::new(
+        scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
+    );
 
     // Subscribe to any topics discovered in the ledger from past sessions
     let known_topics = connection_ledger.all_known_topics();
@@ -2202,6 +2208,25 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         });
     }
 
+    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // A node whose address changed can never rejoin: nobody can dial it at
+    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
+    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
+    // then every 120s) until at least one peer is connected; re-arm when the
+    // peer count drops back to zero. The candidate list comes from the core
+    // ledger (proven + seed tiers), which the T2 unification populated from
+    // peers.json. One long-lived task -- never one task per attempt.
+    let seed_dial_swarm = swarm_handle.clone();
+    let seed_dial_core = core.clone();
+    tokio::spawn(async move {
+        let mut sweep: u32 = 0;
+        loop {
+            sweep += 1;
+            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+    });
+
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
     let dial_scheduler = Arc::new(DialScheduler::new(ledger.clone(), swarm_handle.clone()));
@@ -2214,21 +2239,30 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         let scheduler = Arc::clone(&dial_scheduler);
         let ledger_clone = ledger.clone();
         let swarm_clone = swarm_handle.clone();
+        let data_dir_migrate = data_dir.clone();
 
         tokio::spawn(async move {
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
             let addrs = {
                 let l = ledger_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                match l.run_legacy_migration(
+                    &data_dir_migrate,
+                    Some(&local_peer_id.to_string()),
+                    &my_addrs,
+                ) {
+                    Ok(report) if report.offered > 0 => {
+                        println!(
+                            "[INFO] Migrated {} of {} legacy peers.json entries into the core ledger ({} rejected, archived={})",
+                            report.imported, report.offered, report.rejected, report.archived
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("[WARNING] legacy peers.json migration failed: {:#}", e);
+                    }
+                }
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
-            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-            let addrs = ledger::prioritize_dial_candidates(
-                addrs
-                    .into_iter()
-                    .filter(|(m, _)| {
-                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                    })
-                    .collect(),
-            );
 
             // Dial all known addresses (bootstrap + discovered)
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
@@ -2262,19 +2296,6 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         }
     });
 
-    // Periodic ledger save (every 60 seconds)
-    let ledger_save_clone = ledger.clone();
-    let data_dir_save = data_dir.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            let mut l = ledger_save_clone.lock().await;
-            if let Err(e) = l.save(&data_dir_save) {
-                tracing::error!("Failed to save ledger: {}", e);
-            }
-        }
-    });
-
     // P0_TRANSPORT_001: Periodic address refresh - before dialing from ledger,
     // send an Identify probe to refresh peer addresses. This ensures we have
     // current listen addresses even if peers restarted with new ports.
@@ -2284,9 +2305,10 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
+            let my_addrs = get_local_transport_addresses(&swarm_refresh_clone).await;
             let addrs = {
                 let l = ledger_refresh_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
 
             // For each peer, try to refresh their address via Identify
@@ -2391,8 +2413,6 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // Stdin handling
     // Ctrl+C handler for graceful shutdown
     let ctrl_c_swarm = swarm_handle.clone();
-    let ctrl_c_ledger = ledger.clone();
-    let ctrl_c_data_dir = data_dir.clone();
 
     // Duplicate network deliveries must not create duplicate machine replies.
     // This cache is intentionally process-local and bounded; delivery retries
@@ -2440,14 +2460,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                     _ = tokio::signal::ctrl_c() => {
                         println!("\nCaught Ctrl+C, shutting down gracefully...");
                         let _ = ctrl_c_swarm.shutdown().await;
-                        {
-                            let mut l = ctrl_c_ledger.lock().await;
-                            if let Err(e) = l.save(&ctrl_c_data_dir) {
-                                tracing::warn!("Failed to save ledger on shutdown: {}", e);
-                            } else {
-                                tracing::info!("Ledger saved on shutdown");
-                            }
-                        }
+                        // The core store persists its own mutations; nothing
+                        // to flush on shutdown.
+                        let _ledger_guard = ledger.lock().await;
                         break;
                     }
 
@@ -2518,8 +2533,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 // Record disconnect in ledger (useful for backoff tracking)
                                 // We find the entry by PeerID and record failure
                                 let mut l = ledger_rx.lock().await;
-                                if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                                    let multiaddr = entry.multiaddr.clone();
+                                if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string())
+                                {
                                     l.record_failure(&multiaddr);
                                 }
                                 // Release the per-peer concurrent-connection
@@ -2552,10 +2567,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                     print!("> ");
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-                                    // Save immediately after learning new peers
-                                    if let Err(e) = l.save(&data_dir) {
-                                        tracing::error!("Failed to save ledger: {}", e);
-                                    }
+                                    // The core store persists its own updates;
+                                    // nothing to flush here.
 
                                     // Dial newly discovered peers
                                     let new_entries = ledger::prioritize_dial_candidates(
@@ -2635,8 +2648,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 tracing::info!("Topic discovered from {}: {}", peer_id, topic);
                                 // Record the topic in the ledger for this peer
                                 let mut l = ledger_rx.lock().await;
-                                if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                                    let multiaddr = entry.multiaddr.clone();
+                                if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string())
+                                {
                                     l.record_topic(&multiaddr, &topic);
                                 }
                             }
@@ -3091,11 +3104,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         let peer_count = peers_rx.lock().await.len();
                                         let (known_peers, bootstrap_nodes) = {
                                             let l = ledger_rx.lock().await;
-                                            let known = l
-                                                .entries
-                                                .values()
-                                                .filter(|e| !e.known_topics.is_empty())
-                                                .count();
+                                            let known = l.entry_count_with_known_topics();
                                             (known, web_ctx.bootstrap_nodes.clone())
                                         };
                                         let topo = MeshTopologyUpdateParams {
@@ -3193,12 +3202,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                             println!("Shutting down...");
                             let _ = swarm_handle.shutdown().await;
                             {
-                                let mut l = ctrl_c_ledger.lock().await;
-                                if let Err(e) = l.save(&ctrl_c_data_dir) {
-                                    tracing::warn!("Failed to save ledger on quit: {}", e);
-                                } else {
-                                    tracing::info!("Ledger saved on quit");
-                                }
+                                let _ledger_guard = ledger.lock().await;
                             }
                             break;
                         }
@@ -3453,8 +3457,10 @@ async fn cmd_relay(
     }
     println!();
 
-    // Connection ledger
-    let mut connection_ledger = ledger::ConnectionLedger::load(&data_dir)?;
+    // Connection ledger — dial state over the single core store
+    let mut connection_ledger = ledger::ConnectionLedger::new(
+        scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
+    );
     let known_topics = connection_ledger.all_known_topics();
     for node in &all_bootstrap {
         connection_ledger.add_bootstrap(node, Some(&local_peer_id.to_string()));
@@ -3624,20 +3630,29 @@ async fn cmd_relay(
         let scheduler = Arc::clone(&relay_scheduler);
         let ledger_clone = ledger.clone();
         let swarm_clone = swarm_handle.clone();
+        let data_dir_migrate = data_dir.clone();
         tokio::spawn(async move {
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
             let addrs = {
                 let l = ledger_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                match l.run_legacy_migration(
+                    &data_dir_migrate,
+                    Some(&local_peer_id.to_string()),
+                    &my_addrs,
+                ) {
+                    Ok(report) if report.offered > 0 => {
+                        println!(
+                            "[INFO] Migrated {} of {} legacy peers.json entries into the core ledger ({} rejected, archived={})",
+                            report.imported, report.offered, report.rejected, report.archived
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("[WARNING] legacy peers.json migration failed: {:#}", e);
+                    }
+                }
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
-            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-            let addrs = ledger::prioritize_dial_candidates(
-                addrs
-                    .into_iter()
-                    .filter(|(m, _)| {
-                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                    })
-                    .collect(),
-            );
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
                 let label =
                     ledger::extract_ip_port(multiaddr_str).unwrap_or_else(|| multiaddr_str.clone());
@@ -3659,23 +3674,11 @@ async fn cmd_relay(
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+                let my_addrs = get_local_transport_addresses(&swarm_clone).await;
                 let addrs = {
                     let l = ledger_clone.lock().await;
-                    l.dialable_addresses(Some(&local_peer_id.to_string()))
+                    l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
                 };
-                let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-                let addrs = ledger::prioritize_dial_candidates(
-                    addrs
-                        .into_iter()
-                        .filter(|(m, _)| {
-                            ledger::is_dialable_for_this_node(
-                                m,
-                                ledger::NetworkMode::Local,
-                                &my_addrs,
-                            )
-                        })
-                        .collect(),
-                );
                 for (multiaddr_str, peer_id_opt) in &addrs {
                     let peer_id = peer_id_opt.as_ref().and_then(|s| s.parse::<PeerId>().ok());
                     scheduler.dial(multiaddr_str.clone(), peer_id);
@@ -3698,19 +3701,6 @@ async fn cmd_relay(
                     peer_count: count,
                 },
             ));
-        }
-    });
-
-    // ── Periodic ledger save (every 60 seconds) ─────────────────────────
-    let ledger_save = ledger.clone();
-    let data_dir_save = data_dir.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            let mut l = ledger_save.lock().await;
-            if let Err(e) = l.save(&data_dir_save) {
-                tracing::error!("Failed to save ledger: {}", e);
-            }
         }
     });
 
@@ -3782,8 +3772,7 @@ async fn cmd_relay(
                     SwarmEvent::PeerDisconnected(peer_id) => {
                         peers.lock().await.remove(&peer_id);
                         let mut l = ledger_rx.lock().await;
-                        if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                            let multiaddr = entry.multiaddr.clone();
+                        if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string()) {
                             l.record_failure(&multiaddr);
                         }
                         // Release the per-peer concurrent-connection slot (P0
@@ -3802,9 +3791,7 @@ async fn cmd_relay(
                         let new_count = l.merge_shared_entries(&entries);
                         if new_count > 0 {
                             tracing::info!("Learned {} new peers from {}", new_count, from_peer);
-                            if let Err(e) = l.save(&data_dir) {
-                                tracing::error!("Failed to save ledger: {}", e);
-                            }
+                            // The core store persists its own updates.
                             let new_entries: Vec<(String, Option<String>)> = entries
                                 .iter()
                                 .map(|e| {
@@ -3862,8 +3849,7 @@ async fn cmd_relay(
                     SwarmEvent::TopicDiscovered { peer_id, topic } => {
                         tracing::info!("Topic discovered from {}: {}", peer_id, topic);
                         let mut l = ledger_rx.lock().await;
-                        if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                            let multiaddr = entry.multiaddr.clone();
+                        if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string()) {
                             l.record_topic(&multiaddr, &topic);
                         }
                     }
@@ -3910,8 +3896,8 @@ async fn cmd_relay(
             _ = tokio::signal::ctrl_c() => {
                 println!("\nShutting down relay node...");
                 let _ = swarm_handle.shutdown().await;
-                let mut l = ledger.lock().await;
-                let _ = l.save(&data_dir);
+                // The core store persists its own mutations; nothing to flush.
+                let _ledger_guard = ledger.lock().await;
                 break;
             }
         }

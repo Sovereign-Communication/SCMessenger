@@ -1061,18 +1061,18 @@ pub async fn handle_jsonrpc_request(
         }
         ClientIntent::RoutingMarkRefreshFailed { hint } => {
             if let Some(ref core) = ctx.core {
-                let hint_bytes: [u8; 4] = hint
+                let hint_bytes: [u8; 8] = hint
                     .and_then(|h| hex::decode(h).ok())
                     .and_then(|v| {
-                        if v.len() == 4 {
-                            let mut arr = [0u8; 4];
+                        if v.len() == 8 {
+                            let mut arr = [0u8; 8];
                             arr.copy_from_slice(&v);
                             Some(arr)
                         } else {
                             None
                         }
                     })
-                    .unwrap_or([0, 0, 0, 0]);
+                    .unwrap_or([0; 8]);
                 core.routing_mark_refresh_failed(hint_bytes);
                 let mut m = Map::new();
                 m.insert("marked".to_string(), true.into());
@@ -1108,18 +1108,18 @@ pub async fn handle_jsonrpc_request(
         }
         ClientIntent::RoutingStartRefresh { hint } => {
             if let Some(ref core) = ctx.core {
-                let hint_bytes: [u8; 4] = hex::decode(&hint)
+                let hint_bytes: [u8; 8] = hex::decode(&hint)
                     .ok()
                     .and_then(|v| {
-                        if v.len() == 4 {
-                            let mut arr = [0u8; 4];
+                        if v.len() == 8 {
+                            let mut arr = [0u8; 8];
                             arr.copy_from_slice(&v);
                             Some(arr)
                         } else {
                             None
                         }
                     })
-                    .unwrap_or([0, 0, 0, 0]);
+                    .unwrap_or([0; 8]);
                 core.routing_start_refresh(hint_bytes);
                 let mut m = Map::new();
                 m.insert("started".to_string(), true.into());

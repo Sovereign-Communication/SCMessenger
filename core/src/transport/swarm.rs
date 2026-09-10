@@ -31,7 +31,7 @@ use crate::store::ledger_entry::{LedgerExchangeRequest, LedgerExchangeResponse, 
 use super::multiport::MultiPortConfig;
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiport::{self, BindResult, MultiPortConfig};
-use super::observation::{AddressObserver, ConnectionTracker};
+use super::observation::{listen_ports_from_multiaddrs, AddressObserver, ConnectionTracker};
 use super::reflection::{AddressReflectionRequest, AddressReflectionService};
 #[cfg(not(target_arch = "wasm32"))]
 use super::routing::local::TransportType as RoutingTransportType;
@@ -154,7 +154,9 @@ fn is_discoverable_multiaddr(addr: &Multiaddr) -> bool {
             // it. Kademlia entries always come from a remote (Identify, mDNS, a
             // ledger-exchange record), never from local config, so there is no
             // legitimate-DNS case to preserve at this gate; operator-supplied
-            // bootstrap names reach Kademlia through `SwarmCommand::RegisterEndpoint`.
+            // bootstrap names are dialed as configured and never re-published
+            // into the DHT (V040-T13: the RegisterEndpoint command that used to
+            // insert them is gone).
             Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => {
                 has_dns = true;
             }
@@ -1414,6 +1416,24 @@ fn extract_peer_id_bytes(bytes: &[u8]) -> [u8; 32] {
     result
 }
 
+/// Map a connection's remote multiaddr to the transport string understood by
+/// `IronCore::routing_peer_seen` (which routes through `parse_transport_type`).
+/// A relayed circuit is reported as such even though it rides TCP physically:
+/// the routing engine must distinguish reachability-through-a-helper from a
+/// direct path so failover can prefer the direct ladder. Websockets ride TCP.
+fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
+    use libp2p::multiaddr::Protocol;
+    for proto in remote_addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => return "relay",
+            Protocol::Quic | Protocol::QuicV1 => return "quic",
+            Protocol::Ws(_) | Protocol::Wss(_) => return "ws",
+            _ => {}
+        }
+    }
+    "tcp"
+}
+
 fn verify_registration_message(
     peer: &PeerId,
     message: &RegistrationMessage,
@@ -1710,10 +1730,14 @@ fn routing_decision_to_ranked_routes(
         } => {
             // Direct route -- use target peer directly
             let mut score = transport_quality_score(decision.decided_by, decision.confidence);
-            // Factor transport type into score: BLE < WiFi < TCP < QUIC
+            // Factor transport type into score: BLE < WiFi < Circuit < TCP < QUIC
             let transport_bonus = match transport {
                 RoutingTransportType::QUIC => 0.15,
                 RoutingTransportType::TCP => 0.10,
+                // A relayed circuit rides TCP but adds a helper-node hop, so
+                // it ranks below a direct TCP path yet above the short-range
+                // wireless transports.
+                RoutingTransportType::Circuit => 0.07,
                 RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                 RoutingTransportType::BLE => 0.0,
             };
@@ -1741,6 +1765,10 @@ fn routing_decision_to_ranked_routes(
                 let transport_bonus = match transport {
                     RoutingTransportType::QUIC => 0.15,
                     RoutingTransportType::TCP => 0.10,
+                    // A relayed circuit rides TCP but adds a helper-node hop, so
+                    // it ranks below a direct TCP path yet above the short-range
+                    // wireless transports.
+                    RoutingTransportType::Circuit => 0.07,
                     RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                     RoutingTransportType::BLE => 0.0,
                 };
@@ -1802,6 +1830,10 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
+                        // A relayed circuit rides TCP but adds a helper-node hop, so
+                        // it ranks below a direct TCP path yet above the short-range
+                        // wireless transports.
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                         RoutingTransportType::BLE => 0.0,
                     };
@@ -1829,6 +1861,10 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
+                        // A relayed circuit rides TCP but adds a helper-node hop, so
+                        // it ranks below a direct TCP path yet above the short-range
+                        // wireless transports.
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
                         RoutingTransportType::BLE => 0.0,
                     };
@@ -2197,8 +2233,6 @@ pub enum SwarmCommand {
         addr: Multiaddr,
         reply: mpsc::Sender<Result<Multiaddr, String>>,
     },
-    /// Add a known peer address to Kademlia
-    AddKadAddress { peer_id: PeerId, addr: Multiaddr },
     /// Subscribe to a Gossipsub topic
     SubscribeTopic {
         topic: String,
@@ -2255,12 +2289,6 @@ pub enum SwarmCommand {
     ListEndpoints {
         peer_id: PeerId,
         reply: mpsc::Sender<Vec<Multiaddr>>,
-    },
-    /// Register a new endpoint address for a peer
-    RegisterEndpoint {
-        peer_id: PeerId,
-        addr: Multiaddr,
-        reply: mpsc::Sender<Result<(), String>>,
     },
     /// Touch (mark as recently seen) an endpoint for health tracking
     TouchEndpoint {
@@ -2617,26 +2645,6 @@ impl SwarmHandle {
             .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))
     }
 
-    /// Register a new endpoint address for a peer.
-    /// Adds the address to Kademlia's routing table and the address observer.
-    pub async fn register_endpoint(&self, peer_id: PeerId, addr: Multiaddr) -> Result<()> {
-        let (reply_tx, mut reply_rx) = mpsc::channel(1);
-        self.command_tx
-            .send(SwarmCommand::RegisterEndpoint {
-                peer_id,
-                addr,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Swarm task not running"))?;
-
-        match reply_rx.recv().await {
-            Some(Ok(())) => Ok(()),
-            Some(Err(e)) => Err(anyhow::anyhow!("{}", e)),
-            None => Err(anyhow::anyhow!("No reply from swarm")),
-        }
-    }
-
     /// Touch (mark as recently seen) an endpoint for health tracking.
     /// Updates the last-seen timestamp for the peer's address observation.
     pub async fn touch_endpoint(&self, peer_id: PeerId, addr: Multiaddr) -> Result<()> {
@@ -2875,6 +2883,27 @@ impl SwarmHandle {
 /// seeded with the local peer ID when the swarm starts.
 pub fn default_routing_engine_handle() -> Arc<parking_lot::RwLock<Option<OptimizedRoutingEngine>>> {
     Arc::new(parking_lot::RwLock::new(None))
+}
+
+/// V040-T13 F-DHT (revised): whether the (identity, address) PAIR may be
+/// inserted into Kademlia. The address is the key, looked up in OUR OWN
+/// store: only a pair this node has personally proved -- a locally_verified
+/// entry for this exact address, bound to this peer id -- may be re-published
+/// to third parties via DHT queries. The wire may NAME the pair; our store
+/// must PROVE it. A peer being known-good is not enough: the specific
+/// address must be the one we dialed. Fails closed when the core handle is
+/// gone.
+#[cfg(not(target_arch = "wasm32"))]
+fn ledger_verified_pair(
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: &PeerId,
+    addr: &str,
+) -> bool {
+    let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
+        return false;
+    };
+    core.ledger_manager
+        .is_locally_verified_pair(addr, &peer_id.to_string())
 }
 
 /// Build and start the libp2p swarm, returning a handle for communication.
@@ -3172,9 +3201,9 @@ pub async fn start_swarm_with_config(
         // peer ID so routing can begin immediately.
         let local_peer_id_bytes_raw = local_peer_id.to_bytes();
         let local_peer_id_bytes: [u8; 32] = extract_peer_id_bytes(&local_peer_id_bytes_raw);
-        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..4]
+        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..8]
             .try_into()
-            .expect("blake3 hash should be at least 4 bytes");
+            .expect("blake3 hash should be at least 8 bytes");
         {
             let mut guard = routing_engine_handle.write();
             if guard.is_none() {
@@ -4198,14 +4227,35 @@ pub async fn start_swarm_with_config(
                                             address_observer.record_observation(peer, observed_addr);
 
                                             if let Some(primary) = address_observer.primary_external_address() {
-                                                tracing::info!("Consensus external address: {}", primary);
-                                                // Convert SocketAddr to Multiaddr and add to swarm
-                                                let (ip, port) = (primary.ip(), primary.port());
-                                                let maddr: Multiaddr = match ip {
-                                                    std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                                    std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                                };
-                                                swarm.add_external_address(maddr);
+                                                // V040-T14 P0 (defense-in-depth on the
+                                                // publication path): never advertise an
+                                                // address whose port we do not listen on.
+                                                // The observer already refuses such
+                                                // observations; this guard holds even if a
+                                                // future path builds an un-filtered observer.
+                                                // Empty listen set (no dialable listener
+                                                // bound) means there is nothing to advertise
+                                                // -- refuse, never accept-any: any observed
+                                                // port outside our listen set is the
+                                                // ephemeral-source-port class this P0 removes.
+                                                let listen_ports =
+                                                    listen_ports_from_multiaddrs(&bound_addresses);
+                                                if listen_ports.contains(&primary.port()) {
+                                                    tracing::info!("Consensus external address: {}", primary);
+                                                    // Convert SocketAddr to Multiaddr and add to swarm
+                                                    let (ip, port) = (primary.ip(), primary.port());
+                                                    let maddr: Multiaddr = match ip {
+                                                        std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                        std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                                    };
+                                                    swarm.add_external_address(maddr);
+                                                } else if !listen_ports.is_empty() {
+                                                    tracing::warn!(
+                                                        "Refusing to advertise observed address {}: port {} is not a listen port",
+                                                        primary,
+                                                        primary.port()
+                                                    );
+                                                }
                                             }
                                         }
 
@@ -4702,7 +4752,15 @@ pub async fn start_swarm_with_config(
                                                             entry.last_seen,
                                                         );
                                                         if let Ok(addr) = entry.multiaddr.parse::<Multiaddr>() {
-                                                            if is_discoverable_multiaddr(&addr) {
+                                                            // V040-T13 F-DHT (revised): the wire may NAME
+                                                            // the (identity, address) pair, but only a pair
+                                                            // OUR OWN ledger proves -- this exact address
+                                                            // locally_verified and bound to this pid -- may
+                                                            // reach the DHT. A known-good peer id alone is
+                                                            // not enough; the address must be one we dialed.
+                                                            if is_discoverable_multiaddr(&addr)
+                                                                && ledger_verified_pair(&core_handle, &pid, &entry.multiaddr)
+                                                            {
                                                                 swarm.behaviour_mut().kademlia.add_address(&pid, addr);
                                                                 new_count += 1;
                                                             }
@@ -4850,7 +4908,14 @@ pub async fn start_swarm_with_config(
                                                             entry.last_seen,
                                                         );
                                                         if let Ok(addr) = entry.multiaddr.parse::<Multiaddr>() {
-                                                            if is_discoverable_multiaddr(&addr) {
+                                                            // V040-T13 F-DHT (revised): response entries are
+                                                            // the same hearsay as the request side; the same
+                                                            // per-pair gate applies -- only pairs OUR OWN
+                                                            // ledger proves (this address locally_verified
+                                                            // and bound to this pid) reach the DHT.
+                                                            if is_discoverable_multiaddr(&addr)
+                                                                && ledger_verified_pair(&core_handle, &pid, &entry.multiaddr)
+                                                            {
                                                                 swarm.behaviour_mut().kademlia.add_address(&pid, addr);
                                                             }
                                                         }
@@ -5032,18 +5097,22 @@ pub async fn start_swarm_with_config(
                                             "DCUtR hole-punch SUCCESS with {} (attempts: {})",
                                             remote_peer_id, num_attempts
                                         );
-                                        // Hole-punch succeeded — direct connection established.
-                                        // Add this peer's direct addresses to Kademlia so the
-                                        // DHT knows how to reach them without the relay.
-                                        // Collect first to avoid simultaneous immutable + mutable borrow of swarm.
-                                        let ext_addrs: Vec<libp2p::Multiaddr> =
-                                            swarm.external_addresses().cloned().collect();
-                                        for addr in ext_addrs {
-                                            swarm.behaviour_mut().kademlia.add_address(
-                                                &remote_peer_id,
-                                                addr
-                                            );
-                                        }
+                                        // Hole-punch succeeded — the direct connection is
+                                        // established and lives in the swarm's connection layer.
+                                        // V040-T14: the previous code inserted
+                                        // `swarm.external_addresses()` — OUR OWN addresses — under
+                                        // `remote_peer_id`, publishing our endpoints as the remote
+                                        // peer's (identity misattribution, and our addresses leak
+                                        // bound to a stranger's id). The DCUtR event carries no
+                                        // remote address, so the remote's direct endpoint is not
+                                        // provable here; per the corrected-pair doctrine (T13
+                                        // F-DHT) an `add_address` lands only bindings OUR store
+                                        // proves, so this drop is the fix.
+                                        // Residual: the hole-punched connection remains in use;
+                                        // the peer's direct address enters the DHT only from a
+                                        // source that proves the pair (a successful dial recorded
+                                        // in our ledger, or Identify once the pair predicate
+                                        // gates that feed).
                                         bootstrap_capability.add_peer(remote_peer_id);
                                         if reported_peer_discoveries.insert(remote_peer_id) {
                                             let _ = event_tx.send(SwarmEvent2::PeerDiscovered(remote_peer_id)).await;
@@ -5159,12 +5228,15 @@ pub async fn start_swarm_with_config(
                             )) => {
                                 for (peer_id, addr) in peers {
                                     tracing::info!("mDNS discovered peer: {} at {}", peer_id, addr);
-                                    if is_discoverable_multiaddr(&addr) {
-                                        swarm
-                                            .behaviour_mut()
-                                            .kademlia
-                                            .add_address(&peer_id, addr.clone());
-                                    }
+                                    // V040-T14: mDNS is an unauthenticated LAN broadcast — the
+                                    // (peer_id, addr) pair is asserted by the broadcaster, not
+                                    // proven by our store. Per the corrected-pair doctrine (T13
+                                    // F-DHT) no `add_address` lands here: a hostile device on the
+                                    // LAN could bind any peer id to any public address and have
+                                    // it re-published into the DHT. Discovery still works — the
+                                    // validated dial below is how the pair becomes OUR proof via
+                                    // a successful connection, after which the ledger-backed
+                                    // feeds carry it.
 
                                     // Discovery must be self-initializing: a
                                     // peer learned from mDNS cannot identify
@@ -5275,9 +5347,9 @@ pub async fn start_swarm_with_config(
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                let _peer_hint: [u8; 4] = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                let _peer_hint: [u8; 8] = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
                                 // When identity protocol confirms a peer, use the Kademlia server
                                 // mode as the transport type basis since identity requires a
                                 // server-capable connection.
@@ -5308,13 +5380,32 @@ pub async fn start_swarm_with_config(
                                     );
 
                                     if let Some(primary) = address_observer.primary_external_address() {
-                                        // Convert SocketAddr to Multiaddr and add to swarm
-                                        let (ip, port) = (primary.ip(), primary.port());
-                                        let maddr: Multiaddr = match ip {
-                                            std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                            std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                        };
-                                        swarm.add_external_address(maddr);
+                                        // V040-T14 P0 (defense-in-depth on the
+                                        // publication path): never advertise an address
+                                        // whose port we do not listen on (the observer
+                                        // already refuses such observations). Empty
+                                        // listen set (no dialable listener bound)
+                                        // means there is nothing to advertise --
+                                        // refuse, never accept-any: any observed port
+                                        // outside our listen set is the
+                                        // ephemeral-source-port class this P0 removes.
+                                        let listen_ports =
+                                            listen_ports_from_multiaddrs(&bound_addresses);
+                                        if listen_ports.contains(&primary.port()) {
+                                            // Convert SocketAddr to Multiaddr and add to swarm
+                                            let (ip, port) = (primary.ip(), primary.port());
+                                            let maddr: Multiaddr = match ip {
+                                                std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                            };
+                                            swarm.add_external_address(maddr);
+                                        } else if !listen_ports.is_empty() {
+                                            tracing::warn!(
+                                                "Refusing to advertise observed address {}: port {} is not a listen port",
+                                                primary,
+                                                primary.port()
+                                            );
+                                        }
                                     }
                                 } else {
                                     tracing::trace!(
@@ -5323,14 +5414,27 @@ pub async fn start_swarm_with_config(
                                     );
                                 }
 
-                                // Add only discoverable addresses to Kademlia.
-                                // Loopback/unspecified addresses are excluded.
-                                // Private/RFC1918/CGNAT are NOW allowed for local mesh.
+                                // V040-T13 F-DHT (revised): Identify listen
+                                // addresses are peer-advertised hearsay. Only an
+                                // (identity, address) pair OUR OWN ledger proves
+                                // -- this exact advertised address locally_verified
+                                // and bound to this peer -- may reach the DHT.
+                                // The peer's word is never enough: the address must
+                                // be one we personally dialed. Inbound-only peers
+                                // therefore lose DHT presence until we dial them
+                                // (accepted cost); advertised addresses we never
+                                // dialed are simply not inserted.
                                 for addr in &info.listen_addrs {
-                                    if is_discoverable_multiaddr(addr) {
+                                    if is_discoverable_multiaddr(addr)
+                                        && ledger_verified_pair(&core_handle, &peer_id, &addr.to_string())
+                                    {
                                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
                                     } else {
-                                        tracing::debug!("Skipping non-discoverable Kademlia addr for {}: {}", peer_id, addr);
+                                        tracing::debug!(
+                                            "F-DHT: not adding Identify addr {} for {} (not a proven pair)",
+                                            addr,
+                                            peer_id
+                                        );
                                     }
                                 }
 
@@ -5532,34 +5636,18 @@ pub async fn start_swarm_with_config(
                                     let _ = swarm.remove_listener(listener_id);
                                 } else if is_discoverable_multiaddr(&address) {
                                 tracing::info!("Listening on {}", address);
-                                // D2 (live 2026-09-09): the multiport sweep binds dual-stack
-                                // wildcards (/ip4/0.0.0.0 + /ip6/::), and every per-interface
-                                // listener address libp2p reports for them — including loopback
-                                // (127.0.0.1, ::1) and link-local (fe80::) — is auto-confirmed
-                                // into the external-address book and advertised via Identify.
-                                // Remote peers then dial those addresses and land on the DIALER's
-                                // own loopback listener (libp2p aborts with "Unexpected peer ID";
-                                // 255 self-dial aborts on the AWS relay in 26h). Keep the startup
-                                // event (mobile await_listener gates on the FIRST NewListenAddr,
-                                // which may legitimately be loopback on an offline device) but
-                                // veto the external confirmation and keep the address out of the
-                                // local bound set that feeds advertisement/ledger bookkeeping.
-                                if is_discoverable_multiaddr(&address) {
-                                    bound_addresses.push(address.clone());
-                                } else {
-                                    tracing::debug!(
-                                        "[D2] Listener not routable for peers, suppressing from advertised set: {}",
-                                        address
-                                    );
-                                    swarm.remove_external_address(&address);
-                                }
-                                }
-                                address_observer.set_listen_ports(
-                                    bound_addresses.iter().filter_map(|addr| {
-                                        ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
-                                    }),
-                                );
+                                // D2 (live 2026-09-09): only routable listeners enter the
+                                // bound/advertised set. Loopback/link-local are already
+                                // excluded by is_discoverable_multiaddr; keep the startup
+                                // event (mobile await_listener gates on the first NewListenAddr).
+                                bound_addresses.push(address.clone());
+                                // V040-T14 P0: the external-address consensus may only
+                                // accept observations whose port we actually listen on.
+                                address_observer.set_listen_ports(listen_ports_from_multiaddrs(
+                                    &bound_addresses,
+                                ));
                                 let _ = event_tx.send(SwarmEvent2::ListeningOn(address)).await;
+                                }
                             }
 
                             SwarmEvent::ConnectionEstablished { peer_id, endpoint, connection_id, .. } => {
@@ -5823,6 +5911,26 @@ pub async fn start_swarm_with_config(
                                         "Started core ledger exchange with newly connected peer {}",
                                         peer_id
                                     );
+                                }
+
+                                // Feed the routing engine: a real connection now exists.
+                                // The ledger exchange above is deduped once per peer, but
+                                // every path sighting is meaningful here -- LocalCell
+                                // accumulates transports (direct + relayed circuit) and
+                                // peer_seen clears the peer's negative-cache entry, so a
+                                // reconnect after path loss restores routing confidence
+                                // immediately. Routing through the single
+                                // `IronCore::routing_peer_seen` code path keeps the
+                                // transport derivation and the engine's parser in lockstep.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
                                 }
 
                                 if reported_peer_discoveries.insert(peer_id) {
@@ -6250,15 +6358,15 @@ pub async fn start_swarm_with_config(
                                 // MYCORRHIZAL ROUTING: Use routing engine to determine path
                                 // Convert libp2p PeerId to routing module format
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                // Get recipient hint from peer_id (first 4 bytes of blake3 hash)
-                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..4]
+                                // Get recipient hint from peer_id (first 8 bytes of blake3 hash)
+                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
                                     .try_into()
-                                    .expect("blake3 hash should be at least 4 bytes");
+                                    .expect("blake3 hash should be at least 8 bytes");
 
                                 // Route message using mycorrhizal routing engine.
                                 //
                                 // CRITICAL BYPASS: the mycorrhizal engine only ever sees a
-                                // 4-byte hint -- it has no way to know we already hold an
+                                // hint -- it has no way to know we already hold an
                                 // active libp2p connection to this exact peer_id right now,
                                 // and its layers (negative cache/prefetch/multipath/base
                                 // discovery) are designed for *indirect* routing when the
@@ -6799,12 +6907,6 @@ pub async fn start_swarm_with_config(
                                 }
                             }
 
-                            SwarmCommand::AddKadAddress { peer_id, addr } => {
-                                if is_discoverable_multiaddr(&addr) {
-                                    swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
-                                }
-                            }
-
                             SwarmCommand::SubscribeTopic { topic, reply } => {
                                 if subscribed_topics.contains(&topic) {
                                     let _ = reply.send(Ok(())).await;
@@ -6934,13 +7036,6 @@ pub async fn start_swarm_with_config(
                                 // Identify and Kademlia protocols automatically.
                                 let addrs: Vec<Multiaddr> = swarm.listeners().cloned().collect();
                                 let _ = reply.send(addrs).await;
-                            }
-                            SwarmCommand::RegisterEndpoint { peer_id, addr, reply } => {
-                                swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                                if let Some(socket) = crate::transport::observation::ConnectionTracker::extract_socket_addr(&addr) {
-                                    address_observer.record_observation(peer_id, socket);
-                                }
-                                let _ = reply.send(Ok(())).await;
                             }
                             SwarmCommand::TouchEndpoint { peer_id, addr, reply } => {
                                 if let Some(socket) = crate::transport::observation::ConnectionTracker::extract_socket_addr(&addr) {
@@ -7254,6 +7349,10 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // wasm/browser transport has no TCP/UDP listeners, so the observer
+        // keeps its accept-all default here: there is no listen-port set to
+        // filter against (V040-T14 P0 does not apply to a node that cannot
+        // listen).
         let mut address_observer = AddressObserver::new();
         let mut relay_budget: u32 = 200;
         let mut relay_count_this_hour: u32 = 0;
@@ -7438,11 +7537,6 @@ pub async fn start_swarm_with_config(
                                     .send(Err("listen is unsupported on wasm32/browser transport".to_string()))
                                     .await;
                             }
-                            SwarmCommand::AddKadAddress { peer_id, addr } => {
-                                if is_discoverable_multiaddr(&addr) {
-                                    swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
-                                }
-                            }
                             SwarmCommand::SubscribeTopic { topic, reply } => {
                                 if subscribed_topics.contains(&topic) {
                                     let _ = reply.send(Ok(())).await;
@@ -7532,10 +7626,6 @@ pub async fn start_swarm_with_config(
                             SwarmCommand::ListEndpoints { peer_id: _, reply } => {
                                 // WASM nodes do not track endpoint addresses locally.
                                 let _ = reply.send(Vec::new()).await;
-                            }
-                            SwarmCommand::RegisterEndpoint { peer_id: _, addr: _, reply } => {
-                                // WASM nodes register endpoints via the daemon bridge, not locally.
-                                let _ = reply.send(Ok(())).await;
                             }
                             SwarmCommand::TouchEndpoint { peer_id: _, addr: _, reply } => {
                                 let _ = reply.send(Ok(())).await;
@@ -8179,14 +8269,26 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, info, .. }
                             )) => {
-                                for addr in &info.listen_addrs {
-                                    if is_discoverable_multiaddr(addr) {
-                                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                                    }
-                                }
+                                // V040-T13 F-DHT (revised): wasm has no core
+                                // ledger, so it can never prove an (identity,
+                                // address) pair from OUR OWN store -- and the
+                                // ruling is explicit: "a feed that cannot
+                                // satisfy the predicate is a feed that should
+                                // not write to the DHT at all." The previous
+                                // dialed_peers proxy was vacuous (a browser
+                                // cannot listen, so every connection is a
+                                // dialer and the set admits everything). This
+                                // feed therefore inserts nothing.
+                                // (The earlier dialed_peers set was removed
+                                // entirely -- see the wasm loop declarations.)
                                 if let Some(observed_addr) =
                                     ConnectionTracker::extract_socket_addr(&info.observed_addr)
                                 {
+                                    // WASM: diagnostics-only observation recording.
+                                    // No external-address promotion exists in the
+                                    // wasm event loop (browser cannot listen; the
+                                    // native promotion sites are cfg'd to non-wasm).
+                                    // Residual-2 in PR #270 documents this parity.
                                     address_observer.record_observation(peer_id, observed_addr);
                                 }
 
@@ -8205,9 +8307,16 @@ pub async fn start_swarm_with_config(
                                     trigger = ?crate::routing::smart_retry::DeliveryTrigger::PeerDiscovered(peer_id.to_string()),
                                     peer = %peer_id
                                 );
+                                // V040-T13 F-DHT (revised): wasm has no ledger, so
+                                // no (identity, address) pair can be proven here and
+                                // the Identify feed inserts nothing -- there is no
+                                // dialed-set to maintain.
+                                // Clone the remote address before `endpoint` is consumed
+                                // (T4's routing feed uses it to classify the transport).
+                                let remote_addr = endpoint.get_remote_address().clone();
                                 connection_tracker.add_connection(
                                     peer_id,
-                                    endpoint.get_remote_address().clone(),
+                                    remote_addr.clone(),
                                     match endpoint {
                                         libp2p::core::ConnectedPoint::Listener { local_addr, .. } => local_addr.clone(),
                                         libp2p::core::ConnectedPoint::Dialer { .. } => "/ip4/0.0.0.0/tcp/0".parse().expect("static multiaddr parse cannot fail"),
@@ -8248,6 +8357,21 @@ pub async fn start_swarm_with_config(
                                         "Started core ledger exchange with newly connected peer {} (WASM)",
                                         peer_id
                                     );
+                                }
+
+                                // Feed the routing engine (see the native arm for the
+                                // rationale): every path sighting is meaningful, and the
+                                // empty-engine case is a no-op, so this is safe on nodes
+                                // where the optimized engine is not yet initialized.
+                                if !peer_is_blocked(&core_handle, peer_id) {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core_arc.routing_peer_seen(
+                                            peer_id.to_string(),
+                                            endpoint_transport_string(&remote_addr).to_string(),
+                                        );
+                                    }
                                 }
 
                                 if reported_peer_discoveries.insert(peer_id) {
@@ -8575,9 +8699,9 @@ use libp2p::{gossipsub, request_response};
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mdns_dial_addr, build_routable_relay_addrs, extract_ed25519_public_key_from_peer_id,
-        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
-        resolve_dial_target, select_drift_fallback_carrier,
+        build_mdns_dial_addr, build_routable_relay_addrs, endpoint_transport_string,
+        extract_ed25519_public_key_from_peer_id, is_ledger_exchange_path_failure, peer_is_blocked,
+        rearm_ledger_exchange_after_failure, resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         validate_delivery_convergence_marker_shape, verify_registration_message,
         wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
@@ -8590,6 +8714,32 @@ mod tests {
     use libp2p::{Multiaddr, PeerId};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+
+    #[test]
+    fn endpoint_transport_string_classifies_endpoint_multiaddrs() {
+        // Direct TCP rides TCP; a websocket also rides TCP (same enum tier);
+        // a relayed circuit must NOT be reported as a plain TCP path -- the
+        // routing engine needs the direct-vs-helper distinction for failover.
+        let tcp: Multiaddr = "/ip4/1.2.3.4/tcp/9001".parse().unwrap();
+        let quic: Multiaddr = "/ip4/1.2.3.4/udp/4001/quic-v1".parse().unwrap();
+        let ws: Multiaddr = "/ip4/1.2.3.4/tcp/9001/ws".parse().unwrap();
+        let wss: Multiaddr = "/dns4/example.com/tcp/443/wss".parse().unwrap();
+        let circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
+            .parse()
+            .unwrap();
+
+        assert_eq!(endpoint_transport_string(&tcp), "tcp");
+        assert_eq!(endpoint_transport_string(&quic), "quic");
+        assert_eq!(endpoint_transport_string(&ws), "ws");
+        assert_eq!(endpoint_transport_string(&wss), "ws");
+        assert_eq!(endpoint_transport_string(&circuit), "relay");
+        // The distinction is what matters most: a circuit must never collapse
+        // into the plain-TCP classification.
+        assert_ne!(
+            endpoint_transport_string(&tcp),
+            endpoint_transport_string(&circuit)
+        );
+    }
 
     #[test]
     fn ledger_exchange_failure_rearms_only_the_current_request() {
@@ -9337,6 +9487,11 @@ mod ledger_seeding_hardening_tests {
             failure_count: 0,
             last_seen: None,
             topics: Vec::new(),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         }
     }
 
