@@ -1,8 +1,8 @@
 package com.scmessenger.android.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
@@ -89,19 +89,29 @@ private fun RequestList(
     onNavigateToChat: ((peerId: String) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(16.dp),
+    // FIX(Compose-crash): Column+verticalScroll to eliminate LazyColumn prefetch crash
+    // (SlotTableKt.dataAnchor ArrayIndexOutOfBounds via PrefetchHandleProvider/
+    // LayoutNodeSubcompositionsState.onRelease during MainActivity destroy at 19:42).
+    // Requests list is small (typically <20) so Column overhead is negligible.
+    val stableRequests = remember(requests) {
+        requests.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId }
+    }
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(requests) { request ->
-            RequestItem(
-                request = request,
-                onAccept = onAccept,
-                onReject = onReject,
-                onBlockAndDelete = onBlockAndDelete,
-                onNavigateToChat = onNavigateToChat
-            )
+        stableRequests.forEach { request ->
+            key(request.peerId) {
+                RequestItem(
+                    request = request,
+                    onAccept = onAccept,
+                    onReject = onReject,
+                    onBlockAndDelete = onBlockAndDelete,
+                    onNavigateToChat = onNavigateToChat
+                )
+            }
         }
     }
 }

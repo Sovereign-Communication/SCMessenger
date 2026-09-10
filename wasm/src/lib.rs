@@ -2278,21 +2278,30 @@ mod tests {
         let contact_manager = core.contacts_store_manager();
         let history = core.history_store_manager();
 
-        let peer_id = "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string();
-        let mut contact = Contact::new(peer_id.clone(), "11".repeat(32));
+        // UNIFICATION_V2 canonicalizes a contact's stored peer_id to its public-key
+        // hex even when the add-time peer id is a libp2p id (the real key is
+        // derived from it). Use the initialized identity's own genuine public key
+        // hex as both peer id and public key so the whole desktop flow keys on the
+        // canonical hex form that add()/get() actually store and read.
+        let key_hex = core
+            .get_identity_info()
+            .public_key_hex
+            .expect("initialized identity exposes public key hex");
+
+        let mut contact = Contact::new(key_hex.clone(), key_hex.clone());
         contact.local_nickname = Some("Alice".to_string());
         contact.last_seen = Some(1);
         contact_manager.add(contact).unwrap();
 
         // Verify the specific contact exists (count() may include other sled table keys).
-        let fetched = contact_manager.get(peer_id.clone()).unwrap();
+        let fetched = contact_manager.get(key_hex.clone()).unwrap();
         assert!(fetched.is_some(), "contact should exist after add");
         assert_eq!(fetched.unwrap().local_nickname, Some("Alice".to_string()));
 
         let outbound = MessageRecord {
             id: "desktop-outbound-1".to_string(),
             direction: MessageDirection::Sent,
-            peer_id: "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string(),
+            peer_id: key_hex.clone(),
             content: "hello from desktop".to_string(),
             timestamp: 2,
             sender_timestamp: 2,
@@ -2301,7 +2310,7 @@ mod tests {
         };
         history.add(outbound).unwrap();
 
-        let conversation = history.conversation(peer_id, 20).unwrap();
+        let conversation = history.conversation(key_hex, 20).unwrap();
         assert_eq!(
             conversation.len(),
             1,

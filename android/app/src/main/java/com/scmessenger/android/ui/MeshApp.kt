@@ -313,6 +313,10 @@ fun MeshNavHost(
                     },
                     onNavigateToJoinMesh = {
                         navController.navigate(Screen.JoinMesh.route)
+                    },
+                    // UNIFICATION: mesh node click auto-add — navigate directly to chat; MeshRepository.sendMessage will auto-add peer to contacts using imported nickname (discoveredPeers/ledger, synthetic filtered) if not already a contact, so no manual add required.
+                    onPeerClick = { peer ->
+                        navController.navigate("chat/${peer.peerId}")
                     }
                 )
             }
@@ -322,7 +326,11 @@ fun MeshNavHost(
             route = "peer_list"
         ) {
             PeerListScreen(
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                // UNIFICATION: same mesh node click auto-add flow as Dashboard — direct chat navigation, auto-add handled in MeshRepository.sendMessage.
+                onPeerClick = { peer ->
+                    navController.navigate("chat/${peer.peerId}")
+                }
             )
         }
 

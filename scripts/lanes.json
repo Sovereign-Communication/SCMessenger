@@ -1,7 +1,7 @@
 {
   "_what_this_is": "A MEASUREMENT SNAPSHOT of delegation capacity, not a ranking. Lanes appear and vanish without notice -- Qwen and DashScope both died between 2026-08-04 and 2026-08-14, and OpenRouter silently retired four :free tiers in the same window. Nothing here is 'primary'. Routing is a selection function over the measured properties below, applied fresh each time. See docs/rules/DELEGATION.md section 'Choosing a lane'.",
   "_regenerate": "python scripts/lane_probe.py --write",
-  "_probed": "2026-08-19",
+  "_probed": "2026-08-31 (dashscope re-probed live; other lanes still 2026-08-19)",
   "_expires": "Treat as stale after 7 days or after any 401/404 from a lane. Re-probe, do not assume.",
   "_probe_task": "unified-diff codegen from a natural-language spec, max_tokens>=1000, temperature 0",
   "selection_properties": {
@@ -327,6 +327,28 @@
       ],
       "status": "OK",
       "quirks": "Go/no-go on evidence, merge decisions, adversarial crypto review. A worker cannot verify itself, which is the only reason this tier exists."
+    },
+    {
+      "id": "dashscope-qwen-free",
+      "provider": "dashscope",
+      "endpoint": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "key_file": "dashscope.env",
+      "key_var": "DASHSCOPE_API_KEY",
+      "cost_class": "free-quota",
+      "tiers": [
+        "micro",
+        "scoped",
+        "reasoning",
+        "long-context"
+      ],
+      "status": "OK",
+      "verified": "2026-08-31 -- http 200, content 'READY', model qwen3-14b",
+      "allowlist_ref": "docs/QWEN_QUOTA_LEDGER.md -- 50 models carry free quota; 55 carry none. Route ONLY to the allowlist there.",
+      "quota": {
+        "note": "Per-model buckets of 1,000,000 tokens, NOT shared. ~40 buckets expire 2026-10-06 -- spend those first, they do not roll over. Five full 1M buckets (qwen3.8-flash, qwen3.8-27b, kimi-k3, deepseek-v4-pro-0813, qwen3.8-2.4t-a95b) expire Nov and are the reserve."
+      },
+      "quirks": "TWO TRAPS. (1) INTERNATIONAL endpoint only: dashscope-intl.aliyuncs.com returns 200 while dashscope.aliyuncs.com returns 401 for the SAME key -- this is almost certainly why this lane was recorded dead since 2026-08-15. Try both hosts before declaring it dead. (2) Non-streaming calls to thinking-hybrid models MUST send enable_thinking:false or they 400 with invalid_parameter_error -- a request-body error that reads like a broken lane. Also: send the EXACT dated model code; bare names like deepseek-v4-flash, qwen-plus and qwen3-coder-plus have NO free quota while their dated variants do.",
+      "ref": "operator console export + live probe, 2026-08-31"
     }
   ],
   "dead": [
@@ -334,13 +356,7 @@
       "id": "qwenpaid",
       "code": "HTTP401",
       "detail": "Incorrect API key provided",
-      "note": "Auth failure, NOT quota. Operator believed it was 0%-until-2026-08-19; the key itself is rejected. Re-issue before assuming quota."
-    },
-    {
-      "id": "dashscope",
-      "code": "HTTP401",
-      "detail": "API-key is blocked",
-      "note": "Blocked by Alibaba, not exhausted. Key was knowingly exposed and never rotated. Dead until re-issued."
+      "note": "REMOVED by operator ruling 2026-08-31 -- paid Qwen lane retired, do not restore"
     },
     {
       "id": "or-deepseek-chat-v3.1:free",

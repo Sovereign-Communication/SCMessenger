@@ -3,6 +3,11 @@ package com.scmessenger.android.utils
 object PeerIdValidator {
     private val IDENTITY_ID_REGEX = Regex("^[a-fA-F0-9]{64}$")
 
+    // Strict Base58BTC alphabet (Bitcoin order). `Character.isLetterOrDigit`
+    // accepts non-ASCII letters and would let malformed ids through.
+    private const val BASE58_ALPHABET =
+        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
     fun validate(id: String): Boolean =
         normalize(id).let { normalized ->
             normalized.matches(IDENTITY_ID_REGEX) || isLibp2pPeerId(normalized)
@@ -20,8 +25,9 @@ object PeerIdValidator {
 
     fun isLibp2pPeerId(id: String): Boolean {
         // Base58-encoded libp2p peer IDs: 12D3KooW... (~52 chars) or Qm... (~46 chars)
-        // Validate prefix + reasonable length + base58 charset (no 0, O, I, l)
-        val base58Chars = id.all { c -> c.isLetterOrDigit() && c !in "0OIl" }
+        // Validate prefix + reasonable length + STRICT Base58BTC ASCII charset
+        // (no 0, O, I, l; no '+', '/', no non-ASCII lookalikes)
+        val base58Chars = id.all { it in BASE58_ALPHABET }
         return base58Chars && (
             (id.startsWith("12D3Koo") && id.length in 46..56) ||
             (id.startsWith("Qm") && id.length in 44..50)

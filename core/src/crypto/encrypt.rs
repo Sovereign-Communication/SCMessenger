@@ -611,6 +611,55 @@ pub fn encrypt_with_ratchet_fallback(
 ///
 /// # Returns
 /// The decrypted plaintext bytes.
+/// Build (or replace) a receiver-side hybrid/classical V2 session from an
+/// inbound envelope's bootstrap material. Used both for first-contact session
+/// establishment and for SESSION DIVERGENCE RECOVERY: if the sender restarted
+/// (memory-only sender sessions) its next bootstrap ciphertext cannot be
+/// decrypted against our stale session, and we rebuild from the bootstrap
+/// fields carried on the wire instead of dropping the message.
+#[allow(clippy::too_many_arguments)]
+fn init_receiver_v2_session(
+    manager: &mut crate::crypto::RatchetSessionManager,
+    peer_id: &str,
+    recipient_signing_key: &SigningKey,
+    recipient_x25519_secret: Option<&x25519_dalek::StaticSecret>,
+    our_mlkem_keypair: Option<&crate::crypto::pq::MlKem768KeyPair>,
+    our_bundle: Option<&crate::identity::PublicKeyBundle>,
+    sender_bundle: Option<&crate::identity::PublicKeyBundle>,
+    envelope_v2: &crate::message::EnvelopeV2,
+) -> Result<()> {
+    if let (Some(our_k), Some(our_b), Some(their_b)) =
+        (our_mlkem_keypair, our_bundle, sender_bundle)
+    {
+        let hct = if let Some(mlk) = &envelope_v2.pq_kem_ciphertext {
+            let mut e = [0u8; 32];
+            e.copy_from_slice(&envelope_v2.ephemeral_public_key);
+            let mut m = [0u8; 1088];
+            m.copy_from_slice(mlk);
+            Some(crate::crypto::pq::hybrid::HybridCiphertext {
+                x25519_ephemeral_public: e,
+                mlkem_ciphertext: m.to_vec(),
+            })
+        } else {
+            None
+        };
+
+        manager.create_receiver_session_hybrid(
+            peer_id,
+            recipient_signing_key,
+            recipient_x25519_secret
+                .ok_or_else(|| anyhow::anyhow!("V2 session requires recipient x25519 secret"))?,
+            our_k,
+            our_b,
+            their_b,
+            hct.as_ref(),
+        )?;
+        Ok(())
+    } else {
+        bail!("V2 ratcheted envelope received, but missing keys/bundles for hybrid init");
+    }
+}
+
 pub fn decrypt_with_ratchet_fallback(
     recipient_signing_key: &SigningKey,
     recipient_x25519_secret: Option<&x25519_dalek::StaticSecret>,
@@ -627,7 +676,7 @@ pub fn decrypt_with_ratchet_fallback(
                     let peer_hash = blake3::hash(&envelope.sender_public_key);
                     let peer_id = hex::encode(peer_hash.as_bytes());
 
-                    let session = if !manager.has_session(&peer_id) {
+                    if !manager.has_session(&peer_id) {
                         // Create a classical receiver session if it doesn't exist
                         let mut sender_ed = [0u8; 32];
                         sender_ed.copy_from_slice(&envelope.sender_public_key);
@@ -637,17 +686,61 @@ pub fn decrypt_with_ratchet_fallback(
                             &peer_id,
                             recipient_signing_key,
                             &sender_x25519,
-                        )?
-                    } else {
-                        manager.get_session_mut(&peer_id).ok_or_else(|| {
+                        )?;
+                    }
+
+                    let first_error = match manager
+                        .get_session_mut(&peer_id)
+                        .ok_or_else(|| {
                             anyhow::anyhow!(
                                 "Session exists but cannot be retrieved for peer {}",
                                 peer_id
                             )
-                        })?
+                        })
+                        .and_then(|session| decrypt_message_ratcheted(session, envelope))
+                    {
+                        Ok(plaintext) => return Ok(plaintext),
+                        Err(e) => e,
                     };
 
-                    return decrypt_message_ratcheted(session, envelope);
+                    // SESSION DIVERGENCE RECOVERY: classical receiver sessions are
+                    // deterministically derivable from both parties' static keys,
+                    // so a sender whose session store was wiped (daemon restart)
+                    // can be re-synced by rebuilding ours.
+                    tracing::warn!(
+                        "V1 ratchet decrypt failed for peer {}.. ({}); rebuilding receiver session from static keys",
+                        &peer_id[..16.min(peer_id.len())],
+                        first_error
+                    );
+                    let mut sender_ed = [0u8; 32];
+                    sender_ed.copy_from_slice(&envelope.sender_public_key);
+                    let sender_x25519 =
+                        crate::crypto::encrypt::ed25519_public_to_x25519(&sender_ed)?;
+                    manager.create_receiver_session(
+                        &peer_id,
+                        recipient_signing_key,
+                        &sender_x25519,
+                    )?;
+                    return match manager.get_session_mut(&peer_id) {
+                        Some(session) => match decrypt_message_ratcheted(session, envelope) {
+                            Ok(plaintext) => {
+                                tracing::warn!(
+                                    "V1 session re-established for peer {}..; message recovered",
+                                    &peer_id[..16.min(peer_id.len())]
+                                );
+                                Ok(plaintext)
+                            }
+                            Err(retry_err) => {
+                                tracing::warn!(
+                                    "V1 session rebuild did not help for peer {}..: {}",
+                                    &peer_id[..16.min(peer_id.len())],
+                                    retry_err
+                                );
+                                Err(first_error)
+                            }
+                        },
+                        None => Err(first_error),
+                    };
                 }
                 bail!("Ratcheted V1 envelope received but no active ratchet session");
             }
@@ -657,48 +750,89 @@ pub fn decrypt_with_ratchet_fallback(
             if let Some(manager) = session_manager {
                 let peer_hash = blake3::hash(&envelope_v2.sender_public_key);
                 let peer_id = hex::encode(peer_hash.as_bytes());
+                let peer_short = &peer_id[..16.min(peer_id.len())];
 
-                let session = if !manager.has_session(&peer_id) {
-                    if let (Some(our_k), Some(our_b), Some(their_b)) =
-                        (our_mlkem_keypair, our_bundle, sender_bundle)
-                    {
-                        let hct = if let Some(mlk) = &envelope_v2.pq_kem_ciphertext {
-                            let mut e = [0u8; 32];
-                            e.copy_from_slice(&envelope_v2.ephemeral_public_key);
-                            let mut m = [0u8; 1088];
-                            m.copy_from_slice(mlk);
-                            Some(crate::crypto::pq::hybrid::HybridCiphertext {
-                                x25519_ephemeral_public: e,
-                                mlkem_ciphertext: m.to_vec(),
-                            })
-                        } else {
-                            None
-                        };
+                if !manager.has_session(&peer_id) {
+                    init_receiver_v2_session(
+                        manager,
+                        &peer_id,
+                        recipient_signing_key,
+                        recipient_x25519_secret,
+                        our_mlkem_keypair,
+                        our_bundle,
+                        sender_bundle,
+                        envelope_v2,
+                    )?;
+                }
 
-                        manager.create_receiver_session_hybrid(
-                            &peer_id,
-                            recipient_signing_key,
-                            recipient_x25519_secret.ok_or_else(|| {
-                                anyhow::anyhow!("V2 session requires recipient x25519 secret")
-                            })?,
-                            our_k,
-                            our_b,
-                            their_b,
-                            hct.as_ref(),
-                        )?
-                    } else {
-                        bail!("V2 ratcheted envelope received, but missing keys/bundles for hybrid init");
-                    }
-                } else {
-                    manager.get_session_mut(&peer_id).ok_or_else(|| {
+                let first_error = match manager
+                    .get_session_mut(&peer_id)
+                    .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Session exists but cannot be retrieved for peer {}",
                             peer_id
                         )
-                    })?
+                    })
+                    .and_then(|session| decrypt_message_ratcheted_v2(session, envelope_v2))
+                {
+                    Ok(plaintext) => return Ok(plaintext),
+                    Err(e) => e,
                 };
 
-                return decrypt_message_ratcheted_v2(session, envelope_v2);
+                // SESSION DIVERGENCE RECOVERY: the sender's ratchet sessions live
+                // only in memory on some platforms, so a sender-side restart
+                // silently forks the session. Its next bootstrap ciphertext
+                // (carrying pq/transcript bootstrap fields) can never decrypt
+                // against our stale session -- rebuild the receiver session from
+                // the bootstrap material instead of dropping the message.
+                //
+                // Precedent: the phone already re-keys by pushing identity_sync
+                // automatically; this heals the same divergence inbound, without
+                // needing a round-trip.
+                tracing::warn!(
+                    "V2 ratchet decrypt failed for peer {}.. ({}); attempting session re-establishment from bootstrap fields",
+                    peer_short,
+                    first_error
+                );
+                match init_receiver_v2_session(
+                    manager,
+                    &peer_id,
+                    recipient_signing_key,
+                    recipient_x25519_secret,
+                    our_mlkem_keypair,
+                    our_bundle,
+                    sender_bundle,
+                    envelope_v2,
+                ) {
+                    Ok(()) => match manager.get_session_mut(&peer_id) {
+                        Some(session) => match decrypt_message_ratcheted_v2(session, envelope_v2) {
+                            Ok(plaintext) => {
+                                tracing::warn!(
+                                    "V2 session re-established from bootstrap for peer {}..; message recovered",
+                                    peer_short
+                                );
+                                return Ok(plaintext);
+                            }
+                            Err(retry_err) => {
+                                tracing::warn!(
+                                    "V2 session rebuild did not help for peer {}..: {}",
+                                    peer_short,
+                                    retry_err
+                                );
+                                return Err(first_error);
+                            }
+                        },
+                        None => return Err(first_error),
+                    },
+                    Err(init_err) => {
+                        tracing::warn!(
+                            "V2 session re-establishment unavailable for peer {}..: {}",
+                            peer_short,
+                            init_err
+                        );
+                    }
+                }
+                return Err(first_error);
             }
             bail!("V2 envelope received but no session manager available");
         }
@@ -854,6 +988,101 @@ mod tests {
         let key = SigningKey::from_bytes(&secret);
         secret.zeroize();
         key
+    }
+
+    #[test]
+    fn test_decrypt_fallback_recovers_after_sender_session_restart() {
+        // Regression guard for Windows->phone silent drop after daemon restarts:
+        // sender ratchet sessions are memory-only, so a sender restart forks the
+        // session. The receiver's stale session must NOT cause a silent drop --
+        // decrypt_with_ratchet_fallback must re-establish from the bootstrap
+        // fields carried on the new session's first ciphertext(s).
+        use crate::crypto::RatchetSessionManager;
+
+        let alice_key = generate_keypair();
+        let bob_key = generate_keypair();
+        let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
+        let bob_x25519_secret = ed25519_to_x25519_secret(&bob_key);
+        let bob_mlkem = crate::crypto::pq::generate();
+
+        let alice_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: alice_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&alice_x25519_secret).to_bytes(),
+            mlkem_encaps_key: crate::crypto::pq::generate().public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+        let bob_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: bob_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&bob_x25519_secret).to_bytes(),
+            mlkem_encaps_key: bob_mlkem.public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+
+        let mut bob_sessions = RatchetSessionManager::new();
+
+        // Round 1: normal in-session message establishes Bob's receiver session.
+        let mut alice_sessions_1 = RatchetSessionManager::new();
+        let wire1 = {
+            let session = alice_sessions_1
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"before restart").unwrap()
+        };
+        let pt1 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire1,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt1, b"before restart");
+
+        // Round 2: Alice's process restarts -- her session store (memory-only)
+        // is wiped and a BRAND-NEW sender session is created.
+        let mut fresh_alice_sessions = RatchetSessionManager::new();
+        let wire2 = {
+            let session = fresh_alice_sessions
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"after restart").unwrap()
+        };
+
+        // The whole point of the fix: the fallback RECOVERS against Bob's
+        // stale session instead of failing.
+        let pt2 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire2,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt2, b"after restart");
     }
 
     #[test]

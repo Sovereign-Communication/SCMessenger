@@ -1,9 +1,10 @@
 package com.scmessenger.android.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,6 +21,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +35,7 @@ import androidx.compose.ui.res.stringResource
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.dashboard.PeerListScreen
 import com.scmessenger.android.ui.dashboard.TopologyScreen
+import com.scmessenger.android.utils.toEpochMillis
 import com.scmessenger.android.ui.viewmodels.MeshServiceViewModel
 import com.scmessenger.android.ui.viewmodels.DashboardViewModel
 import com.scmessenger.android.ui.viewmodels.SettingsViewModel
@@ -46,7 +50,8 @@ fun DashboardScreen(
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     onNavigateToPeerList: () -> Unit = {},
     onNavigateToTopology: () -> Unit = {},
-    onNavigateToJoinMesh: () -> Unit = {}
+    onNavigateToJoinMesh: () -> Unit = {},
+    onPeerClick: (com.scmessenger.android.ui.viewmodels.PeerInfo) -> Unit = {}
 ) {
     val serviceState by serviceViewModel.serviceState.collectAsState()
     val isRunning by serviceViewModel.isRunning.collectAsState()
@@ -55,9 +60,9 @@ fun DashboardScreen(
 
     val fullPeers by dashboardViewModel.fullPeersCount.collectAsState()
     val headlessPeers by dashboardViewModel.headlessPeersCount.collectAsState()
-    val totalPeers by dashboardViewModel.totalPeersCount.collectAsState()
 
     val meshSettings by settingsViewModel.settings.collectAsState()
+    val nearbyCount by dashboardViewModel.nearbyPeersCount.collectAsState()
 
     Scaffold(
         topBar = {
@@ -67,142 +72,135 @@ fun DashboardScreen(
         }
     ) { paddingValues ->
         val peers by dashboardViewModel.peers.collectAsState()
+        // UNIFICATION_V2 crash guard: ensure distinct keys for Compose stability (outside LazyColumn scope)
+        // UNIFICATION FIX: nearbyCount is discovery-based (BLE/TCP/mDNS direct + isRecent) not ledger history — 2 nearby vs 9 total.
+        // sortedPeers is unified single-list (online first, offline last) via DashboardViewModel.sortPeersForUnifiedView; total is authoritative.
+        val sortedPeers = remember(peers) { peers.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId } }
 
-        LazyColumn(
+        // FIX: Use Column+verticalScroll instead of LazyColumn to avoid Compose MutableVector crash on rapid list updates
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(16.dp),
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Service Status Card
-            item {
-                StatusCard(
-                    isRunning = isRunning,
-                    stateName = serviceState.name,
-                    isStorageDegraded = isStorageDegraded
-                )
-            }
+            StatusCard(
+                isRunning = isRunning,
+                stateName = serviceState.name,
+                isStorageDegraded = isStorageDegraded
+            )
 
             // Quick Stats Grid
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    StatCard(
-                        modifier = Modifier.weight(1.5f),
-                        title = buildString {
-                            append(stringResource(R.string.dashboard_stat_nodes_format, fullPeers))
-                            if (headlessPeers > 0) append(stringResource(R.string.dashboard_stat_headless_format, headlessPeers))
-                        },
-                        value = totalPeers.toString(),
-                        icon = Icons.Filled.People,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    StatCard(
-                        modifier = Modifier.weight(1f),
-                        title = stringResource(R.string.dashboard_label_relayed),
-                        value = stats?.messagesRelayed?.toString() ?: "0",
-                        icon = Icons.Filled.Router,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                StatCard(
+                    modifier = Modifier.weight(1.5f),
+                    title = buildString {
+                        append(stringResource(R.string.dashboard_stat_nodes_format, fullPeers))
+                        if (headlessPeers > 0) append(stringResource(R.string.dashboard_stat_headless_format, headlessPeers))
+                    },
+                    // UNIFICATION FIX: nearby accuracy — discovery-based direct transport (BLE/TCP/LAN) + isOnline, not ledger history. Fixes 9 vs 2.
+                    value = "$nearbyCount / ${sortedPeers.size}",
+                    icon = Icons.Filled.People,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                StatCard(
+                    modifier = Modifier.weight(1f),
+                    title = stringResource(R.string.dashboard_label_relayed),
+                    value = stats?.messagesRelayed?.toString() ?: "0",
+                    icon = Icons.Filled.Router,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
             }
 
             // Connection Methods Status
-            item {
-                ConnectionStatusCard(
-                    bleEnabled = meshSettings?.bleEnabled ?: false,
-                    wifiAwareEnabled = meshSettings?.wifiAwareEnabled ?: false,
-                    wifiDirectEnabled = meshSettings?.wifiDirectEnabled ?: false,
-                    internetRelayEnabled = meshSettings?.relayEnabled == true && meshSettings?.internetEnabled == true
-                )
-            }
+            ConnectionStatusCard(
+                bleEnabled = meshSettings?.bleEnabled ?: false,
+                wifiAwareEnabled = meshSettings?.wifiAwareEnabled ?: false,
+                wifiDirectEnabled = meshSettings?.wifiDirectEnabled ?: false,
+                internetRelayEnabled = meshSettings?.relayEnabled == true && meshSettings?.internetEnabled == true
+            )
 
             // Detailed Stats
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = stringResource(R.string.dashboard_section_performance),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = stringResource(R.string.dashboard_section_performance),
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
 
-                        TextDetailRow(stringResource(R.string.dashboard_label_uptime), formatDuration(stats?.uptimeSecs ?: 0uL))
-                        TextDetailRow(stringResource(R.string.dashboard_label_data_transferred), formatBytes(stats?.bytesTransferred ?: 0uL))
-                    }
+                    TextDetailRow(stringResource(R.string.dashboard_label_uptime), formatDuration(stats?.uptimeSecs ?: 0uL))
+                    TextDetailRow(stringResource(R.string.dashboard_label_data_transferred), formatBytes(stats?.bytesTransferred ?: 0uL))
                 }
             }
 
             // Discovered Nodes Header
-            item {
-                Text(
-                    text = stringResource(R.string.dashboard_section_discovered),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
+            Text(
+                text = stringResource(R.string.dashboard_section_discovered),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
 
-            // Discovered Nodes List
-            if (peers.isEmpty()) {
-                item {
-                    Text(
-                        text = stringResource(R.string.dashboard_empty_state_discovered),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            // UNIFICATION_V2: single unified sorted list — classification via badge, not section
+            // Clickable: mesh nodes open peer detail / conversation
+            if (sortedPeers.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.dashboard_empty_state_discovered),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             } else {
-                items(peers) { peer ->
-                    PeerItem(peer)
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                // FIX(Compose-crash): stable key per peerId prevents SlotTable MutableVector corruption
+                // on rapid discoveredPeers updates. Dashboard list is small (<50), Column eliminates
+                // LazyColumn prefetch race; key() ensures SwipeToDismissBox/state not reused across peerIds.
+                sortedPeers.forEach { peer ->
+                    key(peer.peerId) {
+                        Column {
+                            PeerItem(peer, onClick = { onPeerClick(peer) })
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
             // Navigation to detailed views
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-            item {
-                DashboardToPeerListNavigation(
-                    onNavigateToPeerList = { onNavigateToPeerList() },
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            item {
-                DashboardToTopologyNavigation(
-                    onNavigateToTopology = { onNavigateToTopology() },
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            item {
-                DashboardToJoinMeshNavigation(
-                    onNavigateToJoinMesh = { onNavigateToJoinMesh() },
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+            Spacer(modifier = Modifier.height(16.dp))
+            DashboardToPeerListNavigation(
+                onNavigateToPeerList = { onNavigateToPeerList() },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            DashboardToTopologyNavigation(
+                onNavigateToTopology = { onNavigateToTopology() },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            DashboardToJoinMeshNavigation(
+                onNavigateToJoinMesh = { onNavigateToJoinMesh() },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
-fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo) {
+fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo, onClick: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -228,9 +226,14 @@ fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo) {
         Spacer(modifier = Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
+            // UNIFICATION FIX: displayName shows localNickname first, filters synthetic peer-... fallback.
+            // Previously showed synthetic peer-... as primary when local was null, even though contact has ChristyLove.
+            // Now synthetic is treated as blank, so PK:... fallback shows until real name arrives, and contact's local wins.
+            val primary = peer.localNickname?.trim()?.takeIf { it.isNotEmpty() }?.takeUnless { it.lowercase().startsWith("peer-") }
+            val secondary = peer.nickname?.trim()?.takeIf { it.isNotEmpty() }?.takeUnless { it.lowercase().startsWith("peer-") }
+            val display = primary ?: secondary
             Text(
-                text = peer.localNickname
-                    ?: peer.nickname
+                text = display
                     ?: when {
                         peer.isFull -> stringResource(R.string.dashboard_label_node)
                         else -> stringResource(R.string.dashboard_label_headless_node)
@@ -238,19 +241,25 @@ fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo) {
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold
             )
-            if (peer.nickname != null && peer.localNickname != null) {
+            if (secondary != null && primary != null && secondary != primary) {
                 Text(
-                    text = "@${peer.nickname}",
+                    text = "@${secondary}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // UNIFICATION_V2: All nodes are relays — no infrastructure label (former isInfrastructure badge removed).
+            // UNIFICATION_V2_IDENTITY: peerId is canonical public_key_hex (64 hex), not libp2p 12D3.
+            // Explicit PK:/P2P: prefix avoids identity hash confusion; 12D3 shown only for legacy transport IDs.
+            // NODE-TRANSPORT-VIS-001: show every known transport distinctly.
             Text(
                 text = buildString {
-                    append("ID: ")
-                    append(peer.peerId.take(12))
-                    append("... • ")
-                    append(peer.transport)
+                    val idPrefix = if (peer.peerId.startsWith("12D3")) "P2P:" else "PK:"
+                    val idTrunc = if (peer.peerId.startsWith("12D3")) peer.peerId.take(12) else peer.peerId.take(8)
+                    append(idPrefix)
+                    append(idTrunc)
+                    append(" • ")
+                    append(peer.transports.ifEmpty { listOf(peer.transport) }.joinToString(" / "))
                     append(" • ")
                     append(
                         when {
@@ -262,6 +271,13 @@ fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (!peer.isOnline && peer.lastSeen != null && peer.lastSeen > 0uL) {
+                Text(
+                    text = stringResource(R.string.peer_list_last_seen, formatRelativeTimestamp(peer.lastSeen)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         if (peer.isOnline) {
@@ -271,6 +287,16 @@ fun PeerItem(peer: com.scmessenger.android.ui.viewmodels.PeerInfo) {
                     .background(Color.Green, CircleShape)
             )
         }
+    }
+}
+
+private fun formatRelativeTimestamp(timestamp: ULong): String {
+    val diff = (System.currentTimeMillis() - timestamp.toEpochMillis()) / 1000
+    return when {
+        diff < 60 -> "just now"
+        diff < 3600 -> "${diff / 60}m ago"
+        diff < 86400 -> "${diff / 3600}h ago"
+        else -> "${diff / 86400}d ago"
     }
 }
 

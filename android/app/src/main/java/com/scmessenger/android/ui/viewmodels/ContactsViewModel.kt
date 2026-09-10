@@ -10,11 +10,64 @@ import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.parseContactImportPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.math.BigInteger
 import javax.inject.Inject
+
+// UNIFICATION P1-1: Ed25519 field constants — mirrors Rust is_valid_public_key (VerifyingKey::from_bytes).
+// Roughly 50% of blake3 identity_id hashes are valid 64-hex but not valid curve points; Kotlin must not
+// treat them as pubkeys or merge with 30d0fa will fail.
+private val CONTACT_ED25519_P: BigInteger = BigInteger("57896044618658097711785492504343953926634992332820282019728792003956564819949")
+private val CONTACT_ED25519_D: BigInteger by lazy {
+    val p = CONTACT_ED25519_P
+    val inv121666 = BigInteger.valueOf(121666).modInverse(p)
+    BigInteger.valueOf(121665).negate().mod(p).multiply(inv121666).mod(p)
+}
+private val CONTACT_ED25519_SQRT_M1: BigInteger by lazy {
+    BigInteger.valueOf(2).modPow(CONTACT_ED25519_P.subtract(BigInteger.ONE).divide(BigInteger.valueOf(4)), CONTACT_ED25519_P)
+}
+private val CONTACT_ED25519_P_PLUS3_OVER8: BigInteger by lazy {
+    CONTACT_ED25519_P.add(BigInteger.valueOf(3)).divide(BigInteger.valueOf(8))
+}
+
+private fun isValidEd25519PointContact(hex: String): Boolean {
+    try {
+        if (hex.length != 64) return false
+        val bytes = ByteArray(32)
+        for (i in 0 until 32) {
+            val hi = Character.digit(hex[i * 2], 16)
+            val lo = Character.digit(hex[i * 2 + 1], 16)
+            if (hi == -1 || lo == -1) return false
+            bytes[i] = ((hi shl 4) or lo).toByte()
+        }
+        val yBytes = bytes.clone()
+        val signBit = (yBytes[31].toInt() and 0x80) != 0
+        yBytes[31] = (yBytes[31].toInt() and 0x7F).toByte()
+        val y = BigInteger(1, yBytes.reversedArray())
+        if (y >= CONTACT_ED25519_P) return false
+        val yy = y.multiply(y).mod(CONTACT_ED25519_P)
+        val u = yy.subtract(BigInteger.ONE).mod(CONTACT_ED25519_P)
+        val v = CONTACT_ED25519_D.multiply(yy).add(BigInteger.ONE).mod(CONTACT_ED25519_P)
+        if (v == BigInteger.ZERO) return false
+        val vInv = try { v.modInverse(CONTACT_ED25519_P) } catch (_: ArithmeticException) { return false }
+        val x2 = u.multiply(vInv).mod(CONTACT_ED25519_P)
+        if (x2 == BigInteger.ZERO) return !signBit
+        var x = x2.modPow(CONTACT_ED25519_P_PLUS3_OVER8, CONTACT_ED25519_P)
+        var check = x.multiply(x).mod(CONTACT_ED25519_P)
+        if (check != x2) {
+            x = x.multiply(CONTACT_ED25519_SQRT_M1).mod(CONTACT_ED25519_P)
+            check = x.multiply(x).mod(CONTACT_ED25519_P)
+            if (check != x2) return false
+        }
+        return true
+    } catch (_: Exception) {
+        return false
+    }
+}
 
 /** A peer discovered on the mesh but not yet saved as a contact. */
 data class NearbyPeer(
@@ -120,6 +173,9 @@ class ContactsViewModel @Inject constructor(
         return normalized.startsWith("peer-")
     }
 
+    // UNIFICATION: authoritative nickname resolution — real user/federated names always win over synthetic "peer-..." placeholders.
+    // Ledger sync with stale null/synthetic must NEVER overwrite a real saved nickname (e.g. ChristyLove).
+    // localNickname is user-defined (primary), nickname is federated (secondary); both use same synthetic filtering.
     private fun selectAuthoritativeNickname(incoming: String?, existing: String?): String? {
         val incomingNormalized = normalizeNickname(incoming)
         val existingNormalized = normalizeNickname(existing)
@@ -127,7 +183,7 @@ class ContactsViewModel @Inject constructor(
         val incomingSynthetic = isSyntheticFallbackNickname(incomingNormalized)
         val existingSynthetic = isSyntheticFallbackNickname(existingNormalized)
 
-        return when {
+        val result = when {
             incomingNormalized == null && existingSynthetic -> null
             incomingNormalized == null -> existingNormalized
             incomingSynthetic && existingNormalized == null -> null
@@ -136,6 +192,11 @@ class ContactsViewModel @Inject constructor(
             existingSynthetic -> incomingNormalized
             else -> incomingNormalized
         }
+        // UNIFICATION verbose logging for nickname merge decisions (diagnose ChristyLove -> peer-... revert)
+        if (incomingNormalized != existingNormalized) {
+            Timber.d("UNIFICATION selectAuthoritativeNickname: incoming=${incomingNormalized?.take(16) ?: "null"}${if (incomingSynthetic) " (synthetic)" else ""} existing=${existingNormalized?.take(16) ?: "null"}${if (existingSynthetic) " (synthetic)" else ""} -> result=${result?.take(16) ?: "null"}")
+        }
+        return result
     }
 
     // Identity validation logic centralized in PeerIdValidator
@@ -258,6 +319,7 @@ class ContactsViewModel @Inject constructor(
     private fun observeNearbyPeers() {
         viewModelScope.launch {
             MeshEventBus.peerEvents.collect { event ->
+                if (!viewModelScope.isActive) return@collect
                 when (event) {
                     is PeerEvent.IdentityDiscovered -> {
                         // Never surface bootstrap relay/headless nodes in the Contacts nearby list.
@@ -444,15 +506,32 @@ class ContactsViewModel @Inject constructor(
 
     /**
      * Load all contacts from repository.
+     * UNIFICATION verbose logging for nickname load — diagnose ledger overwrite of ChristyLove.
+     * FIX(Compose-crash): isActive guard to prevent SlotTable crash on destroy.
      */
     fun loadContacts() {
+        if (!viewModelScope.isActive) {
+            Timber.d("loadContacts skipped — ViewModelScope not active")
+            return
+        }
         viewModelScope.launch {
             try {
+                if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
                 _error.value = null
 
                 val contactList = meshRepository.listContacts()
+                if (!viewModelScope.isActive) return@launch
                 _contacts.value = contactList
+                // UNIFICATION verbose: log nickname state on each load to catch synthetic revert
+                if (contactList.isNotEmpty()) {
+                    Timber.i("UNIFICATION loadContacts: loaded ${contactList.size} contacts")
+                    contactList.take(5).forEach { c ->
+                        Timber.d("UNIFICATION loadContacts entry: peer ${c.peerId.take(16)} nick=${c.nickname?.take(16) ?: "null"} localNick=${c.localNickname?.take(16) ?: "null"} pubKey ${c.publicKey.take(8)}...")
+                    }
+                } else {
+                    Timber.d("UNIFICATION loadContacts: empty")
+                }
 
                 // Drop any nearby entry that is now a saved contact
                 // Use comprehensive identity matching with public key as primary key
@@ -462,10 +541,11 @@ class ContactsViewModel @Inject constructor(
 
                 Timber.d("Loaded ${contactList.size} contacts, filtered nearby peers to ${_nearbyPeers.value.size}")
             } catch (e: Exception) {
+                if (!viewModelScope.isActive) return@launch
                 _error.value = "Failed to load contacts: ${e.message}"
                 Timber.e(e, "Failed to load contacts")
             } finally {
-                _isLoading.value = false
+                if (viewModelScope.isActive) _isLoading.value = false
             }
         }
     }
@@ -502,6 +582,15 @@ class ContactsViewModel @Inject constructor(
                     onComplete?.invoke(false)
                     return@launch
                 }
+                // UNIFICATION P1-1: Validate Ed25519 curve point — roughly 50% of blake3 identity_id hashes are valid
+                // 64-hex but NOT valid curve points. Rust's is_valid_public_key checks VerifyingKey::from_bytes;
+                // Kotlin must not accept identity_id as pubkey or merge with 30d0fa will fail. If not a valid point,
+                // treat as identity_id (not pubkey) and reject contact add as invalid pubkey.
+                if (!isValidEd25519PointContact(trimmedKey)) {
+                    _error.value = "Public key is not a valid Ed25519 point (may be an identity_id hash, not a pubkey)"
+                    onComplete?.invoke(false)
+                    return@launch
+                }
 
                 val generatedNotes = if (!libp2pPeerId.isNullOrEmpty()) {
                     "libp2p_peer_id:$libp2pPeerId;listeners:${listeners.joinToString(",")}"
@@ -515,11 +604,27 @@ class ContactsViewModel @Inject constructor(
                 // UNIFIED ID FIX: the contact key is always the public-key
                 // identity. The libp2p peer ID remains in notes as routing
                 // metadata and must never become the persisted contact ID.
+                // UNIFICATION FIX: contacts save correctly — user-provided nickname is ALWAYS saved as localNickname
+                // (user-defined, primary). Federated nickname (peer's self-reported) is populated via identity beacon
+                // / ledger sync (upsertFederatedContact) and must NEVER overwrite localNickname. Previous heuristic
+                // treated discovered peers' names as federated, causing ChristyLove to be stored as nickname and later
+                // overwritten by stale ledger synthetic peer-... . Now every manual add (manual, QR, nearby promote)
+                // stores the provided name as localNickname so ledger's selectAuthoritative never clobbers it.
+                // Verified: displayName shows localNickname first via ContactDisplayName.kt.
                 val canonicalPeerId = trimmedKey.lowercase()
+                val normalizedProvided = normalizeNickname(nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+                // FIX: Always treat user-provided nickname as localNickname (user-defined). Federated is null here;
+                // it will be populated separately when the peer's own identity beacon arrives via upsertFederatedContact.
+                val federatedNick: String? = null
+                val userLocalNick = normalizedProvided
+                Timber.i("UNIFICATION addContact save: canonical $canonicalPeerId pubKey ${trimmedKey.take(8)}... providedNick=${normalizedProvided?.take(16) ?: "null"} -> LOCAL=${userLocalNick?.take(16) ?: "null"} federated=${federatedNick?.take(16) ?: "null"} (FIX: user-defined saved as localNickname, ledger cannot overwrite)")
+                if (normalizedProvided == null && !nickname.isNullOrBlank()) {
+                    Timber.w("UNIFICATION addContact: provided nickname '${nickname.take(16)}' was synthetic/blank and filtered to null — contact will show PK:... until real name arrives")
+                }
                 val contact = uniffi.api.Contact(
                     peerId = canonicalPeerId,
-                    nickname = nickname,
-                    localNickname = null,
+                    nickname = federatedNick,
+                    localNickname = userLocalNick,
                     publicKey = trimmedKey,
                     addedAt = (System.currentTimeMillis() / 1000).toULong(),
                     lastSeen = null,
@@ -530,6 +635,7 @@ class ContactsViewModel @Inject constructor(
                 )
 
                 meshRepository.addContact(contact)
+                Timber.i("UNIFICATION addContact saved: $canonicalPeerId federated=${federatedNick?.take(16) ?: "null"} local=${userLocalNick?.take(16) ?: "null"}")
 
                 // Update device ID for the contact if we have routing info
                 val discovered = meshRepository.discoveredPeers.value.entries.firstOrNull {
@@ -586,9 +692,12 @@ class ContactsViewModel @Inject constructor(
      * typing before propagating nickname changes to prevent real-time character-by-character
      * propagation that causes crashes.
      */
+    // UNIFICATION: save as localNickname (user-defined) — verbose logging, preserves ChristyLove over peer-... synthetic
     fun setLocalNickname(peerId: String, nickname: String?) {
         // Cancel any pending nickname update for this peer
         pendingNicknameJobs[peerId]?.cancel()
+        val normalized = normalizeNickname(nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+        Timber.i("UNIFICATION setLocalNickname request: peer ${peerId.take(16)} -> ${normalized?.take(16) ?: "null (clear)"} raw=${nickname?.take(16) ?: "null"}")
 
         // Launch a new debounced update
         pendingNicknameJobs[peerId] = viewModelScope.launch {
@@ -599,7 +708,7 @@ class ContactsViewModel @Inject constructor(
                 meshRepository.setLocalNickname(peerId, nickname)
                 loadContacts()
 
-                Timber.d("Local nickname updated for $peerId (debounced)")
+                Timber.i("UNIFICATION setLocalNickname saved (debounced): $peerId -> ${normalized?.take(16) ?: "null"}")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Expected when user continues typing - don't log as error
                 Timber.d("Nickname update cancelled for $peerId (user still typing)")

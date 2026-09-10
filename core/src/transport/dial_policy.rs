@@ -223,6 +223,32 @@ impl DialPolicyManager {
         state.on_connection_established();
     }
 
+    /// Reset backoff/dead state for EVERY address entry belonging to `peer_id`.
+    ///
+    /// Backoff entries are keyed by address, but an INBOUND connection's remote
+    /// address (the peer's ephemeral port) differs from the address we dialed
+    /// and marked dead — so the addr-keyed reset misses it. An established
+    /// connection is proof of liveness regardless of transport path, so clear
+    /// every entry attributed to this peer.
+    pub fn reset_peer_backoff(&self, peer_id: PeerId) {
+        let mut backoff = self.peer_backoff.write();
+        let mut reset_count = 0u32;
+        for (key, state) in backoff.iter_mut() {
+            if state.peer_id == Some(peer_id) && (state.is_dead || state.attempt_count > 0) {
+                state.on_connection_established();
+                reset_count += 1;
+                debug!(addr_key=%key, "[DIAL-POLICY] Peer-level liveness reset cleared backoff entry");
+            }
+        }
+        if reset_count > 0 {
+            info!(
+                peer_id=%peer_id,
+                entries_reset=reset_count,
+                "[DIAL-POLICY] Cleared dial backoff on established connection"
+            );
+        }
+    }
+
     /// Get the current backoff state for a peer (for diagnostics/testing).
     pub fn get_backoff_state(&self, addr_key: &str) -> Option<PerPeerBackoffState> {
         self.peer_backoff.read().get(addr_key).cloned()
@@ -515,6 +541,34 @@ mod tests {
         // After failure, backoff should prevent immediate re-dial.
         manager.record_dial_failure(addr, None);
         assert!(!manager.register_dial_attempt(addr, None));
+    }
+
+    #[test]
+    fn test_reset_peer_backoff_clears_dead_state_on_any_addr_entry() {
+        use libp2p::identity::Keypair;
+
+        let manager = DialPolicyManager::new();
+        let pid = Keypair::generate_ed25519().public().to_peer_id();
+
+        // Peer gets marked dead after 3 failures on its dialed LAN address.
+        let lan_addr = "/ip4/192.168.1.50/tcp/4001";
+        for _ in 0..3 {
+            manager.record_dial_failure(lan_addr, Some(pid));
+        }
+        assert!(!manager.register_dial_attempt(lan_addr, Some(pid)));
+
+        // An INBOUND connection arrives from an ephemeral remote address:
+        // resetting only that address must NOT revive the dead LAN entry.
+        let ephemeral = "/ip4/192.168.1.50/tcp/51234";
+        manager.reset_on_connection_established(ephemeral, Some(pid));
+        assert!(!manager.register_dial_attempt(lan_addr, Some(pid)));
+
+        // Peer-wide liveness reset (what ConnectionEstablished now does) must.
+        manager.reset_peer_backoff(pid);
+        let state = manager.get_backoff_state(lan_addr).expect("entry exists");
+        assert_eq!(state.attempt_count, 0);
+        assert!(!state.is_dead);
+        assert!(manager.register_dial_attempt(lan_addr, Some(pid)));
     }
 
     #[test]

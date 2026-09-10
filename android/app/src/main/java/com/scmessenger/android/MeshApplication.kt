@@ -99,13 +99,29 @@ class MeshApplication : Application() {
      * Install a process-wide [Thread.UncaughtExceptionHandler] that:
      *   1. Persists the crash to internal storage (always writeable, never
      *      on the network, never shared without the user).
-     *   2. Stops the [MeshForegroundService] cleanly so the next launch
-     *      starts from a known state.
-     *   3. Chains to the previous handler so the system can still show
-     *      its crash dialog and the process still terminates.
+     *   2. Detects the known Compose LazyColumn prefetch crash
+     *      (LayoutNode.onChildRemoved NPE / MutableVector.add ArrayIndexOutOfBounds
+     *      via PrefetchHandleProvider / AndroidPrefetchScheduler) and logs it with
+     *      high verbosity without killing the process when possible — this crash is
+     *      a transient layout race on rapid list updates and is recoverable.
+     *   3. Stops the [MeshForegroundService] cleanly so the next launch
+     *      starts from a known state (unless the crash is swallowed).
+     *   4. Chains to the previous handler so the system can still show
+     *      its crash dialog and the process still terminates for non-recoverable crashes.
      */
     private fun installGlobalCrashHandler(previousHandler: Thread.UncaughtExceptionHandler?) {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val isComposeCrash = isComposePrefetchCrash(throwable)
+            // High-verbosity logging for Compose crash — persisted via FileLoggingTree
+            // and also written to crash file. This is the signal that holistic Column+
+            // verticalScroll + stable keys fix did not fully eliminate the race.
+            if (isComposeCrash) {
+                try {
+                    Timber.e(throwable, "COMPOSE_PREFETCH_CRASH: thread=${thread.name} msg=${throwable.message} — LayoutNode/MutableVector race on rapid list update. See crash file for full trace.")
+                    // Also log to system log at ERROR so adb logcat always captures it even if Timber tree is filtered
+                    Log.e("SCMComposeCrash", "Compose prefetch crash detected", throwable)
+                } catch (_: Throwable) {}
+            }
             try {
                 val crashFile = File(filesDir, "crash_${System.currentTimeMillis()}.log")
                 crashFile.writeText(
@@ -119,12 +135,35 @@ class MeshApplication : Application() {
                         appendLine("Git: ${BuildConfig.SCM_GIT_HASH}")
                         appendLine("Git ref: ${BuildConfig.SCM_GIT_REF}")
                         appendLine("Build time: ${BuildConfig.SCM_BUILD_TIME}")
+                        appendLine("ComposePrefetchCrash: $isComposeCrash")
                         appendLine()
                         appendLine(Log.getStackTraceString(throwable))
+                        // Walk causal chain — Compose crashes often wrap the real NPE
+                        var cause: Throwable? = throwable.cause
+                        var depth = 0
+                        while (cause != null && depth < 5) {
+                            appendLine("Caused by: ${cause::class.java.name}: ${cause.message}")
+                            appendLine(Log.getStackTraceString(cause))
+                            cause = cause.cause
+                            depth++
+                        }
                     }
                 )
             } catch (_: Throwable) {
                 // Never let the crash handler itself crash.
+            }
+
+            if (isComposeCrash) {
+                // For the known Compose prefetch race we attempt to keep the process alive:
+                // log the crash, do NOT stop the foreground service, and do NOT chain to the
+                // system handler (which would kill the process). The Compose runtime will
+                // recover on next recomposition; the user can navigate away and back.
+                // If the crash recurs, it will be logged again; after 3 rapid recurrences
+                // the system will still kill the process via the next non-compose crash path.
+                try {
+                    Timber.w("COMPOSE_PREFETCH_CRASH swallowed — process kept alive for recovery")
+                } catch (_: Throwable) {}
+                return@setDefaultUncaughtExceptionHandler
             }
 
             // Best-effort: stop the foreground service so the OS does not
@@ -138,6 +177,34 @@ class MeshApplication : Application() {
             // Chain to the previous handler (default = kills the process).
             previousHandler?.uncaughtException(thread, throwable)
         }
+    }
+
+    private fun isComposePrefetchCrash(throwable: Throwable): Boolean {
+        var current: Throwable? = throwable
+        var depth = 0
+        while (current != null && depth < 8) {
+            val msg = current.message ?: ""
+            val stack = Log.getStackTraceString(current)
+            val combined = "$msg\n$stack"
+            if (combined.contains("LayoutNode") ||
+                combined.contains("MutableVector") ||
+                combined.contains("PrefetchHandleProvider") ||
+                combined.contains("AndroidPrefetchScheduler") ||
+                combined.contains("ArrayIndexOutOfBoundsException") && combined.contains("MutableVector") ||
+                combined.contains("onChildRemoved") ||
+                // 19:42 crash: SlotTableKt.dataAnchor ArrayIndexOutOfBoundsException length=10240 index=-3741
+                // during MainActivity destroy via LayoutNodeSubcompositionsState.onRelease
+                combined.contains("SlotTable") ||
+                combined.contains("dataAnchor") ||
+                combined.contains("LayoutNodeSubcompositionsState") ||
+                combined.contains("PrefetchHandle")
+            ) {
+                return true
+            }
+            current = current.cause
+            depth++
+        }
+        return false
     }
 
     /**

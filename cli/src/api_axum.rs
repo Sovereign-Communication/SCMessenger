@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json as AxumJson, Path, State},
+    extract::{Json as AxumJson, Path, Query, State},
     http::{Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -23,6 +23,13 @@ use super::api::{
     GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse, GetListenersResponse,
     GetPeersResponse, HistoryMessage, PeerEntry, SendMessageRequest, SendMessageResponse, API_PORT,
 };
+
+/// Default number of messages `/api/history` returns when `limit` is
+/// omitted. Kept in sync with `api::DEFAULT_HISTORY_LIMIT`; see that
+/// constant's doc comment for rationale. NOTE: this module is not currently
+/// wired into any `mod` tree / bin target (see `start_api_server` below) --
+/// `cli/src/api.rs` is the live implementation bound to `API_PORT`.
+const DEFAULT_HISTORY_LIMIT: usize = 100;
 
 // Farm Test Harness Types
 
@@ -258,10 +265,16 @@ async fn handle_send_message(
         .parse::<libp2p::PeerId>()
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid peer ID: {}", e)))?;
 
+    // Identity-envelope parity with Android/iOS (see api.rs
+    // build_identity_wrapped_text): wrap chat text so receivers learn our
+    // nickname + route hints.
+    let wire_text =
+        crate::api::build_identity_wrapped_text(core, &ctx.swarm_handle, &request.message).await;
+
     let prepared = core
         .prepare_message_with_id(
             contact.public_key.clone(),
-            request.message.clone(),
+            wire_text,
             scmessenger_core::MessageType::Text,
             None,
         )
@@ -272,14 +285,20 @@ async fn handle_send_message(
             )
         })?;
 
-    let sent = crate::ble_mesh::send_ble_message(&peer_id.to_string(), &prepared.envelope_data)
+    let ble_ok = crate::ble_mesh::send_ble_message(&peer_id.to_string(), &prepared.envelope_data)
         .await
-        .is_ok()
-        || ctx
-            .swarm_handle
-            .send_message(peer_id, prepared.envelope_data, None, None)
-            .await
-            .is_ok();
+        .is_ok();
+    let swarm_ok = ctx
+        .swarm_handle
+        .send_message(peer_id, prepared.envelope_data, None, None)
+        .await
+        .is_ok();
+    if swarm_ok {
+        // Only the swarm path is a true transport ACK (BLE gatt write is
+        // fire-and-forget). Release the outbox entry (R2) strictly on it.
+        core.mark_message_sent(prepared.message_id.clone());
+    }
+    let sent = ble_ok || swarm_ok;
 
     if !sent {
         return Err((
@@ -373,15 +392,17 @@ async fn handle_get_listeners(
     Ok(AxumJson(GetListenersResponse { listeners }))
 }
 
-async fn handle_get_history(
-    State(ctx): State<Arc<ApiContext>>,
-    AxumJson(request): AxumJson<GetHistoryRequest>,
+/// Shared implementation for both `/api/history` verbs. `request.limit`
+/// defaults to `DEFAULT_HISTORY_LIMIT` (not unbounded) when omitted.
+async fn history_response(
+    ctx: Arc<ApiContext>,
+    request: GetHistoryRequest,
 ) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
     let history = ctx.core.history_store_manager();
 
     let messages = if let Some(peer_id) = request.peer_id {
         history
-            .conversation(peer_id, request.limit.unwrap_or(20) as u32)
+            .conversation(peer_id, request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32)
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -390,7 +411,7 @@ async fn handle_get_history(
             })?
     } else {
         history
-            .recent(None, request.limit.unwrap_or(20) as u32)
+            .recent(None, request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32)
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -417,6 +438,23 @@ async fn handle_get_history(
     Ok(AxumJson(GetHistoryResponse {
         messages: history_messages,
     }))
+}
+
+/// `POST /api/history` with a JSON body. Kept for existing callers.
+async fn handle_get_history(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
+}
+
+/// `GET /api/history?peer_id=..&limit=..`, both optional. See the matching
+/// handler in `cli/src/api.rs` (the live server) for the full rationale.
+async fn handle_get_history_query(
+    State(ctx): State<Arc<ApiContext>>,
+    Query(request): Query<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
 }
 
 async fn handle_get_external_address(
@@ -636,7 +674,10 @@ pub async fn start_api_server(ctx: ApiContext) -> Result<()> {
         .route("/api/identity", get(handle_get_identity))
         .route("/api/peers", get(handle_get_peers))
         .route("/api/listeners", get(handle_get_listeners))
-        .route("/api/history", post(handle_get_history))
+        .route(
+            "/api/history",
+            get(handle_get_history_query).post(handle_get_history),
+        )
         .route("/api/external-address", get(handle_get_external_address))
         .route(
             "/api/connection-path-state",

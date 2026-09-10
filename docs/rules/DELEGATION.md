@@ -53,6 +53,24 @@ Full usage, task-file authoring rules and the escalation protocol live in the
 
 Quota ledger: `docs/QWEN_QUOTA_LEDGER.md` is canonical -- update it there.
 
+## Freebuff -- the unmetered implementation lane
+
+Full rules: `docs/rules/FREEBUFF.md`. Live queue: `HANDOFF/freebuff/`.
+
+`freebuff` is an interactive CLI with **no headless mode** -- it exposes only
+`login`, `--continue`, `--cwd`, and ignores piped stdin. It cannot be dispatched
+to programmatically. The operator is the transport: an agent writes a task file
+into `HANDOFF/freebuff/queue/`, the operator pastes it into Freebuff desktop.
+
+Unmetered models: DeepSeek V4 Flash, MiMo, GLM 5.3 Flash. Anything else on that
+CLI draws a shared premium allowance charged by partial time.
+
+This lane has the highest measured throughput in the project's history -- PRs
+#236-#258, 23 merged in three days -- so route scoped implementation here by
+default. The scarce resource is not tokens but **operator paste cycles**, which
+changes the economics: verify a task file's premise end to end before adding it
+to the queue. A wrong premise costs a human round-trip, not a retry.
+
 ## The failure mode that wastes the most time
 
 Free reasoning models spend their entire `max_tokens` budget on hidden reasoning

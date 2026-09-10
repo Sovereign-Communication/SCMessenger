@@ -105,8 +105,57 @@ pub enum ConsentState {
     Granted,
 }
 
+/// Map a transport string (as passed to `routing_peer_seen`) to a
+/// `TransportType` for the optimized routing engine.
+fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
+    match transport.trim().to_ascii_lowercase().as_str() {
+        "ble" | "bluetooth" | "ble_gatt" | "proximity" => crate::routing::TransportType::BLE,
+        "wifi_direct" | "wifidirect" | "p2p" => crate::routing::TransportType::WiFiDirect,
+        "wifi_aware" | "wifiaware" | "nan" => crate::routing::TransportType::WiFiAware,
+        "quic" => crate::routing::TransportType::QUIC,
+        "tcp" | "lan" | "wifi" | "internet" | "mdns" | "ip" | "local" | "ws" | "wss" => {
+            crate::routing::TransportType::TCP
+        }
+        // A relayed circuit rides TCP physically but is a materially different
+        // path (reachability through a helper node) -- the engine must be able
+        // to distinguish it from a direct connection for failover decisions.
+        "circuit" | "p2p_circuit" | "relay" => crate::routing::TransportType::Circuit,
+        _ => crate::routing::TransportType::BLE,
+    }
+}
+
+/// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
+/// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
+/// PeerId encoding.
+fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
+    let clean_str = peer_id_str.trim();
+    let unescaped = clean_str
+        .strip_prefix("public_key:")
+        .or_else(|| clean_str.strip_prefix("identity_id:"))
+        .or_else(|| clean_str.strip_prefix("0x"))
+        .unwrap_or(clean_str);
+
+    if let Ok(bytes) = hex::decode(unescaped) {
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            return Some(arr);
+        }
+    }
+
+    if let Ok(p) = clean_str.parse::<libp2p::PeerId>() {
+        let bytes = p.to_bytes();
+        if bytes.len() >= 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes[bytes.len() - 32..]);
+            return Some(arr);
+        }
+    }
+
+    None
+}
+
 /// The main entry point for the SCMessenger core.
-///
 /// Wraps all subsystems behind `Arc<RwLock<…>>` for safe concurrent access.
 #[cfg_attr(not(target_arch = "wasm32"), derive(uniffi::Object))]
 pub struct IronCore {
@@ -438,23 +487,29 @@ impl IronCore {
         let transport_memory =
             crate::store::transport_memory::TransportMemoryStore::new(backend.clone());
 
-        let identity = match IdentityManager::with_backend(backend.clone()) {
-            Ok(mgr) => mgr,
-            Err(e) => {
-                if storage_err.is_none() {
-                    tracing::warn!(
-                        "Failed to hydrate identity from persistent store (not yet initialized or read error): {:?}",
-                        e
-                    );
-                } else {
-                    tracing::error!(
-                        "Persistent storage degraded; identity will not be hydrated from RAM: {:?}",
-                        e
-                    );
+        let (identity, identity_hydrate_err): (IdentityManager, Option<String>) =
+            match IdentityManager::with_backend(backend.clone()) {
+                Ok(mgr) => (mgr, None),
+                Err(e) => {
+                    let msg = format!("{:?}", e);
+                    if storage_err.is_none() {
+                        tracing::warn!(
+                            "Failed to hydrate identity from persistent store (not yet initialized or read error): {:?}",
+                            e
+                        );
+                    } else {
+                        tracing::error!(
+                            "Persistent storage degraded; identity will not be hydrated from RAM: {:?}",
+                            e
+                        );
+                    }
+                    // UNIFICATION_V2 fail-closed: surface hydrate failure as degraded so UI can block sends
+                    // Keep empty identity (not initialized) but propagate degraded flag
+                    (IdentityManager::new(), Some(msg))
                 }
-                IdentityManager::new()
-            }
-        };
+            };
+        // Merge hydrate error into storage_degraded if storage was otherwise healthy
+        let effective_storage_err = storage_err.or(identity_hydrate_err);
 
         Self {
             identity: Arc::new(RwLock::new(identity)),
@@ -478,7 +533,7 @@ impl IronCore {
             auto_block_engine: Arc::new(RwLock::new(auto_block)),
             storage_path: Some(path),
             log_directory: None,
-            storage_degraded: Arc::new(RwLock::new(storage_err)),
+            storage_degraded: Arc::new(RwLock::new(effective_storage_err.clone())),
             #[cfg(not(target_arch = "wasm32"))]
             ledger_manager: hydrated_ledger_manager(p),
             running: Arc::new(RwLock::new(false)),
@@ -563,23 +618,29 @@ impl IronCore {
         let transport_memory =
             crate::store::transport_memory::TransportMemoryStore::new(backend.clone());
 
-        let identity = match IdentityManager::with_backend(backend.clone()) {
-            Ok(mgr) => mgr,
-            Err(e) => {
-                if storage_err.is_none() {
-                    tracing::warn!(
-                        "Failed to hydrate identity from persistent store (not yet initialized or read error): {:?}",
-                        e
-                    );
-                } else {
-                    tracing::error!(
-                        "Persistent storage degraded; identity will not be hydrated from RAM: {:?}",
-                        e
-                    );
+        let (identity, identity_hydrate_err): (IdentityManager, Option<String>) =
+            match IdentityManager::with_backend(backend.clone()) {
+                Ok(mgr) => (mgr, None),
+                Err(e) => {
+                    let msg = format!("{:?}", e);
+                    if storage_err.is_none() {
+                        tracing::warn!(
+                            "Failed to hydrate identity from persistent store (not yet initialized or read error): {:?}",
+                            e
+                        );
+                    } else {
+                        tracing::error!(
+                            "Persistent storage degraded; identity will not be hydrated from RAM: {:?}",
+                            e
+                        );
+                    }
+                    // UNIFICATION_V2 fail-closed: surface hydrate failure as degraded so UI can block sends
+                    // Keep empty identity (not initialized) but propagate degraded flag
+                    (IdentityManager::new(), Some(msg))
                 }
-                IdentityManager::new()
-            }
-        };
+            };
+        // Merge hydrate error into storage_degraded if storage was otherwise healthy
+        let effective_storage_err = storage_err.or(identity_hydrate_err);
 
         Self {
             identity: Arc::new(RwLock::new(identity)),
@@ -603,7 +664,7 @@ impl IronCore {
             auto_block_engine: Arc::new(RwLock::new(auto_block)),
             storage_path: Some(path),
             log_directory: Some(log_dir),
-            storage_degraded: Arc::new(RwLock::new(storage_err)),
+            storage_degraded: Arc::new(RwLock::new(effective_storage_err.clone())),
             #[cfg(not(target_arch = "wasm32"))]
             ledger_manager: hydrated_ledger_manager(p),
             running: Arc::new(RwLock::new(false)),
@@ -759,9 +820,9 @@ impl IronCore {
             // Initialize routing engine with identity-derived peer id and hint.
             // If the swarm has already seeded the engine (via start_swarm_with_config),
             // keep it — the shared engine is already in use for message dispatch.
-            let hint = blake3::hash(&pk_bytes).as_bytes()[0..4]
+            let hint = blake3::hash(&pk_bytes).as_bytes()[0..8]
                 .try_into()
-                .unwrap_or([0u8; 4]);
+                .unwrap_or([0u8; 8]);
             let mut routing = self.routing_engine.write();
             if routing.is_none() {
                 *routing = Some(OptimizedRoutingEngine::new(pk_bytes, hint));
@@ -965,9 +1026,9 @@ impl IronCore {
         }
 
         // Check routing decision
-        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..4]
+        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..8]
             .try_into()
-            .unwrap_or([0u8; 4]);
+            .unwrap_or([0u8; 8]);
         let msg_id_bytes: [u8; 16] = *uuid::Uuid::parse_str(&message_id)
             .unwrap_or_else(|_| uuid::Uuid::nil())
             .as_bytes();
@@ -2528,7 +2589,7 @@ impl IronCore {
         if let Some(ref mut engine) = guard.as_mut() {
             let current_routes: Vec<(
                 [u8; 32],
-                [u8; 4],
+                [u8; 8],
                 crate::routing::global::RouteAdvertisement,
             )> = engine
                 .base_engine_mut()
@@ -2644,9 +2705,15 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Record that a peer was seen on a given transport.
-    pub fn routing_peer_seen(&self, peer_id_hex: String, _transport: String) {
+    pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.record_message_activity(&peer_id_hex);
+            let transport_type = parse_transport_type(&transport);
+            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
+                engine.peer_seen(peer_id, transport_type);
+            } else {
+                engine.record_message_activity(&peer_id_hex);
+                engine.clear_unreachable_peer(&peer_id_hex);
+            }
         }
     }
 
@@ -2657,9 +2724,9 @@ impl IronCore {
             engine.record_message_activity(&peer_id_hex);
             if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
                 if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    let parsed_hints: Vec<[u8; 4]> = hints
+                    let parsed_hints: Vec<[u8; 8]> = hints
                         .into_iter()
-                        .filter_map(|hint| <[u8; 4]>::try_from(hint.as_slice()).ok())
+                        .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
                         .collect();
                     // LocalCell intentionally updates only peers already known to
                     // the local topology; an announcement cannot create a peer.
@@ -2956,9 +3023,9 @@ impl IronCore {
         let mut guard = self.routing_engine.write();
         match guard.as_mut() {
             Some(engine) => {
-                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..4]
+                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..8]
                     .try_into()
-                    .unwrap_or([0u8; 4]);
+                    .unwrap_or([0u8; 8]);
                 let msg_id: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
                 let now = web_time::SystemTime::now()
                     .duration_since(web_time::UNIX_EPOCH)
@@ -3387,7 +3454,16 @@ impl IronCore {
                     return Err(IronCoreError::CryptoError);
                 };
             let identity = self.identity.read();
-            let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
+            let keys = match identity.keys() {
+                Some(k) => k,
+                None => {
+                    tracing::error!(
+                        "receive_message: dropping inbound envelope ({} bytes): local identity keys not initialized",
+                        envelope_data.len()
+                    );
+                    return Err(IronCoreError::NotInitialized);
+                }
+            };
             local_identity_id = identity.identity_id();
             sender_pubkey = match &wire {
                 crate::message::WireEnvelope::V1(e) => e.sender_public_key.clone(),
@@ -3412,7 +3488,12 @@ impl IronCore {
                 sender_bundle.as_ref(),
             )
             .map_err(|e| {
-                tracing::warn!("Failed to decrypt ratchet message: {:?}", e);
+                tracing::warn!(
+                    "Failed to decrypt ratchet message from peer {}..: {:?} (envelope_len={})",
+                    &hex::encode(&sender_pubkey)[..16],
+                    e,
+                    envelope_data.len()
+                );
                 IronCoreError::CryptoError
             })?
         };
@@ -3436,7 +3517,13 @@ impl IronCore {
         let sender_public_key_hex = hex::encode(&sender_pubkey);
         let canonical_peer_id =
             crate::identity::keys::identity_id_from_public_key_hex(&sender_public_key_hex)
-                .ok_or(IronCoreError::CryptoError)?;
+                .ok_or_else(|| {
+                    tracing::error!(
+                "receive_message: cannot derive canonical identity for sender {}..; dropping",
+                &sender_public_key_hex[..16]
+            );
+                    IronCoreError::CryptoError
+                })?;
 
         // Also check device-specific blocks using the sender's last known device ID
         // Try the authenticated public key and its canonical identity_id; first
@@ -3654,7 +3741,7 @@ impl IronCore {
     }
     pub fn make_routing_decision(
         &self,
-        recipient_hint: [u8; 4],
+        recipient_hint: [u8; 8],
         message_id: [u8; 16],
         priority: u8,
         now: u64,
@@ -3959,7 +4046,7 @@ impl IronCore {
     /// Returns `None` if the routing engine is not initialized.
     pub fn get_best_forwarding_path(
         &self,
-        recipient_hint: &[u8; 4],
+        recipient_hint: &[u8; 8],
         message_id: &[u8; 16],
         priority: u8,
     ) -> Option<crate::routing::RoutingDecision> {
@@ -3983,7 +4070,7 @@ impl IronCore {
                     let peers = engine
                         .base_engine()
                         .local_cell()
-                        .peers_for_hint(&arr[0..4].try_into().unwrap_or([0u8; 4]));
+                        .peers_for_hint(&arr[0..8].try_into().unwrap_or([0u8; 8]));
                     return peers
                         .iter()
                         .map(|p| format!("{:?}", p.transports))
@@ -4004,6 +4091,7 @@ impl IronCore {
             "wifi_aware" => TransportType::WiFiAware,
             "tcp" => TransportType::TCP,
             "quic" => TransportType::QUIC,
+            "circuit" | "relay" | "p2p_circuit" => TransportType::Circuit,
             _ => return false,
         };
         let guard = self.routing_engine.read();
@@ -4364,7 +4452,7 @@ impl IronCore {
     /// Mark a prefetched route refresh as failed.
     /// Called when a route refresh attempt fails, so the prefetch manager
     /// can track failures and deprioritize that route.
-    pub fn routing_mark_refresh_failed(&self, hint: [u8; 4]) {
+    pub fn routing_mark_refresh_failed(&self, hint: [u8; 8]) {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().mark_refresh_failed(&hint);
@@ -4373,7 +4461,7 @@ impl IronCore {
 
     /// Get the next destination hint that needs route refresh.
     /// Returns `None` if the prefetch queue is empty.
-    pub fn routing_next_refresh_hint(&self) -> Option<[u8; 4]> {
+    pub fn routing_next_refresh_hint(&self) -> Option<[u8; 8]> {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().next_refresh_hint()
@@ -4403,7 +4491,7 @@ impl IronCore {
     }
 
     /// Start a route refresh cycle for a specific hint.
-    pub fn routing_start_refresh(&self, hint: [u8; 4]) {
+    pub fn routing_start_refresh(&self, hint: [u8; 8]) {
         let mut guard = self.routing_engine.write();
         if let Some(ref mut engine) = guard.as_mut() {
             engine.prefetch_manager_mut().start_route_refresh(&hint);
@@ -4919,9 +5007,9 @@ mod tests {
     #[test]
     fn routing_hint_update_populates_local_cell() {
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [7u8; 32];
-        let hint = [1u8, 2u8, 3u8, 4u8];
+        let hint = [1u8, 2u8, 3u8, 4u8, 0u8, 0u8, 0u8, 0u8];
         {
             let mut engine = core.routing_engine.write();
             engine
@@ -4948,7 +5036,7 @@ mod tests {
     #[test]
     fn reliability_success_updates_local_score_and_capability_uses_active_peers() {
         let core = IronCore::new();
-        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 4]));
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
         let peer = [8u8; 32];
         {
             let mut engine = core.routing_engine.write();
@@ -4985,6 +5073,126 @@ mod tests {
         assert!(after > before);
         assert!(core.get_forwarding_capability("ble"));
         assert!(!core.get_forwarding_capability("tcp"));
+    }
+
+    #[test]
+    fn routing_peer_seen_raises_confidence_after_connection_established() {
+        // D6 acceptance 1: routing confidence for a peer is zero before any
+        // sighting and non-zero after the swarm's ConnectionEstablished feed
+        // (routed through this exact IronCore entry point).
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer = [42u8; 32];
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
+            .try_into()
+            .expect("8 byte hint");
+        let msg_id = [7u8; 16];
+
+        // Before the feed: unknown peer, StoreAndCarry fallback, zero confidence.
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::StoreAndCarry);
+            assert_eq!(dec.confidence, 0.0);
+        }
+
+        // A direct TCP ConnectionEstablished.
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+
+        {
+            let mut engine = core.routing_engine.write();
+            let dec = engine
+                .as_mut()
+                .expect("engine set")
+                .route_message_optimized(&peer_hint, &msg_id, 50, 1000);
+            assert_eq!(dec.decided_by, crate::routing::RoutingLayer::Local);
+            assert!(
+                dec.confidence >= 0.5,
+                "confidence must be non-zero after a connection sighting, got {}",
+                dec.confidence
+            );
+            match dec.primary {
+                crate::routing::NextHop::Direct { peer_id, transport } => {
+                    assert_eq!(peer_id, peer);
+                    assert_eq!(transport, crate::routing::TransportType::TCP);
+                }
+                other => panic!("expected Direct TCP, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn routing_peer_seen_distinguishes_circuit_from_direct_tcp() {
+        // D6 acceptance 2: a TCP endpoint and a relayed-circuit endpoint map to
+        // different recorded transports. Same peer, both paths -- the engine
+        // accumulates them, mirroring the swarm handler's multi-path reality.
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer = [43u8; 32];
+
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        core.routing_peer_seen(hex::encode(peer), "relay".to_string());
+
+        let engine = core.routing_engine.read();
+        let stored = engine
+            .as_ref()
+            .expect("engine set")
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .expect("peer must be recorded after the feed");
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::TCP),
+            "direct TCP sighting must be recorded, got {:?}",
+            stored.transports
+        );
+        assert!(
+            stored
+                .transports
+                .contains(&crate::routing::TransportType::Circuit),
+            "relayed-circuit sighting must be recorded distinctly, got {:?}",
+            stored.transports
+        );
+    }
+
+    #[test]
+    fn parse_transport_type_distinguishes_direct_from_circuit() {
+        // The string contract between endpoint_transport_string (swarm.rs) and
+        // the engine's parser must be pinned here so the two cannot drift.
+        assert_eq!(
+            parse_transport_type("tcp"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("ws"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("wss"),
+            crate::routing::TransportType::TCP
+        );
+        assert_eq!(
+            parse_transport_type("quic"),
+            crate::routing::TransportType::QUIC
+        );
+        assert_eq!(
+            parse_transport_type("relay"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_eq!(
+            parse_transport_type("circuit"),
+            crate::routing::TransportType::Circuit
+        );
+        assert_ne!(
+            parse_transport_type("tcp"),
+            parse_transport_type("relay"),
+            "a relayed circuit must never collapse into the direct-TCP tier"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

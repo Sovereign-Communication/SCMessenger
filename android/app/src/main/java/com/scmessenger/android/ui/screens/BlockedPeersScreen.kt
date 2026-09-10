@@ -1,8 +1,8 @@
 package com.scmessenger.android.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
@@ -64,18 +64,29 @@ fun BlockedPeersScreen(
                 }
             }
         } else {
-            LazyColumn(
+            // FIX(Compose-crash): Column+verticalScroll to eliminate LazyColumn prefetch crash
+            // (SlotTableKt.dataAnchor ArrayIndexOutOfBounds via PrefetchHandleProvider/
+            // LayoutNodeSubcompositionsState.onRelease during MainActivity destroy at 19:42).
+            // Blocked list is small (<1k) so Column overhead is negligible and avoids
+            // LazyLayout prefetch/subcomposition lifecycle race entirely.
+            val stableBlocked = remember(blockedPeers) {
+                blockedPeers.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId }
+            }
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues),
-                contentPadding = PaddingValues(16.dp),
+                    .verticalScroll(rememberScrollState())
+                    .padding(paddingValues)
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(blockedPeers) { blocked ->
-                    BlockedPeerItem(
-                        blocked = blocked,
-                        onUnblock = { showUnblockConfirm = blocked }
-                    )
+                stableBlocked.forEach { blocked ->
+                    key(blocked.peerId) {
+                        BlockedPeerItem(
+                            blocked = blocked,
+                            onUnblock = { showUnblockConfirm = blocked }
+                        )
+                    }
                 }
             }
         }

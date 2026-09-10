@@ -38,9 +38,10 @@ pub enum DeliveryStatus {
 pub struct Message {
     /// Unique message ID (UUID v4)
     pub id: String,
-    /// Sender's identity ID (Blake3 hash of Ed25519 public key)
+    // UNIFICATION_V2: canonical identity is public_key_hex; identity_id/libp2p_peer_id are derived metadata only.
+    /// Sender's canonical public key hex (64-char lowercase hex of Ed25519 VerifyingKey)
     pub sender_id: String,
-    /// Recipient's identity ID
+    /// Recipient's canonical public key hex (64-char lowercase hex)
     pub recipient_id: String,
     /// Message type
     pub message_type: MessageType,
