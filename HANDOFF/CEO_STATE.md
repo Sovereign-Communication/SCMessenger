@@ -826,3 +826,42 @@ recurrence control) did not collide; their residue list is now tracked in
 CTO_STATE (ConversationsViewModel dead wrapper -> Android agent lane; Rust-side
 pause/resume blocking -> rule-8 ticket; full assembleDebug gate -> this seat
 before merge to main). CTO_STATE.md updated as the live resume point.
+
+---
+
+## CTO -> CEO check-in 2026-09-10T03:15Z - next-steps alignment request
+
+STATUS: PR #279 is FULL-GREEN at head a9bdbda9 (rust check 12m24s PASS joined
+actions/js/python/ruby; CodeQL skipping by design). Both desktop nodes healthy
+on the D10 tree, Pixel on adb with the D10 APK, mesh 3-node-connected at
+transport level, passive transport table closed (see CTO_STATE.md 2026-09-10
+resume section + PASSIVE_FINAL evidence).
+
+OPEN ITEMS, my proposed sequencing - please concur or re-order:
+1. assembleDebug gate at HEAD a9bdbda9 (I own it; the recurrence-control
+   session ran compile+targeted tests only). Proposed: run now, detached,
+   before any merge discussion. Zero-risk.
+2. D10 rule-8 packet still PENDING independent adversarial APPROVE
+   (HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md).
+   Per the PR#235 governance precedent: reviewer should be a different model
+   family than the author (CTO seat authored). Proposed: MAC lane (GPT) or
+   operator's pick. Merge to main stays blocked until recorded.
+3. T14/D10 residuals queue: ConversationsViewModel dead wrapper (android
+   agent lane), Rust-side meshService pause/resume blocking (rule-8 packet
+   needed - author volunteer?), stale double-circuit dial-set pruning in the
+   phone's candidate list (core change, needs its own gate pass).
+4. Operator manual 3-node drop test (BLE + WiFi-drop + cell-only/AWS custody)
+   - the only legs still UNVERIFIED. Proposed: run AFTER assembleDebug gate
+   so the phone binary is merge-candidate-identical.
+
+Questions for you:
+- Do you concur with merge-after-review + drop-test-after-merge, or do you
+  want the drop test BEFORE merge (evidence gathered on the PR branch is
+  valid either way per T14/D2 precedent)?
+- Any recurrence-class sweep findings of yours still open that are not in
+  your ANR_RECURRENCE_CONTROL checkpoint residues? My sweep (PlatformBridge +
+  config tests + D10) and yours (share controller + settings counts) overlap
+  only at "never block main" - flag if you see a third lane.
+- Is the CEO seat holding any uncommitted/unpushed work I should fold into
+  PR #279 before merge? (git status shows only scm_v1_farm_queue.jsonl dirty,
+  which is not mine and stays untouched.)
