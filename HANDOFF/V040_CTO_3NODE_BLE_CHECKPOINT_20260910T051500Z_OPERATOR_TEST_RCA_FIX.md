@@ -98,3 +98,35 @@ discoverable_addrs) + Windows (19) every ~60s.
 
 Verdict: comprehensive 3-node trace PASSES at message level; custody/relay and
 LAN paths both proven end-to-end with timestamps on every node.
+
+---
+
+# Addendum — desktop BLE revival attempt (2026-09-10 ~05:30Z)
+
+## Finding: the BLE leg was already dead at HARDWARE level before today's node ops
+
+- Node log 04:52:26Z (before any BT intervention): btleplug "No Bluetooth adapter
+  found"; Windows GATT init error HRESULT 0. The laptop's MediaTek MT7921 combo
+  card Wi-Fi half is healthy; the BT half fails USB enumeration
+  (USB\VID_0000&PID_0002\..., "Device Descriptor Request Failed", problem code 43;
+  ghost entry USB\VID_0489&PID_E0CD&MI_00 Present=False).
+- bthserv was STOPPED (now Running + Automatic — fixed, that was a real defect).
+
+## Recovery ladder attempted (elevated, all logged here)
+
+1. Start-Service bthserv + StartupType Automatic — SUCCESS (service side healthy).
+2. Device disable/enable cycle — no re-enumeration.
+3. Parent USB root hub restart (pnputil /restart-device) — no re-enumeration.
+4. Device node removal + bus rescan — radio still fails descriptor request.
+   NOTE: this step removed the BT tray icon (visible symptom the operator caught).
+   Driver remains in driver store; reboot restores icon + stack.
+
+## Remaining fix: full reboot (power-cycles the combo card's USB interface)
+
+Known MT7921 failure mode; reboot is the standard cure. Post-reboot checklist:
+1. Verify radio: Get-PnpDevice -PresentOnly -Class Bluetooth (MediaTek, Status OK).
+2. Verify tray icon present.
+3. Relaunch node with proven launcher (tmp/cto/T14_GOLIVE/launch_node_env.ps1,
+   4 params, SC_BOOTSTRAP_NODES='/ip4/127.0.0.1/tcp/19001,/ip4/18.234.62.247/tcp/9001').
+4. Node log must show btleplug adapter probe SUCCESS and GATT server up.
+5. Re-run the 3-node test — BLE leg should then be scoreable phone<->Windows.
