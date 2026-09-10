@@ -20,8 +20,8 @@ fn make_peer_id(id: u8) -> PeerId {
     peer
 }
 
-fn make_hint(id: u8) -> [u8; 4] {
-    [id, 0, 0, 0]
+fn make_hint(id: u8) -> [u8; 8] {
+    [id, 0, 0, 0, 0, 0, 0, 0]
 }
 
 fn make_message_id(id: u8) -> [u8; 16] {
@@ -29,11 +29,11 @@ fn make_message_id(id: u8) -> [u8; 16] {
 }
 
 /// Helper: compute the hint for a peer ID using the same derivation
-/// the routing engine uses (blake3 hash, first 4 bytes).
-fn peer_hint(peer_id: &PeerId) -> [u8; 4] {
-    blake3::hash(peer_id).as_bytes()[0..4]
+/// the routing engine uses (blake3 hash, first 8 bytes).
+fn peer_hint(peer_id: &PeerId) -> [u8; 8] {
+    blake3::hash(peer_id).as_bytes()[0..8]
         .try_into()
-        .unwrap_or([0u8; 4])
+        .unwrap_or([0u8; 8])
 }
 
 /// Helper: register a peer in the local cell and set its reachable hints
@@ -42,7 +42,7 @@ fn register_peer_with_hint(
     engine: &mut OptimizedRoutingEngine,
     peer_id: PeerId,
     transport: TransportType,
-    hints: Vec<[u8; 4]>,
+    hints: Vec<[u8; 8]>,
 ) {
     engine
         .base_engine_mut()
@@ -538,11 +538,11 @@ fn test_can_reach_destination() {
     let mut engine = OptimizedRoutingEngine::new(local_id, local_hint);
 
     // Register a peer with reachable hints matching the derivation
-    // that can_reach_destination uses (first 4 bytes of the peer ID).
+    // that can_reach_destination uses (first 8 bytes of the peer ID).
     let peer_id = make_peer_id(2);
-    let derived_hint_hex = &hex::encode(peer_id)[..8];
+    let derived_hint_hex = &hex::encode(peer_id)[..16];
     let derived_hint_bytes = hex::decode(derived_hint_hex).unwrap_or_default();
-    let derived_hint: [u8; 4] = derived_hint_bytes.try_into().unwrap_or([0u8; 4]);
+    let derived_hint: [u8; 8] = derived_hint_bytes.try_into().unwrap_or([0u8; 8]);
 
     // Register the peer with reachable hints matching the derived hint
     register_peer_with_hint(&mut engine, peer_id, TransportType::TCP, vec![derived_hint]);

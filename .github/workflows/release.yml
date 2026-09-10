@@ -198,6 +198,16 @@ jobs:
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
 
+      # Fail fast on a signing-config mismatch. Today an incorrect
+      # SCMESSENGER_KEY_ALIAS (e.g. a PKCS12 case-sensitivity difference vs
+      # the documented JKS) only surfaces ~24 minutes into packageRelease as
+      # a KeytoolException. This checks the decoded keystore for the exact
+      # alias before any Gradle run. Never prints the alias or password.
+      - name: Verify SCMESSENGER_KEY_ALIAS present in keystore
+        if: ${{ env.HAS_KEYSTORE == 'true' }}
+        run: |
+          keytool -list             -keystore android/app/release.keystore             -storepass "${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}"             -alias "${{ secrets.SCMESSENGER_KEY_ALIAS }}" >/dev/null 2>&1             || { echo "::error::SCMESSENGER_KEY_ALIAS is not present in the decoded keystore"; exit 1; }
+
       - name: Build signed release AAB + APK
         if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:

@@ -78,6 +78,19 @@ open class MeshRepository(
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
 
+        /**
+         * UNIFICATION auth guard: only reject a federated contact update when the
+         * stored key is NON-BLANK and differs from the verified incoming key. A
+         * blank stored key (legacy/discovery-created record) is not a conflict —
+         * the incoming verified key should fill it.
+         */
+        internal fun federatedKeyConflict(storedPublicKey: String?, incomingPublicKey: String): Boolean {
+            val stored = storedPublicKey?.trim()?.lowercase() ?: return false
+            if (stored.isEmpty()) return false
+            val incoming = incomingPublicKey.trim().lowercase()
+            return stored != incoming
+        }
+
         internal fun resolvePlatformSecuredPassphrase(
             encryptedPrefs: SharedPreferences,
             legacyPrefsProvider: () -> SharedPreferences,
@@ -122,6 +135,65 @@ open class MeshRepository(
         /** Cap on how many ledger-sourced relays are surfaced in the Settings UI. */
         private const val MAX_SETTINGS_RELAYS = 10u
 
+        // NODE-TRANSPORT-VIS-001: canonical transport labels shown per node row.
+        internal const val TRANSPORT_BLE = "BLE"
+        internal const val TRANSPORT_TCP_LAN = "TCP/LAN"
+        internal const val TRANSPORT_WIFI_AWARE = "WiFi Aware"
+        internal const val TRANSPORT_WIFI_DIRECT = "WiFi Direct"
+        internal const val TRANSPORT_RELAY_CIRCUIT = "Via shared node"
+        internal const val TRANSPORT_INTERNET = "Internet"
+
+        /**
+         * Parse transport labels from multiaddr protocol paths.
+         *
+         * Recognised patterns:
+         * - "/p2p-circuit/" → Relay-circuit (node reachable via a relay hop)
+         * - "/ble/" → BLE
+         * - "/wifi-aware/" → WiFi Aware
+         * - "/wifi-direct/" → WiFi Direct
+         * - private-range /ip4/ + "/tcp/" → TCP/LAN (mDNS-discovered LAN node)
+         * - any other IP/dns path with a stream protocol → Internet
+         */
+        internal fun parseTransportsFromMultiaddrs(addresses: Collection<String>): Set<String> {
+            val out = linkedSetOf<String>()
+            for (raw in addresses) {
+                val addr = raw.trim()
+                if (addr.isEmpty()) continue
+                if (addr.contains("/p2p-circuit/")) out.add(TRANSPORT_RELAY_CIRCUIT)
+                if (addr.contains("/ble/")) out.add(TRANSPORT_BLE)
+                if (addr.contains("/wifi-aware/")) out.add(TRANSPORT_WIFI_AWARE)
+                if (addr.contains("/wifi-direct/")) out.add(TRANSPORT_WIFI_DIRECT)
+                val hasStreamProto =
+                    addr.contains("/tcp/") || addr.contains("/udp/") ||
+                        addr.contains("/ws") || addr.contains("/quic")
+                if ((addr.contains("/ip4/") || addr.contains("/ip6/") || addr.contains("/dns")) && hasStreamProto) {
+                    val isPrivateLanTcp = addr.startsWith("/ip4/192.168.") ||
+                        addr.startsWith("/ip4/10.") ||
+                        (addr.startsWith("/ip4/172.") && run {
+                            val parts = addr.removePrefix("/ip4/").split(".")
+                            val secondOctet = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                            secondOctet in 16..31
+                        })
+                    out.add(if (isPrivateLanTcp && addr.contains("/tcp/")) TRANSPORT_TCP_LAN else TRANSPORT_INTERNET)
+                }
+            }
+            return out
+        }
+
+        /**
+         * NODE-RELAY-LABEL-002: detect infrastructure relay nodes by their
+         * libp2p agent string (e.g. the AWS "scm-always-on-node/x.y.z" headless
+         * daemon). Infrastructure nodes must never be mixed into the user's
+         * contacts/people list.
+         */
+        internal fun isInfrastructureAgent(agentVersion: String): Boolean {
+            val agent = agentVersion.trim().lowercase()
+            if (agent.isEmpty()) return false
+            return agent.contains("scm-always-on-node") ||
+                agent.contains("always-on") ||
+                agent.contains("infra-relay")
+        }
+
         /** Cap on how many ledger addresses the bounded startup dial sweep attempts. */
         private const val STARTUP_DIAL_SWEEP_MAX_ADDRESSES = 10
 
@@ -144,6 +216,68 @@ open class MeshRepository(
             maxAgeSeconds: Long
         ): Boolean {
             return ackedWithoutReceiptCount > 0 && (nowEpochSec - createdAtEpochSec) >= maxAgeSeconds
+        }
+
+        /**
+         * Drop-at-cap decision (regression seam for the 'message vanished'
+         * defect). Returns true when an undelivered, NEVER transport-acked send
+         * has reached the retry ceiling and must be RETAINED in the pending
+         * outbox as a visible queued/delivering state instead of being silently
+         * removed. The old behavior removed it (markMessageCorrupted + drop),
+         * which is exactly how the operator's sends disappeared.
+         */
+        internal fun retainUndeliveredAtAttemptCap(
+            attemptCount: Int,
+            ackedWithoutReceiptCount: Int,
+            maxAttempts: Int
+        ): Boolean {
+            return attemptCount >= maxAttempts && ackedWithoutReceiptCount == 0
+        }
+
+        /**
+         * Per-item decision for flushPendingOutbox's main loop, kept pure so
+         * the retry-at-cap control flow is testable on the JVM tier (the loop
+         * itself cannot run there: android.util.Base64 is stubbed to return
+         * null, which routes every envelope to the undecodable-payload removal
+         * before the retain logic). The order mirrors the loop exactly:
+         * delivered/terminal cleanup first, then the at-cap queued/delivering
+         * deferral (never drop, but genuinely re-attempt once the patient
+         * backoff elapses), then the backoff and shouldRetry gates.
+         */
+        internal fun decidePendingOutboxFlushAction(
+            item: PendingOutboundEnvelope,
+            nowEpochSec: Long,
+            isDeliveredLocally: Boolean,
+            shouldRetry: () -> Boolean,
+            maxAttempts: Int
+        ): PendingOutboxFlushAction {
+            if (isDeliveredLocally) return PendingOutboxFlushAction.REMOVE
+            if (retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = maxAttempts
+                )
+            ) {
+                // queued/delivering deferral: retained forever, never dropped.
+                // DEFER within the backoff window (no queue rewrite); once the
+                // backoff elapses, SEND -- the entry genuinely tries again on a
+                // patient cadence instead of parking at the cap forever.
+                return if (item.nextAttemptAtEpochSec > nowEpochSec) {
+                    PendingOutboxFlushAction.DEFER
+                } else {
+                    PendingOutboxFlushAction.SEND
+                }
+            }
+            if (item.nextAttemptAtEpochSec > nowEpochSec) return PendingOutboxFlushAction.SKIP
+            // The shouldRetry gate is bypassed for ANY at-cap item (not just
+            // acked==0 retained ones): a transport-acked message that reached the
+            // cap must keep re-sending until a receipt arrives or the patient
+            // age-based acked-without-receipt ceiling above stops it. The
+            // in-memory tracker (which shouldRetry reads) can otherwise sit at
+            // >=12 and park the message forever with the UI claiming forwarding.
+            if (item.attemptCount >= maxAttempts) return PendingOutboxFlushAction.SEND
+            if (!shouldRetry()) return PendingOutboxFlushAction.SKIP
+            return PendingOutboxFlushAction.SEND
         }
 
         /**
@@ -331,6 +465,14 @@ open class MeshRepository(
     @Volatile private var settingsManager: uniffi.api.MeshSettingsManager? = null
     @Volatile private var autoAdjustEngine: uniffi.api.AutoAdjustEngine? = null
 
+    // LEDGER-CACHE-001: cache parsed ledger.json to avoid triple re-parse per DashboardViewModel.loadPeers()
+    // (getSeedAddresses + getRecentlyDeadAddresses + getRelayHopPeerIds each called getAllLedgerEntries()).
+    // File mtime+size key is sufficient: ledger.json is atomically replaced on save, so either changes.
+    private val ledgerCacheLock = Any()
+    @Volatile private var cachedLedgerEntries: List<uniffi.api.LedgerEntry>? = null
+    @Volatile private var cachedLedgerMtime: Long = -1L
+    @Volatile private var cachedLedgerSize: Long = -1L
+
     // P0_NETWORK_001: Circuit breaker for relay failure tracking
     private val relayCircuitBreaker = CircuitBreaker()
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
@@ -485,11 +627,15 @@ open class MeshRepository(
     private val dialThrottleLogCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val dialThrottleLogIntervalMs = 300_000L
 
-    // AND-SEND-BTN-001: In-memory cache for identity ID resolution.
-    // canonicalContactId() calls ironCore?.resolveIdentity() via synchronous FFI on every
-    // recomposition when invoked from Composable code. This cache eliminates repeated FFI calls
-    // for the same peer ID, preventing UI thread freezes.
-    private val identityIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    // AND-SEND-BTN-001: In-memory cache for canonical ID resolution.
+    // UNIFICATION_V2_IDENTITY: This caches canonical public_key_hex (not identity_id blake3 hash).
+    // Naming was identityIdCache historically but stores resolved canonical public_key_hex to avoid
+    // 12D3 vs 64-hex confusion. canonicalContactId() calls ironCore?.resolveIdentity() via
+    // synchronous FFI on every recomposition when invoked from Composable code. This cache
+    // eliminates repeated FFI calls for the same peer ID, preventing UI thread freezes.
+    private val canonicalIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Deprecated("Use canonicalIdCache; kept for binary compat during migration")
+    private val identityIdCache: java.util.concurrent.ConcurrentHashMap<String, String> get() = canonicalIdCache
 
     // TCP/mDNS transport parity: Track peers discovered on LAN via libp2p mDNS.
     // Key = libp2p PeerId, Value = set of LAN multiaddresses for direct TCP delivery.
@@ -519,6 +665,25 @@ open class MeshRepository(
         val publicKey: String,
         val nickname: String?,
         val localNickname: String? = null
+    )
+
+    /**
+     * What flushPendingOutbox should do with a pending entry this pass.
+     * SEND = fall through to the real delivery attempt; DEFER = at-cap
+     * retained entry waiting out its patient backoff; SKIP = below-cap entry
+     * not yet due (or blocked by shouldRetry); REMOVE = locally delivered.
+     */
+    internal enum class PendingOutboxFlushAction { SEND, SKIP, DEFER, REMOVE }
+
+    /**
+     * Single-load snapshot of a pending outbox entry for the UI delivery
+     * surface. Carries the exhausted flag so the composition path never pays a
+     * second outbox file read per row.
+     */
+    data class PendingDeliveryInfo(
+        val attemptCount: Int,
+        val nextAttemptAtEpochSec: Long,
+        val exhausted: Boolean
     )
 
     internal data class PendingOutboundEnvelope(
@@ -559,6 +724,8 @@ open class MeshRepository(
     private val _discoveredPeers = MutableStateFlow<Map<String, PeerDiscoveryInfo>>(emptyMap())
     open val discoveredPeers: StateFlow<Map<String, PeerDiscoveryInfo>> = _discoveredPeers.asStateFlow()
 
+    // UNIFICATION_V2: All nodes are relays — isRelay retained for backward compat but no longer distinguishes.
+    // Every node is a full relay; the field is now always false in UI terms (no "infrastructure" category).
     data class PeerDiscoveryInfo(
         val peerId: String,          // Key (libp2p or canonical)
         val publicKey: String?,      // Extracted from PeerId or from identity beacon
@@ -566,15 +733,24 @@ open class MeshRepository(
         val localNickname: String? = null,
         val libp2pPeerId: String? = null, // Libp2p peer ID for routing
         val transport: com.scmessenger.android.service.TransportType,
-        val isFull: Boolean,         // True if peer identity is authenticated (non-relay)
+        val isFull: Boolean,         // True if peer identity is authenticated
         val isRelay: Boolean = false,
-        val lastSeen: ULong = System.currentTimeMillis().toULong() / 1000u
+        val lastSeen: ULong = System.currentTimeMillis().toULong() / 1000u,
+        // NODE-TRANSPORT-VIS-001: every transport this node is known to speak,
+        // derived from listen addrs / ledger multiaddrs / contact routing hints.
+        val transports: Set<String> = emptySet()
     )
 
     private data class DeliveryAttemptResult(
         val acked: Boolean,
         val routePeerId: String?,
-        val terminalFailureCode: String? = null
+        val terminalFailureCode: String? = null,
+        // UNIFICATION_V3 R1: true ONLY when the swarm's transport send (the
+        // app's bridge.sendMessageStatus -> swarm send_message) returned Ok.
+        // Deliberately excludes BLE/WiFi-Direct local ACKs (fire-and-forget on
+        // the core) and buffer enqueues. The ONLY signal on which a durable
+        // core outbox entry may be cleared.
+        val coreSwarmAcked: Boolean = false
     )
 
     private data class ReplayDiscoveredIdentity(
@@ -925,7 +1101,12 @@ open class MeshRepository(
         }
     }
 
-    private fun initializeManagers() {
+    // `protected open` seam: hermetic JVM unit tests subclass MeshRepository and
+    // override this with a no-op, because every manager constructed here is a
+    // UniFFI object whose instantiation loads libscmessenger_core via JNA
+    // (UniffiLib <clinit>) — impossible on the JVM test tier. Production keeps
+    // this exact behaviour; the override exists only under app/src/test.
+    protected open fun initializeManagers() {
         try {
             // REGRESSION FIX (AND-CONTACTS-WIPE-001): Migrate contacts BEFORE ContactManager
             // opens the new database. Previously the migration ran after construction, which
@@ -965,6 +1146,7 @@ open class MeshRepository(
             ensureTransportManager()
 
             // Pre-load data where applicable
+            sanitizeLedgerPublicKeyBindings()
             ledgerManager?.load()
 
             Timber.i("all_managers_init_success")
@@ -982,6 +1164,17 @@ open class MeshRepository(
 
             // AND-CONTACTS-WIPE-001: Verify contact data integrity after initialization
             verifyContactDataIntegrity()
+
+            // FIX: backfill synthetic "peer-xxxx" contact nicknames from ledger authoritative nicknames
+            // (contacts persist across adb install -r; ledger already has "Claude-Windows-Driver"
+            // for peer 12D3KooWD6... while contact still shows synthetic "peer-30d0fa67").
+            // Idempotent; preserves localNickname.
+            repairSyntheticContactNicknames()
+
+            // NODE-RETENTION-001: populate the Mesh/peers list from persisted
+            // contacts + ledger so known nodes are visible (offline) before the
+            // mesh service ever connects.
+            seedKnownPeersFromPersistedData()
 
             // P0_ANDROID_001: Emergency contact corruption detection and recovery
             // Run corruption detection after managers are initialized
@@ -1433,6 +1626,9 @@ open class MeshRepository(
             // 3. Wire up CoreDelegate (Rust -> Android Events)
             coreDelegate = object : uniffi.api.CoreDelegate {
                 override fun onPeerDiscovered(peerId: String) {
+                    // UNIFICATION: automatic mesh perfection — every peer discovery is logged with transport + isKnownContact for pairing verification
+                    val discIsKnown = try { isKnownContact(peerId) } catch (_: Exception) { false }
+                    Timber.i("UNIFICATION peer_discovery: peerId=${peerId.take(16)} isKnownContact=$discIsKnown transport=INTERNET (swarm) — promiscuous relay assist for anyone")
                     Timber.d("Core notified discovery: $peerId")
                     refreshAddressesSnapshots()
                     repoScope.launch {
@@ -1453,6 +1649,14 @@ open class MeshRepository(
                             publicKey = transportIdentity?.publicKey ?: extractedKey
                         )
 
+                        val relayHints = if (transportIdentity != null) {
+                            buildDialCandidatesForPeer(
+                                routePeerId = peerId,
+                                rawAddresses = emptyList(),
+                                includeRelayCircuits = true
+                            )
+                        } else emptyList()
+
                         // Update discovery map
                         val discoveryInfo = PeerDiscoveryInfo(
                             peerId = transportIdentity?.canonicalPeerId ?: peerId,
@@ -1466,7 +1670,8 @@ open class MeshRepository(
                                     !extractedKey.isNullOrBlank()
                                 ),
                             isRelay = isRelay,
-                            lastSeen = System.currentTimeMillis().toULong() / 1000u
+                            lastSeen = System.currentTimeMillis().toULong() / 1000u,
+                            transports = parseTransportsFromMultiaddrs(relayHints)
                         )
                         updateDiscoveredPeer(peerId, discoveryInfo)
                         if (discoveryInfo.peerId != peerId) {
@@ -1474,11 +1679,6 @@ open class MeshRepository(
                         }
 
                         if (transportIdentity != null) {
-                            val relayHints = buildDialCandidatesForPeer(
-                                routePeerId = peerId,
-                                rawAddresses = emptyList(),
-                                includeRelayCircuits = true
-                            )
                             emitIdentityDiscoveredIfChanged(
                                 peerId = transportIdentity.canonicalPeerId,
                                 publicKey = transportIdentity.publicKey,
@@ -1541,6 +1741,9 @@ open class MeshRepository(
                     }
                     peerIdentifiedDedupCache[trimmedPeerId] = identifySignature to now
 
+                    // UNIFICATION: verbose mesh perfection — connection event with transport, isKnownContact, listenAddrs
+                    val idIsKnown = try { isKnownContact(peerId) } catch (_: Exception) { false }
+                    Timber.i("UNIFICATION peer_connection: peerId=${peerId.take(16)} isKnownContact=$idIsKnown agent=$agentVersion transports=${listenAddrs.joinToString(",").take(120)} — mesh assist (promiscuous) but messaging gated to contacts")
                     Timber.d("Core notified identified: $peerId (agent: $agentVersion) with ${listenAddrs.size} addresses")
                     refreshAddressesSnapshots()
                     // Record successful transport event for health monitoring
@@ -1592,7 +1795,12 @@ open class MeshRepository(
 	                        val syncPeerIds = linkedSetOf(peerId.trim())
 	                        val isHeadless = agentVersion.contains("/headless/")
 	                        val transportIdentity = resolveTransportIdentity(peerId)
-	                        val shouldTreatAsHeadless = isBootstrapRelayPeer(peerId) || (isHeadless && transportIdentity == null)
+	                        // NODE-RELAY-LABEL-002: infrastructure daemons (e.g. the AWS
+	                        // "scm-always-on-node" headless relay) are classified as relays
+	                        // via their agent string so they can be sectioned separately in
+	                        // the UI, even before/without bootstrap-config recognition.
+	                        val isInfraRelay = isBootstrapRelayPeer(peerId) || isInfrastructureAgent(agentVersion)
+	                        val shouldTreatAsHeadless = isInfraRelay || (isHeadless && transportIdentity == null)
 	                        if (shouldTreatAsHeadless) {
 	                            Timber.i("Headless/Relay transport node identified: $peerId (agent: $agentVersion)")
 	                            emitConnectedIfChanged(
@@ -1631,8 +1839,9 @@ open class MeshRepository(
                                 libp2pPeerId = peerId,
                                 transport = peerTransportType,
                                 isFull = transportIdentity != null,
-                                isRelay = isBootstrapRelayPeer(peerId),
-                                lastSeen = System.currentTimeMillis().toULong() / 1000u
+                                isRelay = isInfraRelay,
+                                lastSeen = System.currentTimeMillis().toULong() / 1000u,
+                                transports = parseTransportsFromMultiaddrs(listenAddrs)
                             )
                             updateDiscoveredPeer(peerId, discoveryInfo)
                             if (discoveryInfo.peerId != peerId) {
@@ -1689,7 +1898,9 @@ open class MeshRepository(
                                                     PeerIdValidator.normalize(peerId)
                                                 }
 
-                                                Timber.i("Auto-creating contact for newly discovered peer: $peerId -> $canonicalId (extracted key: ${normalizedKey.take(8)}...)")
+                                                // UNIFICATION: discovered peer — promiscuous mesh will relay, but do NOT auto-create contact.
+                                                // Contact is created only on message → friend request → accept, or explicit add.
+                                                Timber.i("UNIFICATION discovered peer (non-contact) $peerId -> $canonicalId key=${normalizedKey.take(8)}... — NOT auto-creating contact (pairing requires message); mesh relay assist enabled")
                                                 repoScope.launch {
                                                     upsertFederatedContact(
                                                         canonicalPeerId = canonicalId,
@@ -1697,7 +1908,7 @@ open class MeshRepository(
                                                         nickname = null,
                                                         libp2pPeerId = peerId,
                                                         listeners = dialCandidates,
-                                                        createIfMissing = true
+                                                        createIfMissing = false
                                                     )
                                                 }
                                             }
@@ -1717,17 +1928,22 @@ open class MeshRepository(
                                 knownPublicKey = transportIdentity?.publicKey
                             )
                             if (transportIdentity != null) {
-                                // Don't auto-create contacts for relay peers - they are infrastructure, not user contacts
+                                // UNIFICATION: promiscuous relay — discovered identity does NOT auto-create contact.
+                                // Only upsert if already a contact (createIfMissing=false); new peers need message → request.
                                 if (!isBootstrapRelayPeer(peerId)) {
+                                    val alreadyKnown = isKnownContact(transportIdentity.canonicalPeerId)
+                                    Timber.i("UNIFICATION discovered identity peer ${transportIdentity.canonicalPeerId} isKnownContact=$alreadyKnown — ${if (alreadyKnown) "updating" else "NOT auto-creating"} (pairing requires message)")
                                     upsertFederatedContact(
                                         canonicalPeerId = transportIdentity.canonicalPeerId,
                                         publicKey = transportIdentity.publicKey,
                                         nickname = transportIdentity.nickname,
                                         libp2pPeerId = peerId,
                                         listeners = dialCandidates,
-                                        createIfMissing = true  // AUTO-CREATE contacts for all discovered peers
+                                        createIfMissing = false
                                     )
-                                    Timber.i("Auto-created/updated contact for peer: ${transportIdentity.canonicalPeerId} (nickname: ${transportIdentity.nickname})")
+                                    if (alreadyKnown) {
+                                        Timber.i("Updated contact for peer: ${transportIdentity.canonicalPeerId} (nickname: ${transportIdentity.nickname})")
+                                    }
                                 } else {
                                     Timber.d("Skipping contact creation for relay peer: $peerId")
                                 }
@@ -1753,6 +1969,9 @@ open class MeshRepository(
                 }
 
                 override fun onPeerDisconnected(peerId: String) {
+                    // UNIFICATION: automatic mesh perfection — every disconnection logged with isKnownContact for pairing iteration
+                    val discIsKnown = try { isKnownContact(peerId) } catch (_: Exception) { false }
+                    Timber.i("UNIFICATION peer_disconnection: peerId=${peerId.take(16)} isKnownContact=$discIsKnown — promiscuous mesh keeps relay ability, UI will mark offline")
                     // P0: Deduplicate disconnect events — libp2p may fire multiple per session
                     val trimmedPeerId = peerId.trim()
                     val now = System.currentTimeMillis()
@@ -1770,10 +1989,11 @@ open class MeshRepository(
                         val canonicalId = transportToCanonicalMap.remove(peerId) ?: peerId
                         activeSessions.remove(peerId)
 
-                        // Remove disconnected aliases (peerId + canonical + same-key aliases).
-                        pruneDisconnectedPeer(peerId)
+                        // NODE-RETENTION-001: keep the peer visible marked offline
+                        // instead of removing it from the discovery map.
+                        retainDisconnectedPeer(peerId)
                         if (canonicalId != peerId) {
-                            pruneDisconnectedPeer(canonicalId)
+                            retainDisconnectedPeer(canonicalId)
                         }
                         mdnsLanPeers.remove(trimmedPeerId)
 
@@ -1797,27 +2017,29 @@ open class MeshRepository(
                 ) {
                     Timber.i("Message from $senderId: $messageId")
                     repoScope.launch {
-                        // Fail fast on duplicate messages before any decode/history/receipt side effects.
-                        val (isDuplicate, timeVarianceMs, firstTransport) = gateInboundMessage(messageId)
-                        if (isDuplicate) {
-                            Timber.i("Message duplicate detected (core transport): $messageId time_variance=${timeVarianceMs}ms first_transport=$firstTransport")
-                            return@launch
+                        // DELIVERY-DIVERGENCE FIX (2026-08-25): the previous order ran
+                        // gateInboundMessage() FIRST, recording the message id in the
+                        // dedup cache before any droppable check. A message arriving
+                        // during a doze/wake window -- settings store still unavailable
+                        // (fail-safe "disabled"), storage contention throwing below, or
+                        // any early return -- was dropped AFTER its id was recorded.
+                        // Every sender retry of the queued envelope then hit the
+                        // duplicate gate and returned silently: no UI record, no
+                        // delivery receipt, sender stuck "pending" until the 5-minute
+                        // dedup TTL expired (or forever, if the original failure was
+                        // deterministic). Reordered so droppable checks run BEFORE the
+                        // dedup slot is consumed, and duplicates of an already-stored
+                        // inbound message are re-acknowledged instead of dropped.
+
+                        // 1. Participation gate first: dropping here must not consume
+                        //    a dedup slot. Treat load errors as disabled (fail-safe)
+                        //    but WITHOUT poisoning dedup for future retries.
+                        val currentSettings = try {
+                            settingsManager?.load()
+                        } catch (e: Exception) {
+                            Timber.w("Settings load failed in onMessageReceived (fail-safe): ${e.message}")
+                            null
                         }
-
-                        logDeliveryAttempt(
-                            messageId = messageId,
-                            medium = "core",
-                            phase = "rx",
-                            outcome = "received",
-                            detail = "sender=$senderId",
-                            callerContext = "onMessageReceived"
-                        )
-
-                        try {
-                        // Check if relay/messaging is enabled (bidirectional control)
-                        // Treat null/missing settings as disabled (fail-safe)
-                        // Cache settings value to avoid race condition during check
-                        val currentSettings = settingsManager?.load()
                         if (!Companion.isMeshParticipationEnabled(currentSettings)) {
                             Timber.w("Dropping received message - mesh participation is disabled or settings unavailable")
                             return@launch
@@ -1831,6 +2053,46 @@ open class MeshRepository(
                             Timber.d("Suppressing delivery receipt from text/UI path: msg=$messageId")
                             return@launch
                         }
+
+                        // 2. Stored-record check BEFORE the dedup gate so retries of an
+                        //    already-stored inbound message can be re-acknowledged.
+                        val storedBeforeGate = try {
+                            historyManager?.get(messageId)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val alreadyStoredInbound =
+                            storedBeforeGate?.direction == uniffi.api.MessageDirection.RECEIVED
+
+                        // 3. Dedup gate last. A duplicate either re-acks a stored
+                        //    message (sender's retry loop needs the receipt to
+                        //    converge) or falls through for reprocessing when the
+                        //    earlier copy never made it to history.
+                        val (isDuplicate, timeVarianceMs, firstTransport) = gateInboundMessage(messageId)
+                        if (isDuplicate) {
+                            if (alreadyStoredInbound) {
+                                Timber.i("Duplicate inbound $messageId already stored; re-acknowledging (time_variance=${timeVarianceMs}ms first_transport=$firstTransport)")
+                                val ackCanonicalPeerId = resolveCanonicalPeerId(senderId, senderPublicKeyHex)
+                                sendDeliveryReceiptAsync(
+                                    senderPublicKeyHex = senderPublicKeyHex,
+                                    messageId = messageId,
+                                    senderId = ackCanonicalPeerId
+                                )
+                                return@launch
+                            }
+                            Timber.i("Duplicate $messageId without stored record (earlier copy lost mid-window); reprocessing")
+                        }
+
+                        logDeliveryAttempt(
+                            messageId = messageId,
+                            medium = "core",
+                            phase = "rx",
+                            outcome = "received",
+                            detail = "sender=$senderId",
+                            callerContext = "onMessageReceived"
+                        )
+
+                        try {
                         val hintedIdentity = decodedPayload.hints
                         val hintedKey = normalizePublicKey(hintedIdentity?.publicKey)
                         val verifiedHints = if (
@@ -1892,40 +2154,20 @@ open class MeshRepository(
                         val isChatEvent = messageKind == "text" || messageKind.isEmpty()
 
                         val existingContact = try { contactManager?.get(canonicalPeerId) } catch (e: Exception) { null }
-                        if (existingContact == null && normalizedSenderKey != null && isChatEvent) {
-                            var routeNotes = if (!routePeerId.isNullOrBlank()) {
-                                appendRoutingHint(notes = null, key = "libp2p_peer_id", value = routePeerId)
-                            } else {
-                                null
-                            }
-                            routeNotes = appendRoutingHint(
-                                notes = routeNotes,
-                                key = "wifi_peer_id",
-                                value = routeWifiPeerId
-                            )
-                            routeNotes = upsertRoutingListeners(
-                                routeNotes,
-                                normalizeOutboundListenerHints(hintedDialCandidates)
-                            )
-                             val autoContact = uniffi.api.Contact(
-                                peerId = canonicalPeerId,
-                                nickname = knownNickname,
-                                localNickname = null,
-                                publicKey = normalizedSenderKey,
-                                addedAt = (System.currentTimeMillis() / 1000).toULong(),
-                                lastSeen = (System.currentTimeMillis() / 1000).toULong(),
-                                notes = routeNotes,
-                                lastKnownDeviceId = verifiedHints?.deviceId,
-                                verifiedAt = null,
-                                isTombstone = false
-                            )
-                            try {
-                                contactManager?.add(autoContact)
-                                Timber.i("Auto-created contact from received message: ${canonicalPeerId.take(8)} key: ${senderPublicKeyHex.take(8)}...")
-                            } catch (e: Exception) {
-                                Timber.w("Auto-create contact failed for ${canonicalPeerId.take(8)}: ${e.message}")
-                            }
-                        } else if (existingContact != null) {
+                        val isKnownForPairing = existingContact != null || isKnownContact(canonicalPeerId)
+                        // UNIFICATION: automatic mesh perfection — promiscuous relay (all nodes assist) but
+                        // only contacts can send. Inbound from non-contacts becomes a friend request
+                        // + conversation (visible via RequestsInbox/history) — not an immediate contact.
+                        Timber.i("UNIFICATION onMessageReceived pairing: sender=$senderId canonical=$canonicalPeerId routePeerId=${routePeerId ?: "null"} messageId=$messageId kind=$messageKind transport=INTERNET isKnownContact=$isKnownForPairing isChatEvent=$isChatEvent publicKey=${normalizedSenderKey?.take(8) ?: "null"}")
+                        if (!isKnownForPairing && normalizedSenderKey != null && isChatEvent) {
+                            Timber.i("UNIFICATION friend_request CREATED: from ${canonicalPeerId.take(16)} (${knownNickname ?: "unknown"}) messageId=$messageId — inbox holds request, history will store conversation; awaiting user accept via RequestsInbox (contact will be created on accept)")
+                            Timber.d("UNIFICATION friend_request detail: senderKey=${normalizedSenderKey.take(8)}... routePeerId=${routePeerId ?: "none"} hintedAddrs=${hintedAddresses.size} isKnownContact=$isKnownForPairing")
+                            // Do NOT auto-create contact — preserve friend-request flow. Routing hints still
+                            // annotated below via annotateIdentityInLedger, so pairing info is retained.
+                        } else if (!isKnownForPairing && isChatEvent) {
+                            Timber.w("UNIFICATION friend_request missing sender key: canonical=$canonicalPeerId messageId=$messageId — cannot create request without key")
+                        }
+                        if (existingContact != null) {
                             try { contactManager?.updateLastSeen(canonicalPeerId) } catch (e: Exception) {
                                 Timber.d("updateLastSeen failed: ${e.message}")
                             }
@@ -1936,7 +2178,14 @@ open class MeshRepository(
                                 updateContactDeviceId(canonicalPeerId, discoveredDeviceId)
                             }
 
-                            if (existingContact.nickname.isNullOrBlank() && !knownNickname.isNullOrBlank()) {
+                            // NICKNAME-STALE-001: a synthetic auto-name ("peer-xxxx")
+                            // is placeholder metadata, not a saved nickname. Allow
+                            // authoritative sources to replace it just like null.
+                            val existingNickIsSynthetic =
+                                isSyntheticFallbackNickname(existingContact.nickname)
+                            if ((existingContact.nickname.isNullOrBlank() || existingNickIsSynthetic) &&
+                                !knownNickname.isNullOrBlank()
+                            ) {
                                 val updatedContact = uniffi.api.Contact(
                                     peerId = existingContact.peerId,
                                     nickname = knownNickname,
@@ -1951,6 +2200,17 @@ open class MeshRepository(
                                 )
                                 try {
                                     contactManager?.add(updatedContact)
+                                    // FIX: propagate authoritative nickname to discoveredPeers so UI doesn't stay on synthetic "peer-30d0fa67"
+                                    refreshDiscoveredPeerForContact(existingContact.peerId)
+                                    _discoveredPeers.update { cur ->
+                                        cur.mapValues { (k, v) ->
+                                            val matches = k == existingContact.peerId || v.peerId == existingContact.peerId ||
+                                                (normalizedSenderKey != null && normalizePublicKey(v.publicKey) == normalizedSenderKey)
+                                            if (matches) {
+                                                v.copy(nickname = selectAuthoritativeNickname(knownNickname, v.nickname) ?: knownNickname)
+                                            } else v
+                                        }
+                                    }
                                 } catch (e: Exception) {
                                     Timber.d("Failed to persist nickname hint for ${existingContact.peerId}: ${e.message}")
                                 }
@@ -2508,20 +2768,50 @@ open class MeshRepository(
                         "msg=$normalizedMessageId sender=$senderId"
                     )
 
-                    // [CRITICAL] Step 1: Create Receipt struct with core types
-                    val receipt = uniffi.api.Receipt(
-                        messageId = normalizedMessageId,
-                        status = uniffi.api.DeliveryStatus.DELIVERED,
-                        timestamp = (System.currentTimeMillis() / 1000).toULong()
-                    )
+                    // [CRITICAL] Step 1: Normalize sender public key
+                    val keyHex = normalizePublicKey(senderPublicKeyHex)
+                    if (keyHex == null) {
+                        Timber.e("[ERROR] Receipt send FAILED: invalid sender public key msg=$normalizedMessageId")
+                        logDeliveryAttempt(
+                            messageId = normalizedMessageId,
+                            medium = "receipt",
+                            phase = "encode",
+                            outcome = "error",
+                            detail = "invalid_sender_key msg=$normalizedMessageId attempt=$attempt"
+                        )
+                        if (attempt < receiptSendMaxAttempts) {
+                            kotlinx.coroutines.delay(getRetryDelay(attempt - 1))
+                            continue
+                        } else {
+                            Timber.e(
+                                "[ERROR] Receipt prepare exhausted after $receiptSendMaxAttempts attempts: " +
+                                "msg=$normalizedMessageId sender=$senderId"
+                            )
+                            logDeliveryAttempt(
+                                messageId = normalizedMessageId,
+                                medium = "receipt",
+                                phase = "encode",
+                                outcome = "exhausted",
+                                detail = "invalid_sender_key_final msg=$normalizedMessageId attempts=$receiptSendMaxAttempts"
+                            )
+                            return@launch
+                        }
+                    }
 
-                    // [CRITICAL] Step 2: Encode Receipt to JSON bytes using core bindings
+                    // [CRITICAL] Step 2: Prepare signed+encrypted MessageType::Receipt envelope via FFI.
+                    // prepareReceipt constructs the Receipt internally (DELIVERED status, current timestamp)
+                    // and returns Drift-envelope bytes ready for transport. Mirrors iOS MeshRepository.swift
+                    // and CLI main.rs prepare_receipt usage.
+                    val core = ironCore ?: run {
+                        Timber.e("[ERROR] Receipt send FAILED: ironCore not initialized msg=$normalizedMessageId")
+                        throw IllegalStateException("ironCore not initialized")
+                    }
                     val receiptBytes = try {
                         Timber.d(
-                            "[RECEIPT-ENCODE] Encoding Receipt struct: " +
-                            "msg=$normalizedMessageId status=${receipt.status} ts=${receipt.timestamp}"
+                            "[RECEIPT-ENCODE] Preparing signed envelope via prepareReceipt: " +
+                            "msg=$normalizedMessageId sender=$senderId"
                         )
-                        uniffi.api.encodeReceipt(receipt)
+                        core.prepareReceipt(recipientPublicKeyHex = keyHex, messageId = normalizedMessageId)
                     } catch (e: Exception) {
                         Timber.e(
                             e,
@@ -2556,7 +2846,7 @@ open class MeshRepository(
 
                     Timber.i(
                         "[RECEIPT-ENCODE] SUCCESS: msg=$normalizedMessageId " +
-                        "bytes=${receiptBytes.size} status=${receipt.status}"
+                        "bytes=${receiptBytes.size} attempt=$attempt"
                     )
                     logDeliveryAttempt(
                         messageId = normalizedMessageId,
@@ -2678,6 +2968,7 @@ open class MeshRepository(
                     identitySyncSentPeers.remove(normalizedRoute)
                     return@launch
                 }
+                val syncMessageId = prepared.messageId.trim()
 
                 // Use targeted delivery (swarm + BLE fallback) for identity sync
                 val contact = contactManager?.list()?.firstOrNull {
@@ -2691,12 +2982,25 @@ open class MeshRepository(
                     recipientPublicKey = recipientPublicKey
                 )
 
-                attemptDirectSwarmDelivery(
+                val delivery = attemptDirectSwarmDelivery(
                     routePeerCandidates = routeCandidates,
                     listeners = hints.listeners,
                     encryptedData = prepared.envelopeData,
+                    traceMessageId = syncMessageId,
                     blePeerId = hints.blePeerId
                 )
+                // UNIFICATION_V3 R1: identity_sync (send-and-forget, kind != "text")
+                // is never receipt-acked by the receiver, so its durable core outbox
+                // entry would otherwise accumulate forever. Clear it ONLY on the true
+                // swarm transport-delivery ACK (never a BLE/WiFi buffer write).
+                if (syncMessageId.isNotBlank() && delivery.coreSwarmAcked) {
+                    try {
+                        ironCore?.markMessageSent(syncMessageId)
+                        Timber.d("R1: cleared identity_sync core outbox on transport ACK: $syncMessageId")
+                    } catch (e: Exception) {
+                        Timber.e(e, "R1: markMessageSent failed for identity_sync $syncMessageId")
+                    }
+                }
                 Timber.d("Identity sync sent to $normalizedRoute")
             } catch (e: Exception) {
                 identitySyncSentPeers.remove(normalizedRoute)
@@ -2756,12 +3060,23 @@ open class MeshRepository(
                     historySyncSentPeers.remove(normalizedRoute)
                     return@launch
                 }
+                val syncMessageId = prepared.messageId.trim()
 
                 val contact = contactManager?.list()?.firstOrNull { it.peerId == normalizedRoute || parseRoutingHints(it.notes).libp2pPeerId == normalizedRoute }
                 val hints = parseRoutingHints(contact?.notes)
                 val routeCandidates = buildRoutePeerCandidates(contact?.peerId ?: normalizedRoute, normalizedRoute, contact?.notes, recipientPublicKey)
 
-                attemptDirectSwarmDelivery(routeCandidates, hints.listeners, prepared.envelopeData, hints.wifiPeerId, hints.blePeerId)
+                val delivery = attemptDirectSwarmDelivery(routeCandidates, hints.listeners, prepared.envelopeData, hints.wifiPeerId, hints.blePeerId, traceMessageId = syncMessageId)
+                // UNIFICATION_V3 R1: history_sync is never receipt-acked; clear its
+                // durable core outbox ONLY on the true swarm transport-delivery ACK.
+                if (syncMessageId.isNotBlank() && delivery.coreSwarmAcked) {
+                    try {
+                        ironCore?.markMessageSent(syncMessageId)
+                        Timber.d("R1: cleared history_sync core outbox on transport ACK: $syncMessageId")
+                    } catch (e: Exception) {
+                        Timber.e(e, "R1: markMessageSent failed for history_sync $syncMessageId")
+                    }
+                }
                 Timber.w("History sync request sent to $normalizedRoute")
             } catch (e: Exception) {
                 Timber.e(e, "History sync error for $normalizedRoute")
@@ -2817,8 +3132,19 @@ open class MeshRepository(
                         Timber.e("sendHistorySyncDataIfNeeded: prepared is null for batch $batchIndex of $canonicalPeerId")
                         continue
                     }
+                    val syncMessageId = prepared.messageId.trim()
 
-                    attemptDirectSwarmDelivery(routeCandidates, allListeners, prepared.envelopeData, wifiPeerId ?: hints.wifiPeerId, hints.blePeerId)
+                    val delivery = attemptDirectSwarmDelivery(routeCandidates, allListeners, prepared.envelopeData, wifiPeerId ?: hints.wifiPeerId, hints.blePeerId, traceMessageId = syncMessageId)
+                    // UNIFICATION_V3 R1: history_sync_data is never receipt-acked; clear
+                    // its durable core outbox ONLY on the true swarm transport-delivery ACK.
+                    if (syncMessageId.isNotBlank() && delivery.coreSwarmAcked) {
+                        try {
+                            ironCore?.markMessageSent(syncMessageId)
+                            Timber.d("R1: cleared history_sync_data core outbox on transport ACK: $syncMessageId")
+                        } catch (e: Exception) {
+                            Timber.e(e, "R1: markMessageSent failed for sync_data $syncMessageId")
+                        }
+                    }
                     sentBatches++
                     // Small delay between batches to avoid overwhelming BLE
                     if (batchIndex < batches.size - 1) {
@@ -3284,7 +3610,7 @@ open class MeshRepository(
                         peerId = selectCanonicalPeerId(info.peerId, existing.peerId),
                         publicKey = info.publicKey ?: existing.publicKey,
                         nickname = selectAuthoritativeNickname(info.nickname, existing.nickname),
-                        localNickname = normalizeNickname(info.localNickname) ?: normalizeNickname(existing.localNickname),
+                        localNickname = selectAuthoritativeNickname(info.localNickname, existing.localNickname) ?: normalizeNickname(info.localNickname) ?: normalizeNickname(existing.localNickname),
                         libp2pPeerId = info.libp2pPeerId ?: existing.libp2pPeerId,
                         transport = if (
                             info.transport == com.scmessenger.android.service.TransportType.INTERNET ||
@@ -3295,7 +3621,9 @@ open class MeshRepository(
                             info.transport
                         },
                         isFull = info.isFull || existing.isFull,
-                        lastSeen = maxOf(info.lastSeen, existing.lastSeen)
+                        isRelay = info.isRelay || existing.isRelay || isRelayHop(info.peerId) || isRelayHop(existing.peerId),
+                        lastSeen = maxOf(info.lastSeen, existing.lastSeen),
+                        transports = info.transports + existing.transports
                     )
                 }
                 val canonicalPeerId = PeerIdValidator.normalize(merged.peerId.ifEmpty { normalizedKey })
@@ -3305,6 +3633,95 @@ open class MeshRepository(
                     mapKey != canonicalPeerId && PeerIdValidator.isSame(mapKey, canonicalPeerId)
                 }
             }
+        }
+    }
+
+    /**
+     * Refresh discovered peer nicknames from authoritative sources (contacts + ledger).
+     * Called after a contact nickname is corrected from synthetic to authoritative (e.g. envelope path at 2065)
+     * so the UI does not stay stale on synthetic "peer-30d0fa67".
+     */
+    private fun refreshDiscoveredPeersNicknames() {
+        try {
+            val contacts = contactManager?.list().orEmpty()
+            _discoveredPeers.update { current ->
+                val updated = current.mapValues { (_, info) ->
+                    val normalizedKey = normalizePublicKey(info.publicKey)
+                    val matchingContact = contacts.firstOrNull {
+                        it.peerId == info.peerId ||
+                            (normalizedKey != null && normalizePublicKey(it.publicKey) == normalizedKey) ||
+                            (info.libp2pPeerId != null && it.peerId == info.libp2pPeerId) ||
+                            (info.libp2pPeerId != null && parseRoutingHints(it.notes).libp2pPeerId == info.libp2pPeerId)
+                    }
+                    val contactNick = matchingContact?.let {
+                        val primary = normalizeNickname(it.localNickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                        val secondary = normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                        primary ?: secondary
+                    }
+                    val contactLocal = matchingContact?.localNickname?.trim()?.takeIf { it.isNotEmpty() }
+                    val ledgerNick = getAllLedgerEntries().asSequence()
+                        .filter { e ->
+                            e.peerId == info.peerId ||
+                                (normalizedKey != null && normalizePublicKey(e.publicKey) == normalizedKey) ||
+                                (info.libp2pPeerId != null && e.peerId == info.libp2pPeerId)
+                        }
+                        .mapNotNull { normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) } }
+                        .firstOrNull()
+                    val authoritative = selectAuthoritativeNickname(contactNick, ledgerNick)
+                        ?: selectAuthoritativeNickname(ledgerNick, contactNick)
+                        ?: contactNick
+                        ?: ledgerNick
+                    if (authoritative != null && !isSyntheticFallbackNickname(authoritative) && authoritative != info.nickname) {
+                        info.copy(
+                            nickname = authoritative,
+                            localNickname = contactLocal ?: info.localNickname,
+                            isRelay = info.isRelay || isRelayHop(info.peerId) || isKnownRelay(info.peerId)
+                        )
+                    } else if (contactLocal != null && contactLocal != info.localNickname) {
+                        info.copy(localNickname = contactLocal)
+                    } else {
+                        info
+                    }
+                }
+                updated
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "refreshDiscoveredPeersNicknames failed")
+        }
+    }
+
+    private fun refreshDiscoveredPeerForContact(peerId: String) {
+        try {
+            val normalized = peerId.trim()
+            if (normalized.isEmpty()) return
+            val contact = try { contactManager?.get(normalized) } catch (_: Exception) { null }
+                ?: contactManager?.list()?.firstOrNull { it.peerId == normalized || normalizePublicKey(it.publicKey) == normalizePublicKey(peerId) }
+                ?: return
+            val authoritativeNick = run {
+                val primary = normalizeNickname(contact.localNickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                val secondary = normalizeNickname(contact.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                primary ?: secondary
+            } ?: return
+            if (isSyntheticFallbackNickname(authoritativeNick)) return
+            _discoveredPeers.update { current ->
+                var changed = false
+                val updated = current.mapValues { (key, info) ->
+                    val matches = key == normalized || info.peerId == normalized ||
+                        (contact.publicKey != null && normalizePublicKey(info.publicKey) == normalizePublicKey(contact.publicKey)) ||
+                        (info.libp2pPeerId != null && info.libp2pPeerId == normalized) ||
+                        (info.libp2pPeerId != null && parseRoutingHints(contact.notes).libp2pPeerId == info.libp2pPeerId)
+                    if (matches && info.nickname != authoritativeNick) {
+                        changed = true
+                        info.copy(
+                            nickname = selectAuthoritativeNickname(authoritativeNick, info.nickname) ?: authoritativeNick,
+                            localNickname = contact.localNickname ?: info.localNickname
+                        )
+                    } else info
+                }
+                if (changed) updated else current
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "refreshDiscoveredPeerForContact failed for $peerId")
         }
     }
 
@@ -3355,27 +3772,24 @@ open class MeshRepository(
             .maxByOrNull { it.lastSeenMs }
     }
 
-    private fun pruneDisconnectedPeer(peerId: String) {
+    /**
+     * NODE-RETENTION-001: a known peer losing its connection must NOT vanish
+     * from the Mesh/peers list. The entry stays in _discoveredPeers with its
+     * lastSeen timestamp frozen at disconnect time, so the UI renders it as
+     * "offline · last seen Xm ago" until the next discovery/identify event
+     * refreshes lastSeen and flips it back online. Only the alias-cleanup
+     * behaviour of the old pruneDisconnectedPeer is gone — removal now
+     * happens exclusively via explicit identity promotion (BLE UUID →
+     * canonical key) or resetAllData().
+     */
+    private fun retainDisconnectedPeer(peerId: String) {
         val normalizedPeerId = peerId.trim()
         if (normalizedPeerId.isEmpty()) return
 
-        _discoveredPeers.update { current ->
-            if (current.isEmpty()) return@update current
-
-            val disconnectedPublicKey = normalizePublicKey(current[normalizedPeerId]?.publicKey)
-            val keysToRemove = current
-                .filter { (key, info) ->
-                    key == normalizedPeerId ||
-                        info.peerId == normalizedPeerId ||
-                        (
-                            disconnectedPublicKey != null &&
-                                normalizePublicKey(info.publicKey) == disconnectedPublicKey
-                            )
-                }
-                .keys
-
-            if (keysToRemove.isEmpty()) current else current - keysToRemove
-        }
+        // Deliberately no mutation: the entry keeps its existing lastSeen
+        // (stamped at the last discovery/identify event), which the UI renders
+        // as a growing "last seen Xm ago" while the node stays offline.
+        Timber.d("NODE-RETENTION-001: retained $normalizedPeerId in peer list after disconnect (offline)")
     }
 
     private fun initializeAndStartWifi() {
@@ -3787,9 +4201,12 @@ open class MeshRepository(
         connectedEmissionCache.clear()
         mdnsLanPeers.clear()
 
-        // Clear discovered peers from UI on service stop
-        _discoveredPeers.value = emptyMap()
-        Timber.i("Cleared all discovered peers on mesh service stop")
+        // NODE-RETENTION-001: do NOT wipe the peer list on service stop —
+        // known peers stay visible marked offline. Re-seed from persisted
+        // contacts + ledger so the list survives stop/start cycles and WiFi
+        // drops without ever collapsing to "0 nodes".
+        seedKnownPeersFromPersistedData()
+        Timber.i("Retained/refreshed known peers on mesh service stop")
 
         // Clear references to avoid stale lifecycle state on next start.
         coreDelegate = null
@@ -3962,13 +4379,17 @@ open class MeshRepository(
         return resolvedCanonicalId
     }
 
+    // Public for ViewModel dedup — canonical public_key_hex for any id (hex, libp2p, identity_id)
+    internal fun canonicalContactIdPublic(id: String): String = canonicalContactId(id)
+
     private fun canonicalContactId(id: String): String {
         val trimmed = id.trim()
         if (trimmed.isEmpty()) return trimmed
 
         // AND-SEND-BTN-001: Check in-memory cache first to avoid synchronous FFI on UI thread.
+        // UNIFICATION_V2_IDENTITY: Cache stores canonical public_key_hex, not identity_id hash.
         // Identity resolution is deterministic — once resolved, the mapping never changes.
-        identityIdCache[trimmed]?.let { return it }
+        canonicalIdCache[trimmed]?.let { return it }
 
         // ID-STANDARDIZATION-001: Comprehensive ID resolution with sanity checks
         Timber.d("ID_RESOLUTION: Input ID '$trimmed' (length=${trimmed.length})")
@@ -3983,7 +4404,7 @@ open class MeshRepository(
             val resolvedPk = ironCore?.resolveIdentity(trimmed)
             if (resolvedPk != null) {
                 val normalized = PeerIdValidator.normalize(resolvedPk)
-                identityIdCache[trimmed] = normalized
+                canonicalIdCache[trimmed] = normalized
                 Timber.d("ID_RESOLUTION: Resolved '$trimmed' -> public_key_hex: ${normalized.take(8)}...")
                 return normalized
             } else {
@@ -3995,7 +4416,7 @@ open class MeshRepository(
 
         // Fallback: Normalize the input ID (libp2p peer ID or other format)
         val normalizedFallback = PeerIdValidator.normalize(trimmed)
-        identityIdCache[trimmed] = normalizedFallback
+        canonicalIdCache[trimmed] = normalizedFallback
         Timber.d("ID_RESOLUTION: Fallback to normalized input: ${normalizedFallback.take(16)}...")
         return normalizedFallback
     }
@@ -4048,19 +4469,37 @@ open class MeshRepository(
         // reinstalls; keeping it as Contact.peerId creates duplicate contacts
         // and makes message lookup depend on the import surface used.
         val canonicalContactId = trimmedKey.lowercase()
+        // UNIFICATION: resolve nicknames authoritatively — real nickname over synthetic/null ledger data.
+        // localNickname is user-defined (primary), nickname is federated (secondary). Both use the same
+        // synthetic-filtering rule: a synthetic "peer-xxxx" must never overwrite a real user name.
+        val incomingNick = normalizeNickname(contact.nickname)
+        val existingNick = normalizeNickname(existingWithKey?.nickname)
+        val resolvedNickname = selectAuthoritativeNickname(incomingNick, existingNick)
+            ?: incomingNick?.takeUnless { isSyntheticFallbackNickname(it) }
+            ?: existingNick?.takeUnless { isSyntheticFallbackNickname(it) }
+        val incomingLocal = normalizeNickname(contact.localNickname)
+        val existingLocal = normalizeNickname(existingWithKey?.localNickname)
+        val resolvedLocalNickname = selectAuthoritativeNickname(incomingLocal, existingLocal)
+            ?: incomingLocal?.takeUnless { isSyntheticFallbackNickname(it) }
+            ?: existingLocal?.takeUnless { isSyntheticFallbackNickname(it) }
+        // UNIFICATION verbose logging for nickname save path
+        if (existingWithKey != null) {
+            Timber.i("UNIFICATION addContact idempotent upsert: peer ${contact.peerId} -> canonical $canonicalContactId existingNick=${existingNick?.take(16) ?: "null"} incomingNick=${incomingNick?.take(16) ?: "null"} resolvedNick=${resolvedNickname?.take(16) ?: "null"} existingLocal=${existingLocal?.take(16) ?: "null"} incomingLocal=${incomingLocal?.take(16) ?: "null"} resolvedLocal=${resolvedLocalNickname?.take(16) ?: "null"}")
+        } else {
+            Timber.i("UNIFICATION addContact new: canonical $canonicalContactId nick=${incomingNick?.take(16) ?: "null"} localNick=${incomingLocal?.take(16) ?: "null"} pubKey ${trimmedKey.take(8)}...")
+        }
         val finalContact = if (existingWithKey != null) {
-            Timber.i("Idempotent contact upsert: peer ${contact.peerId} matches existing contact ${existingWithKey.peerId} by public key")
             uniffi.api.Contact(
                 peerId = canonicalContactId,
-                nickname = contact.nickname ?: existingWithKey.nickname,
-                localNickname = contact.localNickname ?: existingWithKey.localNickname,
+                nickname = resolvedNickname,
+                localNickname = resolvedLocalNickname,
                 publicKey = trimmedKey,
                 addedAt = existingWithKey.addedAt,
                 lastSeen = if (contact.lastSeen != null) {
                     val currentLastSeen = existingWithKey.lastSeen ?: 0u
                     if (contact.lastSeen!! > currentLastSeen) contact.lastSeen else currentLastSeen
                 } else existingWithKey.lastSeen,
-                notes = contact.notes ?: existingWithKey.notes,
+                notes = mergeNotes(existingWithKey.notes, contact.notes) ?: contact.notes ?: existingWithKey.notes,
                 lastKnownDeviceId = contact.lastKnownDeviceId ?: existingWithKey.lastKnownDeviceId,
                 verifiedAt = contact.verifiedAt ?: existingWithKey.verifiedAt,
                 isTombstone = false
@@ -4068,8 +4507,8 @@ open class MeshRepository(
         } else {
             uniffi.api.Contact(
                 peerId = canonicalContactId,
-                nickname = contact.nickname,
-                localNickname = contact.localNickname,
+                nickname = resolvedNickname ?: incomingNick?.takeUnless { isSyntheticFallbackNickname(it) },
+                localNickname = resolvedLocalNickname ?: incomingLocal?.takeUnless { isSyntheticFallbackNickname(it) },
                 publicKey = trimmedKey,
                 addedAt = contact.addedAt,
                 lastSeen = contact.lastSeen,
@@ -4081,6 +4520,35 @@ open class MeshRepository(
         }
 
         contactManager?.add(finalContact)
+        // UNIFICATION FIX: immediately refresh _discoveredPeers so Dashboard/Contacts UI does not stay on synthetic peer-...
+        // Previously addContact did not update discovery map; a contact added with ChristyLove would still show
+        // peer-30d0fa67 until next BLE/identify cycle. Now we push the authoritative name into _discoveredPeers.
+        try {
+            val authoritativeDisplay = normalizeNickname(finalContact.localNickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+                ?: normalizeNickname(finalContact.nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+            if (authoritativeDisplay != null) {
+                _discoveredPeers.update { current ->
+                    var updated = current
+                    var changed = false
+                    for ((k, v) in current) {
+                        val matches = k == canonicalContactId || v.peerId == canonicalContactId ||
+                            normalizePublicKey(v.publicKey) == normalizePublicKey(finalContact.publicKey) ||
+                            (v.libp2pPeerId != null && parseRoutingHints(finalContact.notes).libp2pPeerId == v.libp2pPeerId)
+                        if (matches) {
+                            val newNick = selectAuthoritativeNickname(authoritativeDisplay, v.nickname) ?: authoritativeDisplay
+                            val newLocal = finalContact.localNickname ?: v.localNickname
+                            updated = updated + (k to v.copy(nickname = newNick, localNickname = newLocal))
+                            changed = true
+                            Timber.d("UNIFICATION addContact discovery refresh: $k -> nick=${newNick.take(16)} local=${newLocal?.take(16)}")
+                        }
+                    }
+                    if (changed) updated else current
+                }
+                refreshDiscoveredPeerForContact(canonicalContactId)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "UNIFICATION addContact discovery refresh failed for $canonicalContactId")
+        }
         val routing = parseRoutingHints(finalContact.notes)
         annotateIdentityInLedger(
             routePeerId = routing.libp2pPeerId,
@@ -4088,7 +4556,7 @@ open class MeshRepository(
             publicKey = finalContact.publicKey,
             nickname = finalContact.nickname
         )
-        Timber.d("Contact added/updated: ${finalContact.peerId}")
+        Timber.i("UNIFICATION addContact saved: peerId $canonicalContactId nickname ${finalContact.nickname?.take(16) ?: "null"} localNickname ${finalContact.localNickname?.take(16) ?: "null"} pubKey ${finalContact.publicKey.take(8)}... display=${(finalContact.localNickname ?: finalContact.nickname)?.take(16) ?: "PK:${finalContact.publicKey.take(8)}"}")
     }
 
     /**
@@ -4101,13 +4569,18 @@ open class MeshRepository(
             val canonical = canonicalId(peerId)
 
             // Already a contact? Just update nickname if provided.
+            // UNIFICATION FIX: when adding by peerId with a nickname, treat it as localNickname (user-defined, primary)
+            // not federated. Previous code stored as nickname (federated) which could be overwritten by ledger synthetic
+            // via upsertFederatedContact. Now we preserve localNickname correctly.
             val existing = contactManager?.get(canonical)
             if (existing != null) {
                 if (nickname != null) {
+                    val normalizedNick = normalizeNickname(nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+                    Timber.i("UNIFICATION addContactByPeerId existing: $canonical nick=${normalizedNick?.take(16) ?: "null"} -> saving as localNickname (FIX)")
                     addContact(uniffi.api.Contact(
                         peerId = existing.peerId,
-                        nickname = nickname,
-                        localNickname = existing.localNickname,
+                        nickname = existing.nickname,
+                        localNickname = normalizedNick ?: existing.localNickname,
                         publicKey = existing.publicKey,
                         addedAt = existing.addedAt,
                         lastSeen = existing.lastSeen,
@@ -4130,10 +4603,15 @@ open class MeshRepository(
                 return false
             }
 
+            // UNIFICATION FIX: new contact via peerId — nickname param is user-provided -> localNickname (primary)
+            // Previously stored as nickname (federated) which ledger could overwrite with peer-... . Now local.
+            val normalizedAddNick = normalizeNickname(nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+                ?: normalizeNickname(discoveryInfo.nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+            Timber.i("UNIFICATION addContactByPeerId new: $canonical nick=${normalizedAddNick?.take(16) ?: "null"} -> localNickname (FIX: user-defined, not federated)")
             val contact = uniffi.api.Contact(
                 peerId = canonical,
-                nickname = nickname ?: discoveryInfo.nickname,
-                localNickname = null,
+                nickname = null,
+                localNickname = normalizedAddNick,
                 publicKey = publicKey,
                 addedAt = (System.currentTimeMillis() / 1000).toULong(),
                 lastSeen = null,
@@ -4151,7 +4629,26 @@ open class MeshRepository(
     }
 
     fun getContact(peerId: String): uniffi.api.Contact? {
-        return contactManager?.get(canonicalId(peerId))
+        val canonical = canonicalId(peerId)
+        contactManager?.get(canonical)?.let { return it }
+
+        // UNKNOWN-CONTACT-001: canonicalContactId() cannot map a transport
+        // libp2p peer ID to its contact when the identity ledger has no
+        // annotation yet, and the unmapped ID is then cached as-is. Retry by
+        // matching against stored routing hints and the contact's public key,
+        // and seed the cache so subsequent lookups hit directly.
+        val trimmed = peerId.trim()
+        if (trimmed.isEmpty()) return null
+        return try {
+            contactManager?.list()?.firstOrNull { contact ->
+                val hintPeerId = parseRoutingHints(contact.notes).libp2pPeerId
+                (hintPeerId != null && PeerIdValidator.isSame(hintPeerId, trimmed)) ||
+                    contact.publicKey?.trim()?.equals(trimmed, ignoreCase = true) == true
+            }?.also { canonicalIdCache[trimmed] = it.peerId }
+        } catch (e: Exception) {
+            Timber.d("Failed routing-hint contact lookup for $trimmed: ${e.message}")
+            null
+        }
     }
 
     /**
@@ -4200,7 +4697,17 @@ open class MeshRepository(
     }
 
     fun listContacts(): List<uniffi.api.Contact> {
-        return contactManager?.list() ?: emptyList()
+        val list = contactManager?.list() ?: emptyList()
+        // UNIFICATION verbose logging for nickname load — helps diagnose ChristyLove revert to peer-...
+        if (list.isNotEmpty()) {
+            Timber.i("UNIFICATION listContacts: loaded ${list.size} contacts")
+            list.take(5).forEach { c ->
+                Timber.d("UNIFICATION listContacts entry: peer ${c.peerId.take(16)} nick=${c.nickname?.take(16) ?: "null"} localNick=${c.localNickname?.take(16) ?: "null"} pubKey ${c.publicKey.take(8)}...")
+            }
+        } else {
+            Timber.d("UNIFICATION listContacts: empty")
+        }
+        return list
     }
 
     fun searchContacts(query: String): List<uniffi.api.Contact> {
@@ -4208,8 +4715,27 @@ open class MeshRepository(
     }
 
     fun setContactNickname(peerId: String, nickname: String?) {
+        // UNIFICATION: federated nickname save — verbose logging, synthetic filtering handled by caller
+        Timber.i("UNIFICATION setContactNickname: save peer $peerId -> federated nick ${nickname?.take(16) ?: "null"} (clears if blank)")
         contactManager?.setNickname(peerId, nickname)
         Timber.d("Contact nickname updated: $peerId -> $nickname")
+        try {
+            val normalized = nickname?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalized != null && !isSyntheticFallbackNickname(normalized)) {
+                refreshDiscoveredPeerForContact(peerId)
+                _discoveredPeers.update { current ->
+                    current.mapValues { (k, v) ->
+                        val matches = k == peerId || v.peerId == peerId ||
+                            (v.libp2pPeerId != null && v.libp2pPeerId == peerId)
+                        if (matches) {
+                            v.copy(nickname = selectAuthoritativeNickname(normalized, v.nickname) ?: normalized)
+                        } else v
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to refresh discovered peer nickname for $peerId")
+        }
     }
 
     /** Mark a contact as verified after an out-of-band safety-number comparison. */
@@ -4327,20 +4853,31 @@ open class MeshRepository(
      * A message request is from a peer who has sent a message but is not yet a contact.
      * Returns a list of MessageRequest objects with sender info and preview.
      */
+    // UNIFICATION: inbox is the friend-request source — promiscuous relay delivers for anyone,
+    // but only contacts can send; non-contact inbound becomes a request + conversation on accept.
     fun getPendingMessageRequests(): List<uniffi.api.MessageRequest> {
         ensureServiceInitializedFireAndForget()
         return try {
             val contacts = contactManager?.list() ?: emptyList()
             val contactPeerIds = contacts.map { it.peerId }.toSet()
 
-            // Get all messages from inbox to find senders without conversations
-            val inboxMessages = ironCore?.drainReceivedMessages() ?: emptyList()
+            // UNIFICATION: use peek not drain — drain is destructive and loses requests on every poll
+            // (gap audit: repeated calls drained inbox). peek is idempotent for UI polling.
+            val inboxMessages = ironCore?.peekReceivedMessages() ?: emptyList()
+            Timber.i("UNIFICATION getPendingMessageRequests: inbox=${inboxMessages.size} contacts=${contacts.size} (isKnownContact gated)")
 
-            // Get unique peerIds from messages that aren't contacts
+            // Get unique peerIds from messages that aren't contacts — verbose pairing logs
             val requestPeerIds = inboxMessages
                 .map { it.senderId }
-                .filter { it !in contactPeerIds }
+                .filter { it !in contactPeerIds && !isKnownContact(it) }
                 .distinct()
+                .also { ids ->
+                    Timber.i("UNIFICATION friend-request pairing: ${ids.size} pending requests from inbox (peerIds=${ids.joinToString { it.take(12) }})")
+                    ids.forEach { pid ->
+                        val transportHints = try { contactManager?.get(pid)?.notes } catch (_: Exception) { null }
+                        Timber.d("UNIFICATION pairing detail: peer=${pid.take(16)} transportHints=${transportHints?.take(32) ?: "unknown"} isKnownContact=${isKnownContact(pid)}")
+                    }
+                }
 
             // Build MessageRequest objects for each peer
             requestPeerIds.map { peerId ->
@@ -4703,18 +5240,37 @@ open class MeshRepository(
     }
 
     fun setLocalNickname(peerId: String, nickname: String?) {
+        // UNIFICATION: user-defined localNickname save — verbose logging, never overwritten by federated sync
+        val normalizedInput = nickname?.trim()?.takeIf { it.isNotEmpty() }
+        Timber.i("UNIFICATION setLocalNickname: save peer $peerId -> localNick ${normalizedInput?.take(16) ?: "null (clear)"} raw=${nickname?.take(16) ?: "null"}")
         try {
             contactManager?.setLocalNickname(peerId, nickname)
-            Timber.i("Local nickname for $peerId set to: $nickname")
-            // Refresh discovery map if this peer is in it
-                _discoveredPeers.update { current ->
-                    val existing = current[peerId]
-                    if (existing != null) {
-                        current + (peerId to existing.copy(localNickname = nickname))
-                    } else {
-                        current
+            Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
+            _discoveredPeers.update { current ->
+                val normalized = peerId.trim()
+                if (current.containsKey(normalized)) {
+                    val existing = current[normalized]!!
+                    current + (normalized to existing.copy(localNickname = nickname))
+                } else {
+                    var updated = current
+                    var changed = false
+                    for ((k, v) in current) {
+                        val matches = k == normalized || v.peerId == normalized ||
+                            (v.libp2pPeerId != null && v.libp2pPeerId == normalized) ||
+                            (normalizePublicKey(v.publicKey) != null && try {
+                                normalizePublicKey(contactManager?.get(normalized)?.publicKey) == normalizePublicKey(v.publicKey)
+                            } catch (_: Exception) { false })
+                        if (matches) {
+                            updated = updated + (k to v.copy(localNickname = nickname))
+                            changed = true
+                        }
                     }
+                    if (changed) updated else current
                 }
+            }
+            if (nickname != null && !isSyntheticFallbackNickname(nickname)) {
+                refreshDiscoveredPeerForContact(peerId)
+            }
         } catch (e: Exception) {
             Timber.e(e, "Failed to set local nickname for $peerId")
         }
@@ -4734,22 +5290,23 @@ open class MeshRepository(
             }
 
             // Fallback: Try contact manager
-            val contact = contactManager?.get(routingPeerId)
+            var contact: uniffi.api.Contact? = contactManager?.get(routingPeerId)
             if (publicKey == null && contact != null && !contact.publicKey.isNullOrEmpty()) {
-                publicKey = contact.publicKey.trim()
+                val contactSnapshot = contact
+                publicKey = contactSnapshot.publicKey.trim()
 
                 // CRITICAL: Validate public key length
                 if (publicKey.length != 64) {
                     Timber.e("SEND_MSG_BUG: Contact has invalid public key length: ${publicKey.length} (expected 64)")
-                    Timber.e("SEND_MSG_BUG: Contact peer_id: ${contact.peerId}")
+                    Timber.e("SEND_MSG_BUG: Contact peer_id: ${contactSnapshot.peerId}")
                     Timber.e("SEND_MSG_BUG: Routing peer_id: $routingPeerId")
                     Timber.e("SEND_MSG_BUG: Public key value: '$publicKey'")
 
                     // Try to recover from discovered peers
                     val discoveredPeer = _discoveredPeers.value.entries.find {
                         PeerIdValidator.isSame(it.key, routingPeerId) ||
-                        PeerIdValidator.isSame(it.key, contact.peerId) ||
-                        (it.value.publicKey == contact.publicKey)
+                        PeerIdValidator.isSame(it.key, contactSnapshot.peerId) ||
+                        (it.value.publicKey == contactSnapshot.publicKey)
                     }?.value
 
                     if (discoveredPeer != null && !discoveredPeer.publicKey.isNullOrEmpty() &&
@@ -4798,10 +5355,148 @@ open class MeshRepository(
             }
 
             // Use public key as canonical peer ID for history storage
-            val normalizedPeerId = if (publicKey != null) {
+            var normalizedPeerId = if (publicKey != null) {
                 normalizePublicKey(publicKey) ?: routingPeerId
             } else {
                 routingPeerId
+            }
+
+            // UNIFICATION: mesh node click auto-add — promiscuous relay (all nodes assist) but messaging needs a contact.
+            // When a mesh node is clicked (Dashboard peer list / mesh map) and the user tries to message, the peer's
+            // nickname is already known via PeerDiscoveryInfo (identity beacon) or ledger. Instead of blocking with
+            // "not in contacts", auto-create the contact using that imported nickname (non-synthetic) and proceed.
+            // Verbose logs aid Android/Windows/Ubuntu pairing verification (peerId, transport, isKnownContact, auto-add).
+            var isKnown = isKnownContact(normalizedPeerId) || isKnownContact(routingPeerId) || (contact != null)
+            Timber.i("UNIFICATION sendMessage pairing check: routingPeerId=${routingPeerId.take(16)} normalizedPeerId=${normalizedPeerId.take(16)} publicKey=${publicKey?.take(8) ?: "null"} isKnownContact=$isKnown contactExists=${contact != null}")
+            if (!isKnown) {
+                Timber.i("UNIFICATION sendMessage auto-add: peer $normalizedPeerId not in contacts — attempting auto-add from discoveredPeers/ledger (mesh node click flow) routingPeerId=${routingPeerId.take(16)} publicKey=${publicKey?.take(8) ?: "null"}")
+                var autoPublicKey = publicKey
+                var autoPeerId = normalizedPeerId
+                // Primary source: discoveredPeers (mesh discovery / identity beacon). Match by routingPeerId, normalizedPeerId, or libp2pPeerId.
+                val discoveredMatch = _discoveredPeers.value.entries.firstOrNull { (key, info) ->
+                    PeerIdValidator.isSame(key, routingPeerId) ||
+                        PeerIdValidator.isSame(key, normalizedPeerId) ||
+                        PeerIdValidator.isSame(info.peerId, routingPeerId) ||
+                        PeerIdValidator.isSame(info.peerId, normalizedPeerId) ||
+                        (info.libp2pPeerId != null && PeerIdValidator.isSame(info.libp2pPeerId, routingPeerId)) ||
+                        (info.libp2pPeerId != null && PeerIdValidator.isSame(info.libp2pPeerId, normalizedPeerId)) ||
+                        (autoPublicKey != null && info.publicKey != null && normalizePublicKey(info.publicKey)?.equals(normalizePublicKey(autoPublicKey), ignoreCase = true) == true)
+                }?.value
+                if (autoPublicKey == null) {
+                    val discKey = discoveredMatch?.publicKey?.trim()?.takeIf { it.length == 64 }?.let { normalizePublicKey(it) }
+                    if (discKey != null) {
+                        autoPublicKey = discKey
+                        Timber.i("UNIFICATION sendMessage auto-add: resolved publicKey from discoveredPeers: ${autoPublicKey?.take(8)} for peer $routingPeerId (discoveredMatch peerId=${discoveredMatch?.peerId?.take(16)})")
+                    }
+                    if (autoPublicKey == null) {
+                        val ledgerKey = getAllLedgerEntries().firstOrNull { entry ->
+                            (entry.peerId?.let { PeerIdValidator.isSame(it, routingPeerId) } == true) ||
+                                (entry.peerId?.let { PeerIdValidator.isSame(it, normalizedPeerId) } == true) ||
+                                (entry.publicKey?.let { pk -> normalizePublicKey(pk)?.let { PeerIdValidator.isSame(pk, routingPeerId) } } == true)
+                        }?.publicKey?.trim()?.takeIf { it.length == 64 }?.let { normalizePublicKey(it) }
+                        if (ledgerKey != null) {
+                            autoPublicKey = ledgerKey
+                            Timber.i("UNIFICATION sendMessage auto-add: resolved publicKey from ledger: ${autoPublicKey?.take(8)}")
+                        }
+                    }
+                    if (autoPublicKey == null && PeerIdValidator.isLibp2pPeerId(routingPeerId)) {
+                        try {
+                            val extracted = ironCore?.extractPublicKeyFromPeerId(routingPeerId)?.let { normalizePublicKey(it) }
+                            if (extracted != null) {
+                                autoPublicKey = extracted
+                                Timber.i("UNIFICATION sendMessage auto-add: extracted publicKey from libp2p peerId: ${autoPublicKey?.take(8)}")
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    if (autoPublicKey == null) {
+                        val normalizedAsKey = normalizePublicKey(normalizedPeerId)
+                        if (normalizedAsKey != null) {
+                            autoPublicKey = normalizedAsKey
+                            Timber.i("UNIFICATION sendMessage auto-add: using normalizedPeerId as publicKey: ${autoPublicKey?.take(8)}")
+                        }
+                    }
+                }
+                if (autoPublicKey != null) {
+                    autoPeerId = normalizePublicKey(autoPublicKey) ?: autoPeerId
+                }
+                // Resolve nickname authoritatively from discoveredPeers/ledger (never synthetic peer-...).
+                var autoNickname: String? = null
+                try {
+                    autoNickname = resolveKnownPeerNickname(autoPeerId, routingPeerId, autoPublicKey)
+                    Timber.i("UNIFICATION sendMessage auto-add: resolved nickname via resolveKnownPeerNickname: ${autoNickname?.take(16) ?: "null"} (discoveredNick=${discoveredMatch?.nickname?.take(16) ?: "null"} localNick=${discoveredMatch?.localNickname?.take(16) ?: "null"}) for peer $autoPeerId")
+                } catch (e: Exception) {
+                    Timber.w(e, "UNIFICATION sendMessage auto-add: resolveKnownPeerNickname failed for $autoPeerId")
+                }
+                if (autoNickname.isNullOrBlank() || isSyntheticFallbackNickname(autoNickname)) {
+                    val directNick = discoveredMatch?.let {
+                        normalizeNickname(it.localNickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                            ?: normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                    }
+                    if (!directNick.isNullOrBlank() && !isSyntheticFallbackNickname(directNick)) {
+                        autoNickname = directNick
+                        Timber.i("UNIFICATION sendMessage auto-add: using direct discovered nickname: $directNick for peer $autoPeerId")
+                    }
+                }
+                if (autoNickname.isNullOrBlank() || isSyntheticFallbackNickname(autoNickname)) {
+                    val ledgerNick = getAllLedgerEntries().asSequence()
+                        .filter { e ->
+                            (e.peerId?.let { PeerIdValidator.isSame(it, routingPeerId) } == true) || (e.peerId?.let { PeerIdValidator.isSame(it, autoPeerId) } == true) ||
+                                (autoPublicKey != null && e.publicKey?.let { normalizePublicKey(it)?.equals(autoPublicKey, ignoreCase = true) } == true)
+                        }
+                        .mapNotNull { normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) } }
+                        .firstOrNull()
+                    if (ledgerNick != null) {
+                        autoNickname = selectAuthoritativeNickname(autoNickname, ledgerNick) ?: ledgerNick
+                        Timber.i("UNIFICATION sendMessage auto-add: using ledger nickname: $ledgerNick for peer $autoPeerId")
+                    }
+                }
+                val normalizedAutoKey = normalizePublicKey(autoPublicKey)
+                if (normalizedAutoKey != null && normalizedAutoKey.length == 64) {
+                    publicKey = normalizedAutoKey
+                    val canonicalPeerId = normalizedAutoKey.lowercase()
+                    try {
+                        val nowSec = (System.currentTimeMillis() / 1000).toULong()
+                        val nicknameForContact = autoNickname?.trim()?.takeIf { it.isNotEmpty() }?.takeUnless { isSyntheticFallbackNickname(it) }
+                        Timber.i("UNIFICATION sendMessage auto-add: creating contact canonical=$canonicalPeerId nickname=${nicknameForContact?.take(16) ?: "null"} pubKey=${normalizedAutoKey.take(8)}... (from discoveredPeers/ledger, synthetic filtered) discoveredMatch=${discoveredMatch?.peerId?.take(16) ?: "null"}")
+                        val contactToAdd = uniffi.api.Contact(
+                            peerId = canonicalPeerId,
+                            nickname = nicknameForContact,
+                            localNickname = null,
+                            publicKey = normalizedAutoKey,
+                            addedAt = nowSec,
+                            lastSeen = nowSec,
+                            notes = null,
+                            lastKnownDeviceId = null,
+                            verifiedAt = null,
+                            isTombstone = false
+                        )
+                        addContact(contactToAdd)
+                        contact = contactManager?.get(canonicalPeerId) ?: contactManager?.get(autoPeerId) ?: contact
+                        isKnown = isKnownContact(canonicalPeerId) || isKnownContact(autoPeerId) || isKnownContact(routingPeerId) || (contact != null)
+                        val displayAfterAdd = contact?.let { it.localNickname?.takeIf { v -> v.isNotBlank() } ?: it.nickname?.takeIf { v -> v.isNotBlank() } } ?: nicknameForContact ?: canonicalPeerId.take(12)
+                        Timber.i("UNIFICATION sendMessage auto-add: SUCCESS auto-added contact $canonicalPeerId displayName=$displayAfterAdd isKnownContact now=$isKnown")
+                        val correctedNormalized = normalizePublicKey(publicKey) ?: normalizedPeerId
+                        if (correctedNormalized != normalizedPeerId) {
+                            Timber.i("UNIFICATION sendMessage auto-add: correcting normalizedPeerId $normalizedPeerId -> $correctedNormalized for history")
+                            normalizedPeerId = correctedNormalized
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "UNIFICATION sendMessage auto-add: FAILED to auto-add contact for $autoPeerId")
+                    }
+                } else {
+                    Timber.w("UNIFICATION sendMessage auto-add: cannot auto-add — no valid publicKey (autoPublicKey=${autoPublicKey?.take(8) ?: "null"} normalizedPeerId=$normalizedPeerId routing=$routingPeerId)")
+                }
+                if (!isKnown) {
+                    val stillKnown = isKnownContact(normalizedPeerId) || isKnownContact(routingPeerId) || (contact != null)
+                    if (!stillKnown) {
+                        val errMsg = "Recipient not in contacts — add ${normalizedPeerId.take(12)} as a contact before sending. Promiscuous relay is enabled (all nodes assist), but messaging is contact-only."
+                        Timber.w("UNIFICATION sendMessage BLOCKED after auto-add attempt: $errMsg (peerId=$normalizedPeerId routing=$routingPeerId)")
+                        logDeliveryState(messageId = initialMessageId, state = "blocked_not_contact", detail = "recipient_not_contact peer=$normalizedPeerId auto_add_failed")
+                        throw IllegalStateException(errMsg)
+                    } else {
+                        isKnown = stillKnown
+                    }
+                }
             }
 
             // 1. Save to history IMMEDIATELY.
@@ -5613,8 +6308,216 @@ open class MeshRepository(
         ledgerManager?.recordFailure(multiaddr)
     }
 
+    /**
+     * Dial candidates from the ledger, with identity fields masked on any
+     * entry whose key binding is not self-certifying.
+     *
+     * Resolution precedence enforcement (see isSelfCertifyingKeyBinding): a
+     * relay-hop-derived key can never win identity resolution because every
+     * ledger consumer reads entries through this accessor — poisoned keys are
+     * logged and stripped here even if a writer bypassed the annotation guards,
+     * and routing metadata (multiaddr, peer_id, last_seen) is preserved so
+     * dialing and node retention are unaffected.
+     */
     fun getDialableAddresses(): List<uniffi.api.LedgerEntry> {
-        return ledgerManager?.dialableAddresses() ?: emptyList()
+        val raw = ledgerManager?.dialableAddresses() ?: return emptyList()
+        return raw.map { entry ->
+            val pid = entry.peerId?.trim().orEmpty()
+            val key = entry.publicKey?.trim().orEmpty()
+            if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
+                Timber.w(
+                    "Ledger read guard: masking poisoned key ${key.take(8)}... bound to " +
+                        "transport peer ...${pid.takeLast(8)} (would have won resolution pre-fix)"
+                )
+                entry.copy(publicKey = null, nickname = null)
+            } else {
+                entry
+            }
+        }
+    }
+
+    /**
+     * Read the entire persisted ledger from disk, masking poisoned bindings.
+     *
+     * This is the offline-persistence accessor required by NODE-RETENTION-001:
+     * [getDialableAddresses] only returns proven entries (success>0 && failure<3),
+     * so a node that is currently unreachable (seed: success==0, dead: failure>=3)
+     * would vanish from the UI. The full accessor lets [seedKnownPeersFromPersistedData]
+     * and [DashboardViewModel.loadPeers] resurrect nodes as "offline · last seen Xm ago"
+     * with transport badges, and lets [isKnownRelay] classify relay hops even when
+     * no live discovery entry exists.
+     */
+    fun getAllLedgerEntries(): List<uniffi.api.LedgerEntry> {
+        synchronized(ledgerCacheLock) {
+            try {
+                val ledgerFile = File(storagePath, "ledger.json")
+                if (!ledgerFile.isFile) {
+                    cachedLedgerEntries = emptyList()
+                    cachedLedgerMtime = -1L
+                    cachedLedgerSize = -1L
+                    return emptyList()
+                }
+                val mtime = ledgerFile.lastModified()
+                val size = ledgerFile.length()
+                val cached = cachedLedgerEntries
+                if (cached != null && mtime == cachedLedgerMtime && size == cachedLedgerSize) {
+                    return cached
+                }
+                val parsed = readLedgerEntriesFromDiskUncached(ledgerFile)
+                cachedLedgerEntries = parsed
+                cachedLedgerMtime = mtime
+                cachedLedgerSize = size
+                return parsed
+            } catch (e: Exception) {
+                Timber.w(e, "getAllLedgerEntries: cache check failed, falling back to direct parse")
+                return readLedgerEntriesFromDiskUncached(File(storagePath, "ledger.json"))
+            }
+        }
+    }
+
+    private fun readLedgerEntriesFromDiskUncached(ledgerFile: File): List<uniffi.api.LedgerEntry> {
+        return try {
+            if (!ledgerFile.isFile) return emptyList()
+            val bytes = ledgerFile.readBytes()
+            if (bytes.isEmpty()) return emptyList()
+            val text = when {
+                bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() ->
+                    bytes.toString(Charsets.UTF_16)
+                else -> {
+                    val utf8 = bytes.toString(Charsets.UTF_8).trim()
+                    if (utf8.startsWith("\uFEFF")) utf8.removePrefix("\uFEFF") else utf8
+                }
+            }.trim()
+            if (text.isEmpty() || text == "[]") return emptyList()
+            val arr = org.json.JSONArray(text)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val multiaddr = obj.optString("multiaddr", "").trim()
+                    if (multiaddr.isEmpty()) continue
+                    val peerId = obj.optString("peer_id", "").trim().takeIf { it.isNotEmpty() }
+                    val publicKeyRaw = if (obj.has("public_key") && !obj.isNull("public_key")) {
+                        obj.optString("public_key", "").trim().takeIf { it.isNotEmpty() }
+                    } else null
+                    val nicknameRaw = if (obj.has("nickname") && !obj.isNull("nickname")) {
+                        obj.optString("nickname", "").trim().takeIf { it.isNotEmpty() }
+                    } else null
+                    val successCount = obj.optInt("success_count", 0).toUInt()
+                    val failureCount = obj.optInt("failure_count", 0).toUInt()
+                    val lastSeenRaw = obj.optLong("last_seen", 0L)
+                    val lastSeen = if (lastSeenRaw > 0) lastSeenRaw.toULong() else null
+                    val topicsJson = obj.optJSONArray("topics")
+                    val topics = buildList {
+                        if (topicsJson != null) {
+                            for (j in 0 until topicsJson.length()) {
+                                val t = topicsJson.optString(j, "").trim()
+                                if (t.isNotEmpty()) add(t)
+                            }
+                        }
+                    }
+                    val locallyVerified = obj.optBoolean("locally_verified", false)
+                    val isBootstrap = obj.optBoolean("is_bootstrap", false)
+                    val firstSeenRaw = obj.optLong("first_seen", 0L)
+                    val firstSeen = if (firstSeenRaw > 0) firstSeenRaw.toULong() else null
+                    val observedIdsJson = obj.optJSONArray("observed_peer_ids")
+                    val observedPeerIds = buildList {
+                        if (observedIdsJson != null) {
+                            for (j in 0 until observedIdsJson.length()) {
+                                val p = observedIdsJson.optString(j, "").trim()
+                                if (p.isNotEmpty()) add(p)
+                            }
+                        }
+                    }
+                    val labelRaw = obj.optString("label", "")
+                    val label = labelRaw.takeIf { it.isNotEmpty() }
+                    val entry = uniffi.api.LedgerEntry(
+                        multiaddr = multiaddr,
+                        peerId = peerId,
+                        publicKey = publicKeyRaw,
+                        nickname = nicknameRaw,
+                        successCount = successCount,
+                        failureCount = failureCount,
+                        lastSeen = lastSeen,
+                        topics = topics,
+                        locallyVerified = locallyVerified,
+                        isBootstrap = isBootstrap,
+                        firstSeen = firstSeen,
+                        observedPeerIds = observedPeerIds,
+                        label = label
+                    )
+                    val pid = entry.peerId?.trim().orEmpty()
+                    val key = entry.publicKey?.trim().orEmpty()
+                    if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
+                        add(entry.copy(publicKey = null, nickname = null))
+                    } else {
+                        add(entry)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "getAllLedgerEntries: failed to read ledger.json")
+            emptyList()
+        }
+    }
+
+    fun getSeedAddresses(limit: UInt = 16u): List<uniffi.api.LedgerEntry> {
+        // Delegate to Rust's in-memory ledger when available (preferred: no disk re-parse, consistent with dialableAddresses).
+        // Falls back to cached file parse when ledgerManager not yet initialized (cold start).
+        ledgerManager?.let { lm ->
+            try {
+                val rust = lm.seedAddresses(limit)
+                // Apply same poison-mask as getDialableAddresses/getAllLedgerEntries for consistency.
+                return rust.map { entry ->
+                    val pid = entry.peerId?.trim().orEmpty()
+                    val key = entry.publicKey?.trim().orEmpty()
+                    if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
+                        entry.copy(publicKey = null, nickname = null)
+                    } else entry
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "getSeedAddresses: Rust delegate failed, falling back to cached file parse")
+            }
+        }
+        // LEDGER-CACHE-001: getAllLedgerEntries() is now mtime+size cached, so triple re-parse collapses to one.
+        return getAllLedgerEntries()
+            .filter { it.successCount == 0u && it.failureCount < 3u }
+            .sortedByDescending { it.lastSeen ?: 0uL }
+            .take(limit.toInt())
+    }
+
+    fun getRecentlyDeadAddresses(withinDays: Long = 7): List<uniffi.api.LedgerEntry> {
+        val cutoffSec = (System.currentTimeMillis() / 1000) - withinDays * 24 * 3600
+        val cutoff = cutoffSec.coerceAtLeast(0).toULong()
+        // LEDGER-CACHE-001: single cached fetch, not three disk parses.
+        return getAllLedgerEntries()
+            .filter { it.failureCount >= 3u && (it.lastSeen ?: 0uL) >= cutoff }
+            .sortedByDescending { it.lastSeen ?: 0uL }
+    }
+
+    fun getRelayHopPeerIds(): Set<String> {
+        val hops = mutableSetOf<String>()
+        // LEDGER-CACHE-001: single cached fetch.
+        for (entry in getAllLedgerEntries()) {
+            val ma = entry.multiaddr
+            if (!ma.contains("/p2p-circuit/")) continue
+            val circuitIdx = ma.indexOf("/p2p-circuit/")
+            if (circuitIdx == -1) continue
+            val beforeCircuit = ma.substring(0, circuitIdx)
+            val relayIdx = beforeCircuit.lastIndexOf("/p2p/")
+            if (relayIdx != -1) {
+                val relayId = beforeCircuit.substring(relayIdx + "/p2p/".length).trim().split("/").firstOrNull()?.trim()
+                if (!relayId.isNullOrEmpty() && PeerIdValidator.isLibp2pPeerId(relayId)) {
+                    hops.add(relayId)
+                }
+            }
+        }
+        return hops
+    }
+
+    fun isRelayHop(peerId: String): Boolean {
+        val normalized = peerId.trim()
+        if (normalized.isEmpty()) return false
+        return normalized in getRelayHopPeerIds()
     }
 
     /**
@@ -5693,6 +6596,242 @@ open class MeshRepository(
             } catch (e: Exception) {
                 Timber.w(e, "triggerTransportRescan failed")
             }
+        }
+    }
+
+    /**
+     * NODE-RETENTION-001: seed the discovery map from persisted state so the
+     * Mesh/peers list is never empty while known nodes exist.
+     *
+     * Sources (both already loaded by initializeManagers):
+     * - Contacts DB: every non-tombstone contact becomes an entry marked
+     *   offline with its stored lastSeen ("last seen Xm ago").
+     * - Connection ledger: dialable addresses / preferred relays enrich or
+     *   create entries; transport labels are parsed from multiaddr protocol
+     *   paths, relay classification via isKnownRelay.
+     *
+     * Live entries always win over seeded ones — seeding only fills gaps and
+     * unions transport labels into existing entries. Re-runs are idempotent.
+     */
+    fun seedKnownPeersFromPersistedData() {
+        try {
+            // FIX: ensure synthetic contacts are backfilled from ledger before seeding discovery map,
+            // so seeded PeerDiscoveryInfo already carries "Claude-Windows-Driver" not "peer-30d0fa67".
+            // Idempotent; also called explicitly from initializeManagers().
+            repairSyntheticContactNicknames()
+            val now = System.currentTimeMillis().toULong() / 1000u
+            val seeded = linkedMapOf<String, PeerDiscoveryInfo>()
+
+            contactManager?.list().orEmpty()
+                .filter { !it.isTombstone }
+                .forEach { contact ->
+                    val peerKey = contact.peerId.trim()
+                    if (peerKey.isEmpty()) return@forEach
+                    val hints = parseRoutingHints(contact.notes)
+                    val transports = parseTransportsFromMultiaddrs(hints.listeners)
+                    seeded[peerKey] = PeerDiscoveryInfo(
+                        peerId = peerKey,
+                        publicKey = contact.publicKey?.trim()?.takeIf { it.isNotEmpty() },
+                        nickname = contact.nickname,
+                        localNickname = contact.localNickname,
+                        libp2pPeerId = hints.libp2pPeerId,
+                        transport = if (transports.contains(TRANSPORT_TCP_LAN))
+                            com.scmessenger.android.service.TransportType.TCP_MDNS
+                        else
+                            com.scmessenger.android.service.TransportType.INTERNET,
+                        isFull = true,
+                        isRelay = false,
+                        lastSeen = contact.lastSeen ?: 0uL,
+                        transports = transports
+                    )
+                }
+
+            // Guarded accessor: poisoned relay-hop bindings are masked before
+            // they can seed the discovery map (NODE-RETENTION-001 must not
+            // resurrect identity poison across WiFi/BLE cycles).
+            // FIX: include offline nodes (seed + recent dead) so the peer list persists
+            // "last seen Xm ago" with transport badges even when dialable==0.
+            val allLedgerForSeeding = (getDialableAddresses() + getSeedAddresses(16u) + getRecentlyDeadAddresses()).distinctBy { it.multiaddr }
+            allLedgerForSeeding.forEach { entry ->
+                val rawPeerId = entry.peerId?.trim().takeIf { !it.isNullOrEmpty() } ?: return@forEach
+                val transports = parseTransportsFromMultiaddrs(listOf(entry.multiaddr))
+                val existing = seeded[rawPeerId]
+                if (existing != null) {
+                    val authoritativeNick = selectAuthoritativeNickname(existing.nickname, entry.nickname)
+                        ?: selectAuthoritativeNickname(entry.nickname, existing.nickname)
+                        ?: existing.nickname
+                        ?: entry.nickname
+                    // Prefer authoritative nickname (non-synthetic) and keep live transport union.
+                    seeded[rawPeerId] = existing.copy(
+                        nickname = selectAuthoritativeNickname(authoritativeNick, existing.nickname) ?: authoritativeNick,
+                        localNickname = existing.localNickname,
+                        lastSeen = maxOf(existing.lastSeen, entry.lastSeen ?: 0uL),
+                        transports = existing.transports + transports
+                    )
+                } else {
+                    seeded[rawPeerId] = PeerDiscoveryInfo(
+                        peerId = rawPeerId,
+                        publicKey = entry.publicKey?.trim()?.takeIf { it.isNotEmpty() },
+                        nickname = entry.nickname,
+                        libp2pPeerId = rawPeerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) },
+                        transport = if (transports.contains(TRANSPORT_TCP_LAN))
+                            com.scmessenger.android.service.TransportType.TCP_MDNS
+                        else
+                            com.scmessenger.android.service.TransportType.INTERNET,
+                        isFull = false,
+                        isRelay = isKnownRelay(rawPeerId) || isRelayHop(rawPeerId),
+                        lastSeen = entry.lastSeen ?: 0uL,
+                        transports = transports
+                    )
+                }
+            }
+
+            // Synthesize Shared Node entries for relay hops that appear only as circuit
+            // middle-hops (e.g. 12D3KooWJoW... which has zero direct ledger entries but
+            // appears in 149 p2p-circuit multiaddrs). Without this, Shared Nodes section stays empty.
+            val relayHops = getRelayHopPeerIds()
+            for (hopId in relayHops) {
+                if (seeded.containsKey(hopId)) {
+                    val cur = seeded[hopId]!!
+                    if (!cur.isRelay) {
+                        seeded[hopId] = cur.copy(isRelay = true, isFull = cur.isFull && !isRelayHop(hopId))
+                    }
+                } else {
+                    // Create offline placeholder for the hop itself; its own lastSeen is the most recent
+                    // circuit that mentions it, so the UI can render "last seen Xm ago".
+                    val hopLastSeen = allLedgerForSeeding.filter { it.multiaddr.contains("/p2p/$hopId/p2p-circuit/") }
+                        .mapNotNull { it.lastSeen }.maxOrNull() ?: 0uL
+                    val hopTransports = parseTransportsFromMultiaddrs(
+                        allLedgerForSeeding.filter { it.multiaddr.contains("/p2p/$hopId/p2p-circuit/") }.map { it.multiaddr }
+                    ) + setOf(TRANSPORT_RELAY_CIRCUIT)
+                    seeded[hopId] = PeerDiscoveryInfo(
+                        peerId = hopId,
+                        publicKey = null,
+                        nickname = null,
+                        localNickname = null,
+                        libp2pPeerId = hopId,
+                        transport = com.scmessenger.android.service.TransportType.INTERNET,
+                        isFull = false,
+                        isRelay = true,
+                        lastSeen = hopLastSeen,
+                        transports = hopTransports
+                    )
+                }
+            }
+
+            if (seeded.isEmpty()) return
+
+            _discoveredPeers.update { current ->
+                val merged = current.toMutableMap()
+                seeded.forEach { (key, info) ->
+                    val live = merged[key]
+                    merged[key] = when {
+                        live == null -> info.copy(lastSeen = minOf(info.lastSeen, now))
+                        else -> {
+                            val mergedNick = selectAuthoritativeNickname(live.nickname, info.nickname)
+                                ?: selectAuthoritativeNickname(info.nickname, live.nickname)
+                                ?: live.nickname
+                            val mergedLocal = live.localNickname ?: info.localNickname
+                            live.copy(
+                                nickname = mergedNick,
+                                localNickname = mergedLocal,
+                                transports = live.transports + info.transports,
+                                isRelay = live.isRelay || info.isRelay || isRelayHop(key),
+                                lastSeen = maxOf(live.lastSeen, info.lastSeen)
+                            )
+                        }
+                    }
+                }
+                merged
+            }
+            Timber.i("NODE-RETENTION-001: seeded ${seeded.size} known node(s) from contacts + ledger (incl. ${relayHops.size} relay hops)")
+        } catch (e: Exception) {
+            Timber.w(e, "NODE-RETENTION-001: failed to seed known peers from persisted data")
+        }
+    }
+
+    /**
+     * Startup one-time repair: backfill synthetic contact nicknames from ledger authoritative nicknames.
+     *
+     * Contacts persist across `adb install -r` while ledger.json is the source of truth for
+     * authoritative nicknames (e.g. "Claude-Windows-Driver"). Legacy contacts created via
+     * prepopulateDiscoveryNickname may hold synthetic "peer-xxxx" that never gets updated
+     * unless a new envelope arrives. This repair scans all libp2p contacts whose
+     * nickname is synthetic or blank and, when ledger holds a non-synthetic nickname for
+     * the same peerId or publicKey, promotes the contact and refreshes _discoveredPeers.
+     *
+     * Idempotent: only touches synthetic/blank nicknames; never overwrites localNickname.
+     */
+    private fun repairSyntheticContactNicknames() {
+        try {
+            val cm = contactManager ?: return
+            val contacts = try { cm.list() } catch (e: Exception) {
+                Timber.w(e, "repairSyntheticContactNicknames: failed to list contacts")
+                return
+            }
+            if (contacts.isEmpty()) return
+            val ledgerEntries = getAllLedgerEntries()
+            if (ledgerEntries.isEmpty()) return
+            var repaired = 0
+            for (contact in contacts) {
+                if (contact.isTombstone) continue
+                val nickBlank = contact.nickname.isNullOrBlank()
+                val nickSynthetic = isSyntheticFallbackNickname(contact.nickname)
+                if (!nickBlank && !nickSynthetic) continue
+                val peerIdTrimmed = contact.peerId.trim()
+                if (peerIdTrimmed.isEmpty()) continue
+                // UNIFICATION: repair synthetic nicknames for BOTH canonical hex (30d0fa) and legacy libp2p (12D3) peerIds.
+                // Previously filtered to libp2p only, leaving canonical hex contacts stuck on peer-... synthetic.
+                // identity split fix: use publicKey matching as primary key to find authoritative ledger nickname.
+                // Do not overwrite if localNickname is already a real (non-synthetic) value:
+                // the contact's displayName will already be correct via displayNames() primary,
+                // but we still repair nickname so ledger authority is not lost. We preserve localNickname.
+                Timber.d("UNIFICATION repairSynthetic check: peer ${peerIdTrimmed.take(16)} nick=${contact.nickname?.take(16) ?: "null"} localNick=${contact.localNickname?.take(16) ?: "null"} pubKey ${contact.publicKey.take(8)}... blank=$nickBlank synthetic=$nickSynthetic")
+                val normalizedContactKey = normalizePublicKey(contact.publicKey)
+                val authoritative = ledgerEntries.asSequence()
+                    .filter { entry ->
+                        entry.peerId == peerIdTrimmed ||
+                            (normalizedContactKey != null && normalizePublicKey(entry.publicKey) == normalizedContactKey)
+                    }
+                    .mapNotNull { normalizeNickname(it.nickname)?.takeIf { v -> v.isNotEmpty() } }
+                    .firstOrNull { !isSyntheticFallbackNickname(it) }
+                    ?: ledgerEntries.asSequence()
+                        .filter { entry ->
+                            entry.peerId == peerIdTrimmed ||
+                                (normalizedContactKey != null && normalizePublicKey(entry.publicKey) == normalizedContactKey)
+                        }
+                        .mapNotNull { it.nickname }
+                        .firstOrNull { !isSyntheticFallbackNickname(it) }
+                    ?: continue
+                if (authoritative == contact.nickname) continue
+                if (isSyntheticFallbackNickname(authoritative)) continue
+                val before = contact.nickname
+                val updated = contact.copy(nickname = authoritative)
+                try {
+                    cm.add(updated)
+                    // Refresh discovery map so UI reflects the authoritative name immediately.
+                    refreshDiscoveredPeerForContact(peerIdTrimmed)
+                    _discoveredPeers.update { cur ->
+                        cur.mapValues { (k, v) ->
+                            val matches = k == peerIdTrimmed || v.peerId == peerIdTrimmed ||
+                                (normalizedContactKey != null && normalizePublicKey(v.publicKey) == normalizedContactKey) ||
+                                (v.libp2pPeerId != null && v.libp2pPeerId == peerIdTrimmed)
+                            if (matches) {
+                                v.copy(nickname = selectAuthoritativeNickname(authoritative, v.nickname) ?: authoritative)
+                            } else v
+                        }
+                    }
+                    Timber.i("Backfilled contact nickname for $peerIdTrimmed from ledger: $before -> $authoritative")
+                    repaired++
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to backfill contact nickname for $peerIdTrimmed")
+                }
+            }
+            if (repaired > 0) {
+                Timber.i("Synthetic contact nickname repair: backfilled $repaired contact(s) from ledger")
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "repairSyntheticContactNicknames failed")
         }
     }
 
@@ -5811,10 +6950,20 @@ open class MeshRepository(
         return loadPendingOutbox().size
     }
 
-    fun getPendingDeliverySnapshot(messageId: String): Pair<Int, Long>? {
+    fun getPendingDeliverySnapshot(messageId: String): PendingDeliveryInfo? {
         if (messageId.isBlank()) return null
         val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return null
-        return pending.attemptCount to pending.nextAttemptAtEpochSec
+        return PendingDeliveryInfo(
+            attemptCount = pending.attemptCount,
+            nextAttemptAtEpochSec = pending.nextAttemptAtEpochSec,
+            // Single source of truth for the drop-at-cap decision; the UI
+            // surface must never drift from the flush-loop predicate.
+            exhausted = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                attemptCount = pending.attemptCount,
+                ackedWithoutReceiptCount = pending.ackedWithoutReceiptCount,
+                maxAttempts = pendingOutboxMaxAttempts
+            )
+        )
     }
 
     fun getPendingTerminalFailureCode(messageId: String): String? {
@@ -6370,6 +7519,8 @@ open class MeshRepository(
         }
     }
 
+    // UNIFICATION: promiscuous relay — every node assists (relay for anyone), but messaging is contact-gated.
+    // This function logs every relay attempt with peerId, transport, isKnownContact for mesh perfection verification.
     private suspend fun attemptDirectSwarmDelivery(
         routePeerCandidates: List<String>,
         listeners: List<String>,
@@ -6382,6 +7533,11 @@ open class MeshRepository(
         recipientIdentityId: String? = null,
         intendedDeviceId: String? = null
     ): DeliveryAttemptResult {
+        try {
+            val relayCandidates = routePeerCandidates.joinToString { it.take(8) }
+            val knownFlags = routePeerCandidates.joinToString { "${it.take(8)}:${isKnownContact(it)}" }
+            Timber.i("UNIFICATION message_relay: ctx=$attemptContext relayAssist=promiscuous (all nodes relay) candidates=[$relayCandidates] isKnown=[$knownFlags] listeners=${listeners.size} msg=${traceMessageId?.take(12)}")
+        } catch (_: Exception) {}
         // AND-DELIVERY-001: Resolve nullable traceMessageId to a non-null value early,
         // so all internal logDeliveryAttempt calls use a real message ID and never emit msg=unknown.
         val traceMessageId = traceMessageId?.takeIf { it.isNotBlank() }
@@ -6849,7 +8005,13 @@ open class MeshRepository(
             )
             return DeliveryAttemptResult(
                 acked = true,
-                routePeerId = routePeerCandidates.firstOrNull()
+                routePeerId = routePeerCandidates.firstOrNull(),
+                // The smart router may have succeeded over BLE/WiFi-Direct (local
+                // fire-and-forget ACK) OR over the core swarm (sendMessageStatus==null).
+                // Only the swarm transports are authoritative for clearing the durable
+                // outbox; BLE/WiFi-Direct must NOT clear it.
+                coreSwarmAcked = smartResult.transport == com.scmessenger.android.transport.SmartTransportRouter.TransportType.CORE ||
+                    smartResult.transport == com.scmessenger.android.transport.SmartTransportRouter.TransportType.TCP_MDNS
             )
         }
 
@@ -6960,7 +8122,7 @@ open class MeshRepository(
                     outcome = "success",
                     detail = "ctx=$attemptContext route=$routePeerId latency=${latencyMs}ms"
                 )
-                return DeliveryAttemptResult(acked = true, routePeerId = routePeerId)
+                return DeliveryAttemptResult(acked = true, routePeerId = routePeerId, coreSwarmAcked = true)
             } else {
                 Timber.w("Core-routed delivery failed for $routePeerId: $directError; trying alternative transports")
                 logDeliveryAttempt(
@@ -7010,7 +8172,7 @@ open class MeshRepository(
                         outcome = "success",
                         detail = "ctx=$attemptContext route=$routePeerId latency=${latencyMs}ms"
                     )
-                    return DeliveryAttemptResult(acked = true, routePeerId = routePeerId)
+                    return DeliveryAttemptResult(acked = true, routePeerId = routePeerId, coreSwarmAcked = true)
                 } else {
                     Timber.w("Relay-circuit retry failed for $routePeerId: $relayError")
                     logDeliveryAttempt(
@@ -7108,49 +8270,63 @@ open class MeshRepository(
                     updated = true
                     continue
                 }
-                // P3_ANDROID_RETRY_SUPPRESSION: No-downgrade rule enforcement
-                // Once message reaches Sent state (confirmed by transport), it may NOT move to Failed or Corrupted.
-                // Messages that have been acked by transport are tracked separately (ackedWithoutReceiptCount)
-                // and should only be stopped via age-based ceiling (above), never via attempt-count ceiling.
-                if (item.ackedWithoutReceiptCount > 0) {
-                    // Transport-confirmed success: keep message in Sent state indefinitely (until age-based stop)
-                    Timber.d("Skipping retry for ${item.historyRecordId}: transport-acked message cannot be downgraded acked_count=${item.ackedWithoutReceiptCount}")
+                // P3_ANDROID_RETRY_SUPPRESSION / UNIFICATION_V3 D3: No-downgrade rule.
+                // Once a message is transport-acked it may NOT move to Failed/Corrupted,
+                // but it MUST keep re-sending until it gets an application-level
+                // Delivered receipt (or the age-based ceiling above stops it). The
+                // previous behavior parked transport-acked messages ("held", +120s
+                // forever) and never re-sent, which stranded messages despite live
+                // transport. We now fall through to the real send path below; the
+                // attempt-cap branch is additionally guarded so acked-without-receipt
+                // messages are never corrupted/dropped by the attempt count.
+                // AND-DELIVERY-001 REVISED (the operator's 'message vanished' defect):
+                // Enforce a retry CEILING to avoid tight spinning, but NEVER silently
+                // discard an undelivered send. Store-and-forward is the product
+                // contract; an unreachable peer must not erase the sender's message.
+                // At the attempt ceiling an undelivered, never-acked send becomes a
+                // persistent, visible 'queued/delivering' state: it is DEFERRED on a
+                // patient backoff (the pending-outbox rewrite only happens when the
+                // send path itself advances the record), NEVER removed, and once the
+                // backoff elapses it falls through to the real send path below and
+                // genuinely tries again -- so it keeps retrying on a patient cadence
+                // until a route exists or delivery is confirmed. The delivered check
+                // runs FIRST (via decidePendingOutboxFlushAction) so a retained entry
+                // that later gets delivered is removed instead of parked forever.
+                val isDeliveredLocally = isMessageDeliveredLocally(item.historyRecordId)
+                val retainedAtCap = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                val flushAction = MeshRepository.Companion.decidePendingOutboxFlushAction(
+                    item = item,
+                    nowEpochSec = now,
+                    isDeliveredLocally = isDeliveredLocally,
+                    // Lazily evaluated by the decision function: the in-memory
+                    // tracker must not be materialized for non-due items.
+                    shouldRetry = { shouldRetryMessage(item.historyRecordId) },
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                if (retainedAtCap && flushAction == MeshRepository.PendingOutboxFlushAction.SEND) {
+                    // Log once per real at-cap attempt (not per flush pass):
+                    // each retained SEND is a genuine retry of a message that
+                    // would previously have been silently dropped.
+                    Timber.w("Retaining undelivered message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts): queued/delivering, NOT dropped")
                     logDeliveryState(
                         messageId = item.historyRecordId,
-                        state = "held",
-                        detail = "acked_without_receipt_protection acked_count=${item.ackedWithoutReceiptCount} attempt=${item.attemptCount}"
+                        state = "queued_delivering",
+                        detail = "retained_pending_outbox reason=max_attempts_reached_never_drop attempt=${item.attemptCount}"
                     )
-                    iterator.set(
-                        item.copy(
-                            nextAttemptAtEpochSec = now + 120L  // Schedule next check in 2 minutes
-                        )
-                    )
-                    updated = true
-                    continue
                 }
-                // AND-DELIVERY-001: Enforce maximum retry limit to prevent infinite retries
-                // Only applies to messages that have NOT been transport-acked
-                if (item.attemptCount >= pendingOutboxMaxAttempts) {
-                    Timber.w("Dropping message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts) - NOT transport-acked")
-                    markMessageCorrupted(item.historyRecordId)
-                    logDeliveryState(
-                        messageId = item.historyRecordId,
-                        state = "failed",
-                        detail = "dropped_pending_outbox reason=max_attempts_exceeded attempt=${item.attemptCount}"
-                    )
-                    iterator.remove()
-                    updated = true
-                    continue
-                }
-                if (item.nextAttemptAtEpochSec > now) continue
-                if (!shouldRetryMessage(item.historyRecordId)) {
-                    Timber.w("Skipping retry for ${item.historyRecordId}: shouldRetryMessage=false")
-                    continue
-                }
-                if (isMessageDeliveredLocally(item.historyRecordId)) {
-                    iterator.remove()
-                    updated = true
-                    continue
+                when (flushAction) {
+                    MeshRepository.PendingOutboxFlushAction.REMOVE -> {
+                        iterator.remove()
+                        updated = true
+                        continue
+                    }
+                    MeshRepository.PendingOutboxFlushAction.SKIP,
+                    MeshRepository.PendingOutboxFlushAction.DEFER -> continue
+                    MeshRepository.PendingOutboxFlushAction.SEND -> Unit
                 }
                 logDeliveryState(
                     messageId = item.historyRecordId,
@@ -7321,7 +8497,7 @@ open class MeshRepository(
         }
     }
 
-    private fun enqueuePendingOutbound(
+    private suspend fun enqueuePendingOutbound(
         historyRecordId: String,
         peerId: String,
         routePeerId: String?,
@@ -7333,14 +8509,14 @@ open class MeshRepository(
         recipientIdentityId: String? = null,
         intendedDeviceId: String? = null,
         terminalFailureCode: String? = null
-    ) {
+    ) = pendingOutboxFlushMutex.withLock {
         if (isMessageDeliveredLocally(historyRecordId)) {
             logDeliveryState(
                 messageId = historyRecordId,
                 state = "delivered",
                 detail = "skip_enqueue_already_delivered"
             )
-            return
+            return@withLock
         }
         val now = System.currentTimeMillis() / 1000
         val queue = loadPendingOutbox().toMutableList()
@@ -7649,7 +8825,15 @@ open class MeshRepository(
             if (keyMatches.isNotEmpty()) return resolvedCanonicalPeerId
         }
 
-        return if (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId)) {
+        // UNIFICATION: never let the message hint downgrade an already-canonical
+        // 64-hex identity (public key OR identity_id) to a derived hash. The hint
+        // identity_id is only preferred when the resolved/sender form is NOT already
+        // a 64-hex key (e.g. legacy libp2p routing ID or BLE UUID), where the hint
+        // is genuinely more canonical than the raw sender id.
+        return if (
+            !PeerIdValidator.isIdentityId(resolvedCanonicalPeerId) &&
+                (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId))
+        ) {
             normalizedHint
         } else {
             resolvedCanonicalPeerId
@@ -7851,24 +9035,52 @@ open class MeshRepository(
             emptyList()
         }
 
-        val fromContact = contacts.firstOrNull {
+        val contact = contacts.firstOrNull {
             it.peerId == peerId ||
                 (
                     normalizedKey != null &&
                         normalizePublicKey(it.publicKey) == normalizedKey
                     )
-        }?.nickname
+        }
+        val fromContact = contact?.let {
+            val primary = normalizeNickname(it.localNickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+            val secondary = normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+            primary ?: secondary ?: selectAuthoritativeNickname(it.localNickname, it.nickname)
+        }
 
-        val resolved = selectAuthoritativeNickname(incomingNickname, fromContact)
+        val fromLedger = getAllLedgerEntries().asSequence()
+            .filter { entry ->
+                entry.peerId == peerId ||
+                    (normalizedKey != null && normalizePublicKey(entry.publicKey) == normalizedKey) ||
+                    entry.peerId == normalizedKey
+            }
+            .mapNotNull { normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) } }
+            .firstOrNull()
+            ?: getAllLedgerEntries().asSequence()
+                .filter { entry ->
+                    entry.peerId == peerId ||
+                        (normalizedKey != null && normalizePublicKey(entry.publicKey) == normalizedKey)
+                }
+                .mapNotNull { normalizeNickname(it.nickname) }
+                .firstOrNull { !isSyntheticFallbackNickname(it) }
+
+        val contactOrLedger = selectAuthoritativeNickname(fromContact, fromLedger)
+        val resolved = selectAuthoritativeNickname(incomingNickname, contactOrLedger)
+        if (!resolved.isNullOrBlank() && !isSyntheticFallbackNickname(resolved)) {
+            return resolved
+        }
+        if (!contactOrLedger.isNullOrBlank() && !isSyntheticFallbackNickname(contactOrLedger)) {
+            return contactOrLedger
+        }
         if (!resolved.isNullOrBlank()) {
             return resolved
         }
 
-        // Auto-generate nickname if none found
-        val shortId = if (peerId.startsWith("12D3KooW")) {
-            peerId.takeLast(8)
-        } else {
-            peerId.take(8)
+        // Auto-generate nickname if none found - use public key prefix when available (matches evidence peer-30d0fa67)
+        val shortId = when {
+            normalizedKey != null -> normalizedKey.take(8)
+            peerId.startsWith("12D3KooW") -> peerId.takeLast(8)
+            else -> peerId.take(8)
         }
         val generated = "peer-$shortId"
         Timber.d("Generated default nickname '$generated' for peer $peerId")
@@ -7893,21 +9105,41 @@ open class MeshRepository(
                             normalizePublicKey(info.publicKey) == normalizedKey
                         )
             }
-            .mapNotNull { normalizeNickname(it.nickname) }
+            .mapNotNull {
+                val nick = normalizeNickname(it.localNickname) ?: normalizeNickname(it.nickname)
+                nick?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+            }
             .firstOrNull()
+            ?: _discoveredPeers.value.values.asSequence()
+                .filter { info ->
+                    info.peerId == canonicalPeerId ||
+                        (!routeCandidate.isNullOrBlank() && info.peerId == routeCandidate) ||
+                        (normalizedKey != null && normalizePublicKey(info.publicKey) == normalizedKey)
+                }
+                .mapNotNull { normalizeNickname(it.nickname) }
+                .firstOrNull { !isSyntheticFallbackNickname(it) }
 
-        val fromLedger = ledgerManager?.dialableAddresses()
-            ?.asSequence()
-            ?.filter { entry ->
+        // Precedence (b)/(c): ledger nicknames are the LOWEST-trust tier and
+        // only count when the entry's key binding survives the self-certifying
+        // gate; contact records (a) outrank them via selectAuthoritativeNickname.
+        // FIX: use all ledger entries (including seed/offline) and prefer non-synthetic.
+        val allLedger = getAllLedgerEntries()
+        val fromLedger = allLedger.asSequence()
+            .filter { entry ->
                 entry.peerId == canonicalPeerId ||
                     (!routeCandidate.isNullOrBlank() && entry.peerId == routeCandidate) ||
-                    (
-                        normalizedKey != null &&
-                            normalizePublicKey(entry.publicKey) == normalizedKey
-                        )
+                    (normalizedKey != null && normalizePublicKey(entry.publicKey) == normalizedKey)
             }
-            ?.mapNotNull { normalizeNickname(it.nickname) }
-            ?.firstOrNull()
+            .mapNotNull { normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) } }
+            .firstOrNull()
+            ?: allLedger.asSequence()
+                .filter { entry ->
+                    entry.peerId == canonicalPeerId ||
+                        (!routeCandidate.isNullOrBlank() && entry.peerId == routeCandidate) ||
+                        (normalizedKey != null && normalizePublicKey(entry.publicKey) == normalizedKey)
+                }
+                .mapNotNull { normalizeNickname(it.nickname) }
+                .firstOrNull { !isSyntheticFallbackNickname(it) }
 
         val fromContact = try {
             contactManager?.list()
@@ -7915,19 +9147,94 @@ open class MeshRepository(
                 ?.filter { contact ->
                     contact.peerId == canonicalPeerId ||
                         (!routeCandidate.isNullOrBlank() && contact.peerId == routeCandidate) ||
-                        (
-                            normalizedKey != null &&
-                                normalizePublicKey(contact.publicKey) == normalizedKey
-                            )
+                        (normalizedKey != null && normalizePublicKey(contact.publicKey) == normalizedKey)
                 }
-                ?.mapNotNull { normalizeNickname(it.nickname) }
+                ?.mapNotNull {
+                    val primary = normalizeNickname(it.localNickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                    val secondary = normalizeNickname(it.nickname)?.takeUnless { v -> isSyntheticFallbackNickname(v) }
+                    primary ?: secondary
+                }
                 ?.firstOrNull()
+                ?: contactManager?.list()?.asSequence()
+                    ?.filter { contact ->
+                        contact.peerId == canonicalPeerId ||
+                            (!routeCandidate.isNullOrBlank() && contact.peerId == routeCandidate) ||
+                            (normalizedKey != null && normalizePublicKey(contact.publicKey) == normalizedKey)
+                    }
+                    ?.mapNotNull { normalizeNickname(it.nickname) }
+                    ?.firstOrNull { !isSyntheticFallbackNickname(it) }
         } catch (_: Exception) {
             null
         }
 
         val discoveryOrLedger = selectAuthoritativeNickname(fromDiscovery, fromLedger)
         return selectAuthoritativeNickname(discoveryOrLedger, fromContact)
+    }
+
+    /**
+     * A public key may only be bound to a peer id when the binding is
+     * self-certifying (Ed25519 peer ids embed their key). Bindings learned from
+     * transport routing hints — relay hops, /p2p-circuit dial candidates,
+     * self-reported identity-sync hints — are rejected here so circuit-relay
+     * route annotations can never poison ledger identity resolution.
+     *
+     * Two accepted forms:
+     *  1. Canonical hex form: the ledger stores peer_id as the 64-hex public key
+     *     itself (the unified canonical identity). A hex peer_id equal to the
+     *     public key is self-certifying by construction.
+     *  2. libp2p base58 form: the derived peer id must equal the stored peer id
+     *     (Ed25519 peer ids embed their key).
+     */
+    private fun isSelfCertifyingKeyBinding(peerId: String, publicKey: String): Boolean {
+        if (!PeerKeyUtils.isValidPublicKey(publicKey)) return false
+        if (peerId.equals(publicKey, ignoreCase = true)) return true
+        return PeerKeyUtils.extractPeerIdFromPublicKey(publicKey) == peerId
+    }
+
+    /**
+     * One-time data repair on load: ledger entries written by older builds may
+     * carry a public_key bound to a transport peer id that the key does not
+     * actually derive (circuit-relay route annotations attributed the relay
+     * hop's key to the destination peer). Such bindings corrupt identity
+     * resolution and receipt encryption. Strip any public_key that is not
+     * self-certifying for its peer_id; routing metadata is preserved.
+     */
+    private fun sanitizeLedgerPublicKeyBindings() {
+        kotlin.runCatching {
+            val ledgerFile = java.io.File(storagePath, "ledger.json")
+            if (!ledgerFile.isFile) return
+            val raw = ledgerFile.readText()
+            val arr = org.json.JSONArray(raw)
+            var changed = false
+            for (i in 0 until arr.length()) {
+                val entry = arr.optJSONObject(i) ?: continue
+                val peerId = entry.optString("peer_id").trim()
+                val publicKey = if (entry.has("public_key") && !entry.isNull("public_key")) {
+                    entry.optString("public_key").trim()
+                } else {
+                    ""
+                }
+                if (peerId.isEmpty() || publicKey.isEmpty()) continue
+                if (isSelfCertifyingKeyBinding(peerId, publicKey)) continue
+                Timber.w(
+                    "Ledger repair: dropping poisoned key ${publicKey.take(8)}... bound to " +
+                        "unrelated transport peer ${peerId.takeLast(8)}..."
+                )
+                entry.remove("public_key")
+                changed = true
+            }
+            if (changed) {
+                val tmp = java.io.File(storagePath, "ledger.json.tmp.repair")
+                tmp.writeText(arr.toString())
+                if (!tmp.renameTo(ledgerFile)) {
+                    ledgerFile.writeText(arr.toString())
+                    tmp.delete()
+                }
+                Timber.i("Ledger repair: sanitized poisoned public_key bindings")
+            }
+        }.onFailure {
+            Timber.w("Ledger public-key sanitation skipped: ${it.message}")
+        }
     }
 
     private fun annotateIdentityInLedger(
@@ -7947,14 +9254,39 @@ open class MeshRepository(
         if (dialHints.isEmpty()) return
 
         val normalizedKey = normalizePublicKey(publicKey)
-        val normalizedNickname = nickname?.trim()?.takeIf { it.isNotEmpty() }
+        val trustedKey = if (normalizedKey != null && !isSelfCertifyingKeyBinding(normalizedRoute, normalizedKey)) {
+            Timber.w(
+                "Ledger guard: refusing to bind key ${normalizedKey.take(8)}... to unrelated " +
+                    "transport peer ${normalizedRoute.takeLast(8)}... (route-hint attribution)"
+            )
+            null
+        } else {
+            normalizedKey
+        }
+        // NICKNAME-STALE-001 FIX: synthetic "peer-xxxx" must never overwrite an
+        // authoritative ledger nickname (e.g. "Claude-Windows-Driver"). Only a
+        // non-synthetic, non-blank nickname is allowed to ride into the ledger.
+        val normalizedNickname = normalizeNickname(nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+        // If the incoming nickname is synthetic but the ledger already has a
+        // synthetic, we still don't want to churn the file with another synthetic.
+        // A null here means "routing metadata only, no identity claim".
         dialHints.forEach { multiaddr ->
             kotlin.runCatching {
+                // Double-check: if we are about to write a synthetic over an existing
+                // authoritative ledger entry, skip. Read current ledger entry for this
+                // multiaddr/peer to ensure we don't clobber Claude with peer-30...
+                val shouldWriteNick = if (normalizedNickname == null) {
+                    // Synthetic or null -> only write if ledger has no authoritative nick
+                    val existingNick = getAllLedgerEntries().firstOrNull {
+                        it.multiaddr == multiaddr && it.peerId == normalizedRoute
+                    }?.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                    existingNick == null || isSyntheticFallbackNickname(existingNick)
+                } else true
                 ledgerManager?.annotateIdentity(
                     multiaddr,
                     normalizedRoute,
-                    normalizedKey,
-                    normalizedNickname
+                    trustedKey,
+                    if (shouldWriteNick) normalizedNickname else null
                 )
             }.onFailure {
                 Timber.d("Failed to annotate identity for ledger entry $multiaddr: ${it.message}")
@@ -8104,15 +9436,17 @@ open class MeshRepository(
                 )
             }
 
-            Timber.w("Creating emergency contact for unknown peer: ${normalizedKey.take(8)}...")
-            val emergencyContact = createEmergencyContact(normalizedKey)
-            logIdentityResolutionDetails(normalizedKey, emergencyContact, createdNew = true)
+            // UNIFICATION: automatic mesh perfection — promiscuous discovery (all nodes relay) but
+            // contact-gated messaging. Do NOT auto-create contact for a merely discovered peer;
+            // they become a contact only on inbound message → friend request → accept, or explicit add.
+            Timber.i("UNIFICATION discovered non-contact peer ${normalizedKey.take(8)}... — promiscuous mesh will relay for it, but messaging gated (isKnownContact=false, pairing requires message/request)")
+            logIdentityResolutionDetails(normalizedKey, null, createdNew = false)
 
             return TransportIdentityResolution(
                 canonicalPeerId = normalizedKey,
                 publicKey = normalizedKey,
-                nickname = emergencyContact.nickname?.takeIf { it.isNotBlank() },
-                localNickname = emergencyContact.localNickname?.takeIf { it.isNotBlank() }
+                nickname = null,
+                localNickname = null
             )
         }
 
@@ -8231,7 +9565,10 @@ open class MeshRepository(
 
             // Auth guard: for an existing canonical peerId, only accept federated updates
             // when the source public key is consistent with the stored contact key.
-            if (existingById != null && normalizePublicKey(existingById.publicKey) != normalizedKey) {
+            // A BLANK stored key is not a conflict — it means the contact record predates
+            // the key (ledger/discovery-created); fill it with the verified incoming key.
+            // Only a non-empty MISMATCHING key is rejected.
+            if (existingById != null && federatedKeyConflict(existingById.publicKey, normalizedKey)) {
                 Timber.w(
                     "Rejected federated nickname update for $normalizedPeerId: key mismatch " +
                         "(stored=${existingById.publicKey.take(8)}..., incoming=${normalizedKey.take(8)}...)"
@@ -8269,8 +9606,14 @@ open class MeshRepository(
             val resolvedPeerId = existing?.peerId ?: normalizedPeerId
             val resolvedPublicKey = existingByKey?.publicKey ?: normalizedKey
             val incomingNickname = normalizeNickname(nickname)
+            // UNIFICATION: federated nickname must never overwrite real user name with synthetic/null stale ledger data.
+            // localNickname is user-defined (primary) and is NEVER overwritten by federated sync.
             val resolvedNickname = selectAuthoritativeNickname(incomingNickname, existing?.nickname)
-            val resolvedLocalNickname = normalizeNickname(existing?.localNickname)
+                ?: incomingNickname?.takeUnless { isSyntheticFallbackNickname(it) }
+                ?: normalizeNickname(existing?.nickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+            val resolvedLocalNickname = normalizeNickname(existing?.localNickname)?.takeUnless { isSyntheticFallbackNickname(it) }
+                ?: normalizeNickname(existing?.localNickname)
+            Timber.i("UNIFICATION upsertFederatedContact: peer $resolvedPeerId pubKey ${resolvedPublicKey.take(8)}... incomingNick=${incomingNickname?.take(16) ?: "null"} existingNick=${existing?.nickname?.take(16) ?: "null"} resolvedNick=${resolvedNickname?.take(16) ?: "null"} existingLocal=${existing?.localNickname?.take(16) ?: "null"} -> resolvedLocal=${resolvedLocalNickname?.take(16) ?: "null"}")
 
             val updated = uniffi.api.Contact(
                 peerId = resolvedPeerId,
@@ -8287,6 +9630,19 @@ open class MeshRepository(
 
             try {
                 contactManager?.add(updated)
+                if (resolvedNickname != null && !isSyntheticFallbackNickname(resolvedNickname) && resolvedNickname != existing?.nickname) {
+                    refreshDiscoveredPeerForContact(resolvedPeerId)
+                    _discoveredPeers.update { cur ->
+                        cur.mapValues { (k, v) ->
+                            val matches = k == resolvedPeerId || v.peerId == resolvedPeerId ||
+                                (normalizePublicKey(v.publicKey) == normalizePublicKey(resolvedPublicKey)) ||
+                                (routePeer != null && v.libp2pPeerId == routePeer)
+                            if (matches) {
+                                v.copy(nickname = selectAuthoritativeNickname(resolvedNickname, v.nickname) ?: resolvedNickname)
+                            } else v
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 Timber.d("Failed to upsert federated contact for $resolvedPeerId: ${e.message}")
             }
@@ -8454,6 +9810,38 @@ open class MeshRepository(
         return null
     }
 
+    /**
+     * UNIFICATION_DIAL: Resolve a route candidate to its dialable libp2p peer id.
+     *
+     * Dialing (swarm bridge, connectToPeer, core transport) requires a libp2p
+     * base58 peer id. Ledger/discovery may surface a contact bound to the
+     * canonical 64-hex public key (`peer_id == public_key`). When that binding
+     * is self-certifying for the given recipient key we derive its libp2p peer
+     * id via the repo-native helper; a real invalid id (or a hex id that does
+     * not certify against the recipient key) returns null so it stays rejected.
+     */
+    private fun toDialableRoutePeerId(peerId: String, recipientPublicKey: String?): String? {
+        val normalized = peerId.trim()
+        if (normalized.isEmpty()) return null
+        // Passthrough MUST precede the recipient-key guard: an already-libp2p
+        // candidate from cached/notes/discovery is dialable as-is and must not be
+        // dropped just because recipientPublicKey is null/empty (regression test
+        // `valid libp2p candidate passes through even with null recipient key`).
+        if (PeerIdValidator.isLibp2pPeerId(normalized)) return normalized
+        // Only accept the canonical hex form when it self-certifies against the
+        // recipient key (hex peer_id equal to the public key is self-certifying
+        // by construction — mirrors isSelfCertifyingKeyBinding form 1). A hex id
+        // unrelated to the recipient stays rejected.
+        val recipientKey = normalizePublicKey(recipientPublicKey)
+        if (recipientKey == null || !PeerKeyUtils.isValidPublicKey(normalized)) return null
+        if (!normalized.equals(recipientKey, ignoreCase = true)) return null
+        // Derive from the canonical recipient key (equal to the hex peer_id by
+        // the self-certificate check, but case-normalized) so derivation is
+        // immune to a case-sensitive hex decoder.
+        val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(recipientKey)
+        return if (PeerIdValidator.isLibp2pPeerId(derived)) derived else null
+    }
+
     private fun buildRoutePeerCandidates(
         peerId: String,
         cachedRoutePeerId: String?,
@@ -8497,11 +9885,28 @@ open class MeshRepository(
             diagSources.add("peer_id=valid")
             candidates.add(peerId)
         } else {
-            diagSources.add("peer_id=invalid_format")
+            // UNIFICATION_DIAL: a canonical 64-hex peer id that self-certifies
+            // against the recipient public key is dialable via its derived
+            // libp2p form (same repo-native helper the sanitizer/discovery use).
+            // Without this the hex-bound ledger contact (e.g. AWS parity) is
+            // rejected as invalid_format here and can never be dialed.
+            val dialable = toDialableRoutePeerId(peerId, recipientPublicKey)
+            if (dialable != null) {
+                diagSources.add("peer_id=canonical_hex_derived")
+                candidates.add(dialable)
+            } else {
+                diagSources.add("peer_id=invalid_format")
+            }
         }
 
         val filtered = candidates
             .map { it.trim() }
+            .mapNotNull { candidate ->
+                // Normalize any self-certifying canonical-hex candidate to its
+                // dialable libp2p form so downstream dial code (which expects a
+                // libp2p peer id) can actually connect to it.
+                toDialableRoutePeerId(candidate, recipientPublicKey)
+            }
             .filter { candidate ->
                 candidate.isNotEmpty() &&
                     PeerIdValidator.isLibp2pPeerId(candidate) &&
@@ -8542,16 +9947,23 @@ open class MeshRepository(
             }
             .toList()
 
-        val fromLedger = (ledgerManager?.dialableAddresses() ?: emptyList())
+        val fromLedger = getDialableAddresses()
             .asSequence()
             .mapNotNull { entry ->
                 val candidate = entry.peerId?.trim().orEmpty()
-                if (candidate.isEmpty() || !PeerIdValidator.isLibp2pPeerId(candidate)) {
+                if (candidate.isEmpty()) {
                     return@mapNotNull null
                 }
+                // Identity-resolution hardening: a poisoned entry can claim the
+                // recipient's key for an unrelated transport peer (relay-hop
+                // attribution). Only accept bindings that are self-certifying.
                 val candidateKey = normalizePublicKey(entry.publicKey) ?: return@mapNotNull null
+                if (!isSelfCertifyingKeyBinding(candidate, candidateKey)) return@mapNotNull null
                 if (candidateKey != normalizedRecipientKey) return@mapNotNull null
-                candidate
+                // Emit the dialable libp2p form: a canonical 64-hex peer id that
+                // self-certifies is converted via the repo-native deriver (the
+                // hex form itself is not a dialable libp2p peer id).
+                toDialableRoutePeerId(candidate, candidateKey) ?: return@mapNotNull null
             }
             .toList()
 
@@ -8564,7 +9976,7 @@ open class MeshRepository(
     ): Boolean {
         val normalizedRoute = routePeerId.trim()
         if (normalizedRoute.isEmpty() || !PeerIdValidator.isLibp2pPeerId(normalizedRoute)) return false
-        if (isKnownRelay(normalizedRoute)) return false
+        // UNIFICATION_V2: All nodes are relays — no isKnownRelay gate (former filter removed).
 
         val normalizedRecipientKey = normalizePublicKey(recipientPublicKey) ?: return true
         val extractedKey = try {
@@ -8583,11 +9995,26 @@ open class MeshRepository(
         }
         if (discoveryMatch) return true
 
-        val ledgerMatch = (ledgerManager?.dialableAddresses() ?: emptyList()).any { entry ->
+        // Key derivation could not vouch for this route (extraction failed
+        // above). A ledger entry alone is not trustworthy here: poisoned
+        // entries attribute relay-hop keys to unrelated transport peers.
+        // Only accept the binding when an existing Contact record corroborates
+        // the route association (explicit user add or signed-message source).
+        val ledgerMatch = getDialableAddresses().any { entry ->
             entry.peerId?.trim() == normalizedRoute &&
                 normalizePublicKey(entry.publicKey) == normalizedRecipientKey
         }
-        return ledgerMatch
+        if (!ledgerMatch) return false
+
+        val contactCorroborated = try {
+            contactManager?.list().orEmpty().any { contact ->
+                contact.peerId == normalizedRoute ||
+                    parseRoutingHints(contact.notes).libp2pPeerId == normalizedRoute
+            }
+        } catch (_: Exception) {
+            false
+        }
+        return contactCorroborated
     }
 
     // Identity validation logic centralized in PeerIdValidator
@@ -8782,13 +10209,38 @@ open class MeshRepository(
         return false
     }
 
+    // UNIFICATION_V2: All nodes are relays — per "a node is a node" philosophy.
+    // Formerly distinguished bootstrap/infra relays; now every node is a full relay.
+    // isKnownRelay retained for API compat but always returns false (no special relay category).
     fun isKnownRelay(peerId: String): Boolean {
-        val normalized = peerId.trim()
-        if (isBootstrapRelayPeer(normalized)) return true
-        val info = _discoveredPeers.value.entries.firstOrNull {
-            it.key.equals(normalized, ignoreCase = true)
-        }?.value ?: return false
-        return info.isRelay && !info.isFull
+        return false
+    }
+
+    // UNIFICATION: contact-gated messaging + promiscuous relay mesh perfection.
+    // All nodes relay for anyone (isRelay unified), but only contacts may send messages.
+    // This helper is the single source of truth for "is this peer a known contact?"
+    // Used by sendMessage guard and inbound friend-request pairing logic. Verbose logs
+    // aid Android/Windows/Ubuntu pairing verification (peerId, transport, isKnownContact).
+    fun isKnownContact(peerId: String): Boolean {
+        val trimmed = peerId.trim()
+        if (trimmed.isEmpty()) return false
+        return try {
+            // Canonical path: public_key_hex is the stored peerId (addContact canonicalizes to hex)
+            val canonical = canonicalId(trimmed)
+            contactManager?.get(canonical)?.let { return true }
+            // Fallback: libp2p vs hex mismatch — match by publicKey or routing hint
+            val normalizedKey = normalizePublicKey(trimmed)?.lowercase()
+            val contacts = contactManager?.list().orEmpty()
+            contacts.any { c ->
+                normalizePublicKey(c.publicKey)?.lowercase() == normalizedKey ||
+                    c.peerId.equals(trimmed, ignoreCase = true) ||
+                    parseRoutingHints(c.notes).libp2pPeerId.equals(trimmed, ignoreCase = false) ||
+                    normalizePublicKey(c.publicKey)?.equals(trimmed, ignoreCase = true) == true
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "UNIFICATION isKnownContact check failed for ${trimmed.take(16)}")
+            false
+        }
     }
 
     private fun relayCircuitAddressesForPeer(targetPeerId: String): List<String> {
@@ -8816,17 +10268,15 @@ open class MeshRepository(
             }
         }
 
-        // 2. Dynamic Discovered Relays
+        // 2. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
         _discoveredPeers.value.entries.filter {
-            it.value.isRelay && !it.value.isFull && it.key != targetPeerId
+            it.key != targetPeerId && PeerIdValidator.isLibp2pPeerId(it.key)
         }.forEach { entry ->
             val relayPeerId = entry.key
-            if (PeerIdValidator.isLibp2pPeerId(relayPeerId)) {
-                val directAddrs = getDialHintsForRoutePeer(relayPeerId)
-                directAddrs.forEach { addr ->
-                    val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
-                    if (!circuits.contains(circuit)) circuits.add(circuit)
-                }
+            val directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            directAddrs.forEach { addr ->
+                val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
+                if (!circuits.contains(circuit)) circuits.add(circuit)
             }
         }
 
@@ -8869,13 +10319,8 @@ open class MeshRepository(
         return ids
     }
 
+    // UNIFICATION_V2: All nodes are relays — no bootstrap relay distinction.
     fun isBootstrapRelayPeer(peerId: String): Boolean {
-        if (peerId.isBlank()) return false
-        val knownRelays = collectKnownRelayPeerIds()
-        if (peerId in knownRelays) return true
-        // Also check with /p2p/ prefix in case callers include it
-        val stripped = peerId.substringAfterLast("/p2p/")
-        if (stripped != peerId && stripped in knownRelays) return true
         return false
     }
 
@@ -9922,11 +11367,18 @@ open class MeshRepository(
                             null
                         }
 
-                        val publicKey = if (!extractedKey.isNullOrEmpty()) {
-                            extractedKey
+                        // SELF-CERTIFYING KEY BINDING: only bind a key derived
+                        // from the peer id itself. Never store the peer_id AS
+                        // the public key -- an unverified placeholder poisons
+                        // identity resolution and receipt encryption. Keep an
+                        // empty-key record with a notes annotation instead.
+                        val publicKey = extractedKey?.trim().orEmpty()
+                        val notes = if (publicKey.isEmpty()) {
+                            "Emergency contact recovered from message history; " +
+                                "public_key unavailable: not self-certifying from peer id; " +
+                                "awaiting verified key"
                         } else {
-                            // Fallback: use peer ID as placeholder (will be updated later via federation)
-                            peerId
+                            "Emergency contact recovered from message history"
                         }
 
                         val contact = uniffi.api.Contact(
@@ -9936,14 +11388,14 @@ open class MeshRepository(
                             publicKey = publicKey,
                             addedAt = System.currentTimeMillis().toULong(),
                             lastSeen = null,
-                            notes = "Emergency contact recovered from message history",
+                            notes = notes,
                             lastKnownDeviceId = null,
                             verifiedAt = null,
                             isTombstone = false
                         )
                         contacts.add(contact)
                         recoveredCount++
-                        Timber.d("Emergency recovery: Created contact for ${peerId.take(8)}... with key: ${publicKey.take(8)}...")
+                        Timber.d("Emergency recovery: Created contact for ${peerId.take(8)}... with key: ${publicKey.take(8).ifEmpty { "<none>" }}...")
                     } catch (e: Exception) {
                         Timber.w("Emergency recovery: Failed to create contact for $peerId: ${e.message}")
                     }

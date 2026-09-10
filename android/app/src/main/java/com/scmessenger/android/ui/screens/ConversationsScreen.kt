@@ -2,8 +2,8 @@ package com.scmessenger.android.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -25,6 +25,7 @@ import com.scmessenger.android.service.MeshEventBus
 import androidx.compose.ui.res.stringResource
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.viewmodels.ConversationsViewModel
+import com.scmessenger.android.utils.displayName
 import com.scmessenger.android.utils.toEpochMillis
 import java.text.SimpleDateFormat
 import java.util.*
@@ -146,32 +147,61 @@ fun ConversationsScreen(
                     }
                 }
             } else {
-                // Conversation list
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                // FIX(Compose-crash): LazyColumn prefetch crash (LayoutNode.onChildRemoved NPE,
+                // MutableVector.add ArrayIndexOutOfBounds) — add stable key + contentType and
+                // avoid recomputing FFI contact lookup during composition without remember.
+                // Conversations list is grouped by peerId (stable identity) so key is peerId;
+                // contentType isolates ConversationItem from header/footer recomposition.
+                // Deduplicate to prevent duplicate-key MutableVector corruption.
+                val stableConversations = remember(conversations) {
+                    conversations.filter { (peerId, msgs) -> peerId.isNotBlank() && msgs.isNotEmpty() }
+                        .distinctBy { (peerId, _) -> peerId }
+                }
+                // FIX: Column+verticalScroll to avoid LazyColumn SlotTable crash on destroy
+                // (SlotTableKt.dataAnchor ArrayIndexOutOfBounds via PrefetchHandleProvider/
+                // LayoutNodeSubcompositionsState.onRelease during MainActivity destroy at 19:42).
+                // Previous LazyColumn prefetch raced with SlotTable disposal on rapid conversation
+                // updates (messageEvents, receipt events). Column eliminates prefetch entirely.
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(conversations) { (peerId, messages) ->
-                        val contact = viewModel.getContactForPeer(peerId)
-                        val localNickname = contact?.localNickname?.trim().orEmpty()
-                        val federatedNickname = contact?.nickname?.trim().orEmpty()
-                        val displayName = when {
-                            localNickname.isNotEmpty() -> localNickname
-                            federatedNickname.isNotEmpty() -> federatedNickname
-                            else -> peerId.take(8) + "..."
+                    stableConversations.forEach { (peerId, messages) ->
+                        // Memoize FFI-backed lookups — previously getContactForPeer() + resolveDeliveryState()
+                        // were called unconditionally on every recomposition inside LazyColumn's item lambda,
+                        // triggering FFI on the UI thread during prefetch and amplifying layout thrash.
+                        // Use key(peerId) to ensure stable identity for SwipeToDismissBox state; without
+                        // key, rememberSwipeToDismissBoxState could be reused across peerIds during
+                        // recomposition, corrupting SlotTable on dispose.
+                        key(peerId) {
+                            val contact = remember(peerId) { viewModel.getContactForPeer(peerId) }
+                            val idFallback = peerId.take(8) + "..."
+                            val displayName = contact?.displayName(idFallback) ?: idFallback
+                            val deliveryState = remember(messages.firstOrNull()?.id) {
+                                messages.firstOrNull()?.let { viewModel.resolveDeliveryState(it) }
+                                    ?: DeliveryStatePresentation(
+                                        state = DeliveryStateSurface.PENDING,
+                                        label = DeliveryStateSurface.PENDING.label,
+                                        detail = DeliveryStateSurface.PENDING.detail
+                                    )
+                            }
+                            if (messages.isNotEmpty()) {
+                                ConversationItem(
+                                    displayName = displayName,
+                                    peerId = peerId,
+                                    messages = messages,
+                                    onNavigateToChat = onNavigateToChat,
+                                    onRequestDelete = {
+                                        conversationToDelete = peerId to messages
+                                        showDeleteDialog = true
+                                    },
+                                    deliveryState = deliveryState
+                                )
+                            }
                         }
-                        ConversationItem(
-                            displayName = displayName,
-                            peerId = peerId,
-                            messages = messages,
-                            onNavigateToChat = onNavigateToChat,
-                            onRequestDelete = {
-                                conversationToDelete = peerId to messages
-                                showDeleteDialog = true
-                            },
-                            deliveryState = viewModel.resolveDeliveryState(messages.first())
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
@@ -209,13 +239,8 @@ fun ConversationsScreen(
             text = {
                 val (peerId, _) = conversationToDelete ?: return@AlertDialog
                 val contact = viewModel.getContactForPeer(peerId)
-                val localNickname = contact?.localNickname?.trim().orEmpty()
-                val federatedNickname = contact?.nickname?.trim().orEmpty()
-                val displayName = when {
-                    localNickname.isNotEmpty() -> localNickname
-                    federatedNickname.isNotEmpty() -> federatedNickname
-                    else -> "${peerId.take(8)}..."
-                }
+                val idFallback = "${peerId.take(8)}..."
+                val displayName = contact?.displayName(idFallback) ?: idFallback
                 Text(stringResource(R.string.conversations_dialog_delete_description, displayName))
             },
             confirmButton = {

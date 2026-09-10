@@ -315,7 +315,10 @@ fn validate_identity_owner(
     claimed_identity_id: &str,
     mismatch_error: &'static str,
 ) -> Result<(), &'static str> {
-    let derived_identity_id = hex::encode(blake3::hash(public_key).as_bytes());
+    // UNIFICATION_V2_IDENTITY: Use single source of truth for identity_id derivation.
+    let public_key_hex = hex::encode(public_key);
+    let derived_identity_id =
+        crate::identity::identity_id_from_public_key_hex(&public_key_hex).ok_or(mismatch_error)?;
     if !derived_identity_id.eq_ignore_ascii_case(claimed_identity_id) {
         return Err(mismatch_error);
     }

@@ -7270,9 +7270,19 @@ struct PeerIdValidator {
         }
     }
 
-    /// Checks if the given string starts with common libp2p Peer ID prefixes.
+    /// Checks if the given string is a well-formed Base58BTC libp2p peer id.
+    ///
+    /// Mirrors Android's `PeerIdValidator.isLibp2pPeerId`: prefix + reasonable
+    /// length + STRICT Base58BTC charset. Prefix-only checks accept malformed
+    /// ids (non-ASCII lookalikes, '+'/'/' Base64 residue) that can poison
+    /// routing hints and identity resolution.
     static func isLibp2pPeerId(_ id: String) -> Bool {
-        return id.hasPrefix("12D3Koo") || id.hasPrefix("Qm")
+        let base58 = Set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+        let validCharset = id.allSatisfy { base58.contains($0) }
+        return validCharset && (
+            (id.hasPrefix("12D3Koo") && (46...56).contains(id.count)) ||
+            (id.hasPrefix("Qm") && (44...50).contains(id.count))
+        )
     }
 
     /// Performs a case-sensitive comparison after normalization.

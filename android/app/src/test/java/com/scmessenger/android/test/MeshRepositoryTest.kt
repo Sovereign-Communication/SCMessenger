@@ -294,6 +294,75 @@ class MeshRepositoryTest {
     }
 
     // -----------------------------------------------------------------------
+    // NODE-TRANSPORT-VIS-001: multiaddr transport parsing
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `parseTransportsFromMultiaddrs detects BLE`() {
+        val result = MeshRepository.parseTransportsFromMultiaddrs(
+            listOf("/ble/AA:BB:CC:DD:EE:FF/p2p/12D3KooWTest")
+        )
+        assertEquals(setOf(MeshRepository.TRANSPORT_BLE), result)
+    }
+
+    @Test
+    fun `parseTransportsFromMultiaddrs distinguishes LAN TCP from Internet TCP`() {
+        val result = MeshRepository.parseTransportsFromMultiaddrs(
+            listOf(
+                "/ip4/192.168.1.50/tcp/9001",
+                "/ip4/52.14.99.210/tcp/9001"
+            )
+        )
+        assertEquals(
+            setOf(MeshRepository.TRANSPORT_TCP_LAN, MeshRepository.TRANSPORT_INTERNET),
+            result
+        )
+    }
+
+    @Test
+    fun `parseTransportsFromMultiaddrs detects relay circuits`() {
+        val result = MeshRepository.parseTransportsFromMultiaddrs(
+            listOf("/ip4/52.14.99.210/tcp/9001/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWPeer")
+        )
+        assertTrue(result.contains(MeshRepository.TRANSPORT_RELAY_CIRCUIT))
+        assertTrue(result.contains(MeshRepository.TRANSPORT_INTERNET))
+    }
+
+    @Test
+    fun `parseTransportsFromMultiaddrs detects wifi aware and wifi direct`() {
+        val result = MeshRepository.parseTransportsFromMultiaddrs(
+            listOf("/wifi-aware/example", "/wifi-direct/example")
+        )
+        assertEquals(
+            setOf(MeshRepository.TRANSPORT_WIFI_AWARE, MeshRepository.TRANSPORT_WIFI_DIRECT),
+            result
+        )
+    }
+
+    @Test
+    fun `parseTransportsFromMultiaddrs handles empty and blank input`() {
+        assertTrue(MeshRepository.parseTransportsFromMultiaddrs(emptyList()).isEmpty())
+        assertTrue(MeshRepository.parseTransportsFromMultiaddrs(listOf("", "  ")).isEmpty())
+    }
+
+    // -----------------------------------------------------------------------
+    // NODE-RELAY-LABEL-002: infrastructure agent detection
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `isInfrastructureAgent detects scm-always-on-node daemon`() {
+        assertTrue(MeshRepository.isInfrastructureAgent("scm-always-on-node/0.4.0"))
+        assertTrue(MeshRepository.isInfrastructureAgent("Scm-Always-On-Node/0.4.0"))
+    }
+
+    @Test
+    fun `isInfrastructureAgent rejects regular peer agents`() {
+        assertFalse(MeshRepository.isInfrastructureAgent("scmessenger/0.4.0/android"))
+        assertFalse(MeshRepository.isInfrastructureAgent("scmessenger/0.4.0/headless/"))
+        assertFalse(MeshRepository.isInfrastructureAgent(""))
+    }
+
+    // -----------------------------------------------------------------------
     // Passphrase Migration & Storage
     // -----------------------------------------------------------------------
 

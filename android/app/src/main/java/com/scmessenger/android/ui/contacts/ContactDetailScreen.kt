@@ -28,6 +28,8 @@ import com.scmessenger.android.ui.components.IdenticonFromPeerId
 import com.scmessenger.android.ui.theme.StatusOnline
 import com.scmessenger.android.ui.theme.StatusOffline
 import com.scmessenger.android.ui.viewmodels.ContactsViewModel
+import com.scmessenger.android.utils.displayName
+import com.scmessenger.android.utils.displayNames
 import com.scmessenger.android.utils.formatAsDateTime
 
 /**
@@ -60,7 +62,12 @@ fun ContactDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(contact?.localNickname ?: contact?.nickname ?: stringResource(R.string.contact_detail_title)) },
+                title = {
+                    Text(
+                        contact?.displayName(stringResource(R.string.contact_detail_title))
+                            ?: stringResource(R.string.contact_detail_title)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_action_dismiss))
@@ -212,6 +219,9 @@ private fun ContactDetailContent(
             )
         }
 
+        // Dual-nickname resolution shared by the identity and metadata cards.
+        val names = contact.displayNames()
+
         // Identity card
         Card {
             Column(
@@ -228,13 +238,13 @@ private fun ContactDetailContent(
 
                 val unknownFallback = stringResource(R.string.unknown_contact)
                 Text(
-                    text = contact.localNickname ?: contact.nickname ?: unknownFallback,
+                    text = names.primary ?: names.secondary ?: unknownFallback,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
-                if (contact.localNickname != null && contact.nickname != null) {
+                if (names.primary != null && names.secondary != null) {
                     Text(
-                        text = "@${contact.nickname}",
+                        text = "(${names.secondary})",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -338,6 +348,19 @@ private fun ContactDetailContent(
                 contact.lastSeen?.let {
                     MetadataRow(label = stringResource(R.string.contact_detail_label_last_seen), value = it.formatAsDateTime())
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Dual-nickname fields: the user's own name for this contact is
+                // editable (top-bar edit); the peer's chosen nickname is read-only.
+                MetadataRow(
+                    label = stringResource(R.string.contact_detail_label_your_name),
+                    value = names.primary ?: stringResource(R.string.contact_detail_not_set)
+                )
+                MetadataRow(
+                    label = stringResource(R.string.contact_detail_label_chosen_nickname),
+                    value = names.secondary ?: stringResource(R.string.contact_detail_not_set)
+                )
 
                 contact.notes?.let {
                     Spacer(modifier = Modifier.height(8.dp))

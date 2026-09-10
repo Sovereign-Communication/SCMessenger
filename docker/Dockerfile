@@ -107,7 +107,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Environment variables
 ENV RUST_LOG=info
 ENV SCM_CONFIG_DIR=/root/.config/scmessenger
-ENV SCM_DATA_DIR=/root/.local/share/scmessenger
+ENV SCM_DATA_DIR=/data
+ENV SCMESSENGER_DATA_DIR=/data
 ENV LISTEN_PORT=9000
 
 # Expose ports

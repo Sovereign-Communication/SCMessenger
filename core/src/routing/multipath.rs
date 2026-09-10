@@ -61,11 +61,11 @@ impl DeliveryPath {
 
 /// Manages multi-path message delivery across redundant routes.
 ///
-/// Paths are indexed by recipient hint (`[u8; 4]`) for O(1) lookup
+/// Paths are indexed by recipient hint (`[u8; 8]`) for O(1) lookup
 /// from the routing engine's decision path.
 #[derive(Debug, Clone)]
 pub struct MultiPathDelivery {
-    paths: HashMap<[u8; 4], Vec<DeliveryPath>>,
+    paths: HashMap<[u8; 8], Vec<DeliveryPath>>,
     max_paths_per_hint: usize,
 }
 
@@ -88,7 +88,7 @@ impl MultiPathDelivery {
     ///
     /// If a path with the same `path_id` already exists under this hint,
     /// it is replaced. Otherwise the path is appended if under the limit.
-    pub fn register_path(&mut self, hint: [u8; 4], path: DeliveryPath) {
+    pub fn register_path(&mut self, hint: [u8; 8], path: DeliveryPath) {
         let paths = self.paths.entry(hint).or_default();
         // Update existing path with same path_id
         if let Some(existing) = paths.iter_mut().find(|p| p.path_id == path.path_id) {
@@ -101,7 +101,7 @@ impl MultiPathDelivery {
     }
 
     /// Get all active paths for a recipient hint, sorted by score descending.
-    pub fn active_paths(&self, hint: &[u8; 4]) -> Vec<&DeliveryPath> {
+    pub fn active_paths(&self, hint: &[u8; 8]) -> Vec<&DeliveryPath> {
         let mut result: Vec<&DeliveryPath> = self
             .paths
             .get(hint)

@@ -21,6 +21,7 @@ import com.scmessenger.android.ui.components.QrCodeImage
 import com.scmessenger.android.ui.theme.StatusOffline
 import com.scmessenger.android.ui.theme.StatusOnline
 import com.scmessenger.android.ui.viewmodels.ContactsViewModel
+import com.scmessenger.android.utils.displayName
 import com.scmessenger.android.utils.formatAsDateTime
 
 /**
@@ -70,7 +71,7 @@ fun VerifySafetyNumberScreen(
         val safetyNumberRaw = remember(contact.publicKey, identityInfo) {
             viewModel.computeSafetyNumber(contact.publicKey)
         }
-        val displayName = contact.localNickname ?: contact.nickname ?: contact.peerId.take(16)
+        val displayName = contact.displayName(contact.peerId.take(16))
 
         Column(
             modifier = Modifier

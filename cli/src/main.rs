@@ -11,6 +11,7 @@ mod ble_mesh;
 mod bootstrap;
 mod config;
 mod ledger;
+mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
@@ -721,6 +722,75 @@ mod dial_scheduler_tests {
             &mut seen_order
         ));
         assert!(seen_ids.is_empty());
+    }
+
+    /// SELF-CERTIFYING KEY BINDING: an identity envelope without a usable
+    /// public key must create a placeholder contact with an EMPTY key (plus a
+    /// notes annotation), never peer_id-as-public_key.
+    #[test]
+    fn envelope_learning_without_key_stores_placeholder_not_peer_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = IronCore::with_storage(path_to_string(&dir.path().join("storage")).unwrap());
+        let contacts = core.contacts_store_manager();
+
+        let unknown_peer = "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1";
+        let decoded = scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope {
+            nickname: Some("Alice".to_string()),
+            public_key: Some("zz-not-hex".to_string()),
+            ..Default::default()
+        };
+
+        learn_sender_identity_from_envelope(&contacts, unknown_peer, &decoded);
+
+        let stored = contacts
+            .get(unknown_peer.to_string())
+            .unwrap()
+            .expect("contact");
+        assert_eq!(stored.nickname.as_deref(), Some("Alice"));
+        assert!(
+            stored.public_key.is_empty(),
+            "placeholder key must be empty, not poisoned"
+        );
+        assert_ne!(stored.public_key, unknown_peer);
+        assert!(stored
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("awaiting verified key"));
+    }
+
+    /// A signed envelope carrying a valid Ed25519 key backfills the contact
+    /// (signed-source corroboration); the binding must survive restarts.
+    #[test]
+    fn envelope_learning_with_valid_key_backfills_contact() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = IronCore::with_storage(path_to_string(&dir.path().join("storage")).unwrap());
+        let contacts = core.contacts_store_manager();
+
+        let mut seed = [0u8; 32];
+        seed[..10].copy_from_slice(b"cli-env-kp");
+        let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+        let kp = libp2p::identity::ed25519::Keypair::from(signing);
+        let key_hex = hex::encode(kp.public().to_bytes());
+        let peer_id = libp2p::identity::PublicKey::from(kp.public())
+            .to_peer_id()
+            .to_string();
+
+        // Pre-existing placeholder record (legacy poison shape) gets repaired.
+        contacts
+            .add(Contact::new(peer_id.clone(), peer_id.clone()))
+            .unwrap();
+
+        let decoded = scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope {
+            nickname: Some("Bob".to_string()),
+            public_key: Some(key_hex.clone()),
+            ..Default::default()
+        };
+        learn_sender_identity_from_envelope(&contacts, &peer_id, &decoded);
+
+        let stored = contacts.get(peer_id.clone()).unwrap().expect("contact");
+        assert_eq!(stored.public_key.to_lowercase(), key_hex);
+        assert_ne!(stored.public_key.to_lowercase(), peer_id);
     }
 }
 
@@ -1933,8 +2003,13 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // ── Outbox — persistent store-and-forward queue ──────────────────────
     let outbox = Outbox::open_default(&data_dir).map_err(|e| anyhow::anyhow!(e))?;
 
-    // ── Connection Ledger — persistent peer memory ──────────────────────
-    let connection_ledger = ledger::ConnectionLedger::load(&data_dir)?;
+    // ── Connection Ledger — dial state over the single core store ───────
+    // The core store is loaded by IronCore::with_storage above; this facade
+    // attaches to the same storage-path entry state. A legacy peers.json is
+    // migrated once at the bootstrap dial sweep (where own addresses known).
+    let connection_ledger = ledger::ConnectionLedger::new(
+        scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
+    );
 
     // Subscribe to any topics discovered in the ledger from past sessions
     let known_topics = connection_ledger.all_known_topics();
@@ -2104,6 +2179,25 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         });
     }
 
+    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // A node whose address changed can never rejoin: nobody can dial it at
+    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
+    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
+    // then every 120s) until at least one peer is connected; re-arm when the
+    // peer count drops back to zero. The candidate list comes from the core
+    // ledger (proven + seed tiers), which the T2 unification populated from
+    // peers.json. One long-lived task -- never one task per attempt.
+    let seed_dial_swarm = swarm_handle.clone();
+    let seed_dial_core = core.clone();
+    tokio::spawn(async move {
+        let mut sweep: u32 = 0;
+        loop {
+            sweep += 1;
+            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+    });
+
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
     let dial_scheduler = Arc::new(DialScheduler::new(ledger.clone(), swarm_handle.clone()));
@@ -2116,21 +2210,30 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         let scheduler = Arc::clone(&dial_scheduler);
         let ledger_clone = ledger.clone();
         let swarm_clone = swarm_handle.clone();
+        let data_dir_migrate = data_dir.clone();
 
         tokio::spawn(async move {
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
             let addrs = {
                 let l = ledger_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                match l.run_legacy_migration(
+                    &data_dir_migrate,
+                    Some(&local_peer_id.to_string()),
+                    &my_addrs,
+                ) {
+                    Ok(report) if report.offered > 0 => {
+                        println!(
+                            "[INFO] Migrated {} of {} legacy peers.json entries into the core ledger ({} rejected, archived={})",
+                            report.imported, report.offered, report.rejected, report.archived
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("[WARNING] legacy peers.json migration failed: {:#}", e);
+                    }
+                }
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
-            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-            let addrs = ledger::prioritize_dial_candidates(
-                addrs
-                    .into_iter()
-                    .filter(|(m, _)| {
-                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                    })
-                    .collect(),
-            );
 
             // Dial all known addresses (bootstrap + discovered)
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
@@ -2164,19 +2267,6 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         }
     });
 
-    // Periodic ledger save (every 60 seconds)
-    let ledger_save_clone = ledger.clone();
-    let data_dir_save = data_dir.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            let mut l = ledger_save_clone.lock().await;
-            if let Err(e) = l.save(&data_dir_save) {
-                tracing::error!("Failed to save ledger: {}", e);
-            }
-        }
-    });
-
     // P0_TRANSPORT_001: Periodic address refresh - before dialing from ledger,
     // send an Identify probe to refresh peer addresses. This ensures we have
     // current listen addresses even if peers restarted with new ports.
@@ -2186,9 +2276,10 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
+            let my_addrs = get_local_transport_addresses(&swarm_refresh_clone).await;
             let addrs = {
                 let l = ledger_refresh_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
 
             // For each peer, try to refresh their address via Identify
@@ -2207,6 +2298,61 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
             }
         }
     });
+
+    // EXTERNAL-ADDRESS AWARENESS: on daemon start and every 10 minutes,
+    // determine this node's externally observed address(es) (the same source
+    // the GET /api/external-address endpoint reports), log the refresh, and
+    // register them in the local route tables (hint store + ledger) so peers
+    // can dial us and our outbound identity envelopes always carry fresh
+    // external reachables.
+    {
+        let ext_swarm = swarm_handle.clone();
+        let ext_local_peer = local_peer_id;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(600));
+            ticker.tick().await; // first tick is immediate (daemon start)
+            loop {
+                ticker.tick().await;
+                match ext_swarm.get_external_addresses().await {
+                    Ok(sockets) => {
+                        let mut addrs: Vec<String> = Vec::new();
+                        for socket in sockets {
+                            if socket.ip().is_unspecified() || socket.port() == 0 {
+                                continue;
+                            }
+                            let host = match socket.ip() {
+                                std::net::IpAddr::V4(ip) => format!("/ip4/{ip}"),
+                                std::net::IpAddr::V6(ip) => format!("/ip6/{ip}"),
+                            };
+                            let value = format!("{host}/tcp/{}", socket.port());
+                            if !addrs.contains(&value) {
+                                addrs.push(value);
+                            }
+                        }
+                        if addrs.is_empty() {
+                            tracing::debug!(
+                                "EXTERNAL_ADDRESS_REFRESH: no externally observed addresses yet for {}",
+                                ext_local_peer
+                            );
+                            continue;
+                        }
+                        tracing::info!(
+                            "EXTERNAL_ADDRESS_REFRESH peer={} addrs={:?}",
+                            ext_local_peer,
+                            addrs
+                        );
+                        scmessenger_core::transport::hint_store::annotate_peer_hints(
+                            ext_local_peer,
+                            &addrs,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!("EXTERNAL_ADDRESS_REFRESH failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     // Start control API server
     let api_ctx = api::ApiContext {
@@ -2238,8 +2384,6 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // Stdin handling
     // Ctrl+C handler for graceful shutdown
     let ctrl_c_swarm = swarm_handle.clone();
-    let ctrl_c_ledger = ledger.clone();
-    let ctrl_c_data_dir = data_dir.clone();
 
     // Duplicate network deliveries must not create duplicate machine replies.
     // This cache is intentionally process-local and bounded; delivery retries
@@ -2287,14 +2431,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                     _ = tokio::signal::ctrl_c() => {
                         println!("\nCaught Ctrl+C, shutting down gracefully...");
                         let _ = ctrl_c_swarm.shutdown().await;
-                        {
-                            let mut l = ctrl_c_ledger.lock().await;
-                            if let Err(e) = l.save(&ctrl_c_data_dir) {
-                                tracing::warn!("Failed to save ledger on shutdown: {}", e);
-                            } else {
-                                tracing::info!("Ledger saved on shutdown");
-                            }
-                        }
+                        // The core store persists its own mutations; nothing
+                        // to flush on shutdown.
+                        let _ledger_guard = ledger.lock().await;
                         break;
                     }
 
@@ -2365,8 +2504,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 // Record disconnect in ledger (useful for backoff tracking)
                                 // We find the entry by PeerID and record failure
                                 let mut l = ledger_rx.lock().await;
-                                if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                                    let multiaddr = entry.multiaddr.clone();
+                                if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string())
+                                {
                                     l.record_failure(&multiaddr);
                                 }
                                 // Release the per-peer concurrent-connection
@@ -2399,10 +2538,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                     print!("> ");
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-                                    // Save immediately after learning new peers
-                                    if let Err(e) = l.save(&data_dir) {
-                                        tracing::error!("Failed to save ledger: {}", e);
-                                    }
+                                    // The core store persists its own updates;
+                                    // nothing to flush here.
 
                                     // Dial newly discovered peers
                                     let new_entries = ledger::prioritize_dial_candidates(
@@ -2482,8 +2619,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 tracing::info!("Topic discovered from {}: {}", peer_id, topic);
                                 // Record the topic in the ledger for this peer
                                 let mut l = ledger_rx.lock().await;
-                                if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                                    let multiaddr = entry.multiaddr.clone();
+                                if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string())
+                                {
                                     l.record_topic(&multiaddr, &topic);
                                 }
                             }
@@ -2518,7 +2655,25 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             }
                                         }
                                         MessageType::Text => {
-                                            let text = msg.text_content().unwrap_or_else(|| "<binary>".into());
+                                            // Identity-envelope parity with Android/iOS:
+                                            // inbound chat text may be wrapped in a
+                                            // scm.message.identity.v1 envelope. Decode it
+                                            // for display/history and learn the sender's
+                                            // nickname + route hints.
+                                            let raw_text =
+                                                msg.text_content().unwrap_or_else(|| "<binary>".into());
+                                            let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                            if let Some(decoded) = decoded_envelope.as_ref() {
+                                                learn_sender_identity_from_envelope(
+                                                    &contacts_rx,
+                                                    &peer_id.to_string(),
+                                                    decoded,
+                                                );
+                                            }
+                                            let text = decoded_envelope
+                                                .as_ref()
+                                                .map(|d| d.text.clone())
+                                                .unwrap_or(raw_text);
                                             let sender_name = contacts_rx.get(peer_id.to_string())
                                                 .ok().flatten()
                                                 .map(|c| c.display_name().to_string())
@@ -2549,17 +2704,39 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 let _ = ui_broadcast.send(server::UiOutbound::JsonRpc(v));
                                             }
 
-                                            // Send delivery receipt back to sender.
-                                            if let Some(ref pk_hex) = sender_public_key_hex {
-                                                match core_rx.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
-                                                    Ok(ack_bytes) => {
-                                                        tracing::debug!("Sending delivery ACK for {} to {}", msg.id, peer_id);
-                                                        if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
-                                                            tracing::debug!("Failed to send delivery ACK to {}: {}", peer_id, e);
+                                            // Send delivery receipt back to the sender -- but ONLY
+                                            // for a genuine inbound user message. UNIFICATION_V3 D2:
+                                            // suppress acking scm.message.identity.v1 SYNC/CONFIG
+                                            // metadata (kind != "text", e.g. identity_sync /
+                                            // history_sync) that the sender emits send-and-forget
+                                            // with no outbox record, and a message that looped back
+                                            // to its own origin (sender == local node). NOTE: every
+                                            // outbound CHAT message is also wrapped in an identity
+                                            // envelope with kind == "text", so only kinds other than
+                                            // "text" are treated as metadata -- acking those produced
+                                            // the receiver's "[RECEIPT-RX] IGNORING ...
+                                            // direction=missing" stampede.
+                                            let is_identity_metadata = decoded_envelope
+                                                .as_ref()
+                                                .map(|d| d.kind.as_str() != "text")
+                                                .unwrap_or(false);
+                                            let local_pk = core_rx.get_identity_info().public_key_hex;
+                                            let is_self_loop = local_pk
+                                                .as_deref()
+                                                .map(|pk| sender_public_key_hex.as_deref() == Some(pk))
+                                                .unwrap_or(false);
+                                            if !is_identity_metadata && !is_self_loop {
+                                                if let Some(ref pk_hex) = sender_public_key_hex {
+                                                    match core_rx.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
+                                                        Ok(ack_bytes) => {
+                                                            tracing::debug!("Sending delivery ACK for {} to {}", msg.id, peer_id);
+                                                            if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
+                                                                tracing::debug!("Failed to send delivery ACK to {}: {}", peer_id, e);
+                                                            }
                                                         }
-                                                    }
-                                                    Err(e) => {
-                                                        tracing::debug!("Failed to prepare delivery ACK: {}", e);
+                                                        Err(e) => {
+                                                            tracing::debug!("Failed to prepare delivery ACK: {}", e);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2571,8 +2748,12 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             // evidence; this acknowledgement exists only
                                             // for the explicit CLI test-harness mode.
                                             if auto_reply {
-                                                let incoming =
-                                                    msg.text_content().unwrap_or_default();
+                                                let incoming = decoded_envelope
+                                                    .as_ref()
+                                                    .map(|d| d.text.clone())
+                                                    .unwrap_or_else(|| {
+                                                        msg.text_content().unwrap_or_default()
+                                                    });
                                                 if !should_send_auto_reply(
                                                     &msg.id,
                                                     &incoming,
@@ -2731,11 +2912,21 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
 
                                      if let Some(pk) = pk_opt {
                                          // prepare_message_with_id automatically saves outgoing history
-                                         if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), message.clone(), scmessenger_core::MessageType::Text, None) {
-                                              let sent = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok()
-                                                  || swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
+                                         // Identity-envelope parity: wrap chat text so the
+                                         // receiver learns our nickname + route hints.
+                                         let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
+                                          if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
+                                               let ble_ok = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok();
+                                               let swarm_ok = swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
+                                               if swarm_ok {
+                                                   // True transport ACK (R2): release the outbox entry without a
+                                                   // Delivered receipt. BLE gatt is fire-and-forget, so only the
+                                                   // swarm path marks sent.
+                                                   core_rx.mark_message_sent(prep.message_id.clone());
+                                               }
+                                               let sent = ble_ok || swarm_ok;
 
-                                              if sent {
+                                               if sent {
                                                   let mid = id.clone().unwrap_or_default();
                                                   let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageStatus {
                                                       message_id: mid.clone(),
@@ -2879,11 +3070,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         let peer_count = peers_rx.lock().await.len();
                                         let (known_peers, bootstrap_nodes) = {
                                             let l = ledger_rx.lock().await;
-                                            let known = l
-                                                .entries
-                                                .values()
-                                                .filter(|e| !e.known_topics.is_empty())
-                                                .count();
+                                            let known = l.entry_count_with_known_topics();
                                             (known, web_ctx.bootstrap_nodes.clone())
                                         };
                                         let topo = MeshTopologyUpdateParams {
@@ -2922,13 +3109,16 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             push_err(-32002, "No public key for recipient".into());
                                             continue;
                                         };
-        match core_rx.prepare_message_with_id(pk.clone(), message.clone(), scmessenger_core::MessageType::Text, None) {
+                                        let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
+        match core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                             Ok(prep) => {
                                                 if swarm_handle
                                                     .send_message(target, prep.envelope_data, None, None)
                                                     .await
                                                     .is_ok()
                                                 {
+                                                    // True transport ACK (R2): release the outbox entry.
+                                                    core_rx.mark_message_sent(prep.message_id.clone());
                                                     let mid = msg_id.clone().unwrap_or_default();
                                                     let mut m = serde_json::Map::new();
                                                     m.insert("status".to_string(), "sent".into());
@@ -2978,12 +3168,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                             println!("Shutting down...");
                             let _ = swarm_handle.shutdown().await;
                             {
-                                let mut l = ctrl_c_ledger.lock().await;
-                                if let Err(e) = l.save(&ctrl_c_data_dir) {
-                                    tracing::warn!("Failed to save ledger on quit: {}", e);
-                                } else {
-                                    tracing::info!("Ledger saved on quit");
-                                }
+                                let _ledger_guard = ledger.lock().await;
                             }
                             break;
                         }
@@ -3009,6 +3194,107 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     }
 
     Ok(())
+}
+
+/// Learn sender identity from an inbound `scm.message.identity.v1` envelope:
+/// upsert the sender's nickname into contacts (fill blanks / replace synthetic
+/// placeholders, never a user-set local nickname — mirrors Android's
+/// `selectAuthoritativeNickname`) and backfill the public key for unknown
+/// peers so replies can be encrypted.
+fn learn_sender_identity_from_envelope(
+    contacts: &ContactManager,
+    peer_id: &str,
+    decoded: &scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope,
+) {
+    // Route hints first: envelope-sourced reachables feed the hint store so
+    // outbound sends can dial them when local candidates are stale.
+    if let Ok(sender_peer) = peer_id.parse::<libp2p::PeerId>() {
+        let mut hints = decoded.connection_hints.clone();
+        for extra in decoded
+            .external_addresses
+            .iter()
+            .chain(decoded.listeners.iter())
+        {
+            hints.push(extra.clone());
+        }
+        scmessenger_core::transport::hint_store::annotate_peer_hints(sender_peer, &hints);
+        if !hints.is_empty() {
+            tracing::debug!(
+                "Learned {} route hint(s) from identity envelope of {}",
+                hints.len(),
+                peer_id
+            );
+        }
+    }
+
+    let valid_key = decoded
+        .public_key
+        .as_deref()
+        .filter(|pk| pk.len() == 64 && pk.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|pk| pk.to_lowercase());
+
+    match contacts.get(peer_id.to_string()) {
+        Ok(Some(mut contact)) => {
+            let authoritative =
+                scmessenger_core::message::identity_envelope::select_authoritative_nickname(
+                    decoded.nickname.as_deref(),
+                    contact.nickname.as_deref(),
+                );
+            if authoritative.as_deref() != contact.nickname.as_deref() {
+                let changed = authoritative.clone();
+                if let Err(e) = contacts.set_nickname(peer_id.to_string(), changed) {
+                    tracing::debug!(
+                        "Failed to learn nickname from identity envelope for {}: {:?}",
+                        peer_id,
+                        e
+                    );
+                } else if let Some(ref name) = authoritative {
+                    tracing::info!("Learned nickname '{}' for {}", name, peer_id);
+                }
+            }
+            // Backfill a missing/placeholder public key from the envelope.
+            let key_is_placeholder = contact.public_key.is_empty()
+                || contact.public_key.eq_ignore_ascii_case(&contact.peer_id);
+            if key_is_placeholder {
+                if let Some(pk) = valid_key {
+                    contact.public_key = pk;
+                    let _ = contacts.add(contact);
+                }
+            }
+        }
+        _ => {
+            // Unknown sender: create a minimal contact so the nickname and
+            // encryption key survive restarts. The envelope key is signed
+            // material so binding it is corroborated; without one, keep an
+            // empty-key placeholder (never peer_id-as-public_key -- that
+            // poisons identity resolution and receipt encryption).
+            if let Some(name) = decoded.nickname.as_deref() {
+                let has_verified_key = valid_key.is_some();
+                let mut contact = Contact::new(peer_id.to_string(), valid_key.unwrap_or_default())
+                    .with_nickname(name.to_string());
+                if !has_verified_key {
+                    contact.notes = Some(
+                        "public_key unavailable: awaiting verified key from signed source"
+                            .to_string(),
+                    );
+                }
+                contact.local_nickname = None;
+                if let Err(e) = contacts.add(contact) {
+                    tracing::debug!(
+                        "Failed to upsert contact {} from identity envelope: {:?}",
+                        peer_id,
+                        e
+                    );
+                } else {
+                    tracing::info!(
+                        "Learned new contact '{}' ({}) from identity envelope",
+                        name,
+                        peer_id
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Shared outbox flush logic used across CLI event loops (`cmd_relay` and `cmd_start`).
@@ -3137,8 +3423,10 @@ async fn cmd_relay(
     }
     println!();
 
-    // Connection ledger
-    let mut connection_ledger = ledger::ConnectionLedger::load(&data_dir)?;
+    // Connection ledger — dial state over the single core store
+    let mut connection_ledger = ledger::ConnectionLedger::new(
+        scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
+    );
     let known_topics = connection_ledger.all_known_topics();
     for node in &all_bootstrap {
         connection_ledger.add_bootstrap(node, Some(&local_peer_id.to_string()));
@@ -3285,20 +3573,29 @@ async fn cmd_relay(
         let scheduler = Arc::clone(&relay_scheduler);
         let ledger_clone = ledger.clone();
         let swarm_clone = swarm_handle.clone();
+        let data_dir_migrate = data_dir.clone();
         tokio::spawn(async move {
+            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
             let addrs = {
                 let l = ledger_clone.lock().await;
-                l.dialable_addresses(Some(&local_peer_id.to_string()))
+                match l.run_legacy_migration(
+                    &data_dir_migrate,
+                    Some(&local_peer_id.to_string()),
+                    &my_addrs,
+                ) {
+                    Ok(report) if report.offered > 0 => {
+                        println!(
+                            "[INFO] Migrated {} of {} legacy peers.json entries into the core ledger ({} rejected, archived={})",
+                            report.imported, report.offered, report.rejected, report.archived
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("[WARNING] legacy peers.json migration failed: {:#}", e);
+                    }
+                }
+                l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
             };
-            let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-            let addrs = ledger::prioritize_dial_candidates(
-                addrs
-                    .into_iter()
-                    .filter(|(m, _)| {
-                        ledger::is_dialable_for_this_node(m, ledger::NetworkMode::Local, &my_addrs)
-                    })
-                    .collect(),
-            );
             for (i, (multiaddr_str, peer_id_opt)) in addrs.iter().enumerate() {
                 let label =
                     ledger::extract_ip_port(multiaddr_str).unwrap_or_else(|| multiaddr_str.clone());
@@ -3320,23 +3617,11 @@ async fn cmd_relay(
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+                let my_addrs = get_local_transport_addresses(&swarm_clone).await;
                 let addrs = {
                     let l = ledger_clone.lock().await;
-                    l.dialable_addresses(Some(&local_peer_id.to_string()))
+                    l.dialable_addresses(Some(&local_peer_id.to_string()), &my_addrs)
                 };
-                let my_addrs = get_local_transport_addresses(&swarm_clone).await;
-                let addrs = ledger::prioritize_dial_candidates(
-                    addrs
-                        .into_iter()
-                        .filter(|(m, _)| {
-                            ledger::is_dialable_for_this_node(
-                                m,
-                                ledger::NetworkMode::Local,
-                                &my_addrs,
-                            )
-                        })
-                        .collect(),
-                );
                 for (multiaddr_str, peer_id_opt) in &addrs {
                     let peer_id = peer_id_opt.as_ref().and_then(|s| s.parse::<PeerId>().ok());
                     scheduler.dial(multiaddr_str.clone(), peer_id);
@@ -3359,19 +3644,6 @@ async fn cmd_relay(
                     peer_count: count,
                 },
             ));
-        }
-    });
-
-    // ── Periodic ledger save (every 60 seconds) ─────────────────────────
-    let ledger_save = ledger.clone();
-    let data_dir_save = data_dir.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            let mut l = ledger_save.lock().await;
-            if let Err(e) = l.save(&data_dir_save) {
-                tracing::error!("Failed to save ledger: {}", e);
-            }
         }
     });
 
@@ -3443,8 +3715,7 @@ async fn cmd_relay(
                     SwarmEvent::PeerDisconnected(peer_id) => {
                         peers.lock().await.remove(&peer_id);
                         let mut l = ledger_rx.lock().await;
-                        if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                            let multiaddr = entry.multiaddr.clone();
+                        if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string()) {
                             l.record_failure(&multiaddr);
                         }
                         // Release the per-peer concurrent-connection slot (P0
@@ -3463,9 +3734,7 @@ async fn cmd_relay(
                         let new_count = l.merge_shared_entries(&entries);
                         if new_count > 0 {
                             tracing::info!("Learned {} new peers from {}", new_count, from_peer);
-                            if let Err(e) = l.save(&data_dir) {
-                                tracing::error!("Failed to save ledger: {}", e);
-                            }
+                            // The core store persists its own updates.
                             let new_entries: Vec<(String, Option<String>)> = entries
                                 .iter()
                                 .map(|e| {
@@ -3523,8 +3792,7 @@ async fn cmd_relay(
                     SwarmEvent::TopicDiscovered { peer_id, topic } => {
                         tracing::info!("Topic discovered from {}: {}", peer_id, topic);
                         let mut l = ledger_rx.lock().await;
-                        if let Some(entry) = l.find_by_peer_id(&peer_id.to_string()) {
-                            let multiaddr = entry.multiaddr.clone();
+                        if let Some(multiaddr) = l.find_peer_multiaddr(&peer_id.to_string()) {
                             l.record_topic(&multiaddr, &topic);
                         }
                     }
@@ -3571,8 +3839,8 @@ async fn cmd_relay(
             _ = tokio::signal::ctrl_c() => {
                 println!("\nShutting down relay node...");
                 let _ = swarm_handle.shutdown().await;
-                let mut l = ledger.lock().await;
-                let _ = l.save(&data_dir);
+                // The core store persists its own mutations; nothing to flush.
+                let _ledger_guard = ledger.lock().await;
                 break;
             }
         }
@@ -3673,14 +3941,18 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
     };
 
     // Prepare the message envelope
-    let envelope_bytes = core
+    // Identity-envelope parity: wrap chat text so the receiver learns our
+    // nickname + route hints.
+    let wire_message =
+        crate::api::build_identity_wrapped_text(&core, &swarm_handle, &message).await;
+    let (envelope_bytes, prepared_message_id) = core
         .prepare_message(
             contact.public_key.clone(),
-            message.clone(),
+            wire_message,
             scmessenger_core::MessageType::Text,
             None,
         )
-        .map(|pm| pm.envelope_data)
+        .map(|pm| (pm.envelope_data, pm.message_id))
         .context("Failed to encrypt message")?;
 
     println!(
@@ -3711,6 +3983,10 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
             .await
         {
             Ok(_) => {
+                // True transport ACK (R2): release the outbox entry without a
+                // Delivered receipt. send_message() awaits the actual delivery,
+                // not a buffer enqueue.
+                core.mark_message_sent(prepared_message_id.clone());
                 println!(
                     "{} Message sent successfully to {} (attempt {}/{})",
                     "[OK]".green(),
@@ -3771,14 +4047,19 @@ async fn queue_message_for_later_delivery(
     core.initialize_identity()
         .context("Failed to initialize identity for queued send")?;
 
-    let envelope_bytes = core
-        .prepare_message(
-            contact.public_key.clone(),
-            message.to_string(),
-            scmessenger_core::MessageType::Text,
-            None,
-        )
-        .map(|pm| pm.envelope_data)?;
+    // NOTE (UNIFICATION_V3 D1 fix): the envelope's wire message id MUST be
+    // reused as the outbox entry key. A Delivered receipt returned by the
+    // recipient carries the wire id, and `Outbox::remove` matches strictly on
+    // `message_id`. Mismatching the two (previously a fresh UUID here) meant
+    // the receipt never cleared the outbox entry -> infinite retry storm.
+    let prepared = core.prepare_message(
+        contact.public_key.clone(),
+        message.to_string(),
+        scmessenger_core::MessageType::Text,
+        None,
+    )?;
+    let envelope_bytes = prepared.envelope_data;
+    let wire_message_id = prepared.message_id;
 
     match Outbox::open_default(data_dir) {
         Ok(outbox_arc) => {
@@ -3789,7 +4070,7 @@ async fn queue_message_for_later_delivery(
                 .as_secs();
             let queued_msg = QueuedMessage {
                 version: 1,
-                message_id: uuid::Uuid::new_v4().to_string(),
+                message_id: wire_message_id,
                 recipient_id: contact.peer_id.clone(),
                 envelope_data: envelope_bytes,
                 queued_at: now,

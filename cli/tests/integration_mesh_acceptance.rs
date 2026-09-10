@@ -1,11 +1,18 @@
 //! Deterministic acceptance fixtures for the CLI mesh path.
 //!
-//! These tests deliberately do not inject contacts, call `record_connection`,
-//! or manually dial a peer. They model the data produced by ledger exchange
-//! and assert the invariants the live five-node acceptance run must observe:
-//! every node learns the other four nodes, the local node is never a dial
-//! target, discovered peers receive a usable CLI route, and queued messages
-//! are released once per discovered peer.
+//! These tests deliberately do not inject contacts, bootstrap nodes, or manual
+//! connections. They model the data produced by ledger exchange and assert the
+//! invariants the live five-node acceptance run must observe: every node learns
+//! the other four nodes, the local node is never a dial target, discovered
+//! peers receive a usable CLI route, and queued messages are released once per
+//! discovered peer.
+//!
+//! T2 UNIFICATION (2026-08-31): ledger exchange is HEARSAY. It is recorded for
+//! routing but is not a persistent dial candidate until a connection proves it
+//! (the core store fires `record_connection` on outbound
+//! `ConnectionEstablished` -- exactly what a successful first dial of a
+//! wire-learned address does). The tests model that wire path: exchange ->
+//! dial -> proven -> candidate.
 //!
 //! The live mDNS/swarm five-node test remains a separate network-gated run;
 //! these tests keep CI deterministic while making its expected assertions
@@ -15,7 +22,7 @@ use libp2p::{identity::Keypair, PeerId};
 use scmessenger_cli::ledger::ConnectionLedger;
 use scmessenger_cli::transport_bridge::TransportBridge;
 use scmessenger_core::store::outbox::MessageState;
-use scmessenger_core::store::{Outbox, QueuedMessage};
+use scmessenger_core::store::{LedgerManager, Outbox, QueuedMessage};
 use scmessenger_core::transport::abstraction::TransportType;
 use scmessenger_core::transport::SharedPeerEntry;
 use std::collections::HashSet;
@@ -23,6 +30,10 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NODE_COUNT: usize = 5;
+
+fn ledger() -> ConnectionLedger {
+    ConnectionLedger::new(LedgerManager::ephemeral())
+}
 
 #[derive(Debug, Clone)]
 struct FixtureNode {
@@ -52,6 +63,20 @@ fn shared_entries(nodes: &[FixtureNode]) -> Vec<SharedPeerEntry> {
         .collect()
 }
 
+/// The node's own LAN address family: the private-class rule only dials
+/// RFC1918 candidates on the same class as an address this node itself holds.
+fn my_addrs() -> Vec<String> {
+    vec!["/ip4/192.168.42.1/tcp/9100".to_string()]
+}
+
+/// The wire path a successful first dial of a wire-learned address takes:
+/// the scheduler dials, the connection establishes, and the core store marks
+/// the address locally verified. Mirrors `ConnectionEstablished` in the
+/// swarm event loop.
+fn prove_connection(ledger: &ConnectionLedger, node: &FixtureNode) {
+    ledger.record_connection(&node.multiaddr, &node.peer_id.to_string());
+}
+
 fn queued_message(message_id: &str, recipient_id: &str) -> QueuedMessage {
     QueuedMessage {
         version: 1,
@@ -77,13 +102,28 @@ fn five_node_no_manual_contact_ledger_converges_to_four_dial_candidates() {
     let all_peer_ids: HashSet<PeerId> = nodes.iter().map(|node| node.peer_id).collect();
 
     for local in &nodes {
-        let mut ledger = ConnectionLedger::default();
+        let mut ledger = ledger();
 
         // This is the ledger-exchange input. No bootstrap, contact, or
-        // locally verified connection is inserted first.
+        // locally verified connection is inserted first. Exchange is
+        // HEARSAY: recorded for routing but not yet a dial candidate.
         assert_eq!(ledger.merge_shared_entries(&wire_entries), NODE_COUNT);
+        assert!(
+            ledger
+                .dialable_addresses(Some(&local.peer_id.to_string()), &my_addrs())
+                .is_empty(),
+            "unproven exchange knowledge reached dialable_addresses()"
+        );
 
-        let dial_candidates = ledger.dialable_addresses(Some(&local.peer_id.to_string()));
+        // The wire path: each node's exchange-learned addresses get dialed
+        // (LedgerReceived handler); the five successful connections -- the
+        // mesh's own traffic -- prove the entries.
+        for node in &nodes {
+            prove_connection(&ledger, node);
+        }
+
+        let dial_candidates =
+            ledger.dialable_addresses(Some(&local.peer_id.to_string()), &my_addrs());
         assert_eq!(
             dial_candidates.len(),
             NODE_COUNT - 1,
@@ -116,7 +156,7 @@ fn five_node_no_manual_contact_ledger_converges_to_four_dial_candidates() {
         assert_eq!(ledger.merge_shared_entries(&wire_entries), 0);
         assert_eq!(
             ledger
-                .dialable_addresses(Some(&local.peer_id.to_string()))
+                .dialable_addresses(Some(&local.peer_id.to_string()), &my_addrs())
                 .len(),
             NODE_COUNT - 1
         );
@@ -124,25 +164,52 @@ fn five_node_no_manual_contact_ledger_converges_to_four_dial_candidates() {
 }
 
 #[test]
-fn five_node_shared_candidates_survive_cli_ledger_restart_without_contact_injection() {
+fn five_node_shared_candidates_survive_core_ledger_reload_without_contact_injection() {
     let nodes = fixture_nodes();
     let local = &nodes[0];
-    let mut ledger = ConnectionLedger::default();
+    let dir = tempfile::tempdir().expect("temporary core ledger directory");
+    let storage = dir.path().join("storage");
+
+    // Handle A: the node that merged the exchange. The core store persists
+    // on every mutation, so ledger.json lands on disk immediately.
+    let mut ledger =
+        ConnectionLedger::new(LedgerManager::new(storage.to_string_lossy().to_string()));
     assert_eq!(
         ledger.merge_shared_entries(&shared_entries(&nodes)),
         NODE_COUNT
     );
 
-    let data_dir = tempfile::tempdir().expect("temporary CLI ledger directory");
-    ledger.save(data_dir.path()).expect("save shared ledger");
+    // Durability: a restarting process will load this file.
+    let ledger_file = storage.join("ledger.json");
+    assert!(
+        ledger_file.exists(),
+        "core ledger did not persist ledger.json"
+    );
+    let persisted = std::fs::read_to_string(&ledger_file).expect("read persisted ledger");
+    for node in &nodes {
+        assert!(
+            persisted.contains(&node.multiaddr),
+            "persisted ledger lost {}",
+            node.multiaddr
+        );
+    }
 
-    let restored = ConnectionLedger::load(data_dir.path()).expect("reload shared ledger");
-    let candidates = restored.dialable_addresses(Some(&local.peer_id.to_string()));
+    // The wire path proves the four other nodes.
+    for node in &nodes {
+        if node.peer_id != local.peer_id {
+            prove_connection(&ledger, node);
+        }
+    }
+
+    // Handle B: a fresh session over the same storage path (the in-process
+    // mirror of a restart) sees the surviving shared candidates.
+    let restored = ConnectionLedger::new(LedgerManager::new(storage.to_string_lossy().to_string()));
+    let candidates = restored.dialable_addresses(Some(&local.peer_id.to_string()), &my_addrs());
 
     assert_eq!(
         candidates.len(),
         NODE_COUNT - 1,
-        "restarting the CLI lost shared mesh candidates: {candidates:?}"
+        "reloading the shared ledger lost mesh candidates: {candidates:?}"
     );
     assert!(candidates.iter().all(|(_, peer_id)| peer_id.is_some()));
     assert!(candidates
@@ -155,13 +222,17 @@ fn five_node_shared_candidates_survive_cli_ledger_restart_without_contact_inject
 fn five_node_discovery_registers_routes_and_flushes_each_queued_message_once() {
     let nodes = fixture_nodes();
     let local = &nodes[0];
-    let mut ledger = ConnectionLedger::default();
+    let mut ledger = ledger();
     assert_eq!(
         ledger.merge_shared_entries(&shared_entries(&nodes)),
         NODE_COUNT
     );
+    for node in &nodes {
+        prove_connection(&ledger, node);
+    }
 
-    let candidates = ledger.dialable_addresses(Some(&local.peer_id.to_string()));
+    let candidates = ledger.dialable_addresses(Some(&local.peer_id.to_string()), &my_addrs());
+    assert_eq!(candidates.len(), NODE_COUNT - 1);
     let mut bridge = TransportBridge::new();
     let mut outbox = Outbox::new();
 
