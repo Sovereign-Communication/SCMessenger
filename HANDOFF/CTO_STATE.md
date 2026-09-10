@@ -1,10 +1,94 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T02:35Z (V040 three-node campaign: T14 + BLE-01 fixed/live, E2 core+android green, next run gated)
+Last updated: 2026-09-10T02:50Z (D10 landed+deployed, mesh rejoined, ANR class closed twice, rewrite-source killed; PR #279 head 2bdc3c86)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-09) =====
+# ===== RESUME HERE (2026-09-10) =====
+
+All state below verified from fresh commands 2026-09-10T02:45-02:50Z.
+
+## Live rig (verified)
+
+- Windows node: running, tree `5c7caa1d` (docs commit atop D10 `7ff317f0`; exe
+  sha256 `660BE35D…` built 00:54Z), T14 pin live
+  (`external_addrs=["147.81.41.188:9001","192.168.0.222:9001"]`), identity
+  `12D3KooWD6vZ…` preserved. Relauncher: `tmp/cto/reroll_windows_d10.cmd`
+  (+ `tmp/cto/d10_restore_pin.ps1`, `d10_strip_bom.ps1`); bootstrap env
+  `SC_BOOTSTRAP_NODES=/ip4/127.0.0.1/tcp/19001,/ip4/18.234.62.247/tcp/9001`.
+- AWS node: `7ff317f0` (image sha-7ff317f via docker-publish run 34421758994),
+  identity preserved, peers=[Windows], `/data` mount verified.
+- Pixel: adb reachable (serial `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp`),
+  D10 APK sha256 `d0143c65…` installed (HEAD `8c74a6a2`), PID 7140, data preserved.
+- config.json: T14 pin INTACT, sha `88755db2…` (guard backup
+  `tmp/cto/RWRITE_HUNT/config_guard_backup.json`).
+- Branch `cto/t2-disk-ruling-2026-08-31` = PR #279 head `2bdc3c86`, pushed.
+
+## What landed this campaign (all pushed to PR #279)
+
+| Commit | What |
+|---|---|
+| `c6f7ce2f` | ANR root fix: PlatformBridge lifecycle/motion/device-state FFI moved off main (uniffi re-entrant deadlock, 19 ANRs RCA'd from dropbox) |
+| `7ff317f0` | D10: relay-reservation base validation (kills nested/self-circuit poison listeners that overflowed mDNS and killed LAN discovery); 8 regression tests; rule-8 packet `HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md` (verdict PENDING) |
+| `a8694585` | T14 rewrite-source KILLED: cli config test was writing the REAL %APPDATA% config (proven before/after via sha flip 88755db2->1b7a7872); now hermetic via SCMESSENGER_CONFIG tempdir + CONFIG_ENV_LOCK mutex |
+| `1ba13ac9` | CEO session, ANR-recurrence-control: diagnostics-share crash contained (new DiagnosticsShareController, never-throws) + Settings info-counts FFI moved off main into InfoCounts StateFlow; 5 new tests |
+
+## Transport verdicts (evidence: tmp/cto/)
+
+- REJOIN PASS — D10 proven end-to-end: phone detected Windows via LAN, dialed
+  `192.168.0.222:9001`, full identify; Windows peers=[Pixel,AWS]; 2-peer list
+  sent to phone (ledger re-seed live). Evidence `tmp/cto/D10_REJOIN_20260910T015627Z/`.
+- DELIVERY PASS — 5 msgs phone->Windows ~1/min, `transport_ack=true`, Windows
+  outbox 8->0 (`tmp/cto/PASSIVE_FINAL_20260910T020553Z/`).
+- Ledger persistence PASS — phone bootstraps its 1 PROVEN relay (Windows) every ~64s.
+- ANR fix holds on D10 APK — zero steady-state signatures across 4 windows.
+- PHONE->AWS: NOT OBSERVED on WiFi (by-design: dial policy needs PROVEN
+  candidates; AWS known-but-unproven to phone). Cell-only drop test exercises it.
+- BLE: Bluetooth OFF at OS level on the phone this pass (Scanner/Advertiser
+  "not available"). Operator's BLE test exercises it.
+- WARN cleanup items: stale pre-D10 double-circuit addresses in the phone's
+  dial set fail periodically (harmless); D10 reservation-base ordering picked
+  a link-local IPv6 from AWS's identify set once (validity unaffected).
+
+## Working in tandem with the CEO (2026-09-10)
+
+CEO checkpoint `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260910T021100Z_ANR_RECURRENCE_CONTROL.md`
+(READ — committed 1ba13ac9): two more main-thread paths in the ANR class
+found+fixed (diagnostics-share FileProvider crash; Settings FFI-in-composition).
+Residues flagged there that this seat owns tracking for:
+
+1. `ConversationsViewModel.getMessageCount()` dead wrapper (android/, owner
+   lane — do not edit from the CTO seat; queue for the Android agent).
+2. Rust-side `meshService.pause/resume` blocking behavior — rule-8-gated
+   ticket, still OPEN.
+3. Orchestrator (this seat) should run full `assembleDebug` gate before any
+   merge to main (the CEO session ran compile+targeted tests only).
+
+## Open to the 0.4.0 tag decision (in order)
+
+1. PR #279 `Analyze (rust)` check still pending (re-triggers per push); CodeQL
+   skipping. Full-green needed.
+2. Independent rule-8 adversarial APPROVEs: D10 packet PENDING
+   (`HANDOFF/review/V040_D10_...`); T14 packet precedent; reviewer = operator
+   choice (MAC lane or other non-authoring model).
+3. PR #279 merge to main (only after 1+2).
+4. Operator manual 3-node drop test: BLE + WiFi-drop + cell-only (AWS custody
+   leg). Scoring rules: fingerprint tripwires (`swarm_event_loop_died`,
+   `Clearing stale swarm handle`) invalidate a pass.
+5. Tag decision + release (draft rule: rc tags are drafts; a public release
+   needs the standing release-gate rulings).
+
+## Evidence index (this campaign, all under tmp/cto/)
+
+`D10_GATE_20260909T234503Z` (gates) · `D10_CLIPPY_20260909T142328Z` (CI-exact
+clippy) · `D10_APK_20260910T012139Z` (APK build+sha) · `D10_GOLIVE_20260909T145402Z`
+(AWS deploy) · `D10_REROLL_20260909T145417Z` (Windows rebuild+relaunch; node-out
++ BOM incident) · `D10_REJOIN_20260910T015627Z` (rejoin windows) ·
+`PASSIVE_FINAL_20260910T020553Z` (3-window passive table) · `RWRITE_HUNT`
+(rewrite-source before/after proof + VERDICT.md) · `TRANSPORT_20260909T213941Z`
++ `...T214437Z` (earlier passive snapshots).
+
+# ===== PREVIOUS RESUME POINT (2026-09-09) =====
 
 The next `/cto` session's whole brief is `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md`
 (with `HANDOFF/V040_3NODE_RCA_2026-09-09.md` as its issue index and the

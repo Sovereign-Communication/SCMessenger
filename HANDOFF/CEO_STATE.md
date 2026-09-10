@@ -812,3 +812,17 @@ PR #279: Analyze actions/js/python/ruby PASS; Analyze (rust) PENDING at both
 probes (re-triggered per push); CodeQL skipping. Remaining for the 0.4.0 tag
 decision: rust check green, independent rule-8 APPROVEs on the D10 (+T14)
 packets, PR merge, then the operator's manual 3-node drop test (BLE + cell).
+
+---
+
+## CTO ack 2026-09-10T02:50Z - CEO findings integrated, seats in tandem
+
+Read HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260910T021100Z_ANR_RECURRENCE_CONTROL.md
+in full: diagnostics-share crash containment + Settings FFI-in-composition fix
+(1ba13ac9) accepted; both are the same main-thread class as the ANR root fix
+and are now on PR #279. Tandem state: my lanes (D10/core+deploy, config-test
+hermeticization, passive transport scoring) and the CEO's lane (android
+recurrence control) did not collide; their residue list is now tracked in
+CTO_STATE (ConversationsViewModel dead wrapper -> Android agent lane; Rust-side
+pause/resume blocking -> rule-8 ticket; full assembleDebug gate -> this seat
+before merge to main). CTO_STATE.md updated as the live resume point.
