@@ -174,6 +174,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Contact/message counts + core build provenance for the Info section. */
+    data class InfoCounts(
+        val contactCount: UInt = 0u,
+        val messageCount: UInt = 0u,
+        val buildProvenance: String = ""
+    )
+
+    // Declared BEFORE the init block on purpose: refreshInfoCounts() is called
+    // from init and its IO coroutine can complete before later property
+    // initializers run. Kotlin executes initializers in declaration order, so
+    // the StateFlow must exist before any writer can touch it (init-order NPE
+    // surfaced by the full unit suite, 2026-09-10).
+    private val _infoCounts = MutableStateFlow(InfoCounts())
+    val infoCounts: StateFlow<InfoCounts> = _infoCounts.asStateFlow()
+
     init {
         // P0_SHARED_IDENTITY: mirror the centralized meshRepository.identityInfo
         // StateFlow into the local _identityInfo so any identity change from
@@ -251,19 +266,10 @@ class SettingsViewModel @Inject constructor(
         refreshInfoCounts()
     }
 
-    /** Contact/message counts + core build provenance for the Info section. */
-    data class InfoCounts(
-        val contactCount: UInt = 0u,
-        val messageCount: UInt = 0u,
-        val buildProvenance: String = ""
-    )
-
-    private val _infoCounts = MutableStateFlow(InfoCounts())
-    val infoCounts: StateFlow<InfoCounts> = _infoCounts.asStateFlow()
-
     /**
      * Reload the Info-section counts on IO. Cheap enough to re-run on service
-     * RUNNING transitions; never called from composition.
+     * RUNNING transitions; never called from composition. Safe to call from
+     * init because [_infoCounts] is declared before the init block.
      */
     fun refreshInfoCounts() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -753,21 +759,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Get ledger summary for diagnostics.
-     */
-    fun getLedgerSummary(): String {
-        return meshRepository.getLedgerSummary()
-    }
-
-    fun getConnectionPathState(): uniffi.api.ConnectionPathState {
-        return meshRepository.getConnectionPathState()
-    }
-
-    fun getNatStatus(): String {
-        return meshRepository.getNatStatus()
-    }
-
-    /**
      * ANR FIX (P0_ANDROID_017): Export diagnostics asynchronously.
      * Uses the repository's async variant to avoid blocking on file I/O and Rust FFI calls.
      */
@@ -857,38 +848,10 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Get transport health summary for diagnostics.
-     */
-    fun getTransportHealthSummary(): Map<String, com.scmessenger.android.transport.TransportHealthMonitor.TransportHealth> {
-        return meshRepository.getTransportHealthSummary()
-    }
-
-    /**
-     * Get network diagnostics snapshot for settings display.
-     */
-    fun getNetworkDiagnosticsSnapshot(): com.scmessenger.android.transport.NetworkDiagnostics {
-        return meshRepository.getNetworkDiagnosticsSnapshot()
-    }
-
-    /**
-     * Get network failure summary for settings display.
-     */
-    fun getNetworkFailureSummary(): com.scmessenger.android.utils.NetworkFailureMetrics.Summary {
-        return meshRepository.getNetworkFailureSummary()
-    }
-
-    /**
      * Reset service runtime stats for a fresh diagnostics window.
      */
     fun resetServiceStats() {
         meshRepository.resetServiceStats()
-    }
-
-    /**
-     * Get list of currently active transports for status display.
-     */
-    fun getActiveTransports(): List<com.scmessenger.android.service.TransportType> {
-        return meshRepository.getActiveTransports()
     }
 
     /**
@@ -958,14 +921,6 @@ class SettingsViewModel @Inject constructor(
                 Timber.e(e, "Failed to clear BLE peer cache")
             }
         }
-    }
-
-    /**
-     * Test connectivity to ledger relay nodes.
-     * Returns true if at least one relay is reachable.
-     */
-    fun testLedgerRelayConnectivity(): Boolean {
-        return meshRepository.testLedgerRelayConnectivity()
     }
 
     /**

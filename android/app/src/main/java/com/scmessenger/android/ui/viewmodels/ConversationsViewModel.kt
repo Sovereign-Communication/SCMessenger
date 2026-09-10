@@ -439,13 +439,6 @@ class ConversationsViewModel @Inject constructor(
         _error.value = null
     }
 
-    /**
-     * Get total message count.
-     */
-    fun getMessageCount(): UInt {
-        return meshRepository.getMessageCount()
-    }
-
     fun resolveDeliveryState(
         message: uniffi.api.MessageRecord,
         nowEpochSec: Long = System.currentTimeMillis() / 1000
