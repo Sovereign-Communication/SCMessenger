@@ -1059,3 +1059,30 @@ tips + channel state. Recommend the gate runbook entry simply say: run
   round-2 TxtRecordTooLong from relay-reservation advertisement bloat ticketed.
 - Remaining: BLE leg needs a 2nd BLE node (desktop+AWS have none); D10 rule-8
   verdict PENDING; breaker-reset convergence post-test.
+
+## CTO addendum (2026-09-10 ~06:10Z) — receipt-return + store/forward RCA complete
+
+Operator flagged two gaps: (1) receipts never returned to Android for some
+messages, (2) Windows->Android via AWS store/forward never proven. Full RCA in
+`tmp/cto/RECEIPT_SOF_RCA_20260910T060500Z.md`.
+
+Findings, evidence-backed:
+- Receipts: 5 of 9 test messages got full receipt chains on the phone
+  (RECEIPT-RX lines with timestamps). The 4 missing ones correlate with
+  Windows's 47 "Failed to decode wire envelope" WARNs in the test hour —
+  the CLI ACK gate requires a decoded identity envelope (kind=="text" +
+  sender key), and undecodable envelopes open no ACK. ACK emission was
+  DEBUG-logged (invisible at INFO), so sent-vs-lost was indistinguishable;
+  fixed to INFO/WARN with message id (commit 03e9246b, fmt+clippy green,
+  pushed to PR #279).
+- Store/forward Windows-as-relay for phone: PROVEN end-to-end
+  (Accepted custody 05:03:41 -> Dispatching on reconnect 05:04:52 ->
+  [OK] delivered to phone).
+- Store/forward via AWS for the phone: NOT EXERCISED this window (AWS held
+  zero custody for the phone — phone was always AWS-reachable during the
+  test). Designed exercise remains the operator's WiFi-off/cell-only test.
+- New defect filed for Android lane: phone SubnetProbe self-dials its own
+  LAN IP every ~3m29s (NoAddresses exception spam, harmless but must not
+  dial self).
+Next-test success criteria recorded in the RCA file (ACK INFO lines + AWS
+custody-accept/dispatch-for-phone lines).
