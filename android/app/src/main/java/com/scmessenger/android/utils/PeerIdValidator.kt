@@ -81,22 +81,23 @@ object PeerIdValidator {
             if (bytes.size != 32) return false
             // Sign bit is high bit of last byte; y is little-endian 255-bit.
             val y = java.math.BigInteger(1, bytes.reversedArray().let { arr ->
-                // clear sign bit for y
                 val copy = arr.copyOf()
                 copy[31] = (copy[31].toInt() and 0x7f).toByte()
                 copy
             })
             val p = java.math.BigInteger("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed", 16)
             val d = java.math.BigInteger("52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3", 16)
+            val one = java.math.BigInteger.ONE
+            val two = java.math.BigInteger.valueOf(2)
+            val zero = java.math.BigInteger.ZERO
             val yy = y.multiply(y).mod(p)
-            val u = yy.subtract(java.math.ONE).mod(p)
-            val v = java.math.ONE.add(d.multiply(yy)).mod(p)
-            // Edwards: -x^2 + y^2 = 1 + d x^2 y^2  =>  x^2 = (y^2-1)/(1+d y^2)
+            val u = yy.subtract(one).mod(p)
+            val v = one.add(d.multiply(yy)).mod(p)
+            // Edwards: x^2 = (y^2-1)/(1+d y^2)
             val denomInv = v.modInverse(p)
             val x2 = u.multiply(denomInv).mod(p)
-            // Square root exists iff x2^((p-1)/2) is 0 or 1 (Euler criterion)
-            val legendre = x2.modPow(p.subtract(java.math.ONE).divide(java.math.TWO), p)
-            legendre == java.math.ZERO || legendre == java.math.ONE
+            val legendre = x2.modPow(p.subtract(one).divide(two), p)
+            legendre == zero || legendre == one
         } catch (_: Exception) {
             false
         }
