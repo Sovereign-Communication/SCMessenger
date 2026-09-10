@@ -301,3 +301,30 @@ pending; CodeQL skipping.
 UNVERIFIED (expected passively next); message delivery WARN.
 The mesh is 3-node-connected at the transport level (Windows sees both
 peers simultaneously). Ready for the operator's manual drop test.
+
+---
+
+## ADDENDUM 2026-09-10T02:40Z — CLOSING TRANSPORT-EVIDENCE TABLE (passive, 3 windows / ~25 min)
+
+Evidence: tmp/cto/PASSIVE_FINAL_20260910T020553Z/ (logcat_w1/w2/w3, pid 7140),
+live curls at 02:05-02:35Z. Passive-only; no phone or node interaction.
+
+| Leg / check | Verdict | Evidence (actual lines) |
+| --- | --- | --- |
+| LAN direct: phone <-> Windows | **PASS** | W1 `Successfully dialed discovered LAN peer /ip4/192.168.0.222/tcp/9001 via SwarmBridge`; Windows log `Connected to 12D3KooWR9io… via /ip4/192.168.0.134/tcp/59956` (02:01:24Z); Windows peers=[Pixel,AWS] at 02:01-02:05Z. NOTE: peer list is cyclical — Pixel absent from Windows's list at the 02:35Z snapshot (dial-cadence/backoff cycle, not a regression; delivery lines continue during connected windows) |
+| Delivery (phone -> Windows, message level) | **PASS** | W1/W2 `delivery_attempt msg=11e11549… outcome=success`; `[OK] Transport core succeeded in 65ms`; `aggregate outcome=accepted transport_ack=true`; repeat for faab3ce4, 1f132f65, a31e022f, 9c34b327 (~1/min cadence); **Windows outbox 8 -> 0**. Residual `undelivered_count=194` is pre-existing backlog to long-offline peers, not current-traffic failure (outbox=0) |
+| Ledger re-seed (D3c/D4 persist-on-success) | **PASS** | W1 `Bootstrap: attempting 1 proven ledger relay candidate(s)` at 16:01:24, repeating every ~64s through W3 — the phone's ledger PERSISTED Windows as proven from the successful LAN dial |
+| WAN relay/custody: phone -> AWS | **NOT OBSERVED on WiFi** (by-design candidate) | Phone's bootstrap dials ONLY its 1 proven candidate (Windows); AWS appears in the phone's knowledge (`peer_connection … transports=/ip4/18.234.62.247/tcp/9001/p2p/<AWS>/p2p-circuit/p2p/<Windows>`) but is unproven, so no dial. AWS peers=[Windows] only, received=122 static, custody_audit 0. The cell-only drop test is the designed exercise for this leg |
+| BLE | **UNAVAILABLE this pass** (OS state, not a defect) | W3 `BleScanner: Bluetooth Scanner not available`, `BleAdvertiser: Bluetooth Advertiser not available` (16:00:52) — Bluetooth OFF at the OS level; advertiser rotation configured (900000ms). The operator's BLE test exercises this leg |
+| ANR fix on D10 APK | **PASS** | Only the single recorded benign cold-start skip (15:56:46.194) across all 3 windows; watchdog silent in steady state |
+| Address hygiene (residual, non-blocking) | **WARN** | Stale pre-D10 double-circuit addresses persist in the phone's dial set and fail periodically: `Failed to dial /ip4/192.168.0.222/tcp/443/p2p/<W>/p2p-circuit/p2p/<AWS>/p2p-circuit/p2p/<W>` — harmless (fallback works) but a candidate-pruning cleanup item |
+
+**PR #279 checks** (start 02:06Z / end 02:36Z): Analyze actions/js/python/ruby
+PASS on both latest runs; **Analyze (rust) still pending at both probes**
+(runs re-trigger per push); CodeQL skipping. Not yet full-green — pending item
+for the tag decision.
+
+**Bottom line:** LAN direct + delivery + ledger persistence all PASS on the
+D10 tree; WAN/custody and BLE legs remain for the operator's manual drop test
+(exactly the legs that test is designed to exercise). Passive transport story
+is complete to the extent WiFi-only observation allows.

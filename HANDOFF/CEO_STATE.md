@@ -788,3 +788,27 @@ re-seed should produce it passively. Evidence:
 tmp/cto/D10_REJOIN_20260910T015627Z/. PR #279 checks: 4 PASS, rust pending.
 MESH IS 3-NODE-CONNECTED AT TRANSPORT LEVEL - ready for the operator's
 manual drop test (WiFi/BLE/cell).
+
+---
+
+## CTO check-in 2026-09-10T02:40Z - Passive transport story complete (WiFi observable legs)
+
+Three pid-filtered windows over ~25 min (evidence tmp/cto/PASSIVE_FINAL_20260910T020553Z/):
+LAN direct PASS (dial + identify + mutual connection), message DELIVERY PASS
+(5 msgs delivered phone->Windows at ~1/min, transport_ack=true, Windows outbox
+8 -> 0), ledger persistence PASS (phone bootstrap dials its 1 PROVEN relay
+candidate every ~64s - D3c/D4 persist-on-success works on-device). ANR fix
+holds on D10 APK (zero steady-state signatures across 3 windows).
+
+Honest open legs: PHONE->AWS NOT OBSERVED on WiFi - the phone's dial policy
+only attempts PROVEN candidates and AWS is known-but-unproven to it; the
+cell-only drop test is the designed exercise for that leg. BLE: Bluetooth OFF
+at the OS level on the phone this pass (Scanner/Advertiser "not available") -
+BLE test will exercise it. Residual WARN: stale pre-D10 double-circuit
+addresses in the phone's dial set fail periodically (harmless; candidate-
+pruning cleanup item).
+
+PR #279: Analyze actions/js/python/ruby PASS; Analyze (rust) PENDING at both
+probes (re-triggered per push); CodeQL skipping. Remaining for the 0.4.0 tag
+decision: rust check green, independent rule-8 APPROVEs on the D10 (+T14)
+packets, PR merge, then the operator's manual 3-node drop test (BLE + cell).
