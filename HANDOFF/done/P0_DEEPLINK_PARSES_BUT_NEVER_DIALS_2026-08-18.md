@@ -1,3 +1,10 @@
+> **RESOLVED 2026-09-10 -- moved to done/ with evidence (see below).**
+> Evidence (this session, main@45ab59f9): CTO_STATE 2026-08-30 records the fix
+> verified in source at `MainViewModel.kt:374` -> `connectToPeer`, with the route
+> registered at `MeshApp.kt:412`. The earlier CTO_STATE entry that flagged this
+> ticket as resolved-but-unmoved is repeated here so the move is traceable.
+
+
 # P0 -- Android deep link parses connection addresses but deliberately never dials them
 
 Status: Open -- root cause identified in code, needs operator decision

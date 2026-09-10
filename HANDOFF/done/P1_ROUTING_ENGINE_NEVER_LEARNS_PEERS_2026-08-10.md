@@ -1,3 +1,14 @@
+> **RESOLVED 2026-09-10 -- moved to done/ with evidence (see below).**
+> Evidence (all run this session on main@45ab59f9): `routing_peer_seen` now has
+> production call sites at `core/src/transport/swarm.rs:5641` and `:8067`
+> (`core_arc.routing_peer_seen(...)`), fed from the F-DHT locally-verified gate
+> merged in PR #267 (merge commit on main). The iron_core.rs:2708 definition
+> persists; a unit test `routing_peer_seen_raises_confidence_after_connection_established`
+> exists at `core/src/iron_core.rs:5079`. Remaining acceptance item (field
+> re-measure of non-zero confidence on a live mesh) is scored on the Tier A rig,
+> not on this ticket. Closed as code-complete; gate scoring continues via T4.
+
+
 # P1 -- Routing engine never learns connected peers; every decision is StoreAndCarry at confidence 0.0
 
 Status: Active
