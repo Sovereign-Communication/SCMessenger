@@ -6107,6 +6107,15 @@ pub async fn start_swarm_with_config(
                                     resolved_to_dns.retain(|_, v| v != &dns);
                                 }
 
+                                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
+                                let transport = endpoint_transport_string(&remote_addr);
+                                tracing::info!(
+                                    "[TRANSPORT-LANE] peer={} direction={} transport={} addr={} (promiscuous mode — any PeerID accepted)",
+                                    peer_id,
+                                    direction,
+                                    transport,
+                                    remote_addr
+                                );
                                 tracing::info!(
                                     "Connected to {} via {} (promiscuous mode — any PeerID accepted)",
                                     peer_id,
@@ -6491,7 +6500,14 @@ pub async fn start_swarm_with_config(
                                 );
                             }
                             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                                tracing::info!("[ERROR] Disconnected from {}", peer_id);
+                                tracing::info!(
+                                    "[ERROR] Disconnected from {}",
+                                    peer_id
+                                );
+                                tracing::info!(
+                                    "[TRANSPORT-LANE] peer={} event=disconnected",
+                                    peer_id
+                                );
                                 // Allow a later mDNS advertisement to restore
                                 // a peer after its last direct path closes.
                                 mdns_dial_attempted.remove(&peer_id);
