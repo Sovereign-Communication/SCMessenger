@@ -160,3 +160,39 @@ REQUIRED FIX (queued, rule-8 gated, core/src/transport/swarm.rs):
 - Mesh rejoin (LAN/cell) from the Pixel: FAIL — second root cause documented
   above, fix queued as rule-8 gated work (next session's first task)
 - BLE transport availability on Pixel: PASS (advertising + scanning live)
+
+---
+
+## ADDENDUM 2026-09-10 — D10 LAN-discovery fix LANDED (queued rule-8 item executed)
+
+The queued core fix is implemented, gated, committed, and pushed.
+
+- Commit: `7ff317f0` on `cto/t2-disk-ruling-2026-08-31` (PR #279 head, confirmed
+  via `gh pr view 279` after push). Files: `core/src/transport/swarm.rs` (+360/-4),
+  `HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md` (new).
+- Fix shape: structural wildcard-aware `is_self_endpoint` (private/loopback-only
+  claims — same-port foreign relays stay eligible, test-enforced),
+  `is_valid_reservation_base` gate at the live reservation call site
+  (circuit bases, undiscoverable bases, self bases rejected; no valid base ->
+  reservation skipped and retried on next identify), `is_canonical_reservation_addr`
+  tripwire (exactly one terminal `/p2p-circuit`).
+- Regression tests: 8/8 passing (`cargo test -p scmessenger-core --lib d10_`,
+  `tmp/cto/d10_tests_final.log`).
+- Gates (authoritative Windows, under build lock): fmt 0
+  (`tmp/cto/d10_fmt_final.log`), clippy CI-exact 0
+  (`tmp/cto/D10_CLIPPY_20260909T142328Z/clippy.log`; the battery's earlier
+  clippy 101 was the bare `-A` shorthand artifact, not a code defect),
+  full workspace suite 0 (`tmp/cto/D10_GATE_20260909T234503Z/workspace_tests.log`).
+- Review packet: `HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md`
+  — verdict PENDING; merge to main BLOCKED per rule 8 until an independent
+  adversarial APPROVE is recorded.
+- Branch deploy: docker-publish dispatched at the SHA (D1 pattern):
+  run https://github.com/Sovereign-Communication/SCMessenger/actions/runs/34421758994
+- Stale-lock note: the battery left a stale lock (`cto-d10-clippy`, dead pid 3112,
+  age 1816 s > 1800 s stale threshold); released with the matching holder name.
+- Not done in this pass (per directive): node restarts, APK rebuilds, the
+  config-rewrite (T14 pin) and empty-ledger persistence questions — scheduled
+  after this lands and the rejoin is verified.
+
+Verdict: D10 fix PASS at code level + all local gates; LIVE rejoin verification
+still UNVERIFIED (requires node redeploy + Pixel-side rejoin, next pass).

@@ -697,3 +697,22 @@ self-circuit listen address degrades Windows mDNS advertisement
 fix plan in HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260909T225500Z_ANR_MAIN_FFI_FIX.md.
 Also open: Rust-side pause/resume blocking (rule-8 packet pending),
 config external_addr rewrite source.
+
+---
+
+## CTO check-in 2026-09-10T00:35Z - D10 LAN-discovery fix landed on PR #279
+
+The queued rule-8 item is done: relay-reservation bases are now validated at
+the live call site (no nested/self/loopback/circuit bases; wildcard-aware
+self-detection keeps same-port foreign relays eligible), 8 regression tests
+added, all gates green on the authoritative Windows environment (fmt 0,
+clippy CI-exact 0, cargo test --workspace 0). Commit `7ff317f0` pushed to
+`cto/t2-disk-ruling-2026-08-31` = PR #279 head; docker-publish dispatched
+(run 34421758994). Rule-8 review packet filed
+(HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md,
+verdict PENDING - merge to main blocked until independent adversarial APPROVE).
+
+NEXT: independent review of the D10 packet, then node redeploy + Pixel rejoin
+verification (the live proof the LAN-discovery fix restores mesh rejoin), then
+the 0.4.0 tag decision. Still open after that: Rust-side pause/resume blocking
+(rule-8 packet), config external_addr rewrite source, empty-ledger persistence.
