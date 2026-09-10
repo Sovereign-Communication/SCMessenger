@@ -716,3 +716,26 @@ NEXT: independent review of the D10 packet, then node redeploy + Pixel rejoin
 verification (the live proof the LAN-discovery fix restores mesh rejoin), then
 the 0.4.0 tag decision. Still open after that: Rust-side pause/resume blocking
 (rule-8 packet), config external_addr rewrite source, empty-ledger persistence.
+
+---
+
+## CTO check-in 2026-09-10T01:25Z - D10 deployed to both desktop nodes, LAN discovery restored
+
+docker-publish 34421758994 SUCCESS -> AWS redeployed (sha-7ff317f, identity +
+/data mount preserved, peers=[Windows], pinned external addr) and Windows exe
+rebuilt + relaunched (identity 12D3KooWD6vZ preserved, T14 pin live,
+AWS reconnected, DirectPreferred). D10 live proof on the Windows axis:
+exactly one canonical circuit listener (pre-fix node carried the nested
+self-circuit poison), 0 TxtRecordTooLong / 0 os error 10040 since relaunch
+vs 206 in the pre-relaunch hour file. Windows ledger actively dialing the
+Pixel's LAN address - re-seed path alive.
+
+INCIDENT (fixed in-pass): PS 5.1 Set-Content -Encoding UTF8 wrote a BOM into
+config.json; serde rejected it and the first relaunched process exited.
+Stripped + python-validated, relaunched clean. Config-rewrite evidence: pin
+was nulled again at 00:11:40Z, INSIDE the D10 workspace-test battery window -
+prime suspect is now a test touching the real %APPDATA% path (hunt pending).
+
+Pixel-side rejoin UNVERIFIED this pass (adb unreachable; passive-only rule
+respected). Next pass: re-establish adb, pull pid-filtered logcat, score
+peersDiscovered>0 + message flow; then the 3-node test with the operator.

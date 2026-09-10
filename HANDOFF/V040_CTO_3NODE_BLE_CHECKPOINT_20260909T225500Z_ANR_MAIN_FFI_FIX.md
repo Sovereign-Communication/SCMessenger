@@ -196,3 +196,61 @@ The queued core fix is implemented, gated, committed, and pushed.
 
 Verdict: D10 fix PASS at code level + all local gates; LIVE rejoin verification
 still UNVERIFIED (requires node redeploy + Pixel-side rejoin, next pass).
+
+---
+
+## ADDENDUM 2026-09-10T01:20Z — D10 GOLIVE: both desktop nodes on 7ff317f0
+
+**Deploy states (all evidence paths under `tmp/cto/`):**
+
+- **docker-publish** run 34421758994: SUCCESS (image `testbotz/scmessenger:sha-7ff317f`).
+- **AWS deploy**: PASS — `tmp/cto/D10_GOLIVE_20260909T145402Z/aws_deploy.log`:
+  identity-preserving `/data` mount verified (`[OK] persistent volume mounted`),
+  identity preserved (`12D3KooWGvCW…`, seniority 1788524000), node reports
+  `0.4.0 (7ff317f0…)` healthy; post-deploy `peers=[Windows]`, `external_addrs=[18.234.62.247:9001]`,
+  `connection_path_state=DirectPreferred` (verified live via /api/diagnostics).
+- **Windows reroll**: PASS — `tmp/cto/D10_REROLL_20260909T145417Z/`:
+  stop → release rebuild 10m49s (EXITCODE=0, exe sha256 `660BE35D…`) →
+  config pin restored (PIN_RESTORED=YES) → relaunch with T14 env
+  (`SC_BOOTSTRAP_NODES=/ip4/127.0.0.1/tcp/19001,/ip4/18.234.62.247/tcp/9001`).
+  Live: `/version` git_hash `5c7caa1d` (docs commit atop D10; swarm.rs identical
+  to 7ff317f0 — exe built 00:54Z from this tree), identity `12D3KooWD6vZ…` preserved,
+  `external_addrs=['147.81.41.188:9001']` (T14 pin live), AWS reconnected
+  (`Identified peer 12D3KooWGvCW…` every 60s).
+
+**D10 proof (Windows axis — the decisive evidence):**
+- Live listener set: exactly ONE circuit listener —
+  `/ip4/18.234.62.247/tcp/9001/p2p/<AWS>/p2p-circuit/p2p/<self>` — canonical
+  single-circuit; NO nested/double-circuit addresses (pre-fix live node showed the poison shape).
+- File log (`scm.log.2026-09-10-01`, since relaunch): **0 `TxtRecordTooLong`,
+  0 `os error 10040`** vs the pre-relaunch hour file's **206** `TxtRecordTooLong`.
+  mDNS enabled on iface 192.168.0.222; reservation ACCEPTED with canonical
+  address; reservation base logged (link-local IPv6 picked from identify set —
+  ordering nit for a later pass, validity unaffected).
+- BOM incident (fixed in-pass): the pin-restore via `Set-Content -Encoding UTF8`
+  (PS 5.1) wrote a UTF-8 BOM; serde rejected the config (`expected value at line
+  1 column 1`) and the first relaunched process exited. Fixed with
+  `tmp/cto/d10_strip_bom.ps1` (BOM stripped, python-validated JSON), relaunched
+  cleanly. Lesson recorded: config writes on this host must be BOM-free.
+
+**Config rewrite evidence (rewrite-source hunt, not deep-dived per directive):**
+config.json `external_addr` was null again, file mtime **2026-09-10T00:11:40Z** —
+inside the D10 workspace-test battery window (23:45:03Z→00:12:06Z). Current
+prime suspect: a workspace test (or default-config writer) touching the real
+`%APPDATA%` path. Recorded for the pending hunt; pin restored this pass.
+
+**Rejoin status:**
+- Windows ledger is actively dialing the Pixel's LAN address
+  (`/ip4/192.168.0.111/…` attempts with backoff in `scm.log.2026-09-10-01`):
+  the desktop re-seed path is alive.
+- Pixel adb unreachable this pass (empty `adb devices`; `adb connect
+  192.168.0.111:34895` fails silently) — phone-side rejoin proof therefore
+  **UNVERIFIED this pass** (evidence access, not a regression signal: Windows's
+  mDNS advertisement is now provably intact, which was the broken leg).
+- Deliveries are expected to resume as the Pixel's own dial loop hits the now-
+  healthy Windows advertisement; scoring the full rejoin (peersDiscovered>0,
+  message flow) is the next pass once adb is back.
+
+**Verdicts:** AWS deploy PASS; Windows deploy PASS; D10 live proof PASS
+(no nested circuits, no TXT overflow); mutual desktop reconnection PASS;
+Pixel-side rejoin UNVERIFIED (adb unreachable — next pass).
