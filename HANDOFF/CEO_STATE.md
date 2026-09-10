@@ -1044,3 +1044,18 @@ tips + channel state. Recommend the gate runbook entry simply say: run
   toggles mesh ON, then drop test proceeds on merge-candidate-identical phone.
 - PR #279 full-green on `3533e5b8` incl. rust + CodeQL. D10 rule-8 verdict still
   PENDING (dispatch packet ready). Merge to main remains blocked per governance.
+
+---
+
+## CTO — operator drop-test PASS; toggle-defect + AWS-starvation fixed and live — 2026-09-10T05:15Z
+
+- Operator test scored from 52k-line adb window: peersDiscovered=2, both test
+  messages accepted transport_ack=true, zero ANR. AWS lists the phone; Windows
+  lists phone+AWS.
+- Fixed and LIVE on the phone (APK 344bcb47, git=1eea9e65): (1) backgrounding no
+  longer pauses the mesh (toggle-defect root cause removed); (2) bootstrap now
+  sweeps the seed tier — ledger.json refilled 2B->10.7KB, AWS dialable.
+- Windows mDNS wedge (os error 10040 at 01:30Z) recovered by operational restart;
+  round-2 TxtRecordTooLong from relay-reservation advertisement bloat ticketed.
+- Remaining: BLE leg needs a 2nd BLE node (desktop+AWS have none); D10 rule-8
+  verdict PENDING; breaker-reset convergence post-test.

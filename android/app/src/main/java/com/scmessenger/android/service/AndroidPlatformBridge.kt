@@ -425,19 +425,24 @@ class AndroidPlatformBridge @Inject constructor(
     override fun onEnteringBackground() {
         Timber.i("App entering background")
 
-        // ANR-2026-09-09 fix: this override is invoked on the MAIN thread from
-        // MainActivity.onPause (notifyBackground) AND from the Rust core via
-        // the uniffi PlatformBridge callback. The pause() FFI has been caught
-        // blocking main for >10s in 47 captured ANR stacks
-        // (uniffi_scmessenger_core_fn_method_meshservice_pause). Dispatch off
-        // main; never call it synchronously from a lifecycle/callback path.
-        scope.launch {
-            try {
-                meshRepository.pauseMeshService()
-            } catch (e: Exception) {
-                Timber.w(e, "pauseMeshService failed")
-            }
-        }
+        // BACKGROUND-PAUSE REMOVAL (2026-09-10, operator ruling): this override
+        // previously called meshRepository.pauseMeshService() every time the
+        // activity backgrounded, tearing the mesh down to zero transports while
+        // the foreground service stayed alive. Live evidence: peersDiscovered
+        // pinned at 0 and outbox retries failing with transports=0 for the
+        // entire backgrounded window — the end user had to manually re-toggle
+        // mesh to restore connectivity. SCMessenger is store-and-forward: a
+        // backgrounded node MUST keep custody, relay, and discovery alive, or
+        // the product's core delivery guarantee is void. Battery and resource
+        // adaptation remains the job of the duty-cycle system
+        // (on_battery_changed / on_motion_changed / behavior adjustments), and
+        // the user can still pause explicitly via the notification action —
+        // only the automatic lifecycle-driven pause is removed.
+        //
+        // ANR-2026-09-09 fix note kept for provenance: any FFI work triggered
+        // from this path must stay off the main thread (this override is
+        // invoked on MAIN from MainActivity.onPause and from the Rust core
+        // callback). The removed call was the only work launched here.
     }
 
     override fun onEnteringForeground() {

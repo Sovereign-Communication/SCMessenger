@@ -135,6 +135,29 @@ open class MeshRepository(
         /** Cap on how many ledger-sourced relays are surfaced in the Settings UI. */
         private const val MAX_SETTINGS_RELAYS = 10u
 
+        /** Cap on seed-tier candidates swept per bootstrap pass (poison-fanout guard). */
+        internal const val MAX_BOOTSTRAP_SEEDS = 4
+
+        /**
+         * Merge proven and seed-tier relay candidates for a bootstrap sweep.
+         * Pure so the proven/seed merge policy is unit-testable without the
+         * ledger manager. Order: proven (priority order preserved) first, then
+         * newest-first seeds not already covered, deduped.
+         */
+        internal fun mergeBootstrapCandidates(
+            proven: List<String>,
+            seeds: List<String>,
+            maxSeeds: Int = MAX_BOOTSTRAP_SEEDS
+        ): List<String> {
+            val provenTrimmed = proven.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            val provenSet = provenTrimmed.toSet()
+            val seedsTrimmed = seeds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                .filterNot { it in provenSet }
+                .distinct()
+                .take(maxSeeds)
+            return (provenTrimmed + seedsTrimmed).distinct()
+        }
+
         // NODE-TRANSPORT-VIS-001: canonical transport labels shown per node row.
         internal const val TRANSPORT_BLE = "BLE"
         internal const val TRANSPORT_TCP_LAN = "TCP/LAN"
@@ -10441,6 +10464,30 @@ open class MeshRepository(
     }
 
     /**
+     * Bootstrap dial candidates: the proven relay tier first, then the seed
+     * tier (invite/QR/ledger-exchange-supplied addresses we have never yet
+     * dialed successfully). Sweeping the seed tier closes the cold-start
+     * chicken-and-egg where a ledger-exchanged cloud relay (e.g. the AWS
+     * bootstrap node shared via the peer list) could never become proven
+     * because it was only ever dialed after being proven — live evidence
+     * 2026-09-10: phone held AWS in its ledger knowledge but bootstrap
+     * attempted only its 1 proven candidate (Windows) and never reached the
+     * cloud node. A first successful dial promotes the seed via
+     * record_connection in core (swarm.rs identify path), after which it
+     * ranks from the proven tier. Seed candidates keep every guard the proven
+     * path has: circuit breaker, shouldAttemptDial throttle, failure cap
+     * (seed_addresses already excludes failure_count >= threshold), and the
+     * same backoff arithmetic on all-fail. The seed sweep is capped so a
+     * poisoned seed ledger cannot fan out dials unboundedly.
+     */
+    private fun getBootstrapCandidateAddresses(): List<String> {
+        val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .map { it.multiaddr }
+        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt()).map { it.multiaddr }
+        return mergeBootstrapCandidates(proven, seeds)
+    }
+
+    /**
      * P0_NETWORK_001: Bootstrap relay connections with circuit breaker and
      * WebSocket fallback for cellular networks.
      *
@@ -10465,15 +10512,14 @@ open class MeshRepository(
         Timber.i("Bootstrap: network=%s, cellular=%b, priority=%s",
             networkDetector.networkType.value, isCellular, transportPriority)
 
-        // Build the candidate list from proven ledger relays. Do not hardcode
-        // an endpoint: a fresh install legitimately has no candidates until
+        // Build the candidate list from proven ledger relays plus the seed
+        // tier (see getBootstrapCandidateAddresses). Do not hardcode an
+        // endpoint: a fresh install legitimately has no candidates until
         // invite/QR, LAN discovery, or a successful ledger exchange supplies
         // one. The previous empty list made every periodic bootstrap pass a
         // misleading zero-attempt "all-failed" result, including cellular.
         val addresses = prioritizeAddressesForCurrentNetwork(
-            (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
-                .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
-                .distinct()
+            getBootstrapCandidateAddresses()
         )
 
         if (addresses.isEmpty()) {
@@ -10610,13 +10656,13 @@ open class MeshRepository(
             relayCircuitBreaker.resetAll()
         }
 
-        // Build prioritized address list from the ledger (v0.4.0: no dedicated
-        // relays, no hardcoded node addresses -- discovery is ledger sharing).
+        // Build prioritized address list from the ledger proven tier plus the
+        // seed tier (v0.4.0: no dedicated relays, no hardcoded node addresses
+        // -- discovery is ledger sharing; see getBootstrapCandidateAddresses).
         // A fresh install has an empty ledger and legitimately has no
         // candidates here; that falls straight through to the mDNS fallback
         // below, which is the intended cold-start path, not a bug.
-        val prioritizedAddresses = (ledgerManager?.getPreferredRelays(5u) ?: emptyList())
-            .map { it.multiaddr }
+        val prioritizedAddresses = getBootstrapCandidateAddresses()
         if (prioritizedAddresses.isEmpty()) {
             Timber.i("Racing bootstrap: no known relays in ledger yet, going straight to mDNS fallback")
         }
