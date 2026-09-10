@@ -32,23 +32,27 @@ Fleet: Windows CLI + AWS relay + Pixel 6a
 | AWS | `inbox_receive` of the message while phone offline; later `Sending delivery ACK` to phone |
 | Phone | inbox shows the message after reconnect; no "Message Store Unavailable" |
 
-## Identity triad (fill after install)
-
-After onboarding, grab from Windows once mesh learns the phone:
-
-```
-curl -s "http://127.0.0.1:9876/api/peer-resolve?input=<id-from-win-peers>"
-```
-
-Or from Windows `/api/peers` → `triad` object.
-
-Record:
+## Identity triad (NEW after clean install 2026-09-10)
 
 | Field | Value |
 |---|---|
-| Phone libp2p PeerID | (from Windows peers) |
-| Phone public_key | (triad.public_key_hex) |
-| Phone identity_id | (triad.identity_id) |
+| Phone libp2p PeerID | `12D3KooWFhvgUu1UF8BoQG8dBxjdjDvoWJfgCnhFgzoSDAWqExt7` |
+| Phone public_key | `577fd1715f9f95fae10da5ea01aa20ac6789dfd898c3351ca3b6f62b249c4fb8` |
+| Phone identity_id | `77210c717fc849bb8a24e9f4462eeb03947fa69785ee87c0d18e31f07300775a` |
+
+Self-certifying (`/api/peer-resolve` on Windows). **Discard** old
+`e3d4aaec…` / `9a230574…` — pre-uninstall identity.
+
+Send while away:
+
+```powershell
+$pk = "577fd1715f9f95fae10da5ea01aa20ac6789dfd898c3351ca3b6f62b249c4fb8"
+$body = @{ recipient=$pk; message="store-forward-away $(Get-Date -Format o)" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:9876/api/send -Body $body -ContentType application/json
+```
+
+Preflight while mesh was up: `b5f51bdc…` accepted (`StoreAndCarry`).
+AWS `inbox_receive` from new phone id `77210c71…` confirmed.
 
 ## If mesh fails to start
 
