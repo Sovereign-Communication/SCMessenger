@@ -495,10 +495,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_listen_port_set_fails_closed() {
+    fn empty_listen_port_set_accepts_all_until_ports_known() {
+        // Unified 2026-09-10: empty listen set = accept all (browser/wasm has no
+        // listeners). Once set_listen_ports is called, non-listen ports are dropped.
         let mut observer = AddressObserver::new();
         observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
-        assert!(observer.external_addresses().is_empty());
+        assert_eq!(
+            observer.primary_external_address(),
+            Some("203.0.113.5:9001".parse().unwrap())
+        );
+
+        observer.set_listen_ports([9001]);
+        assert_eq!(
+            observer.primary_external_address(),
+            Some("203.0.113.5:9001".parse().unwrap())
+        );
     }
 
     #[test]

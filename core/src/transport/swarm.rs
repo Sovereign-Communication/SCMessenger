@@ -2958,14 +2958,6 @@ impl SwarmHandle {
             .map_err(|_| anyhow::anyhow!("Swarm task not running"))
     }
 
-    /// Add a known address for a peer in the DHT
-    pub async fn add_kad_address(&self, peer_id: PeerId, addr: Multiaddr) -> Result<()> {
-        self.command_tx
-            .send(SwarmCommand::AddKadAddress { peer_id, addr })
-            .await
-            .map_err(|_| anyhow::anyhow!("Swarm task not running"))
-    }
-
     /// Get listening addresses
     pub async fn get_listeners(&self) -> Result<Vec<Multiaddr>> {
         let (reply_tx, mut reply_rx) = mpsc::channel(1);
