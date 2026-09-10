@@ -601,6 +601,124 @@ fn build_routable_relay_addrs(
         .collect()
 }
 
+/// D10 (2026-09-09): structural self-endpoint check, wildcard-aware.
+///
+/// `addr_filter::is_self_address` matches concrete host:port strings against
+/// the identify-time snapshot of our own transport addresses. That snapshot
+/// can be INCOMPLETE during the startup race (identify of a relay can arrive
+/// before our binds are recorded), and our binds are often wildcard forms
+/// (`/ip4/0.0.0.0/tcp/9001`) that never string-match a concrete reflection
+/// (`/ip4/192.168.0.222/tcp/9001`).
+///
+/// This check closes that hole structurally: the candidate's (host, port)
+/// matches self if it matches ANY known local address on host, port, OR
+/// port-only when our own binding for that port is a wildcard. Purely
+/// structural — no network I/O, no identity lookups.
+///
+/// Returns true only when `known_local_addrs` is non-empty AND at least one
+/// entry matches; with no known local addresses this cannot self-match (the
+/// caller-visible effect is that the reservation gate then relies on the
+/// string-based `is_self_address` snapshot alone, as before D10).
+fn is_self_endpoint(addr: &Multiaddr, known_local_addrs: &[Multiaddr]) -> bool {
+    use libp2p::multiaddr::Protocol;
+
+    let extract_ip_port = |m: &Multiaddr| -> Option<(std::net::IpAddr, u16)> {
+        let mut ip: Option<std::net::IpAddr> = None;
+        let mut port: Option<u16> = None;
+        for proto in m.iter() {
+            match proto {
+                Protocol::Ip4(v4) => ip = Some(std::net::IpAddr::V4(v4)),
+                Protocol::Ip6(v6) => ip = Some(std::net::IpAddr::V6(v6)),
+                Protocol::Tcp(p) => port = Some(p),
+                _ => {}
+            }
+        }
+        match (ip, port) {
+            (Some(ip), Some(port)) => Some((ip, port)),
+            _ => None,
+        }
+    };
+
+    let (cand_ip, cand_port) = match extract_ip_port(addr) {
+        Some(v) => v,
+        None => return false,
+    };
+    if known_local_addrs.is_empty() {
+        return false;
+    }
+    for local in known_local_addrs {
+        let (local_ip, local_port) = match extract_ip_port(local) {
+            Some(v) => v,
+            None => continue,
+        };
+        if local_port != cand_port {
+            continue;
+        }
+        // Exact host match on the same port is unambiguous self.
+        if local_ip == cand_ip {
+            return true;
+        }
+        // D10 refinement (test-driven): a wildcard bind covers our local
+        // interfaces on that port, but public hosts on the same port are
+        // foreign relays in the standard same-port topology (Windows:9001
+        // <-> AWS:9001). So a wildcard bind claims a concrete candidate
+        // only when the candidate host is loopback/private/link-local —
+        // the reflection shape the observed poison actually took — or is
+        // in the same wildcard family for IPv6 (conservative: v6 locals
+        // are rarely enumerated in time during the race).
+        if local_ip.is_unspecified() {
+            let wildcard_claims = match cand_ip {
+                std::net::IpAddr::V4(v4) => {
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                }
+                std::net::IpAddr::V6(_) => true,
+            };
+            if wildcard_claims {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// D10: validate a relay-reservation candidate base at the moment of use.
+///
+/// The base for `listen_on(<base>/p2p/<relay>/p2p-circuit>)` must be a DIRECT,
+/// NON-CIRCUIT address that is NOT one of this node's own endpoints.
+///
+/// Why this gate exists (evidence: HANDOFF/
+/// V040_CTO_3NODE_BLE_CHECKPOINT_20260909T225500Z_ANR_MAIN_FFI_FIX.md):
+/// libp2p-mdns advertises the swarm's ListenAddresses verbatim, and a
+/// reservation `listen_on` whose base was a nested circuit route or the
+/// node's own address produced a poison listener
+/// (`/ip4/<self>/tcp/9001/p2p/<self>/p2p-circuit/p2p/<AWS>/p2p-circuit/
+/// p2p/<self>`) whose bulk overflowed the mDNS response
+/// (`TxtRecordTooLong`, `os error 10040`) and killed LAN discovery for
+/// every peer on the network.
+///
+/// `known_local_addrs` must be the CURRENT swarm listen + external address
+/// set at the moment of the reservation, not an identify-time snapshot.
+fn is_valid_reservation_base(addr: &Multiaddr, known_local_addrs: &[Multiaddr]) -> bool {
+    // (1) No circuit components: the reservation builder appends the single
+    // trailing `/p2p-circuit`; a base that already contains one would nest.
+    if addr
+        .iter()
+        .any(|proto| matches!(proto, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return false;
+    }
+    // (2) Must be discoverable at all (loopback/CGNAT/multicast/DNS forms are
+    // already rejected by the existing gate).
+    if !is_discoverable_multiaddr(addr) {
+        return false;
+    }
+    // (3) Must not be one of our own endpoints (wildcard-aware).
+    if is_self_endpoint(addr, known_local_addrs) {
+        return false;
+    }
+    true
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn relay_reservation_multiaddr(base: &Multiaddr, relay_peer_id: PeerId) -> Multiaddr {
     use libp2p::multiaddr::Protocol;
@@ -618,6 +736,29 @@ fn relay_reservation_multiaddr(base: &Multiaddr, relay_peer_id: PeerId) -> Multi
     normalized
         .with(Protocol::P2p(relay_peer_id))
         .with(Protocol::P2pCircuit)
+}
+
+/// D10: the reservation address this builder produces must contain EXACTLY
+/// ONE `/p2p-circuit` segment, in terminal position. This is the structural
+/// guarantee the reviewer asked for: no double-append, no nesting, regardless
+/// of what the base contained.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_canonical_reservation_addr(addr: &Multiaddr) -> bool {
+    use libp2p::multiaddr::Protocol;
+    let mut circuit_count = 0usize;
+    let mut saw_non_circuit_after_circuit = false;
+    for proto in addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => {
+                circuit_count += 1;
+            }
+            _ if circuit_count > 0 => {
+                saw_non_circuit_after_circuit = true;
+            }
+            _ => {}
+        }
+    }
+    circuit_count == 1 && !saw_non_circuit_after_circuit
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5213,10 +5354,55 @@ pub async fn start_swarm_with_config(
                                         if !routable_relay_addrs.is_empty() {
                                             // Pick the first routable relay address and register a circuit reservation.
                                             // Format: /ip4/<relay-ip>/tcp/<port>/p2p/<relay-peer-id>/p2p-circuit
-                                            let relay_circuit_addr = relay_reservation_multiaddr(
-                                                &routable_relay_addrs[0],
-                                                peer_id,
-                                            );
+                                            //
+                                            // D10 (2026-09-09): re-validate the base against the CURRENT
+                                            // swarm address set at the moment of use. The identify-time
+                                            // snapshot (bound_addresses) can be incomplete during the
+                                            // startup race, and a reservation based on one of our own
+                                            // endpoints or on a circuit route creates a poison listener
+                                            // that overflows the mDNS response and kills LAN discovery
+                                            // network-wide (evidence in the D10 checkpoint).
+                                            let mut known_local_addrs: Vec<Multiaddr> =
+                                                swarm.listeners().cloned().collect();
+                                            known_local_addrs
+                                                .extend(swarm.external_addresses().cloned());
+
+                                            let mut reservation_base: Option<Multiaddr> = None;
+                                            for candidate in &routable_relay_addrs {
+                                                if is_valid_reservation_base(
+                                                    candidate,
+                                                    &known_local_addrs,
+                                                ) {
+                                                    reservation_base = Some(candidate.clone());
+                                                    break;
+                                                }
+                                            }
+
+                                            if reservation_base.is_none() {
+                                                tracing::warn!(
+                                                    "[D10] Relay {} reservation skipped: no valid direct non-self base among {} candidate(s)",
+                                                    peer_id,
+                                                    routable_relay_addrs.len()
+                                                );
+                                                // Mark as reserved-without-listener is NOT allowed; fall
+                                                // through to the else branch by leaving already_reserved
+                                                // unset, so a later identify (with complete binds) retries.
+                                            }
+
+                                            let relay_circuit_addr = reservation_base
+                                                .map(|base| {
+                                                    relay_reservation_multiaddr(&base, peer_id)
+                                                });
+
+                                            let Some(relay_circuit_addr) = relay_circuit_addr
+                                            else {
+                                                // D10: every candidate base was invalid (circuit
+                                                // route, self-endpoint, or undiscoverable). Skip
+                                                // the reservation entirely — a later identify with
+                                                // complete binds retries, and no poison listener is
+                                                // ever created.
+                                                continue;
+                                            };
 
                                             tracing::info!(
                                                 "Attempting relay circuit reservation via {}: {}",
@@ -5227,6 +5413,10 @@ pub async fn start_swarm_with_config(
                                                     tracing::info!(
                                                         "[OK] Relay circuit reservation registered: {:?} via {}",
                                                         listener_id, peer_id
+                                                    );
+                                                    debug_assert!(
+                                                        is_canonical_reservation_addr(&relay_circuit_addr),
+                                                        "reservation address must carry exactly one trailing /p2p-circuit"
                                                     );
                                                     successful_relay_reservations.insert(peer_id, listener_id);
                                                     relay_peer_addrs.insert(peer_id, routable_relay_addrs.clone());
@@ -9385,5 +9575,171 @@ mod ledger_seeding_hardening_tests {
              loop than any honest exchange ever needs"
         );
         assert!(LEDGER_EXCHANGE_MAX_REQUEST_PEERS <= 64);
+    }
+
+    // ------------------------------------------------------------------
+    // D10 (2026-09-09) -- relay-reservation base validation.
+    //
+    // A reservation base must be a direct, non-circuit, non-self address.
+    // A poison reservation listener (nested self-circuit route) overflows
+    // the mDNS response and kills LAN discovery network-wide.
+    // ------------------------------------------------------------------
+
+    use super::{
+        is_canonical_reservation_addr, is_valid_reservation_base, relay_reservation_multiaddr,
+    };
+
+    fn relay_id() -> PeerId {
+        // Deterministic-enough random peer for the RELAY (a different node).
+        PeerId::random()
+    }
+
+    #[test]
+    fn d10_nested_circuit_base_is_rejected() {
+        let relay = relay_id();
+        // The poison shape observed on Windows (evidence: D10 checkpoint):
+        // a route THROUGH a relay that is itself reached via a circuit.
+        let nested: Multiaddr = format!(
+            "/ip4/192.168.0.222/tcp/9001/p2p/{}/p2p-circuit/p2p/{}/p2p-circuit",
+            PeerId::random(),
+            relay
+        )
+        .parse()
+        .expect("valid multiaddr");
+        assert!(
+            !is_valid_reservation_base(&nested, &[]),
+            "a base containing /p2p-circuit must never produce a reservation listener"
+        );
+    }
+
+    #[test]
+    fn d10_concrete_self_base_is_rejected() {
+        let self_concrete: Multiaddr = "/ip4/192.168.0.222/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        // The wildcard-bind race: our own bind is 0.0.0.0:9001 and the
+        // candidate is our private LAN reflection on the same port. The
+        // wildcard rule claims private candidates; no exact knowledge needed.
+        let known_local = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap(),
+            "/ip4/0.0.0.0/tcp/9876".parse::<Multiaddr>().unwrap(),
+        ];
+        assert!(
+            !is_valid_reservation_base(&self_concrete, &known_local),
+            "a private reflection covered by our own wildcard bind must be rejected as self"
+        );
+    }
+
+    #[test]
+    fn d10_wildcard_bind_does_not_claim_public_hosts_on_same_port() {
+        // The standard same-port topology: we bind 0.0.0.0:9001 and the AWS
+        // relay listens on 18.234.62.247:9001. The wildcard bind must NOT
+        // claim the foreign public endpoint as self (that would disable
+        // reservations in the default deployment).
+        let foreign: Multiaddr = "/ip4/18.234.62.247/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        let known_local = vec!["/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap()];
+        assert!(
+            is_valid_reservation_base(&foreign, &known_local),
+            "public foreign relay on the same port as our wildcard bind is NOT self"
+        );
+    }
+
+    #[test]
+    fn d10_exact_host_match_is_rejected_even_without_wildcard() {
+        let self_concrete: Multiaddr = "/ip4/10.0.0.5/tcp/9001".parse().expect("valid multiaddr");
+        let known_local = vec!["/ip4/10.0.0.5/tcp/9002".parse::<Multiaddr>().unwrap()];
+        // Same host, different port: the string-based matcher treats this as a
+        // different address, but the D10 structural check keys on host+port
+        // pairs; a host:port the node already OWNS on another port is still
+        // not a relay endpoint... except that hosts are shared. The structural
+        // rule is: same host AND same port = self. Different port on same host
+        // is a DIFFERENT endpoint and stays eligible.
+        assert!(
+            is_valid_reservation_base(&self_concrete, &known_local),
+            "same host with a different port is a different endpoint, not self"
+        );
+        let same_port: Multiaddr = "/ip4/10.0.0.5/tcp/9002".parse().unwrap();
+        assert!(
+            !is_valid_reservation_base(&same_port, &known_local),
+            "exact host:port match against a known local address must be rejected as self"
+        );
+    }
+
+    #[test]
+    fn d10_empty_local_set_does_not_block_foreign_relay() {
+        let relay_addr: Multiaddr = "/ip4/203.0.113.7/tcp/443".parse().expect("valid multiaddr");
+        // Startup race with NO binds recorded yet: D10 cannot self-match, so
+        // the gate must not blanket-reject foreign relays (that would disable
+        // reservations entirely until binds exist).
+        assert!(
+            is_valid_reservation_base(&relay_addr, &[]),
+            "empty known-local set must not reject a foreign relay base"
+        );
+    }
+
+    #[test]
+    fn d10_valid_foreign_base_is_accepted_and_reservation_is_canonical() {
+        let relay = relay_id();
+        let base: Multiaddr = "/ip4/18.234.62.247/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        let known_local = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap(),
+            "/ip6/::/tcp/9001".parse::<Multiaddr>().unwrap(),
+        ];
+        // The relay's WAN endpoint shares our listen PORT but not our hosts;
+        // wildcard matching is per-IP-family, so this must stay eligible.
+        assert!(
+            is_valid_reservation_base(&base, &known_local),
+            concat!(
+                "a foreign relay on the same port as our wildcard IPv4 bind is NOT self ",
+                "(its IP differs from the bind family/host)"
+            )
+        );
+
+        let reservation = relay_reservation_multiaddr(&base, relay);
+        assert!(
+            is_canonical_reservation_addr(&reservation),
+            "reservation must carry exactly one trailing /p2p-circuit: {reservation}"
+        );
+        // The relay hop must be encoded immediately before the circuit marker.
+        let mut protos = reservation.iter();
+        assert!(
+            protos.any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(id) if id == relay)),
+            "reservation must embed the relay peer id"
+        );
+        assert!(
+            reservation.to_string().ends_with("/p2p-circuit"),
+            "reservation must terminate at the circuit marker"
+        );
+    }
+
+    #[test]
+    fn d10_reservation_builder_never_nests_circuit_from_circuit_base() {
+        let relay = relay_id();
+        // Even if a circuit base slips past upstream filters, the builder's
+        // structural normalization must not produce a nested-circuit address.
+        let circuit_base: Multiaddr = format!(
+            "/ip4/203.0.113.7/tcp/443/p2p/{}/p2p-circuit",
+            PeerId::random()
+        )
+        .parse()
+        .expect("valid multiaddr");
+        let reservation = relay_reservation_multiaddr(&circuit_base, relay);
+        assert!(
+            is_canonical_reservation_addr(&reservation),
+            "normalization must collapse any base to a single trailing circuit: {reservation}"
+        );
+    }
+
+    #[test]
+    fn d10_loopback_base_is_rejected() {
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/9001".parse().expect("valid multiaddr");
+        assert!(
+            !is_valid_reservation_base(&loopback, &[]),
+            "loopback bases are undiscoverable and must never anchor a reservation"
+        );
     }
 }
