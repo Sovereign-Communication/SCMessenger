@@ -42,6 +42,39 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Register this node's identity (device_id + seniority) with a relay peer so
+/// custody can accept store-and-forward requests *to* this node.
+///
+/// Android already does this on Identify (`mobile_bridge.rs`); the CLI never
+/// did, which produced `identity_registration_missing` on AWS whenever another
+/// node tried to relay to a Windows/Linux peer through the cloud node.
+async fn register_identity_with_relay(
+    core: &IronCore,
+    swarm_handle: &SwarmHandle,
+    peer_id: PeerId,
+) {
+    match core.build_registration_request() {
+        Ok(request) => match swarm_handle.register_identity(peer_id, request).await {
+            Ok(()) => {
+                tracing::info!(
+                    "[CUSTODY] Registered local identity with peer {} (relay-ready)",
+                    peer_id
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[CUSTODY] Failed to register local identity with {}: {}",
+                    peer_id,
+                    e
+                );
+            }
+        },
+        Err(e) => {
+            tracing::debug!("[CUSTODY] No registration request for {}: {:?}", peer_id, e);
+        }
+    }
+}
+
 /// Convert a Path to a string, returning an error if the path contains invalid UTF-8.
 /// This is safer than using .unwrap() which would panic on non-UTF-8 paths.
 fn path_to_string(path: &std::path::Path) -> Result<String> {
@@ -2647,6 +2680,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         listen_addrs.iter().map(|a| a.to_string()).collect();
                                     l.record_identified_peer(&peer_id.to_string(), &advertised);
                                 }
+                                // Register with this peer so it can custody-store
+                                // messages for us (required for cell/AWS relay).
+                                register_identity_with_relay(&core_rx, &swarm_handle, peer_id).await;
                                 if let Err(e) = swarm_handle.share_ledger(peer_id).await {
                                     tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
                                 }
@@ -3851,6 +3887,9 @@ async fn cmd_relay(
                         let advertised: Vec<String> =
                             listen_addrs.iter().map(|a| a.to_string()).collect();
                         l.record_identified_peer(&peer_id.to_string(), &advertised);
+                        drop(l);
+                        // Relay nodes must also register so peers can custody to us.
+                        register_identity_with_relay(core_arc.as_ref(), &swarm_handle, peer_id).await;
                         if let Err(e) = swarm_handle.share_ledger(peer_id).await {
                             tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
                         }
