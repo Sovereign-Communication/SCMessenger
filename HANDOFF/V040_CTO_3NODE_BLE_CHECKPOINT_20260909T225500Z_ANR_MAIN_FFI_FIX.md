@@ -254,3 +254,50 @@ prime suspect: a workspace test (or default-config writer) touching the real
 **Verdicts:** AWS deploy PASS; Windows deploy PASS; D10 live proof PASS
 (no nested circuits, no TXT overflow); mutual desktop reconnection PASS;
 Pixel-side rejoin UNVERIFIED (adb unreachable — next pass).
+
+---
+
+## ADDENDUM 2026-09-10T02:10Z — REJOIN PASS: Pixel back on the mesh (D10 proven end-to-end)
+
+**Deploy:** staged D10 APK (sha256 d0143c65…, HEAD 8c74a6a2) replace-installed
+(lastUpdateTime 15:56:34 local = 01:56Z, data preserved, versionCode=14),
+launched via monkey (authorized deploy-verify flow), new PID 7140.
+Evidence: tmp/cto/D10_REJOIN_20260910T015627Z/ (logcat_w1_90s / w2_210s / w3_final).
+
+**Rejoin scoring (from actual lines):**
+- (a) mDNS/LAN discovery of WINDOWS: **PASS** — `16:01:09.637 MeshRepository:
+  TCP/mDNS: LAN peer detected 12D3KooWD6vZQrUq…(Windows) with 8 local addresses`;
+  self-resolve correctly ignored (`mDNS: ignoring self-resolved service`).
+- Dial: **PASS** — `Successfully dialed discovered LAN peer
+  /ip4/192.168.0.222/tcp/9001 via SwarmBridge` (correct port-fallback from a
+  failed 9002/ws attempt); full identify: `agent=scmessenger/0.4.0/full/relay/
+  12D3KooWD6vZ…, 32 addresses`.
+- Desktop mutual: **PASS** — Windows /api/diagnostics peers now include the
+  Pixel `12D3KooWR9io…` AND AWS; `Connected to 12D3KooWR9io… via
+  /ip4/192.168.0.134/tcp/59956`; `Learned new contact 'Lucas'`;
+  `DIAL-BACKOFF Reset backoff state after successful connection`; `Sent peer
+  list (2 peers) to 12D3KooWR9io…` (the ledger re-seed mechanism, live).
+- (b) peersDiscovered: **PASS** — `peersDiscovered=1` (was 0).
+- (c) bootstrap: **PASS** — `NetworkDetector: Network type updated:
+  UNKNOWN -> WIFI (stable for 500ms)` (clean E8-class line); racing bootstrap
+  on WIFI; phone's address snapshot contains
+  `/ip4/147.81.41.188/tcp/9001/p2p/<Windows>/p2p-circuit/p2p/<self>` — the
+  T14-pinned Windows endpoint relaying the phone (T14+D10 end-to-end).
+- (d) ANR: **PASS** — zero ANRs, watchdog silent after start; the only match
+  in both windows is the same single benign cold-start frame skip at
+  15:56:46.194 (2.6s after spawn, pre-Compose-init).
+- (e) message flow: **WARN** — history intact (120 msgs), one
+  `UNIFICATION message_relay: ctx=send … msg=11e11549…` send-attempt line,
+  `messagesRelayed=0` in stats, `undeliveredCount=1`. Delivery confirmation
+  not yet observed in the captured windows.
+- Phone->AWS leg: **UNVERIFIED this pass** — no AWS dial/identify line in the
+  windows yet; the re-seed (Windows sent 2-peer list at 02:01:24Z) should
+  produce it passively over the next minutes.
+
+**PR #279 checks at 01:55Z:** Analyze actions/js/python/ruby PASS; rust
+pending; CodeQL skipping.
+
+**Verdicts:** REJOIN VIA LAN PASS; ANR FIX HOLDS ON D10 APK PASS; PHONE->AWS
+UNVERIFIED (expected passively next); message delivery WARN.
+The mesh is 3-node-connected at the transport level (Windows sees both
+peers simultaneously). Ready for the operator's manual drop test.

@@ -768,3 +768,23 @@ rejoin scoring when adb returns.
 
 NEXT: Pixel rejoin scoring (adb back), then operator-driven 3-node test.
 D10 rule-8 review packet still PENDING independent adversarial review.
+
+---
+
+## CTO check-in 2026-09-10T02:10Z - REJOIN PASS: Pixel on the mesh, D10 proven end-to-end
+
+adb returned; staged D10 APK (d0143c65, HEAD 8c74a6a2) replace-installed +
+launched (PID 7140, data preserved). Scored from actual lines: phone detected
+Windows via LAN (TCP/mDNS LAN peer detected 12D3KooWD6vZ with 8 local addrs),
+dialed 192.168.0.222:9001 directly, full identify (32 addrs);
+peersDiscovered 0 -> 1; bootstrap UNKNOWN -> WIFI clean; ANR fix holds on
+the new APK (zero ANRs, one benign cold-start frame skip). Desktop mutual
+confirmed: Windows peers = [Pixel, AWS] simultaneously, DIAL-BACKOFF reset,
+contact 'Lucas' learned, 2-peer list SENT to the phone (ledger re-seed live),
+phone's address snapshot carries the 147.81.41.188 circuit through Windows -
+T14+D10 end-to-end. WARN: message delivery not yet confirmed
+(undeliveredCount=1, messagesRelayed=0); phone->AWS leg UNVERIFIED but the
+re-seed should produce it passively. Evidence:
+tmp/cto/D10_REJOIN_20260910T015627Z/. PR #279 checks: 4 PASS, rust pending.
+MESH IS 3-NODE-CONNECTED AT TRANSPORT LEVEL - ready for the operator's
+manual drop test (WiFi/BLE/cell).
