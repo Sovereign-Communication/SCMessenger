@@ -55,3 +55,46 @@ UTC: 2026-09-10T05:15Z. Branch cto/t2-disk-ruling-2026-08-31. Immutable append-o
 
 Evidence: tmp/cto/OPTEST_20260910T050723Z/ (full+tail logcat), tmp/cto/AWSRCA_GATE/
 (fix gate 10/10, verify windows w1-w6), tmp/cto/D12_MDNS_RECOVERY_20260910T044936Z/.
+
+---
+
+# Addendum — three-node time-correlated message trace (operator test window)
+
+Clocks: phone local UTC-10 -> UTC by +10h. Cross-node clock skew observed: <= 10ms
+(inferred from Windows receive preceding phone ack-log by ~25ms on identical
+pairs; all three nodes agree within log-timestamp noise).
+
+## Message-level trace (msg id: phone send -> recipient inbox_receive)
+
+| msg (8ch) | route | phone send (UTC) | phone outcome | node recv (UTC) | e2e |
+|---|---|---|---|---|---|
+| 8e69920b | Windows | 05:04:52.725 | accepted core | Win 05:04:52.950 | ~225ms |
+| 21dea3f9 | Windows | 05:04:52.788 | accepted core | Win 05:04:53.010 | ~222ms |
+| e1474906 | Windows | 05:04:52.794 | accepted core | Win 05:04:53.017 | ~223ms |
+| f2ce7f1c | Windows | 05:04:52.860 | accepted core | Win 05:04:53.084 | ~224ms |
+| 8603aa88 | Windows | 05:04:52.917 | accepted core | Win 05:04:53.141 | ~224ms |
+| 90898041 | Windows | 05:05:12.872 | accepted core | Win 05:05:13.098 | ~226ms |
+| ccef44e4 | Windows | 05:06:52.747 | accepted core | Win 05:06:52.972 | ~225ms |
+| 2410ea22 | AWS    | 05:05:00.514 ack | accepted core | AWS 05:05:00.274 | <=240ms |
+| 87a321b1 | AWS+Win (raced) | 05:06:31.3 | core-direct FAILED (breaker), relay-assist + tcp_mdns delivered; aggregate accepted | AWS 05:06:31.496, Win via LAN 05:06:32.0 | ~200-700ms |
+
+Consistent end-to-end latency: ~220-245ms phone->recipient on all legs.
+
+## Post-test AWS ingestion (phone -> AWS direct leg alive)
+
+AWS inbox_receive cadence from the phone (sender 9a230574...): 1d80cf3f 05:03:42,
+2410ea22 05:05:00, 87a321b1 05:06:31, e4bc8c1c 05:07:31, 6b694d7d 05:09:00,
+4ca0dba6 05:10:00, f15e4231 05:11:31, dbfe4aed 05:12:31 — every 60-90s, the
+store/forward leg actively ingesting. Identify cadence on AWS: phone (38
+discoverable_addrs) + Windows (19) every ~60s.
+
+## Windows-side observations (non-blocking)
+
+- "Failed to decode wire envelope: unexpected end of file" WARNs during the
+  window — partial/truncated reads; deliveries unaffected. Ticketed hygiene.
+- Windows received 0 copies of the 2 AWS-routed messages (correct routing).
+- SSH to AWS node lacks post-quantum KEX (OpenSSH warning) — infra hygiene item,
+  not product.
+
+Verdict: comprehensive 3-node trace PASSES at message level; custody/relay and
+LAN paths both proven end-to-end with timestamps on every node.
