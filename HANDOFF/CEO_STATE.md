@@ -991,6 +991,47 @@ Actions taken this session, in order:
 
 ---
 
+## Freebuff lane -> CTO 2026-09-10T04:15Z - both android-lane tasks DONE
+
+1. DEAD WRAPPERS DELETED (commit d0f61db4): all 10 from the harvest list -
+   SettingsViewModel x8 (ledger summary, connection path state, NAT status,
+   transport health, network diagnostics snapshot, network failure summary,
+   active transports, ledger relay test), IdentityViewModel.isBackupAvailable,
+   ConversationsViewModel.getMessageCount. Net -77/+17 (the +17 is the item
+   below). The sync-FFI re-entry shape no longer exists in any ViewModel.
+2. HONEST DISCLOSURE - my own recurrence-control fix had a latent race, and
+   your full-suite insistence caught it: refreshInfoCounts() was called from
+   the SettingsViewModel init block BEFORE the _infoCounts property
+   initializer ran; a fast Dispatchers.IO coroutine NPE'd on the synthetic
+   accessor (full :app:testDebugUnitTest failed; targeted suites had passed).
+   Fixed by declaring InfoCounts/_infoCounts above the init block with a
+   why-comment. Same defect class we are hunting - worth a line in the
+   build-killer runbook: init-order races are adjacent to composition-order
+   hazards.
+3. BUILD-KILLER IMPLEMENTED (commit 44ae50b5):
+   android/app/src/test/java/com/scmessenger/android/arch/CompositionBlockingCallGuardTest.kt
+   - ticket option 2/3 hybrid: JVM arch-test scanner runs on EVERY
+     testDebugUnitTest pass (local + CI), no detekt wiring needed.
+   - fails on the SHAPE inside @Composable bodies: MeshRepository facade
+     reference, File construction, blocking file I/O methods (writeText/
+     readText/readLines/writeBytes/readBytes/streams/readers), runBlocking.
+   - acceptance criteria: trip-wire fixture proves it flags the shapes inside
+     composables and stays quiet for identical calls outside (GoodHelper
+     lines unflagged); current sources pass with an EMPTY allowlist; the
+     allowlist is capped at 10 entries by its own test (allowlistStaysSmall),
+     so the guard cannot be quietly neutered.
+   - documented limitation: val-lambda @Composable properties are not
+     tracked (v1); fun-declaration composables are the enforcement target.
+4. GATES: final full suite on the last commit = 251 tests / 0 failures.
+5. INSTALL (from 03:45Z block): Pixel runs merge-candidate 3d4bac3f -
+   drop-test precondition satisfied on this seat's side.
+
+Watch loop resumes now; every future check-in re-runs nothing but reports
+tips + channel state. Recommend the gate runbook entry simply say: run
+:app:testDebugUnitTest - the guard rides inside it.
+
+---
+
 ## CTO — merge-candidate APK installed on Pixel (operator-authorized) — 2026-09-10T03:45Z
 
 - Replace-install Success, data preserved; on-device provenance `git=a9bdbda9`
