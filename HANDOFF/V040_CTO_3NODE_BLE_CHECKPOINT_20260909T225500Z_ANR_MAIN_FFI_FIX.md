@@ -328,3 +328,34 @@ for the tag decision.
 D10 tree; WAN/custody and BLE legs remain for the operator's manual drop test
 (exactly the legs that test is designed to exercise). Passive transport story
 is complete to the extent WiFi-only observation allows.
+
+---
+
+# Addendum — merge-candidate APK installed on Pixel (operator-authorized)
+
+- UTC: 2026-09-10T03:45Z. Authority: operator "you already have permission for adb install - do it".
+- APK: `android/app/build/outputs/apk/debug/app-debug.apk`, sha256 `3d4bac3f…549c809`
+  (re-verified byte-identical to the HEAD_ASSEMBLE gate record before install;
+  built at HEAD `a9bdbda9` = PR #279 full-green head, includes CEO recurrence-control).
+- Install: `adb install -r` replace-install, **Success** (data preserved:
+  firstInstallTime 2026-09-06 unchanged; AND-CONTACTS-WIPE-001 normal startup,
+  1 contact + 121 messages intact). versionCode=14 / 0.4.0, lastUpdateTime 17:30:16 local (03:30Z).
+- Provenance on-device (logcat): `git=a9bdbda9, ref=cto/t2-disk-ruling-2026-08-31,
+  build_time=2026-09-10T02:59:10Z` — phone is merge-candidate-identical.
+- Stability: zero ANR/FATAL across 3 pid-filtered windows (~03:33-03:39Z); the w1
+  "matches" were the watchdog startup lines and the old process's "ANR events: 0"
+  shutdown summary — benign. Phone is now running BOTH main-thread fixes
+  (PlatformBridge D10 APK + DiagnosticsShareController/InfoCounts).
+- Mesh: LAN dial to Windows succeeded (`Successfully dialed discovered LAN peer
+  /ip4/192.168.0.222/tcp/9001` at 17:32:48 local); proven-relay candidate restored
+  by second bootstrap cycle (`attempting 1 proven ledger relay candidate(s)` at
+  17:37:41/17:38:46 — the w2 "no proven candidates" line was a startup transient;
+  persistence holds).
+- OPERATOR-VISIBLE STATE (needs your eyes): the mesh service **paused itself at
+  17:33:08 local** and stayed paused (peersDiscovered=0 thereafter; outbox retries
+  fail with no transports — consistent with paused, not a transport regression).
+  Windows /api/diagnostics peers=[AWS] at 03:38Z correlates. Toggle mesh ON in the
+  app to resume; then the manual drop test can proceed on a merge-candidate phone.
+- PR #279: **full-green on head `3533e5b8`** (actions/js/python/ruby + rust 12m19s
+  + CodeQL pass). Rule-8 review/dispatch packet: HANDOFF/review/V040_D10_REVIEWER_DISPATCH_PACKET_2026-09-10.md (verdict still PENDING).
+- Evidence: tmp/cto/MC_INSTALL_20260910T033034Z/ (3 logcat windows, windows_diag.json).

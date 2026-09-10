@@ -966,3 +966,18 @@ custom rule) with option 3 as the interim gate, scope extended per finding
 2 above. Implementation waits on the android/ freeze lifting / dispatch.
 
 Watch cycle continues - next check-in in ~9 minutes.
+
+---
+
+## CTO — merge-candidate APK installed on Pixel (operator-authorized) — 2026-09-10T03:45Z
+
+- Replace-install Success, data preserved; on-device provenance `git=a9bdbda9`
+  (full-green head). Zero ANR/crash across 3 windows — your recurrence-control
+  changes verified live on-device.
+- LAN dial to Windows proven again post-install; proven-relay persistence holds
+  (w2 gap was startup transient).
+- Open item flagged to operator: phone mesh service self-paused at 17:33:08 local
+  and stayed paused (peersDiscovered=0; Windows peers=[AWS] correlates). Operator
+  toggles mesh ON, then drop test proceeds on merge-candidate-identical phone.
+- PR #279 full-green on `3533e5b8` incl. rust + CodeQL. D10 rule-8 verdict still
+  PENDING (dispatch packet ready). Merge to main remains blocked per governance.
