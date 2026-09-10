@@ -358,6 +358,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes every test that points SCMESSENGER_CONFIG at a temp file.
+    /// The env var is process-global: without this lock, a concurrent
+    /// set/remove race can leave a save() running against the REAL user
+    /// config — this exact hazard nulled the live external_addr pin during
+    /// the 2026-09-10 gate battery (mtime 00:11:40Z, between test starts and
+    /// battery end; proven by running the unfixed culprit test and watching
+    /// %APPDATA%\scmessenger\config.json change under it).
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
@@ -370,6 +380,13 @@ mod tests {
 
     #[test]
     fn test_external_addr_config_roundtrip_and_validation() {
+        // HERMETIC: set()/save() persist to SCMESSENGER_CONFIG — point that
+        // at a temp file so this test can never write the real user config
+        // again (before this fix it nulled the live T14 external_addr pin).
+        let _env_guard = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("SCMESSENGER_CONFIG", tmp.path().join("config.json"));
+
         let mut config = Config::default();
 
         // Valid host:port is accepted and survives serialization.
@@ -392,6 +409,8 @@ mod tests {
         // Empty value clears the knob.
         config.set("external_addr", "").unwrap();
         assert!(config.external_addr.is_none());
+
+        std::env::remove_var("SCMESSENGER_CONFIG");
     }
 
     #[test]
@@ -404,6 +423,7 @@ mod tests {
 
     #[test]
     fn test_add_bootstrap_node_circuit_relay_dedup() {
+        let _env_guard = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let config_file = tmp.path().join("config.json");
         std::env::set_var("SCMESSENGER_CONFIG", &config_file);

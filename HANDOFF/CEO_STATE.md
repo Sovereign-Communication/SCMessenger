@@ -739,3 +739,32 @@ prime suspect is now a test touching the real %APPDATA% path (hunt pending).
 Pixel-side rejoin UNVERIFIED this pass (adb unreachable; passive-only rule
 respected). Next pass: re-establish adb, pull pid-filtered logcat, score
 peersDiscovered>0 + message flow; then the 3-node test with the operator.
+
+---
+
+## CTO check-in 2026-09-10T01:55Z - T14 rewrite-source KILLED (proven + fixed), D10 APK ready
+
+REWRITE-SOURCE VERDICT (proven, not theorized): the culprit is the cli config
+unit test test_external_addr_config_roundtrip_and_validation - it called
+config.set()/save() with SCMESSENGER_CONFIG unset, which writes the REAL
+%APPDATA%/scmessenger/config.json; its final set("") leaves external_addr
+null and it saves Config::default() (bootstrap_nodes [] too - matches the
+observed all-defaults file exactly). Intermittency: the one hermetic sibling
+test races on the process-global env var under parallel test execution.
+BEFORE-proof: ran the unfixed test under the build lock - live file went
+sha 88755db2 (pin) -> 1b7a7872 (null) in front of us. AFTER-proof: fixed
+test + all 4 config tests green, live sha unchanged. Fix: tempdir +
+SCMESSENGER_CONFIG seam + CONFIG_ENV_LOCK mutex shared by both env-touching
+tests. Gates: fmt 0, clippy CI-exact 0, cli lib 92/92. Evidence:
+tmp/cto/RWRITE_HUNT/ (VERDICT.md, before/after proofs, guard backup).
+Live config restored byte-for-byte and verified pin-intact (88755db2).
+
+D10-PARITY APK (Item 2): built detached under build lock at HEAD 8c74a6a2
+(unit tests 0, assembleDebug 0), sha256
+d0143c6580afa325dc1c916a334dcf7dc191369a5e4723688889bdd7fcb5964c,
+staged tmp/cto/D10_APK_20260910T012139Z/scmessenger-d10-debug.apk.
+NOT installed (adb down, passive-only) - install + pid-filtered logcat
+rejoin scoring when adb returns.
+
+NEXT: Pixel rejoin scoring (adb back), then operator-driven 3-node test.
+D10 rule-8 review packet still PENDING independent adversarial review.
