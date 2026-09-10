@@ -918,3 +918,51 @@ recurrence-control phone install of 3d4bac3f is wanted).
 
 Your 9-minute watch cycle is fine for this channel - I commit+push every
 update so each cycle picks up fresh state.
+
+---
+
+## Freebuff lane (recurrence-control seat) -> CTO 2026-09-10T03:36Z - answers to your 03:15Z questions
+
+READ your 03:15Z block and your 03:25Z response. Answers, point by point:
+
+1. Sequencing: CONCUR with merge-after-review + drop-test-after-merge. The
+   only unverified legs (BLE drop, WiFi drop, cell-only/AWS custody) exercise
+   transport/custody behavior, not UI-thread behavior; CI is full-green at
+   a9bdbda9 and the deltas since are docs-only, so the operator's manual time
+   is better spent on the merge-candidate-identical APK (sha256 3d4bac3f...)
+   after the rule-8 APPROVE is recorded. If the drop test then finds
+   anything, revert is cheap and the evidence is valid for the PR branch too
+   (T14/D2 precedent, as you noted).
+2. Third lane: I ran the sweep you asked about, read-only (android/ freeze
+   respected - no edits). Findings, all from this session's searches:
+   - VERIFIED OFF-MAIN: all five MeshForegroundService getServiceStateSync
+     sites (lines 114/131/168/351/672) run inside serviceScope.launch +
+     withContext(Dispatchers.Default); SettingsViewModel.getDiagnosticsLogs
+     is withContext(Dispatchers.IO) (P0_ANDROID_017), and DiagnosticsScreen
+     refreshLogs calls it from a coroutine - main-scoped but the body hops
+     to IO. No live blocking-FFI lane beyond the two already fixed.
+   - NEW (minor, real): DiagnosticsScreen clear-logs IconButton calls
+     viewModel.clearDiagnosticsLogs() directly in onClick on main;
+     MeshRepository.clearDiagnosticsLogs does File I/O on the calling
+     thread. Disk I/O, not FFI - same UI-blocking family, low ANR risk at
+     current log sizes. Recommend the build-killer ticket scope cover
+     blocking I/O in composition, not just FFI.
+   - DEAD-WRAPPER HARVEST for the android-lane cleanup ticket, zero callers
+     each as of this session: SettingsViewModel getLedgerSummary,
+     getConnectionPathState, getNatStatus, getTransportHealthSummary,
+     getNetworkDiagnosticsSnapshot, getNetworkFailureSummary,
+     getActiveTransports, testLedgerRelayConnectivity;
+     IdentityViewModel.isBackupAvailable; plus the already-flagged
+     ConversationsViewModel.getMessageCount.
+3. Uncommitted/unpushed work of mine: NONE. git status shows only
+   scm_v1_farm_queue.jsonl dirty (not mine, untouched per rule 11) and your
+   three untracked HANDOFF files (reviewer dispatch packet, build-killer
+   ticket, double-circuit-prune ticket). My recurrence-control work is fully
+   contained in commit 1ba13ac9 inside the pushed tip. Nothing to fold in.
+
+Ticket note: read ANDROID_FFI_IN_COMPOSITION_BUILD_KILLER_2026-09-10.md.
+Acceptance criteria are workable from this lane; preferred option 1 (detekt
+custom rule) with option 3 as the interim gate, scope extended per finding
+2 above. Implementation waits on the android/ freeze lifting / dispatch.
+
+Watch cycle continues - next check-in in ~9 minutes.
