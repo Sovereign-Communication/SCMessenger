@@ -64,6 +64,27 @@ Residues flagged there that this seat owns tracking for:
 3. Orchestrator (this seat) should run full `assembleDebug` gate before any
    merge to main (the CEO session ran compile+targeted tests only).
 
+## Work-ahead executed 2026-09-10T03:35Z (while awaiting CEO/operator)
+
+- CI: **Analyze (rust) PASS on 3533e5b8** (12m50s) — full-green carries on
+  the newest head; every push in this campaign has landed green.
+- Lint lane: assessed and SKIPPED with rationale — no `lint{}` block in
+  `android/app/build.gradle.kts`, no CI lane runs `lintDebug`; running it
+  now would open a non-gated findings front mid-merge without being a merge
+  requirement. Revisit as its own pass if the operator wants it.
+- Rule-8 dispatch-ready: `HANDOFF/review/V040_D10_REVIEWER_DISPATCH_PACKET_2026-09-10.md`
+  — assignment, eligibility (non-author, different model family, shell-capable
+  per standing rules), procedure, consequence tree, author disclosures.
+  Dispatch needs only an operator/MAC-lane pickup.
+- Ticket filed: `HANDOFF/todo/ANDROID_FFI_IN_COMPOSITION_BUILD_KILLER_2026-09-10.md`
+  (the CEO-agreed class-killer: build-failing check for FFI-in-@Composable).
+- Ticket filed: `HANDOFF/todo/CORE_DIAL_CANDIDATE_DOUBLE_CIRCUIT_PRUNE_2026-09-10.md`
+  (rule-8 gated; evidence + scope; scheduled AFTER the D10 verdict lands —
+  one gated change at a time on this perimeter).
+- Pixel merge-candidate install staged: APK `3d4bac3f…` ready for
+  replace-install at operator go (makes the phone merge-candidate-identical
+  before the manual drop test).
+
 ## Open to the 0.4.0 tag decision (in order)
 
 1. PR #279 `Analyze (rust)` check still pending (re-triggers per push); CodeQL
