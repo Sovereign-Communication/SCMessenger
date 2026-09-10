@@ -23,6 +23,8 @@ val TransportWiFi = Color(0xFF4CAF50)       // Green
 val TransportInternet = Color(0xFF9C27B0)   // Purple
 val TransportWiFiAware = Color(0xFF00BCD4)  // Cyan
 val TransportWiFiDirect = Color(0xFF8BC34A) // Light Green
+val TransportTcpLan = Color(0xFF4CAF50)     // Green (LAN TCP/mDNS)
+val TransportRelayCircuit = Color(0xFFFF9800) // Orange (relayed circuit)
 
 // Status colors
 val StatusOnline = Color(0xFF4CAF50)        // Green

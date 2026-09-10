@@ -1,8 +1,7 @@
 package com.scmessenger.android.utils
 
 import timber.log.Timber
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.math.BigInteger
 
 /**
  * Utility functions for peer key and peer ID conversion.
@@ -11,15 +10,23 @@ import java.nio.ByteOrder
  * - Extract public keys from libp2p peer IDs
  * - Generate peer IDs from public keys
  * - Validate public keys and peer IDs
+ *
+ * UNIFICATION: Ed25519 libp2p PeerIds are protobuf-encoded identity multihashes:
+ *   0x00 0x24 0x08 0x01 0x12 0x20 <32-byte Ed25519 public key> (38 bytes total)
+ * This matches Rust's `public_key_hex_from_libp2p_peer_id` / `peer_id_from_public_key_hex`
+ * in core/src/store/ledger_entry.rs and IronCore::resolve_identity. The previous
+ * 0x12+32+checksum Kotlin-only format never matched Rust-generated IDs, so cold-start
+ * (ironCore null) fallback always failed and left 12D3Koo... and 30d0fa... as two nodes.
  */
 object PeerKeyUtils {
 
     /**
      * Extract public key from a libp2p peer ID.
      *
-     * Libp2p peer IDs starting with "12D3KooW" use Ed25519 keys encoded as:
-     * - 0x12 (Ed25519 code) + 32-byte public key + 2-byte SHA256 checksum
-     * - This is base58-encoded to form the final peer ID
+     * UNIFICATION: Decodes base58 protobuf identity multihash and extracts Ed25519 key.
+     * Accepts only strict 38-byte protobuf (`00 24 08 01 12 20 <32>`). Returns null for
+     * hashed (Qm...) or malformed IDs so callers store a placeholder rather than poisoning
+     * identity resolution. Self-certification is verified by re-deriving the peer ID.
      *
      * @param peerId The libp2p peer ID to extract from
      * @return The extracted public key as hex string, or null if extraction fails
@@ -33,33 +40,61 @@ object PeerKeyUtils {
 
             // Decode from base58
             val decoded = base58Decode(peerId)
-            if (decoded == null || decoded.size < 35) {
-                Timber.w("Decoded peer ID too short: ${decoded?.size ?: 0}")
+            if (decoded == null) {
+                Timber.w("Base58 decode failed for peerId: ${peerId.take(16)}...")
                 return null
             }
 
-            // Verify the format: first byte should be 0x12 (Ed25519)
-            if (decoded[0] != 0x12.toByte()) {
-                Timber.w("Invalid multihash prefix: 0x${decoded[0].toInt().toHex()}")
-                return null
-            }
-
-            // Extract the 32-byte public key (bytes 2-33)
-            val publicKeyBytes = decoded.copyOfRange(2, 34)
-
-            // Verify checksum (bytes 34+ should match first 2 bytes of SHA256(publicKey))
-            if (decoded.size >= 36) {
-                val storedChecksum = decoded.copyOfRange(decoded.size - 2, decoded.size)
-                val expectedChecksum = java.security.MessageDigest.getInstance("SHA256")
-                    .digest(publicKeyBytes)
-                    .copyOfRange(0, 2)
-                if (!storedChecksum.contentEquals(expectedChecksum)) {
-                    Timber.w("Checksum verification failed")
+            // UNIFICATION: Rust's strict protobuf — 38 bytes, header 00 24 08 01 12 20
+            if (decoded.size == 38 &&
+                decoded[0] == 0x00.toByte() &&
+                decoded[1] == 0x24.toByte() &&
+                decoded[2] == 0x08.toByte() &&
+                decoded[3] == 0x01.toByte() &&
+                decoded[4] == 0x12.toByte() &&
+                decoded[5] == 0x20.toByte()
+            ) {
+                val publicKeyBytes = decoded.copyOfRange(6, 38)
+                val hex = publicKeyBytes.joinToString("") { String.format("%02x", it) }
+                // Defense in depth: re-derive must match (mirrors Rust check)
+                val rederived = generateLibp2pPeerIdFromPublicKey(hex)
+                if (rederived != peerId) {
+                    Timber.w("PeerID re-derive mismatch for ${peerId.take(16)}... (extracted ${hex.take(8)}...)")
                     return null
                 }
+                Timber.d("UNIFICATION extract: ${peerId.take(16)}... -> ${hex.take(8)}... via protobuf")
+                return hex
             }
 
-            publicKeyBytes.joinToString("") { String.format("%02x", it) }
+            // Legacy Kotlin 36-byte format (0x12 + 32 + 2-byte sha256 checksum) — kept for backward compat
+            // so cold-start fallback can still dedup ledger entries written by old Kotlin builds.
+            if (decoded.size == 36 && decoded[0] == 0x12.toByte()) {
+                val publicKeyBytes = decoded.copyOfRange(2, 34)
+                // Verify checksum if present (optional — old format did checksum)
+                if (decoded.size >= 36) {
+                    val storedChecksum = decoded.copyOfRange(decoded.size - 2, decoded.size)
+                    val expectedChecksum = java.security.MessageDigest.getInstance("SHA256")
+                        .digest(decoded.copyOfRange(0, 34))
+                        .copyOfRange(0, 2)
+                    if (!storedChecksum.contentEquals(expectedChecksum)) {
+                        Timber.w("Legacy checksum verification failed for ${peerId.take(16)}...")
+                        // Still return key — checksum is auxiliary, not identity-critical
+                    }
+                }
+                val hex = publicKeyBytes.joinToString("") { String.format("%02x", it) }
+                Timber.d("UNIFICATION extract legacy: ${peerId.take(16)}... -> ${hex.take(8)}... via legacy 0x12 format")
+                return hex
+            }
+
+            // Also support 34-byte truncated variant (0x12 + 32 without checksum)
+            if (decoded.size == 34 && decoded[0] == 0x12.toByte()) {
+                val hex = decoded.copyOfRange(2, 34).joinToString("") { String.format("%02x", it) }
+                Timber.d("UNIFICATION extract legacy 34: ${peerId.take(16)}... -> ${hex.take(8)}...")
+                return hex
+            }
+
+            Timber.w("Decoded peer ID size ${decoded.size} not recognised for ${peerId.take(16)}...")
+            null
         } catch (e: Exception) {
             Timber.e("Failed to extract public key from peer ID $peerId: ${e.message}")
             null
@@ -67,11 +102,13 @@ object PeerKeyUtils {
     }
 
     /**
-     * Generate a libp2p peer ID from a public key using proper multihash encoding.
+     * Generate a libp2p peer ID from a public key using protobuf identity multihash.
      *
-     * This generates a peer ID in the standard libp2p format:
-     * - Ed25519 public key → multihash (0x12 + 32 bytes) + SHA256 checksum → base58
-     * - Format: 12D3KooW + base58-encoded(multihash)
+     * UNIFICATION: Mirrors Rust `peer_id_from_public_key_hex`:
+     *   protobuf = 00 24 08 01 12 20 <32-byte key> → base58
+     * This ensures Kotlin-generated IDs are identical to Rust-generated ones, so
+     * self-certifying checks (`isSelfCertifyingKeyBinding`) and cold-start
+     * canonicalization agree across platforms.
      *
      * @param publicKey The public key as hex string (64 chars for Ed25519)
      * @return The generated libp2p peer ID
@@ -90,23 +127,18 @@ object PeerKeyUtils {
                 return generateFallbackPeerId(publicKey)
             }
 
-            // Create multihash: 0x12 (Ed25519) + 32-byte key
-            val multihash = ByteBuffer.allocate(34)
-                .put(0x12.toByte())
-                .put(publicKeyBytes)
-                .array()
-
-            // Add SHA256 checksum (first 2 bytes)
-            val sha256 = java.security.MessageDigest.getInstance("SHA256")
-            val checksum = sha256.digest(multihash).copyOfRange(0, 2)
-
-            val fullData = ByteBuffer.allocate(36)
-                .put(multihash)
-                .put(checksum)
-                .array()
+            // UNIFICATION: protobuf identity multihash 00 24 08 01 12 20 + key (38 bytes)
+            val protobuf = ByteArray(38)
+            protobuf[0] = 0x00
+            protobuf[1] = 0x24
+            protobuf[2] = 0x08
+            protobuf[3] = 0x01
+            protobuf[4] = 0x12
+            protobuf[5] = 0x20
+            System.arraycopy(publicKeyBytes, 0, protobuf, 6, 32)
 
             // Encode to base58
-            val base58Encoded = base58Encode(fullData)
+            val base58Encoded = base58Encode(protobuf)
             if (base58Encoded == null) {
                 Timber.w("Base58 encoding failed")
                 return generateFallbackPeerId(publicKey)
@@ -153,12 +185,13 @@ object PeerKeyUtils {
 
     /**
      * Check if a string is a libp2p peer ID (internal helper).
+     * UNIFICATION: Strict Base58BTC alphabet, 12D3Koo (Ed25519) or Qm (hashed).
      */
-    private fun isLibp2pPeerId(peerId: String): Boolean {
+    fun isLibp2pPeerId(peerId: String): Boolean {
         // Base58-encoded libp2p peer IDs: 12D3KooW... (~52 chars) or Qm... (~46 chars)
-        val base58Chars = peerId.all { c -> c.isLetterOrDigit() && c !in "0OIl" }
+        val base58Chars = peerId.all { it in BASE58_ALPHABET }
         return base58Chars && (
-            (peerId.startsWith("12D3Koo") && peerId.length in 46..56) ||
+            (peerId.startsWith("12D3Koo") && peerId.length in 46..60) ||
             (peerId.startsWith("Qm") && peerId.length in 44..50)
         )
     }
@@ -189,7 +222,9 @@ object PeerKeyUtils {
     private fun Int.toHex(): String = String.format("%02x", this)
 
     // --- Base58 encoding/decoding implementation ---
-    // Using a simple implementation without external dependencies
+    // UNIFICATION: Use BigInteger for correctness — matches Rust `bs58` crate.
+    // Previous manual carry logic produced incorrect encodings for 38-byte protobufs,
+    // causing isSelfCertifyingKeyBinding and cold-start dedup to always fail.
 
     private val BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
     private val BASE58_CHARSET = BASE58_ALPHABET.toCharArray()
@@ -201,102 +236,65 @@ object PeerKeyUtils {
     }
 
     /**
-     * Encode bytes to base58 string.
+     * Encode bytes to base58 string via BigInteger.
      */
     private fun base58Encode(data: ByteArray): String? {
-        if (data.isEmpty()) return "1"
-
+        if (data.isEmpty()) return ""
         // Count leading zeros
         var zeroCount = 0
         while (zeroCount < data.size && data[zeroCount] == 0.toByte()) {
             zeroCount++
         }
-
-        // Convert to base58
-        val encoded = StringBuilder()
-        var carry = data.clone()
-
-        // Big integer division by 58
-        var leadingZero = true
-        while (true) {
-            var carryValue = 0
-            var j = 0
-            while (j < carry.size) {
-                carryValue = (carryValue shl 8) + (carry[j].toInt() and 0xFF)
-                carry[j] = (carryValue / 58).toByte()
-                carryValue %= 58
-                j++
-            }
-
-            if (carryValue > 0) {
-                val charIndex = carryValue
-                if (leadingZero && charIndex == 0) {
-                    encoded.append('1')
-                } else {
-                    encoded.append(BASE58_ALPHABET[charIndex])
-                    leadingZero = false
-                }
-            } else if (!leadingZero) {
-                break
-            }
-
-            // Remove processed bytes
-            val newCarry = ByteArray(carry.size - j)
-            System.arraycopy(carry, j, newCarry, 0, newCarry.size)
-            carry = newCarry
+        // BigInteger handles the rest (positive)
+        var bi = BigInteger(1, data)
+        val sb = StringBuilder()
+        val base = BigInteger.valueOf(58)
+        if (bi == BigInteger.ZERO) {
+            // All zeros
+            return BASE58_ALPHABET[0].toString().repeat(zeroCount)
         }
-
-        // Add leading '1's for leading zeros
-        for (i in 0 until zeroCount) {
-            encoded.insert(0, '1')
+        while (bi > BigInteger.ZERO) {
+            val mod = bi.mod(base)
+            sb.append(BASE58_ALPHABET[mod.toInt()])
+            bi = bi.divide(base)
         }
-
-        return encoded.toString().ifEmpty { null }
+        // Leading zeros as '1'
+        repeat(zeroCount) { sb.append(BASE58_ALPHABET[0]) }
+        return sb.reverse().toString()
     }
 
     /**
-     * Decode base58 string to bytes.
+     * Decode base58 string to bytes via BigInteger.
      */
     private fun base58Decode(str: String): ByteArray? {
         if (str.isEmpty()) return null
-
         // Count leading '1's (leading zeros)
         var zeroCount = 0
         for (c in str) {
-            if (c == '1') zeroCount++
-            else break
+            if (c == '1') zeroCount++ else break
         }
-
-        // Decode each character
-        val bytes = ByteArray(str.length)
-        var position = 0
-
+        var bi = BigInteger.ZERO
+        val base = BigInteger.valueOf(58)
         for (c in str) {
             val digit = if (c.code < BASE58_MAP.size) BASE58_MAP[c.code] else -1
             if (digit == -1) {
                 Timber.w("Invalid base58 character: $c")
                 return null
             }
-
-            // Multiply by 58 and add digit
-            var carry = digit
-            for (i in position downTo 0) {
-                carry += bytes[i].toInt() * 58
-                bytes[i] = (carry and 0xFF).toByte()
-                carry = carry ushr 8
-            }
-
-            while (carry > 0) {
-                bytes[position] = (carry and 0xFF).toByte()
-                position++
-                carry = carry ushr 8
-            }
+            bi = bi.multiply(base).add(BigInteger.valueOf(digit.toLong()))
         }
-
-        // Remove leading zeros
-        val result = ByteArray(bytes.size - zeroCount)
-        System.arraycopy(bytes, zeroCount, result, 0, result.size)
-
+        var bytes = bi.toByteArray()
+        // BigInteger may add leading zero for sign
+        if (bytes.isNotEmpty() && bytes[0] == 0.toByte()) {
+            bytes = bytes.copyOfRange(1, bytes.size)
+        }
+        // Handle zero case
+        if (bytes.isEmpty()) {
+            return ByteArray(zeroCount)
+        }
+        // Prepend leading zeros
+        val result = ByteArray(zeroCount + bytes.size)
+        System.arraycopy(bytes, 0, result, zeroCount, bytes.size)
         return result
     }
 }

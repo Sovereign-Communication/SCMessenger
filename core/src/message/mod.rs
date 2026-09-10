@@ -2,6 +2,7 @@
 
 pub mod codec;
 pub mod ephemeral;
+pub mod identity_envelope;
 pub mod types;
 
 pub use codec::{

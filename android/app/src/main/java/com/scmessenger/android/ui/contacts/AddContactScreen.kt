@@ -8,8 +8,6 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -628,18 +626,29 @@ private fun PeerList(
     inlineErrorMessage: String?,
     onDismissInlineError: () -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp),
+    // FIX(Compose-crash): Column+verticalScroll to eliminate LazyColumn prefetch crash
+    // (SlotTableKt.dataAnchor ArrayIndexOutOfBounds via PrefetchHandleProvider/
+    // LayoutNodeSubcompositionsState.onRelease during MainActivity destroy at 19:42).
+    // Nearby peers is small (<~50) so Column overhead is negligible.
+    val stablePeers = remember(peers) {
+        peers.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (hasInlineError && inlineErrorMessage != null) {
-            item(key = "nearby_error") {
+            key("nearby_error") {
                 ErrorBanner(message = inlineErrorMessage, onDismiss = onDismissInlineError)
             }
         }
-        items(peers, key = { it.peerId }) { peer ->
-            NearbyPeerCard(peer = peer, onAdd = { onAdd(peer) }, onDismiss = { onDismissPeer(peer) })
+        stablePeers.forEach { peer ->
+            key(peer.peerId) {
+                NearbyPeerCard(peer = peer, onAdd = { onAdd(peer) }, onDismiss = { onDismissPeer(peer) })
+            }
         }
     }
 }

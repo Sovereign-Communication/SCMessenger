@@ -126,7 +126,9 @@ class ContactsViewModelTest {
         // surfaced for the first time, not a regression.
         assertEquals(validPublicKey.lowercase(), contact.peerId)
         assertEquals(validPublicKey, contact.publicKey)
-        assertEquals("Bob", contact.nickname)
+        // UNIFICATION: addContact stores user-provided name as localNickname (primary), not federated nickname
+        assertEquals("Bob", contact.localNickname)
+        assertEquals(null, contact.nickname)
         // The generated notes should encode the libp2p peer id and listeners
         assertTrue(
             "notes should include libp2p peer id",

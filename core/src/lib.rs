@@ -75,6 +75,10 @@ pub use error::{
 };
 pub use identity::IdentityManager;
 pub use message::codec::decode_envelope;
+pub use message::identity_envelope::{
+    build_identity_envelope, parse_identity_envelope, select_authoritative_nickname,
+    DecodedIdentityEnvelope, EnvelopeSenderHints, IDENTITY_ENVELOPE_SCHEMA,
+};
 pub use message::types::Receipt;
 // FFI-facing receipt codec wrappers (owned args, IronCoreError) — these are what
 // the UniFFI scaffolding binds; the canonical serializers live in message::types.

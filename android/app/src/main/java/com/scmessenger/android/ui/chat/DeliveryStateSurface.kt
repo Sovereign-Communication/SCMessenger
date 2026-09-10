@@ -3,7 +3,8 @@ package com.scmessenger.android.ui.chat
 data class PendingDeliverySnapshot(
     val attemptCount: Int,
     val nextAttemptAtEpochSec: Long,
-    val terminalFailureCode: String? = null
+    val terminalFailureCode: String? = null,
+    val exhausted: Boolean = false
 )
 
 enum class DeliveryStateSurface(val label: String, val detail: String) {
@@ -14,6 +15,10 @@ enum class DeliveryStateSurface(val label: String, val detail: String) {
     STORED(
         label = "stored",
         detail = "Stored for retry. The recipient is currently offline or unreachable."
+    ),
+    QUEUED_DELIVERING(
+        label = "queued/delivering",
+        detail = "Still queued and undelivered. Earlier attempts couldn't be confirmed; it stays queued (never dropped) and will try again when a route exists."
     ),
     FORWARDING(
         label = "forwarding",
@@ -36,6 +41,12 @@ data class DeliveryStatePresentation(
 )
 
 object DeliveryStateMapper {
+    // Contract (precedence, top to bottom): DELIVERED > REJECTED > QUEUED_DELIVERING
+    // > FORWARDING > STORED > PENDING. Deliberate: an at-cap retained entry shows
+    // queued/delivering even during the 60s window when a real attempt is in
+    // flight, because the message is not actively progressing -- it is waiting
+    // out the patient backoff of an exhausted entry. delivered always wins so a
+    // receipt never gets hidden behind a stale exhausted flag.
     fun resolve(
         delivered: Boolean,
         pending: PendingDeliverySnapshot?,
@@ -44,6 +55,7 @@ object DeliveryStateMapper {
         val state = when {
             delivered -> DeliveryStateSurface.DELIVERED
             pending?.terminalFailureCode != null -> DeliveryStateSurface.REJECTED
+            pending?.exhausted == true -> DeliveryStateSurface.QUEUED_DELIVERING
             pending != null && pending.nextAttemptAtEpochSec <= nowEpochSec -> DeliveryStateSurface.FORWARDING
             pending != null -> DeliveryStateSurface.STORED
             else -> DeliveryStateSurface.PENDING

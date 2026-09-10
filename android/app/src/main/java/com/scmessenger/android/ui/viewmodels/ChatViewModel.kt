@@ -9,6 +9,7 @@ import com.scmessenger.android.utils.toEpochMillis
 import com.scmessenger.android.utils.PeerIdValidator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
@@ -88,14 +89,22 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Load messages for the current peer.
+     * FIX(Compose-crash): isActive guard to prevent SlotTable crash on destroy
+     * (SlotTableKt.dataAnchor via PrefetchHandleProvider during onRelease).
      */
     private fun loadMessages() {
+        if (!viewModelScope.isActive) {
+            Timber.d("ChatViewModel loadMessages skipped — ViewModelScope not active")
+            return
+        }
         viewModelScope.launch {
             try {
+                if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
                 val currentPeer = _peerId.value ?: return@launch
                 val messageList = meshRepository.getConversation(currentPeer, limit = _conversationLimit.value)
 
+                if (!viewModelScope.isActive) return@launch
                 // MSG-PERSIST-001: Merge with existing optimistic messages, don't replace
                 val currentMessages = _messages.value
                 val mergedMessages = mutableListOf<uniffi.api.MessageRecord>()
@@ -120,20 +129,24 @@ class ChatViewModel @Inject constructor(
 
                 Timber.d("Loaded ${messageList.size} messages for $currentPeer (merged with ${currentMessages.size} existing)")
             } catch (e: Exception) {
+                if (!viewModelScope.isActive) return@launch
                 _error.value = "Failed to load messages: ${e.message}"
                 Timber.e(e, "Failed to load messages")
             } finally {
-                _isLoading.value = false
+                if (viewModelScope.isActive) _isLoading.value = false
             }
         }
     }
 
     /**
      * Load contact information.
+     * FIX: isActive guard to prevent emit after destroy.
      */
     private fun loadContact() {
+        if (!viewModelScope.isActive) return
         viewModelScope.launch {
             try {
+                if (!viewModelScope.isActive) return@launch
                 val currentPeer = _peerId.value ?: return@launch
                 val contactInfo = meshRepository.getContact(currentPeer)
                 _contact.value = contactInfo
@@ -242,10 +255,12 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Observe message events from MeshEventBus.
+     * FIX: isActive guard to prevent SlotTable crash on destroy.
      */
     private fun observeMessageEvents() {
         viewModelScope.launch {
             MeshEventBus.messageEvents.collect { event ->
+                if (!viewModelScope.isActive) return@collect
                 when (event) {
                     is MessageEvent.Received -> {
                         // Reload if message is for current peer (consistent ID comparison)
@@ -271,10 +286,12 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Observe incoming messages from repository.
+     * FIX: isActive guard
      */
     private fun observeIncomingMessages() {
         viewModelScope.launch {
             meshRepository.incomingMessages.collect { message ->
+                if (!viewModelScope.isActive) return@collect
                 if (message.peerId.equals(_peerId.value, ignoreCase = true)) {
                     loadMessages()
                 }
@@ -284,10 +301,12 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Observe message updates (sent messages).
+     * FIX: isActive guard to prevent emit after destroy.
      */
     private fun observeMessageUpdates() {
         viewModelScope.launch {
             meshRepository.messageUpdates.collect { message ->
+                if (!viewModelScope.isActive) return@collect
                 if (PeerIdValidator.isSame(message.peerId, _peerId.value.orEmpty())) {
                     // Replace or add the message
                     val currentMessages = _messages.value.toMutableList()
@@ -316,6 +335,7 @@ class ChatViewModel @Inject constructor(
                         }
                     }
 
+                    if (!viewModelScope.isActive) return@collect
                     _messages.value = currentMessages.sortedBy { it.senderTimestamp }
                 }
             }
@@ -325,6 +345,7 @@ class ChatViewModel @Inject constructor(
     private fun observePeerEvents() {
         viewModelScope.launch {
             MeshEventBus.peerEvents.collect { event ->
+                if (!viewModelScope.isActive) return@collect
                 val current = _peerId.value ?: return@collect
                 when (event) {
                     is com.scmessenger.android.service.PeerEvent.Connected -> {
@@ -401,8 +422,10 @@ class ChatViewModel @Inject constructor(
 
     /**
      * Update message delivery status in the UI.
+     * FIX: isActive guard
      */
     private fun updateMessageStatus(messageId: String, delivered: Boolean) {
+        if (!viewModelScope.isActive) return
         val updatedMessages = _messages.value.map { msg ->
             if (msg.id == messageId) {
                 uniffi.api.MessageRecord(
@@ -420,6 +443,7 @@ class ChatViewModel @Inject constructor(
                 msg
             }
         }
+        if (!viewModelScope.isActive) return
         _messages.value = updatedMessages
     }
 

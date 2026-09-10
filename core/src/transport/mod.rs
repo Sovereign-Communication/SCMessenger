@@ -12,6 +12,7 @@ pub mod dial_policy;
 pub mod discovery;
 pub mod escalation;
 pub mod health;
+pub mod hint_store;
 pub mod internet;
 pub mod manager;
 pub mod mesh_routing;

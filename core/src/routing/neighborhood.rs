@@ -73,7 +73,7 @@ pub struct NeighborhoodSummary {
     /// Total peers reachable through this neighborhood path
     pub total_reachable: u32,
     /// Recipient hints reachable (aggregated from cell summaries)
-    pub reachable_hints: Vec<[u8; 4]>,
+    pub reachable_hints: Vec<[u8; 8]>,
     /// Average reliability along this path
     pub path_reliability: f64,
     /// Number of hops in this path
@@ -188,7 +188,7 @@ impl NeighborhoodTable {
     }
 
     /// Find gateways that might reach a recipient hint
-    pub fn gateways_for_hint(&self, hint: &[u8; 4]) -> Vec<&GatewayInfo> {
+    pub fn gateways_for_hint(&self, hint: &[u8; 8]) -> Vec<&GatewayInfo> {
         self.gateways
             .values()
             .filter(|g| g.cell_summary.reachable_hints.contains(hint))
@@ -196,7 +196,7 @@ impl NeighborhoodTable {
     }
 
     /// Get best gateway for a hint (lowest hops, highest reliability)
-    pub fn best_gateway_for_hint(&self, hint: &[u8; 4]) -> Option<&GatewayInfo> {
+    pub fn best_gateway_for_hint(&self, hint: &[u8; 8]) -> Option<&GatewayInfo> {
         self.gateways_for_hint(hint).into_iter().min_by(|a, b| {
             let cost_a = self.gateway_cost(a);
             let cost_b = self.gateway_cost(b);
@@ -320,7 +320,7 @@ impl NeighborhoodTable {
     }
 
     /// Reachable hints aggregated across all neighborhoods
-    pub fn all_reachable_hints(&self) -> Vec<[u8; 4]> {
+    pub fn all_reachable_hints(&self) -> Vec<[u8; 8]> {
         let mut hints = Vec::new();
 
         // Collect from gateways
@@ -357,7 +357,7 @@ impl NeighborhoodTable {
     /// Rebuild neighborhood summaries (deduplicate and clean)
     fn rebuild_summaries(&mut self) {
         // Deduplicate by reachable hints (prefer freshest)
-        let mut unique_summaries: HashMap<Vec<[u8; 4]>, NeighborhoodSummary> = HashMap::new();
+        let mut unique_summaries: HashMap<Vec<[u8; 8]>, NeighborhoodSummary> = HashMap::new();
 
         for summary in self.summaries.drain(..) {
             let key = summary.reachable_hints.clone();
@@ -416,11 +416,13 @@ mod tests {
         id
     }
 
-    fn make_hint(n: u32) -> [u8; 4] {
-        n.to_le_bytes()
+    fn make_hint(n: u32) -> [u8; 8] {
+        let mut hint = [0u8; 8];
+        hint[..4].copy_from_slice(&n.to_le_bytes());
+        hint
     }
 
-    fn make_cell_summary(hint_list: Vec<[u8; 4]>) -> CellSummary {
+    fn make_cell_summary(hint_list: Vec<[u8; 8]>) -> CellSummary {
         CellSummary {
             peer_count: 5,
             gateway_count: 1,

@@ -3,8 +3,8 @@ package com.scmessenger.android.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
@@ -40,6 +40,8 @@ import com.scmessenger.android.R
 import com.scmessenger.android.ui.viewmodels.ContactsViewModel
 import com.scmessenger.android.ui.viewmodels.NearbyPeer
 import com.scmessenger.android.utils.ContactImportParseResult
+import com.scmessenger.android.utils.displayName
+import com.scmessenger.android.utils.displayNames
 import com.scmessenger.android.utils.parseContactImportPayload
 import com.scmessenger.android.utils.toEpochMillis
 import java.text.SimpleDateFormat
@@ -155,92 +157,97 @@ fun ContactsScreen(
                     }
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    // UI Fix B: bottom padding (~88dp) leaves clearance for the
-                    // outer Scaffold's contacts "+" FAB so the last list item
-                    // isn't hidden behind the FAB. FAB default size is 56dp
-                    // with 16dp margin -> 72dp; we add a small extra to keep
-                    // the swipe-to-dismiss affordance on the last row visible.
-                    // PaddingValues(start, top, end, bottom) is the 4-arg form.
-                    contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 88.dp)
+                // FIX(Compose-crash): Replace LazyColumn with Column+verticalScroll to eliminate
+                // LazyColumn prefetch crash (LayoutNode.onChildRemoved NPE / MutableVector.add
+                // ArrayIndexOutOfBounds via PrefetchHandleProvider/AndroidPrefetchScheduler)
+                // on rapid nearbyPeers/contacts updates. Dashboard and PeerList already use this
+                // pattern; Contacts has identical churn via discovery (5s grace, rapid peerEvents).
+                // Stable keys via key() + distinctBy(peerId) + content deduplication prevent
+                // duplicate-key recomposition that triggered MutableVector corruption.
+                // Column overhead is acceptable (contacts < 1k) and avoids LazyLayout prefetch.
+                val stableContacts = remember(contacts) { contacts.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId } }
+                val stableNearby = remember(nearbyPeers) { nearbyPeers.filter { it.peerId.isNotBlank() }.distinctBy { it.peerId } }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Nearby peers section — discovered but not yet saved
-                    if (nearbyPeers.isNotEmpty()) {
-                        item {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(bottom = 4.dp, top = 4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Sensors,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(R.string.contacts_section_nearby, nearbyPeers.size),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                    if (stableNearby.isNotEmpty()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 4.dp, top = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sensors,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(R.string.contacts_section_nearby, stableNearby.size),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        items(nearbyPeers, key = { "nearby_${it.peerId}" }) { peer ->
-                            NearbyPeerItem(
-                                peer = peer,
-                                onAdd = {
-                                    nearbyPrefilledPeer = peer
-                                    showAddDialog = true
-                                },
-                                onConnect = {
-                                    val publicKey = peer.publicKey?.trim()
-                                    if (publicKey.isNullOrEmpty()) {
+                        stableNearby.forEach { peer ->
+                            key("nearby_${peer.peerId}") {
+                                NearbyPeerItem(
+                                    peer = peer,
+                                    onAdd = {
                                         nearbyPrefilledPeer = peer
                                         showAddDialog = true
-                                    } else {
-                                        val bleRoute = peer.blePeerId?.takeIf { it.isNotBlank() }
-                                        val notes = bleRoute?.let { "ble_peer_id:$it" }
-                                        viewModel.addContact(
-                                            peerId = peer.peerId,
-                                            publicKey = publicKey,
-                                            nickname = peer.nickname,
-                                            libp2pPeerId = peer.libp2pPeerId,
-                                            listeners = peer.listeners,
-                                            notes = notes
-                                        )
-                                        onNavigateToChat(peer.peerId)
+                                    },
+                                    onConnect = {
+                                        val publicKey = peer.publicKey?.trim()
+                                        if (publicKey.isNullOrEmpty()) {
+                                            nearbyPrefilledPeer = peer
+                                            showAddDialog = true
+                                        } else {
+                                            val bleRoute = peer.blePeerId?.takeIf { it.isNotBlank() }
+                                            val notes = bleRoute?.let { "ble_peer_id:$it" }
+                                            viewModel.addContact(
+                                                peerId = peer.peerId,
+                                                publicKey = publicKey,
+                                                nickname = peer.nickname,
+                                                libp2pPeerId = peer.libp2pPeerId,
+                                                listeners = peer.listeners,
+                                                notes = notes
+                                            )
+                                            onNavigateToChat(peer.peerId)
+                                        }
                                     }
-                                }
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        if (contacts.isNotEmpty()) {
-                            item {
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                                Text(
-                                    text = stringResource(R.string.contacts_title, contacts.size),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 4.dp)
                                 )
                             }
                         }
+                        if (stableContacts.isNotEmpty()) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            Text(
+                                text = stringResource(R.string.contacts_title, stableContacts.size),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
                     }
-                    // Saved contacts
-                    items(contacts, key = { it.peerId }) { contact ->
-                        ContactItem(
-                            contact = contact,
-                            onClick = { onNavigateToChat(contact.peerId) },
-                            onDetails = {
-                                onNavigateToContactDetail?.invoke(contact.peerId)
-                            },
-                            onDelete = { viewModel.removeContact(contact.peerId) },
-                            onEditNickname = { nickname ->
-                                viewModel.setLocalNickname(contact.peerId, nickname.ifBlank { null })
-                            }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                    // Saved contacts — stable key per contact.peerId prevents duplicate-key crash
+                    stableContacts.forEach { contact ->
+                        key(contact.peerId) {
+                            ContactItem(
+                                contact = contact,
+                                onClick = { onNavigateToChat(contact.peerId) },
+                                onDetails = {
+                                    onNavigateToContactDetail?.invoke(contact.peerId)
+                                },
+                                onDelete = { viewModel.removeContact(contact.peerId) },
+                                onEditNickname = { nickname ->
+                                    viewModel.setLocalNickname(contact.peerId, nickname.ifBlank { null })
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -345,14 +352,17 @@ fun ContactItem(
                 // ID text. Matches the pattern in NearbyPeerItem (line 543).
                 Column(modifier = Modifier.weight(1f)) {
                     val unknownFallback = stringResource(R.string.unknown_contact)
-                    val currentNickname = contact.localNickname ?: contact.nickname ?: ""
+                    // Dual-nickname: localNickname is primary; the peer's own
+                    // chosen nickname shows as a secondary "@name" subtitle.
+                    val names = contact.displayNames()
+                    val primaryName = names.primary ?: names.secondary ?: ""
                     Text(
-                        text = currentNickname.ifBlank { unknownFallback },
+                        text = primaryName.ifBlank { unknownFallback },
                         style = MaterialTheme.typography.titleMedium
                     )
-                    if (contact.localNickname != null && contact.nickname != null) {
+                    if (names.primary != null && names.secondary != null) {
                         Text(
-                            text = "@${contact.nickname}",
+                            text = "(@${names.secondary})",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -449,7 +459,7 @@ fun ContactItem(
 
     // Edit nickname dialog
     if (showEditNicknameDialog) {
-        var newNickname by remember { mutableStateOf(contact.localNickname ?: contact.nickname ?: "") }
+        var newNickname by remember { mutableStateOf(contact.localNickname?.trim() ?: "") }
         val focusRequester = remember { FocusRequester() }
 
         AlertDialog(
@@ -475,7 +485,7 @@ fun ContactItem(
                     if (contact.nickname != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Federated nickname: @${contact.nickname}",
+                            text = stringResource(R.string.contact_chosen_nickname_value, contact.nickname ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -511,7 +521,7 @@ fun ContactItem(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text(stringResource(R.string.contacts_dialog_delete_title)) },
             text = {
-                Text(stringResource(R.string.contacts_dialog_delete_description, contact.localNickname ?: contact.nickname ?: "this contact"))
+                Text(stringResource(R.string.contacts_dialog_delete_description, contact.displayName("this contact")))
             },
             confirmButton = {
                 TextButton(

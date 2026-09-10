@@ -90,6 +90,30 @@ pub struct HistoryManager {
     backend: Arc<dyn StorageBackend>,
 }
 
+/// D4 coalescing: history records are ALWAYS stored under the canonical
+/// identity_id (blake3 of the sender public key -- see receive_message's
+/// canonical_peer_id), while contacts and thread lookups are often keyed by
+/// the public_key_hex flavor on a different surface (e.g. a contact's stored
+/// `peer_id` is its public key). Match a record's peer against EITHER the
+/// queried value OR, when the query value is a public key, that key's derived
+/// identity_id, so a single identity's conversation is reachable from both
+/// forms instead of being silently split into two threads. The derivation is
+/// one-way, so identity_id-keyed lookups cannot invert back to a public key;
+/// that is fine because no pubkey-keyed history records exist to match (all
+/// records are written under identity_id). `filter_identity_id` is precomputed
+/// once per query (Ed25519 curve validation + blake3), never per record.
+fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
+    if record_peer.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+    if let Some(identity_id) = filter_identity_id {
+        if record_peer.eq_ignore_ascii_case(identity_id) {
+            return true;
+        }
+    }
+    false
+}
+
 impl HistoryManager {
     pub fn new(backend: Arc<dyn StorageBackend>) -> Self {
         Self { backend }
@@ -154,6 +178,13 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // Derive the identity_id for a pubkey filter ONCE per query; the
+        // derivation does Ed25519 curve validation + blake3 and must not run
+        // per record inside the scan loop below.
+        let filter_identity_id = peer_filter
+            .as_deref()
+            .and_then(crate::identity::keys::identity_id_from_public_key_hex);
+
         for (_, value) in all {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
@@ -165,7 +196,7 @@ impl HistoryManager {
             }
 
             if let Some(ref peer) = peer_filter {
-                if record.peer_id.eq_ignore_ascii_case(peer) {
+                if history_peer_matches(peer, &record.peer_id, filter_identity_id.as_deref()) {
                     records.push(record);
                 }
             } else {
@@ -198,11 +229,16 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: match the peer by either id flavor, exactly like conversation()
+        // (derived once per call, never per record).
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if record.hidden
+                && history_peer_matches(peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 record.hidden = false;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -222,11 +258,16 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: match the peer by either id flavor, exactly like conversation()
+        // (derived once per call, never per record).
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(peer_id);
         let mut count = 0u32;
         for (_, value) in all {
             let mut record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
-            if !record.hidden && record.peer_id.eq_ignore_ascii_case(peer_id) {
+            if !record.hidden
+                && history_peer_matches(peer_id, &record.peer_id, filter_identity_id.as_deref())
+            {
                 record.hidden = true;
                 let key = format!("msg_{}", record.id);
                 let updated = serde_json::to_vec(&record).map_err(|_| IronCoreError::Internal)?;
@@ -274,12 +315,16 @@ impl HistoryManager {
             .scan_prefix(b"msg_")
             .map_err(|_| IronCoreError::StorageError)?;
 
+        // D4: remove exactly the set conversation() returns for this peer, so a
+        // thread visible under the pubkey flavor is actually deletable (derived
+        // once per call, never per record).
+        let filter_identity_id = crate::identity::keys::identity_id_from_public_key_hex(&peer_id);
         for (key, value) in all {
             let record: MessageRecord =
                 serde_json::from_slice(&value).map_err(|_| IronCoreError::Internal)?;
             let record = record.adjust_legacy_timestamps();
 
-            if record.peer_id.eq_ignore_ascii_case(&peer_id) {
+            if history_peer_matches(&peer_id, &record.peer_id, filter_identity_id.as_deref()) {
                 self.backend
                     .remove(&key)
                     .map_err(|_| IronCoreError::StorageError)?;
@@ -429,6 +474,105 @@ impl HistoryManager {
 mod tests {
     use super::*;
     use crate::store::backend::MemoryStorage;
+
+    #[test]
+    fn test_history_peer_matches_id_flavors() {
+        // Real keypair so the pubkey filter derives a genuine identity_id
+        // (same construction as crate::identity::keys::KeyPair::generate).
+        use ed25519_dalek::SigningKey;
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
+            .expect("valid pubkey must derive identity_id");
+
+        // Pubkey filter reaches BOTH the pubkey-keyed record and its derived identity_id record.
+        assert!(history_peer_matches(&pubkey_hex, &pubkey_hex, None));
+        assert!(history_peer_matches(
+            &pubkey_hex,
+            &identity_id,
+            Some(&identity_id)
+        ));
+
+        // Identity_id filter: only the exact identity_id record matches. The
+        // caller passes `None` here because a raw identity_id filter's
+        // derivation, when it happens to be on-curve, is a double-hash that no
+        // record can match -- not a flavor discriminator.
+        assert!(history_peer_matches(&identity_id, &identity_id, None));
+        assert!(!history_peer_matches(&identity_id, &pubkey_hex, None));
+
+        // Empty and non-hex filters: exact match only, never a derived match.
+        assert!(!history_peer_matches("", &identity_id, None));
+        assert!(!history_peer_matches(
+            "12D3KooWNotHexId",
+            &identity_id,
+            None
+        ));
+        assert!(!history_peer_matches("not-hex!!!", &identity_id, None));
+
+        // Case-insensitive exact match is preserved.
+        assert!(history_peer_matches(
+            &identity_id.to_uppercase(),
+            &identity_id,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_hide_and_unhide_by_pubkey_flavor() {
+        // Real keypair so the pubkey filter derives a genuine identity_id.
+        use ed25519_dalek::SigningKey;
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&pubkey_hex)
+            .expect("valid pubkey must derive identity_id");
+
+        let backend = Arc::new(MemoryStorage::new());
+        let history = HistoryManager::new(backend);
+        history
+            .add(MessageRecord {
+                id: "msg1".to_string(),
+                peer_id: identity_id.clone(), // stored under the canonical flavor
+                direction: MessageDirection::Received,
+                content: "hide me".to_string(),
+                timestamp: 1000,
+                sender_timestamp: 1000,
+                delivered: true,
+                hidden: false,
+            })
+            .unwrap();
+
+        // Hide by the PUBKEY flavor must reach the identity_id-keyed record.
+        assert_eq!(history.hide_messages_for_peer(&pubkey_hex).unwrap(), 1);
+        assert!(
+            history
+                .conversation(pubkey_hex.clone(), 50)
+                .unwrap()
+                .is_empty(),
+            "hidden record must disappear from normal queries"
+        );
+        assert_eq!(
+            history
+                .recent_including_hidden(Some(identity_id.clone()), 50)
+                .unwrap()
+                .len(),
+            1,
+            "hidden record must still exist for evidentiary retention"
+        );
+
+        // Unhide by the same flavor restores it.
+        assert_eq!(history.unhide_messages_for_peer(&pubkey_hex).unwrap(), 1);
+        assert_eq!(
+            history.conversation(pubkey_hex, 50).unwrap().len(),
+            1,
+            "unhidden record must be visible again under the pubkey flavor"
+        );
+    }
 
     #[test]
     fn test_case_insensitive_peer_id_matching() {

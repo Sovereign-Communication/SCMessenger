@@ -372,3 +372,6 @@ HANDOFF/todo/INBOX_*.md
 HANDOFF/logs/
 
 .qwen/worktrees/
+
+# Freebuff tool state (worktree tracking) - never commit
+.freebuff/

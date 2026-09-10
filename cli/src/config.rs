@@ -44,6 +44,15 @@ pub struct Config {
     /// User-configured bootstrap nodes (community ledger)
     #[serde(default)]
     pub bootstrap_nodes: Vec<String>,
+
+    /// Wrap outbound chat messages in the scm.message.identity.v1 envelope so
+    /// peers auto-learn our nickname + route hints (parity with Android/iOS).
+    #[serde(default = "default_true")]
+    pub identity_envelope: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +86,7 @@ impl Default for Config {
             storage_path: None,
             network: NetworkConfig::default(),
             bootstrap_nodes: Vec::new(), // No hardcoded bootstrap nodes (community ledger)
+            identity_envelope: true,
         }
     }
 }
@@ -215,6 +225,9 @@ impl Config {
                     self.bootstrap_nodes.retain(|n| n != value);
                 }
             }
+            "identity_envelope" => {
+                self.identity_envelope = value.parse().context("Invalid boolean value")?;
+            }
             _ => anyhow::bail!("Unknown config key: {}", key),
         }
         self.save()?;
@@ -235,6 +248,7 @@ impl Config {
             "enable_nat_traversal" => Some(self.network.enable_nat_traversal.to_string()),
             "enable_relay" => Some(self.network.enable_relay.to_string()),
             "bootstrap_nodes" => Some(self.bootstrap_nodes.join(",")),
+            "identity_envelope" => Some(self.identity_envelope.to_string()),
             _ => None,
         }
     }
@@ -272,6 +286,10 @@ impl Config {
             (
                 "bootstrap_nodes".to_string(),
                 self.bootstrap_nodes.join(","),
+            ),
+            (
+                "identity_envelope".to_string(),
+                self.identity_envelope.to_string(),
             ),
         ]
     }

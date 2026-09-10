@@ -45,9 +45,12 @@ class ReceiptWindowTest {
         }
     }
 
+    // Resolve on MeshRepository itself: the hermetic subclass does not
+    // redeclare these private fields (inherited ones are not returned by
+    // getDeclaredField on the subclass).
     @Suppress("UNCHECKED_CAST")
     private fun <T> getField(target: Any, name: String): T? {
-        val field = target::class.java.getDeclaredField(name)
+        val field = MeshRepository::class.java.getDeclaredField(name)
         field.isAccessible = true
         return field.get(target) as? T
     }
@@ -102,7 +105,7 @@ class ReceiptWindowTest {
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 1)
 
         // Create repository with mocked dependencies
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
 
         // Load the pending outbox
@@ -131,7 +134,7 @@ class ReceiptWindowTest {
 
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 3)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         // Load pending outbox
         val pendingOutbox = repo.loadPendingOutbox()
@@ -153,7 +156,7 @@ class ReceiptWindowTest {
         val filesDir = freshFilesDir()
         val context = fakeContext(filesDir)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         // The adaptive waits should be:
         // - First 3 retries: 60 seconds (receiptAwaitSeconds)
@@ -180,7 +183,7 @@ class ReceiptWindowTest {
         // Create a message that has been acked many times (more than max attempts)
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 15)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         val pendingOutbox = repo.loadPendingOutbox()
         val item = pendingOutbox.first()
@@ -203,7 +206,7 @@ class ReceiptWindowTest {
 
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 0)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         // Verbose logging should be available in production for debugging
         // This test verifies the structure is in place
@@ -223,7 +226,7 @@ class ReceiptWindowTest {
 
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 2)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         val pendingOutbox = repo.loadPendingOutbox()
         val item = pendingOutbox.first()
@@ -244,7 +247,7 @@ class ReceiptWindowTest {
 
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 5)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         val pendingOutbox = repo.loadPendingOutbox()
         val item = pendingOutbox.first()
@@ -267,7 +270,7 @@ class ReceiptWindowTest {
         // Message with NO acks, high attempt count
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 0)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         val pendingOutbox = repo.loadPendingOutbox()
         val item = pendingOutbox.first()
@@ -290,7 +293,7 @@ class ReceiptWindowTest {
         // Create message that was acked, then wait longer than receipt timeout
         writePendingOutbox(filesDir, messageId, peerId, ackedCount = 1)
 
-        val repo = MeshRepository(context = context)
+        val repo = HermeticRepo(context = context)
 
         val pendingOutbox = repo.loadPendingOutbox()
         val item = pendingOutbox.first()

@@ -33,7 +33,7 @@ pub enum NextHop {
     /// Store and wait — no route known, carry until one appears
     StoreAndCarry,
     /// Broadcast route request — ask the network "who can reach this?"
-    RouteDiscovery { hint: [u8; 4] },
+    RouteDiscovery { hint: [u8; 8] },
 }
 
 /// Which routing layer decided the route
@@ -55,7 +55,7 @@ pub struct RoutingDecision {
     /// Which message this route is for
     pub message_id: [u8; 16],
     /// The recipient we're trying to reach
-    pub recipient_hint: [u8; 4],
+    pub recipient_hint: [u8; 8],
     /// Primary path (where to try first)
     pub primary: NextHop,
     /// Alternative paths (for redundant delivery of high-priority messages)
@@ -109,13 +109,13 @@ pub struct RoutingEngine {
     global: GlobalRoutes,
     /// Our own peer ID (Ed25519 public key)
     _local_id: PeerId,
-    /// Our recipient hint (first 4 bytes of blake3(our_pk))
-    local_hint: [u8; 4],
+    /// Our recipient hint (first 8 bytes of blake3(our_pk))
+    local_hint: [u8; 8],
 }
 
 impl RoutingEngine {
     /// Create a new routing engine
-    pub fn new(local_id: PeerId, local_hint: [u8; 4]) -> Self {
+    pub fn new(local_id: PeerId, local_hint: [u8; 8]) -> Self {
         RoutingEngine {
             local: LocalCell::new(local_id),
             neighborhood: NeighborhoodTable::new(),
@@ -134,7 +134,7 @@ impl RoutingEngine {
     /// 4. Store-and-carry — hold until a route appears
     pub fn route_message(
         &self,
-        recipient_hint: &[u8; 4],
+        recipient_hint: &[u8; 8],
         message_id: &[u8; 16],
         priority: u8,
         _now: u64,
@@ -143,7 +143,9 @@ impl RoutingEngine {
         let local_peers = self.local.peers_for_hint(recipient_hint);
         if !local_peers.is_empty() {
             // Found direct peer(s)
-            let best_peer = local_peers[0]; // Already sorted by reliability in LocalCell
+            // V040-T13 F7-C: `peers_for_hint` now actually delivers on this
+            // contract (it sorts by reliability, highest first).
+            let best_peer = local_peers[0];
             let transport = best_peer
                 .transports
                 .first()
@@ -228,7 +230,7 @@ impl RoutingEngine {
     /// the chance of successful delivery for critical messages.
     pub fn route_redundant(
         &self,
-        recipient_hint: &[u8; 4],
+        recipient_hint: &[u8; 8],
         message_id: &[u8; 16],
         priority: u8,
         redundancy: usize,
@@ -246,7 +248,7 @@ impl RoutingEngine {
     }
 
     /// Is this message addressed to us?
-    pub fn is_for_us(&self, recipient_hint: &[u8; 4]) -> bool {
+    pub fn is_for_us(&self, recipient_hint: &[u8; 8]) -> bool {
         recipient_hint == &self.local_hint
     }
 
@@ -334,7 +336,7 @@ impl RoutingEngine {
     // Helper methods
 
     /// Collect alternative hops for a destination
-    fn collect_alternative_hops(&self, hint: &[u8; 4], skip_layer: RoutingLayer) -> Vec<NextHop> {
+    fn collect_alternative_hops(&self, hint: &[u8; 8], skip_layer: RoutingLayer) -> Vec<NextHop> {
         let mut alternatives = Vec::new();
 
         // From Layer 1 (if not the primary)
@@ -377,7 +379,7 @@ impl RoutingEngine {
     }
 
     /// Collect N alternative hops
-    fn collect_alternative_hops_count(&self, hint: &[u8; 4], count: usize) -> Vec<NextHop> {
+    fn collect_alternative_hops_count(&self, hint: &[u8; 8], count: usize) -> Vec<NextHop> {
         let mut alternatives = Vec::new();
 
         // Layer 1
@@ -448,8 +450,8 @@ mod tests {
         [id; 16]
     }
 
-    fn make_hint(id: u8) -> [u8; 4] {
-        [id, 0, 0, 0]
+    fn make_hint(id: u8) -> [u8; 8] {
+        [id, 0, 0, 0, 0, 0, 0, 0]
     }
 
     #[test]

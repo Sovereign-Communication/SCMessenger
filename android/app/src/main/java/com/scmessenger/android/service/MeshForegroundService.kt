@@ -17,6 +17,7 @@ import androidx.core.app.ServiceCompat
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.MainActivity
 import com.scmessenger.android.utils.NotificationHelper
+import com.scmessenger.android.utils.displayName
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -586,8 +587,11 @@ class MeshForegroundService : Service() {
                 val appInForeground = isAppInForeground()
                 val activeConversationId = getActiveConversationId()
 
-                // Get nickname from contact if available
-                val nickname = contactData?.nickname ?: contactData?.localNickname
+                // Get display name from contact if available (localNickname
+                // primary; chosen nickname secondary; synthetic peer-* blank).
+                val nickname = contactData?.let { contact ->
+                    contact.displayName(message.peerId.take(12))
+                }
 
                 // Post notification to main thread
                 withContext(Dispatchers.Main) {
