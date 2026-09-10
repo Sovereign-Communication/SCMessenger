@@ -719,6 +719,33 @@ fn is_valid_reservation_base(addr: &Multiaddr, known_local_addrs: &[Multiaddr]) 
     true
 }
 
+/// D10b: poison-listener guard predicate (event-loop enforcement).
+///
+/// libp2p-mdns advertises the swarm's listen addresses verbatim, so ANY
+/// listener address with circuit segments that is not a tracked single-circuit
+/// relay reservation is poison: it overflows the mDNS response
+/// (`TxtRecordTooLong`, `os error 10040`) and kills LAN discovery
+/// network-wide. Two live shapes have been observed:
+/// - nested double-circuit routes (`.../p2p-circuit/p2p/<x>/p2p-circuit/...`)
+///   leaked from relay-assist paths before D10;
+/// - a relay-assist reservation whose reported address carried TWO circuit
+///   segments even under the D10 base gate (base validated direct, but the
+///   relay returned a deeper route).
+///
+/// A reported address with exactly ONE circuit segment is legitimate only for
+/// a listener created by the guarded reservation path.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_poison_circuit_listener(address: &Multiaddr, is_tracked_reservation: bool) -> bool {
+    let circuit_count = address
+        .iter()
+        .filter(|proto| matches!(proto, libp2p::multiaddr::Protocol::P2pCircuit))
+        .count();
+    if circuit_count == 0 {
+        return false;
+    }
+    circuit_count > 1 || !is_tracked_reservation
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn relay_reservation_multiaddr(base: &Multiaddr, relay_peer_id: PeerId) -> Multiaddr {
     use libp2p::multiaddr::Protocol;
@@ -5484,7 +5511,26 @@ pub async fn start_swarm_with_config(
                                 }
                             }
 
-                            SwarmEvent::NewListenAddr { address, .. } => {
+                            SwarmEvent::NewListenAddr { listener_id, address, .. } => {
+                                // D10b: poison-listener guard. Circuit listeners are
+                                // legitimate ONLY as tracked single-circuit relay
+                                // reservations. Anything else (nested double-circuit
+                                // routes, untracked circuit listeners) is removed here
+                                // BEFORE libp2p-mdns can advertise it — the overflow of
+                                // the mDNS response by such listeners killed LAN
+                                // discovery network-wide (D10 checkpoint evidence), and
+                                // the D10 base gate alone proved insufficient (round 2:
+                                // a relay returned a deeper route for a validated base).
+                                let is_reserved = successful_relay_reservations
+                                    .values()
+                                    .any(|lid| *lid == listener_id);
+                                if is_poison_circuit_listener(&address, is_reserved) {
+                                    tracing::warn!(
+                                        "[D10b] Poison-listener guard: removing circuit listener (tracked_reservation={}, circuits>1 or untracked): {}",
+                                        is_reserved, address
+                                    );
+                                    let _ = swarm.remove_listener(listener_id);
+                                } else if is_discoverable_multiaddr(&address) {
                                 tracing::info!("Listening on {}", address);
                                 // D2 (live 2026-09-09): the multiport sweep binds dual-stack
                                 // wildcards (/ip4/0.0.0.0 + /ip6/::), and every per-interface
@@ -5506,6 +5552,7 @@ pub async fn start_swarm_with_config(
                                         address
                                     );
                                     swarm.remove_external_address(&address);
+                                }
                                 }
                                 address_observer.set_listen_ports(
                                     bound_addresses.iter().filter_map(|addr| {
@@ -8954,6 +9001,39 @@ mod tests {
         // DNS multiaddrs skip straight past IP layers; our extractor returns the TCP port if present.
         // This test asserts the extractor does not panic on DNS-prefixed addresses.
         let _ = super::extract_tcp_port_from_multiaddr(&addr);
+    }
+
+    #[test]
+    fn poison_listener_guard_rejects_nested_double_circuit() {
+        // Live poison shape (round 2, 2026-09-10T05:05Z Windows node):
+        // relay-assist reported a listener whose base was itself a circuit
+        // route — two circuit segments, mDNS overflow, LAN discovery death.
+        let addr: Multiaddr = "/ip4/172.31.18.74/tcp/9090/p2p/12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31/p2p-circuit/p2p/12D3KooWR9ioPPRJ2tGPbWj9NVKXAve2iwZX4csLbDd1Tn6Hpi3B/p2p-circuit/p2p/12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw"
+            .parse()
+            .unwrap();
+        assert!(super::is_poison_circuit_listener(&addr, false));
+        assert!(super::is_poison_circuit_listener(&addr, true)); // even tracked, >1 circuit = poison
+    }
+
+    #[test]
+    fn poison_listener_guard_rejects_untracked_single_circuit() {
+        let relay = PeerId::random();
+        let addr: Multiaddr = format!("/ip4/18.234.62.247/tcp/9001/p2p/{}/p2p-circuit", relay)
+            .parse()
+            .unwrap();
+        // Untracked circuit listener (not created by the guarded reservation
+        // path): poison even with a single circuit segment.
+        assert!(super::is_poison_circuit_listener(&addr, false));
+        // Tracked single-circuit reservation: legitimate.
+        assert!(!super::is_poison_circuit_listener(&addr, true));
+    }
+
+    #[test]
+    fn poison_listener_guard_passes_direct_listeners() {
+        let addr: Multiaddr = "/ip4/192.168.0.222/tcp/9001".parse().unwrap();
+        assert!(!super::is_poison_circuit_listener(&addr, false));
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/9001".parse().unwrap();
+        assert!(!super::is_poison_circuit_listener(&loopback, false));
     }
 
     #[test]
