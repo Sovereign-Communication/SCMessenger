@@ -10,7 +10,7 @@ PR: https://github.com/Sovereign-Communication/SCMessenger/pull/281
 |---|---|---|---|
 | Windows CLI | release exe, SHA256 staged outside target | `238a8c53` | `0.4.0 (5f1f29bf:unified/v040-3node-parity)` (docs-only delta after rebuild) |
 | AWS | `testbotz/scmessenger:sha-238a8c5` | `238a8c5335a00fec…` | `0.4.0 (238a8c53…:unified/v040-3node-parity)` |
-| Pixel 6a | installed APK vc14 | `0.4.0` app | lastUpdate 2026-09-09 (pre-candidate APK; **reinstall pending** when assembleDebug finishes) |
+| Pixel 6a | `app-debug-238a8c53.apk` SHA256 `FE93C965…` | app logs `git=238a8c53` | lastUpdate 2026-09-10 05:31Z; `MeshApplication: version=0.4.0 (14), git=238a8c53, ref=unified/v040-3node-parity` |
 
 AWS image digest: `sha256:155d137073499a715cc5cd23e5f69e3f3d1c506a3bba3e4efdd8953e5b0f953e`
 Identity mount: `/opt/scm-relay-data` → `/data` (verified present)
@@ -51,7 +51,9 @@ Duplicate EC2 `i-0b735c4f` **terminated**; only `i-0b41aab7` running.
 
 ## Still open for 0.4.0 tag
 
-1. Pixel APK reinstall from this SHA (build in progress: UniFFI/android cargo).
+1. **Operator:** start mesh from Pixel app UI (permission dialog / service was
+   STOPPED after reinstall; identity preserved — `initialized=true`, contacts
+   present). Then confirm `peersDiscovered=2` in passive logcat.
 2. Rule-8 independent APPROVE for transport diffs (merge-to-main gate).
 3. BLE leg requires Windows BT radio reboot (hardware MT7921 wedge).
 4. Tag `v0.4.0` only after operator final matrix including BLE isolation probe.
