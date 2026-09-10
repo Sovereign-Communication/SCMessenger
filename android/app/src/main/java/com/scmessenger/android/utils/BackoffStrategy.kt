@@ -48,17 +48,6 @@ class BackoffStrategy(
     }
 
     /**
-     * Get the current delay without incrementing.
-     */
-    fun getCurrentDelay(): Long {
-        synchronized(lock) {
-            val attempt = attemptCount.get()
-            val baseDelay = (initialDelayMs * Math.pow(multiplier, attempt.toDouble())).toLong()
-            return min(baseDelay, maxDelayMs)
-        }
-    }
-
-    /**
      * Reset the backoff state for a fresh start.
      */
     fun reset() {
@@ -67,34 +56,4 @@ class BackoffStrategy(
             Timber.d("Backoff strategy reset")
         }
     }
-
-    /**
-     * Get the current attempt count.
-     */
-    fun getAttemptCount(): Int = attemptCount.get()
-
-    /**
-     * Check if we've exceeded the max delay.
-     */
-    fun isAtMaxDelay(): Boolean {
-        synchronized(lock) {
-            return getCurrentDelay() >= maxDelayMs
-        }
-    }
-}
-
-/**
- * Build a backoff delay string for logging.
- */
-fun BackoffStrategy.getBackoffLogString(): String {
-    val current = getCurrentDelay()
-    return "backoff(current=${current}ms, max=${maxDelayMs}ms, attempts=${getAttemptCount()})"
-}
-
-/**
- * A simpler fixed delay backoff for simple cases.
- */
-class FixedDelayBackoff(private val delayMs: Long = 5000L) {
-    fun nextDelay(): Long = delayMs
-    fun reset() {}
 }

@@ -207,5 +207,4 @@ object ApkShareManager {
     }
 
     fun isHosting(): Boolean = isHosting
-    fun getHostingPort(): Int = hostingPort
 }
