@@ -4,7 +4,9 @@ Status: Active
 Created: 2026-09-10
 Workspace: `C:\Users\SCM\Documents\GitHub\MiMoSCMessengerFresh`
 Branch: `unified/v040-3node-parity`
-Tip: `3c2140d3` (+ local compile fix)
+Tip: `9fec7b77`
+Gates: cargo check PASS; observation unit tests 11/11 PASS
+Deploy runbook: `HANDOFF/UNIFIED_V040_3NODE_DEPLOY_RUNBOOK_2026-09-10.md`
 
 ## What this is
 
