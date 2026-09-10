@@ -2744,7 +2744,13 @@ open class MeshRepository(
             }
 
             val info = ironCore?.getIdentityInfo()
-            Timber.i("SC_IDENTITY_OWN p2p_id=${info?.libp2pPeerId ?: "unknown"} pk=${info?.publicKeyHex ?: "unknown"}")
+            // SC_IDENTITY_TRIAD: always log all three identifiers so PeerID /
+            // public_key / identity_id confusion is impossible in field logs.
+            Timber.i(
+                "SC_IDENTITY_OWN p2p_id=${info?.libp2pPeerId ?: "unknown"} " +
+                    "pk=${info?.publicKeyHex ?: "unknown"} " +
+                    "id=${info?.identityId ?: "unknown"}"
+            )
             Timber.i("Mesh service started successfully")
         } catch (e: Exception) {
             val isStorageError = e is uniffi.api.IronCoreException.StorageException ||

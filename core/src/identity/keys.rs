@@ -58,6 +58,101 @@ pub fn identify_key_type(hex_str: &str) -> &'static str {
     }
 }
 
+/// Canonical triad of every peer identifier used across apps.
+///
+/// - `libp2p_peer_id` — base58 transport id (`12D3KooW…`)
+/// - `public_key_hex` — Ed25519 verifying key (`pk:`)
+/// - `identity_id` — blake3 of the public key bytes (`id:`)
+///
+/// All three are self-consistent: pubkey ⇄ peer_id is reversible for Ed25519
+/// identity multihashes; identity_id is one-way from pubkey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerIdTriad {
+    pub libp2p_peer_id: Option<String>,
+    pub public_key_hex: Option<String>,
+    pub identity_id: Option<String>,
+    /// How the caller's input was classified.
+    pub input_kind: String,
+    /// True when peer_id re-derives from public_key_hex (Ed25519 identity).
+    pub self_certifying: bool,
+}
+
+impl PeerIdTriad {
+    /// Resolve ANY of the three identifier flavors into the full triad.
+    ///
+    /// Accepts `12D3…` peer ids, 64-hex public keys, or 64-hex identity_ids.
+    /// Public keys yield the complete triad. Peer ids yield pubkey+identity_id
+    /// when the key is embedded. Identity_ids cannot invert to a pubkey, so
+    /// those fields stay `None` and only `identity_id` is returned.
+    pub fn resolve(input: &str) -> Option<Self> {
+        let raw = input.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        // Strip diagnostic prefixes if present.
+        let s = raw
+            .strip_prefix(PUBLIC_KEY_PREFIX)
+            .or_else(|| raw.strip_prefix(IDENTITY_ID_PREFIX))
+            .unwrap_or(raw);
+
+        if s.starts_with("12D") || s.starts_with("Qm") {
+            let public_key_hex = crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(s)?;
+            let identity_id = identity_id_from_public_key_hex(&public_key_hex);
+            return Some(Self {
+                libp2p_peer_id: Some(s.to_string()),
+                public_key_hex: Some(public_key_hex),
+                identity_id,
+                input_kind: "libp2p_peer_id".into(),
+                self_certifying: true,
+            });
+        }
+
+        if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            if is_valid_public_key(s) {
+                let public_key_hex = s.to_ascii_lowercase();
+                let identity_id = identity_id_from_public_key_hex(&public_key_hex);
+                let libp2p_peer_id =
+                    crate::store::ledger_entry::peer_id_from_public_key_hex(&public_key_hex);
+                let self_certifying = libp2p_peer_id.is_some();
+                return Some(Self {
+                    libp2p_peer_id,
+                    public_key_hex: Some(public_key_hex),
+                    identity_id,
+                    input_kind: "public_key".into(),
+                    self_certifying,
+                });
+            }
+            // 64-hex that is not a curve point: treat as identity_id.
+            return Some(Self {
+                libp2p_peer_id: None,
+                public_key_hex: None,
+                identity_id: Some(s.to_ascii_lowercase()),
+                input_kind: "identity_id".into(),
+                self_certifying: false,
+            });
+        }
+
+        None
+    }
+
+    /// Log-safe rendering: `p2p=… pk=… id=…` with prefixes.
+    pub fn log_label(&self) -> String {
+        format!(
+            "p2p={} pk:{} id:{} self_cert={}",
+            self.libp2p_peer_id.as_deref().unwrap_or("-"),
+            self.public_key_hex
+                .as_deref()
+                .map(|s| format!("{s}…"))
+                .unwrap_or_else(|| "-".into()),
+            self.identity_id
+                .as_deref()
+                .map(|s| format!("{s}…"))
+                .unwrap_or_else(|| "-".into()),
+            self.self_certifying
+        )
+    }
+}
+
 /// Key pair for signing and verification
 #[derive(Clone)]
 pub struct KeyPair {
@@ -1050,5 +1145,57 @@ mod tests {
             identity_id_from_public_key_hex(&"7f".repeat(32)).is_none(),
             "0x7f*32 is not a valid Ed25519 curve point"
         );
+    }
+
+    #[test]
+    fn peer_id_triad_roundtrips_pubkey_and_peer_id() {
+        let keys = IdentityKeys::generate();
+        let pk = keys.public_key_hex();
+        let triad = PeerIdTriad::resolve(&pk).expect("valid pubkey resolves");
+        assert_eq!(triad.input_kind, "public_key");
+        assert_eq!(triad.public_key_hex.as_deref(), Some(pk.as_str()));
+        let peer = triad.libp2p_peer_id.clone().expect("peer_id derived");
+        assert!(triad.identity_id.is_some());
+        assert!(triad.self_certifying);
+
+        // Resolving via peer id must yield the same pubkey + identity_id.
+        let via_peer = PeerIdTriad::resolve(&peer).expect("peer_id resolves");
+        assert_eq!(via_peer.input_kind, "libp2p_peer_id");
+        assert_eq!(via_peer.public_key_hex, Some(pk.clone()));
+        assert_eq!(via_peer.identity_id, triad.identity_id);
+        assert_eq!(via_peer.libp2p_peer_id, Some(peer));
+
+        // Resolving via identity_id cannot invert, but must keep the id.
+        // A blake3 digest is a valid Ed25519 curve point ~50% of the time; in
+        // that case PeerIdTriad classifies the input as a public_key (correct
+        // for real keys, ambiguous for those ids). Force a non-curve-point id.
+        let mut off_curve_id = None;
+        for _ in 0..64 {
+            let k = IdentityKeys::generate();
+            let id = identity_id_from_public_key_hex(&k.public_key_hex()).unwrap();
+            if !is_valid_public_key(&id) {
+                off_curve_id = Some(id);
+                break;
+            }
+        }
+        let id = off_curve_id.expect("should find a non-curve-point identity_id quickly");
+        let via_id = PeerIdTriad::resolve(&id).expect("identity_id resolves");
+        assert_eq!(via_id.input_kind, "identity_id");
+        assert_eq!(via_id.identity_id, Some(id));
+        assert!(via_id.public_key_hex.is_none());
+        assert!(via_id.libp2p_peer_id.is_none());
+    }
+
+    #[test]
+    fn peer_id_triad_accepts_prefixes_and_rejects_junk() {
+        let keys = IdentityKeys::generate();
+        let pk = keys.public_key_hex();
+        let labeled = format!("{PUBLIC_KEY_PREFIX}{pk}");
+        let t = PeerIdTriad::resolve(&labeled).expect("pk: prefix accepted");
+        assert_eq!(t.public_key_hex.as_deref(), Some(pk.as_str()));
+
+        assert!(PeerIdTriad::resolve("").is_none());
+        assert!(PeerIdTriad::resolve("not-an-id").is_none());
+        assert!(PeerIdTriad::resolve("12D3KooWnotvalidbase58!!!").is_none());
     }
 }
