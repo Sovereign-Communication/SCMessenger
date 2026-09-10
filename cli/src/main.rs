@@ -2745,13 +2745,18 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 if let Some(ref pk_hex) = sender_public_key_hex {
                                                     match core_rx.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
                                                         Ok(ack_bytes) => {
-                                                            tracing::debug!("Sending delivery ACK for {} to {}", msg.id, peer_id);
+                                                            // INFO (was debug): receipt emission is the
+                                                            // decisive evidence line for delivery-confirmation
+                                                            // audits across nodes; at DEBUG it is invisible at
+                                                            // the node's default INFO level and a lost ACK is
+                                                            // indistinguishable from an unsent one.
+                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
                                                             if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
-                                                                tracing::debug!("Failed to send delivery ACK to {}: {}", peer_id, e);
+                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, peer_id, e);
                                                             }
                                                         }
                                                         Err(e) => {
-                                                            tracing::debug!("Failed to prepare delivery ACK: {}", e);
+                                                            tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
                                                         }
                                                     }
                                                 }
