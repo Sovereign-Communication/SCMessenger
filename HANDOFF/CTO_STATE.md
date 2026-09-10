@@ -1,8 +1,98 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-30 (recorded Android agent authorization scope; #251/#252 in flight)
+Last updated: 2026-09-10 (Freebuff sandbox burn-down session; #272 FFI fix pushed, #277 merged, #280 ticket hygiene)
 Entry point: `/CTO`. This file is the whole context load.
+
+# ===== RESUME HERE (2026-09-10) =====
+
+## Session record 2026-09-10 — Freebuff sandbox (Linux; no Windows toolchain, no AWS creds)
+
+All facts below were verified by command this session. Environment: Freebuff
+Linux sandbox — container builds are advisory-only per AGENTS.md; none were
+run and none were needed (everything landed was docs/CI-snapshot surface).
+
+### Verified state of the burn-down (each item: command that proved it)
+
+- **`main` green at `c5b7c530`** — push lanes CI/Lint/Cross/Docker Publish/
+  Docker Integration Suite/Repository Hygiene all `success` on the #267 merge;
+  `gh run list --branch main`. Failures on main are schedule-lanes only
+  (Docker Integration Suite schedule, Security Scan schedule) — not push gates.
+- **Custody split-brain: ALREADY FIXED on main.** The 2026-08-29 charter item
+  is stale. `core/src/transport/swarm.rs:3040-3055` now publishes the swarm's
+  live `RelayCustodyStore` back into `IronCore`
+  (`*core.relay_custody_store.write() = relay_custody_store.clone()`), with a
+  comment citing the v0.4.0 gate. Landed in the recent #267-#278 wave. No work
+  remains. Do not re-implement.
+- **`docs_sync_check.sh` PASSES on main** — run verbatim this session. Charter
+  L4-4 (and Freebuff T5) are DONE. The broken residual-risk-register link was
+  fixed upstream; every agent's finalize gate is unblocked again.
+- **`routing_peer_seen` is WIRED (D6 code blocker cleared).** Production call
+  sites at `core/src/transport/swarm.rs:5641` and `:8067`, fed from the F-DHT
+  locally-verified gate (PR #267); confidence tests at `iron_core.rs:5079`.
+  Remaining: field re-measure of non-zero routing confidence on the Tier A rig
+  (T4's acceptance, not a code task).
+- **Dual-bind: fixed in code, verified** — `multiport.rs:75-99` emits exactly
+  one transport per port with `seen_ports` dedup. The L0-4 operator decision
+  is moot; ticket moved to `done/` (this session, via PR #280).
+- **L1-1 (release alias preflight) is on main** — `release.yml:209` fails fast
+  with `[FAIL] SCMESSENGER_KEY_ALIAS is not present in the decoded keystore`.
+- **Three resolved tickets moved to `done/` with evidence headers** (routing,
+  dual-bind, deeplink) and **`SUPPORT.md` version line corrected** v0.3.5 ->
+  v0.4.0 — open as **PR #280**.
+- **PR #277 (beach-join audit docs) MERGED** `c5b7c530` — all 17 checks green,
+  HANDOFF-only files verified before merge.
+
+### PR #272 (v0.4.0 candidate) — fix pushed, merge still gated
+
+- Root cause of its only red check, from run `34111832444` log: the branch's
+  `mobile_bridge.rs` adds one UniFFI export
+  `set_swarm_peer_connection(publicKeyHex, connected)` but never updated the
+  checked-in FFI snapshots. CI printed the exact missing lines (addition-only
+  hunks: Kotlin `317a318`, Swift `225a226`).
+- Fix: fast-forwarded the PR branch `85cb4c67..5fe7d664` with those two lines
+  inserted verbatim into `scripts/ffi-snapshots/{kotlin,swift}-symbols.txt`.
+  The check regenerates bindings and diffs, so the snapshot cannot lie — CI is
+  the verifier. FFI check `pending` at session end; confirm before anything else.
+- **BLOCKER THAT REMAINS: no Rule-8 adversarial review on file for #272.** It
+  touches `core/src/transport/` + `core/src/routing/` (+1,434 lines in
+  mobile_bridge). Verified: zero PR reviews/comments on GitHub and no review
+  doc in `docs/security/` or `HANDOFF/` referencing #272. Do NOT merge on green
+  CI alone. Dispatch a fresh reviewer (different model family from the author)
+  and file the verdict before merging.
+
+### Other open PRs (30 open at session end; full list from `gh pr list`)
+
+- **#279 (transport unification wave) is CONFLICTING** with main — it predates
+  the #267-#278 run. Rebase or merge-main is the owner's call; a rebase needs a
+  force-push, which is banned on shared branches, so leave it to its author or
+  get explicit operator direction.
+- Charter L3 lane: dependabot/docs PRs #214/#212/#211/#141 (merge after rebase),
+  close-superseded #223/#224/#225/#205/#206, DIRTY-but-green #227/#209 rebase —
+  all still open, none started this session.
+
+### Tier A — cloud node: NOT verified, likely DOWN at the recorded address
+
+- `curl http://54.226.67.101:9876/health` returned `000` (unreachable) from the
+  sandbox. The Freebuff README itself warns the public IP changes on every
+  instance replacement, so the recorded address may simply be stale — but the
+  down-or-stale state is UNRESOLVED.
+- This sandbox has neither `~/.ssh/scm-node-key.pem` nor the EC2 discovery
+  config, so `scripts/aws_deploy.sh` cannot run here. **Operator/Windows-host
+  action:** run `scripts/aws_deploy.sh` (no arg — it discovers the IP) to
+  redeploy `testbotz/scmessenger:latest` at `main@c5b7c530`-equivalent image
+  (Docker Publish was green on the #267 merge), with the `/opt/scm-relay-data`
+  mount, then paste `/health` + deployed-SHA evidence. That re-arms L0-2/L0-3
+  (custody + connection-assistance scoring), which remain the v0.4.0 gate.
+
+### Operator actions still outstanding (unchanged by this session)
+
+1. **Keystore alias check** (charter 1.1, ~2 min) — preflight will now fail
+   fast in CI, so the wrong alias costs seconds instead of 24 minutes.
+2. **External audit commissioning** (charter 1.2) — board decision, money.
+3. **D4/D6/D7 field scoring** (charter 1.4) — released APK, second handset,
+   cross-network. D7 (offline proximity) is still NOT STARTED and is the next
+   unclaimed gate item after the cloud node is proven.
 
 # ===== RESUME HERE (2026-08-30) =====
 
