@@ -10560,10 +10560,10 @@ open class MeshRepository(
         val host = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
             ?: Regex("/ip6/([^/]+)/").find(addr)?.groupValues?.get(1)
             ?: return false
-        if (_discoveredPeers.value.values.any { peer ->
-                peer.listeners.any { it.contains(host) } ||
-                    peer.peerId.isNotEmpty() && addr.contains(host)
-            }) {
+        // PeerDiscoveryInfo does not carry listeners. Use mDNS LAN multiaddrs
+        // as the live-peer address snapshot (same role the broken field was
+        // meant to play).
+        if (mdnsLanPeers.values.any { addrs -> addrs.any { it.contains(host) } }) {
             return true
         }
         // Also treat ourselves as connected when peersDiscovered > 0 and host
