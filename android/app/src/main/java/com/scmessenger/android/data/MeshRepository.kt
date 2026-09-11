@@ -6104,7 +6104,20 @@ open class MeshRepository(
      * asynchronously after service starts. This allows Settings screen to load immediately.
      */
     private fun ensureServiceInitializedDeferred() {
+        // STOP-RACE-001 (2026-09-11): Settings/async reload used to call
+        // startMeshService() ~1s after ACTION_STOP, resurrecting a mesh the
+        // user just stopped. The user-stop latch lives on MeshForegroundService
+        // and is set synchronously in decideCommand(ACTION_STOP).
+        if (com.scmessenger.android.service.MeshForegroundService.userStoppedForSession) {
+            Timber.i("ensureServiceInitializedDeferred: user stop in effect; not starting mesh")
+            return
+        }
         repoScope.launch {
+            // Re-check after dispatch: stop may have landed while we queued.
+            if (com.scmessenger.android.service.MeshForegroundService.userStoppedForSession) {
+                Timber.i("ensureServiceInitializedDeferred: user stop landed while queued; abort start")
+                return@launch
+            }
             val state = meshService?.getState()
             if (state == uniffi.api.ServiceState.RUNNING) {
                 return@launch

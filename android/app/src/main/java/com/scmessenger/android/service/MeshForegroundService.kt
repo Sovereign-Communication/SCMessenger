@@ -744,7 +744,13 @@ class MeshForegroundService : Service() {
         ): StartDecision {
             // R4-M1: STOP is always honored -- a repeated or late stop must be
             // able to complete teardown even if the latch is already set.
+            // STOP-RACE-001: latch MUST be set SYNCHRONOUSLY here, before any
+            // coroutine work. Log 2026-09-11: ensureServiceInitializedDeferred
+            // (async settings reload) called repository.startMeshService() ~1s
+            // after ACTION_STOP because the latch was only set inside the
+            // async stopMeshService() body.
             if (action == ACTION_STOP) {
+                userStoppedForSession = true
                 return StartDecision.Stop
             }
             // R3-F1 / R4-M2: after a user stop, only an explicit ACTION_START
