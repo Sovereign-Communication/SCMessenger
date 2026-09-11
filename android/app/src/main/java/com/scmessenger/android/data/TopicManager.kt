@@ -124,10 +124,28 @@ class TopicManager(
 
     /**
      * Auto-subscribe to peer topics when discovering new peers.
+     * GHOST-IDENTITY-001: never subscribe topics for retired/ghost peer ids
+     * (they re-advertise dead identities mesh-wide via gossipsub).
      */
     fun autoSubscribeToPeerTopics(peerId: String) {
+        val trimmed = peerId.trim()
+        if (trimmed.isEmpty()) return
         // Generate peer topic pattern: /scmessenger/peer/{peerId}/v1
-        val peerTopic = "/scmessenger/peer/$peerId/v1"
+        val peerTopic = "/scmessenger/peer/$trimmed/v1"
+
+        // Only subscribe for identities that are live in discovery OR proven in ledger.
+        val discovered = meshRepository.discoveredPeers.value
+        val isDiscovered = discovered.containsKey(trimmed) ||
+            discovered.values.any { it.peerId == trimmed || it.libp2pPeerId == trimmed }
+        val proven = try {
+            meshRepository.getDialableAddresses().any { e ->
+                (e.peerId == trimmed || e.publicKey == trimmed) && e.successCount > 0u
+            }
+        } catch (_: Exception) { false }
+        if (!isDiscovered && !proven) {
+            Timber.i("GHOST-IDENTITY-001 skip peer-topic subscribe for unproven $trimmed")
+            return
+        }
 
         if (!_subscribedTopics.value.contains(peerTopic)) {
             subscribe(peerTopic)

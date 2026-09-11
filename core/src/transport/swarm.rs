@@ -3251,6 +3251,44 @@ fn ledger_verified_pair(
         .is_locally_verified_pair(addr, &peer_id.to_string())
 }
 
+/// GHOST-IDENTITY-001 (2026-09-11 RCA PK:577fd171).
+///
+/// Gossipsub `Subscribed` used to auto-subscribe EVERY discovered topic,
+/// including `/scmessenger/peer/<retired-pk>/v1`. That re-advertised dead
+/// identities mesh-wide after phone reinstall. A peer-topic is a ghost when
+/// its id is 64-hex (identity-confusion class: pk stored as peer_id) and we
+/// have no proven ledger entry for it (`success_count == 0` or missing).
+/// Mesh-wide topics (`sc-lobby`, `sc-mesh`, …) always auto-negotiate.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCore>>) -> bool {
+    let Some(rest) = topic_str.strip_prefix("/scmessenger/peer/") else {
+        return false;
+    };
+    let Some(peer_key) = rest.strip_suffix("/v1") else {
+        return false;
+    };
+    // Only the 64-hex identity-confusion shape is a candidate ghost.
+    // Libp2p PeerIds (`12D3KooW…`) are self-certifying and allowed.
+    let is_hex64 = peer_key.len() == 64
+        && peer_key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b));
+    if !is_hex64 {
+        return false;
+    }
+    let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
+        // Fail closed on ghost shape when we cannot consult the ledger.
+        return true;
+    };
+    let proven = core.ledger_manager.get_preferred_relays(64).iter().any(|e| {
+        e.success_count > 0
+            && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
+            && (e.peer_id.as_deref() == Some(peer_key)
+                || e.public_key.as_deref() == Some(peer_key))
+    });
+    !proven
+}
+
 /// Build and start the libp2p swarm, returning a handle for communication.
 ///
 /// This spawns a tokio task that runs the swarm event loop.
@@ -5377,7 +5415,15 @@ pub async fn start_swarm_with_config(
 
                                 // AUTO-NEGOTIATE: If a peer subscribes to a topic we don't know,
                                 // subscribe to it ourselves. "A node is a node."
-                                if !subscribed_topics.contains(&topic_str) {
+                                // GHOST-IDENTITY-001: NEVER auto-negotiate retired-identity peer
+                                // topics (`/scmessenger/peer/<old-pk>/v1`) — that is the amplifier
+                                // that made PK:577fd171 reappear mesh-wide after Pixel reinstall.
+                                if is_ghost_peer_topic(&topic_str, &core_handle) {
+                                    tracing::info!(
+                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
+                                        topic_str
+                                    );
+                                } else if !subscribed_topics.contains(&topic_str) {
                                     tracing::info!("Auto-subscribing to discovered topic: {}", topic_str);
                                     let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
                                     if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&ident_topic) {

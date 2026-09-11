@@ -6556,13 +6556,15 @@ open class MeshRepository(
             try {
                 val rust = lm.seedAddresses(limit)
                 // Apply same poison-mask as getDialableAddresses/getAllLedgerEntries for consistency.
-                return rust.map { entry ->
-                    val pid = entry.peerId?.trim().orEmpty()
-                    val key = entry.publicKey?.trim().orEmpty()
-                    if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
-                        entry.copy(publicKey = null, nickname = null)
-                    } else entry
-                }
+                return rust
+                    .map { entry ->
+                        val pid = entry.peerId?.trim().orEmpty()
+                        val key = entry.publicKey?.trim().orEmpty()
+                        if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
+                            entry.copy(publicKey = null, nickname = null)
+                        } else entry
+                    }
+                    .filterNot { isGhostLedgerEntry(it) }
             } catch (e: Exception) {
                 Timber.w(e, "getSeedAddresses: Rust delegate failed, falling back to cached file parse")
             }
@@ -6570,6 +6572,7 @@ open class MeshRepository(
         // LEDGER-CACHE-001: getAllLedgerEntries() is now mtime+size cached, so triple re-parse collapses to one.
         return getAllLedgerEntries()
             .filter { it.successCount == 0u && it.failureCount < 3u }
+            .filterNot { isGhostLedgerEntry(it) }
             .sortedByDescending { it.lastSeen ?: 0uL }
             .take(limit.toInt())
     }
@@ -6578,8 +6581,11 @@ open class MeshRepository(
         val cutoffSec = (System.currentTimeMillis() / 1000) - withinDays * 24 * 3600
         val cutoff = cutoffSec.coerceAtLeast(0).toULong()
         // LEDGER-CACHE-001: single cached fetch, not three disk parses.
+        // GHOST-IDENTITY-001: dead rows are exactly where retired identities hide
+        // (577fd171 had fail=3 success=0). Do not resurrect them into seed/UI.
         return getAllLedgerEntries()
             .filter { it.failureCount >= 3u && (it.lastSeen ?: 0uL) >= cutoff }
+            .filterNot { isGhostLedgerEntry(it) }
             .sortedByDescending { it.lastSeen ?: 0uL }
     }
 
@@ -6746,7 +6752,9 @@ open class MeshRepository(
             // resurrect identity poison across WiFi/BLE cycles).
             // FIX: include offline nodes (seed + recent dead) so the peer list persists
             // "last seen Xm ago" with transport badges even when dialable==0.
-            val allLedgerForSeeding = (getDialableAddresses() + getSeedAddresses(16u) + getRecentlyDeadAddresses()).distinctBy { it.multiaddr }
+            val allLedgerForSeeding = (getDialableAddresses() + getSeedAddresses(16u) + getRecentlyDeadAddresses())
+                .distinctBy { it.multiaddr }
+                .filterNot { isGhostLedgerEntry(it) }
             allLedgerForSeeding.forEach { entry ->
                 val rawPeerId = entry.peerId?.trim().takeIf { !it.isNullOrEmpty() } ?: return@forEach
                 val transports = parseTransportsFromMultiaddrs(listOf(entry.multiaddr))
@@ -11165,6 +11173,32 @@ open class MeshRepository(
      */
     fun getExternalAddresses(): List<String> {
         return externalAddressesSnapshot
+    }
+
+    /**
+     * Own LAN-facing IP literals from listener/external snapshots (no ports).
+     * GHOST-IDENTITY-001: used to drop ledger rows that dial THIS device
+     * under a retired peer_id (self-dial poison after identity rotation).
+     */
+    fun getOwnLanAddrLiterals(): Set<String> {
+        val out = linkedSetOf<String>()
+        val regex = Regex("""/ip4/(\d{1,3}(?:\.\d{1,3}){3})/""")
+        for (ma in listeningAddressesSnapshot + externalAddressesSnapshot) {
+            regex.find(ma)?.groupValues?.get(1)?.let { out.add(it) }
+        }
+        return out
+    }
+
+    /** GHOST-IDENTITY-001: true when this ledger row must not resurrect as a node. */
+    fun isGhostLedgerEntry(entry: uniffi.api.LedgerEntry): Boolean {
+        return GhostIdentityGate.isGhost(
+            peerId = entry.peerId,
+            publicKey = entry.publicKey,
+            multiaddr = entry.multiaddr,
+            successCount = entry.successCount,
+            failureCount = entry.failureCount,
+            ownLanAddrs = getOwnLanAddrLiterals(),
+        )
     }
 
     /**

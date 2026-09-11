@@ -214,7 +214,11 @@ class DashboardViewModel @Inject constructor(
             val dialable = meshRepository.getDialableAddresses()
             val seed = meshRepository.getSeedAddresses(16u)
             val deadRecent = meshRepository.getRecentlyDeadAddresses(7)
-            val ledgerEntries = (dialable + seed + deadRecent).distinctBy { it.multiaddr }
+            // GHOST-IDENTITY-001: seed/dead already filtered in MeshRepository; double-check here
+            // so a future caller that skips those helpers cannot resurrect PK:577fd171-class ghosts.
+            val ledgerEntries = (dialable + seed + deadRecent)
+                .distinctBy { it.multiaddr }
+                .filterNot { meshRepository.isGhostLedgerEntry(it) }
             val relayHops = meshRepository.getRelayHopPeerIds()
             val routeAliasToCanonical = discoveredSnapshot
                 .mapNotNull { (routeKey, info) ->
