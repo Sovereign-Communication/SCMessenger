@@ -78,6 +78,22 @@ $env:MIMO_PYTHON scripts/recovery_preflight.py --action <name>
 Also: never delete `target/debug` while a build is live; never `pm clear` to
 "unlock" storage without confirming no identity is needed for the next test.
 
+## Harness verification requirement (operator 2026-09-11)
+
+Substantive changes need **sovereign-harness** evidence in addition to Windows
+gates. Free tier is the default; paid escalation allowed only when free
+evidence is insufficient, **max $0.10 per use**.
+
+```powershell
+$env:MIMO_PYTHON scripts/harness_gate.py --kind smoke
+$env:MIMO_PYTHON scripts/harness_gate.py --kind verify --prompt-file <file>
+# only if free shortfall/split:
+$env:MIMO_PYTHON scripts/harness_gate.py --kind verify --prompt-file <file> --allow-paid --max-cost 0.10
+```
+
+Incomplete harness coverage = **UNVERIFIED / BLOCKED**, never PASS. Harness is
+additional evidence, not a substitute for assemble/clippy/CI or rule-8.
+
 ## Delegation and validation
 
 Use the repository's approved orchestration path and semantic role manifest:

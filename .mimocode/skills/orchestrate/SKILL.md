@@ -72,6 +72,28 @@ canonical invocation. Free tier is default. Paid ladder requires
 | Resume a deferred apply | `continue --state …` |
 | Spend / trust audit | `spend`, `trust`, `ledger report` |
 
+### MANDATORY harness verification (operator 2026-09-11)
+
+**Any and all substantive changes** (source, tests-as-implementation, scripts
+that gate delivery, HANDOFF-claimed verdicts that depend on new evidence)
+must be harness-verified **in addition to** Windows build gates.
+
+```powershell
+# seat wrapper (policy-enforcing)
+$env:MIMO_PYTHON scripts/harness_gate.py --kind smoke
+$env:MIMO_PYTHON scripts/harness_gate.py --kind verify --prompt-file <abs-or-rel>
+# paid only when free evidence is insufficient:
+$env:MIMO_PYTHON scripts/harness_gate.py --kind verify --prompt-file <f> --allow-paid --max-cost 0.10
+```
+
+| Rule | Value |
+|---|---|
+| Default tier | **free** (expected path) |
+| Paid ceiling per escalation/use | **$0.10** (`--max-cost 0.10`) |
+| Paid trigger | free shortfall / unstable split / operator call — never by default |
+| Result path | absolute `--out` under `Harness/audits/scmessenger/…` |
+| Daily key ceiling | harness `spend` ($0.75 class) still binds |
+
 ### Hard harness rules (SCMessenger)
 
 1. **Write product audits only under Harness** (`Harness/audits/scmessenger/…`).
@@ -79,17 +101,14 @@ canonical invocation. Free tier is default. Paid ladder requires
    while a CTO campaign is live (Round-5 lesson).
 2. **Absolute `--out` paths.** Relative outs under the wrong cwd silently lose
    evidence.
-3. **Harness is advisory.** A green panel is not a Windows build gate and not a
-   rule-8 adversarial APPROVE. Re-run real gates in this environment.
-4. **Spend discipline.** Respect the daily key ceiling (~$0.75 class). Record
-   paid confirms in the handoff that requested them.
+3. **Harness is required evidence, not a substitute.** A green panel is not a
+   Windows build gate and not a rule-8 adversarial APPROVE. Re-run real gates
+   in this environment. Incomplete harness coverage is a **blocked** verdict,
+   not a soft pass.
+4. **Spend discipline.** Paid max **$0.10/use** (seat wrapper enforces). Daily
+   key ceiling still applies. Record paid confirms in the handoff.
 5. **No `tools` key / no forced paid routes.** If harness config drifts onto
    paid Fusion-style payloads, stop and restore free-tier defaults.
-
-Default integration path for this repo: free `verify` on a small claims set →
-absolute `--out` under `Harness/audits/scmessenger/roundN/` → fold findings
-into HANDOFF; product code changes still go through orchestrate_strict workers
-plus Windows gates.
 
 ## Recovery pointer (2026-09-11)
 

@@ -62,8 +62,17 @@ git -C C:\Users\SCM\Documents\GitHub\SCMessenger status -sb
 $env:MIMO_PYTHON scripts/recovery_preflight.py --action audit_readiness
 ```
 
-Harness (`$env:PYTHONPATH=C:\Users\SCM\Documents\GitHub\Harness`) may be used
-for advisory panel audits only; write outputs under `Harness/audits/…`.
+Harness (`scripts/harness_gate.py` / PYTHONPATH=`C:\Users\SCM\Documents\GitHub\Harness`)
+is **required** for substantive CTO-deliverable audits from 2026-09-11:
+free tier by default, paid escalation **max $0.10/use** when free evidence is
+insufficient. Write outputs under `Harness/audits/scmessenger/…` with absolute
+paths. CEO does not treat harness as a substitute for live node evidence or
+rule-8; missing harness evidence on a claimed change is an audit FAIL.
+
+```powershell
+$env:MIMO_PYTHON scripts/harness_gate.py --kind smoke
+$env:MIMO_PYTHON scripts/recovery_preflight.py --action audit_readiness
+```
 
 ## Consensus rule
 
