@@ -3667,7 +3667,14 @@ open class MeshRepository(
                         peerId = selectCanonicalPeerId(info.peerId, existing.peerId),
                         publicKey = info.publicKey ?: existing.publicKey,
                         nickname = selectAuthoritativeNickname(info.nickname, existing.nickname),
-                        localNickname = selectAuthoritativeNickname(info.localNickname, existing.localNickname) ?: normalizeNickname(info.localNickname) ?: normalizeNickname(existing.localNickname),
+                        // NICKNAME-AUTHORITY: localNickname is user-defined. Never let a
+                        // discovery merge replace a real existing localNickname with a
+                        // different real incoming value — that caused local vs federated
+                        // display flip-flops. Fill only when existing is blank/synthetic.
+                        localNickname = com.scmessenger.android.utils.resolveLocalNickname(
+                            incoming = info.localNickname,
+                            existing = existing.localNickname
+                        ),
                         libp2pPeerId = info.libp2pPeerId ?: existing.libp2pPeerId,
                         transport = if (
                             info.transport == com.scmessenger.android.service.TransportType.INTERNET ||

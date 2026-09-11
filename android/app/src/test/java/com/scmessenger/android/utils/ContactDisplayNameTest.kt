@@ -100,4 +100,66 @@ class ContactDisplayNameTest {
         assertFalse(isSyntheticFallbackNickname(null))
         assertFalse(isSyntheticFallbackNickname(""))
     }
+
+    // ------------------------------------------------------------------
+    // resolveLocalNickname — user-defined localNickname must not flip-flop
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `resolveLocalNickname preserves real existing over different real incoming`() {
+        assertEquals(
+            "Alice",
+            resolveLocalNickname(incoming = "Claude-Windows", existing = "Alice")
+        )
+    }
+
+    @Test
+    fun `resolveLocalNickname fills when existing is blank`() {
+        assertEquals(
+            "Claude-Windows",
+            resolveLocalNickname(incoming = "Claude-Windows", existing = null)
+        )
+        assertEquals(
+            "Claude-Windows",
+            resolveLocalNickname(incoming = "Claude-Windows", existing = "   ")
+        )
+    }
+
+    @Test
+    fun `resolveLocalNickname ignores synthetic existing and takes real incoming`() {
+        assertEquals(
+            "Claude-Windows",
+            resolveLocalNickname(incoming = "Claude-Windows", existing = "peer-a1b2c3d4")
+        )
+    }
+
+    @Test
+    fun `resolveLocalNickname ignores synthetic incoming and keeps real existing`() {
+        assertEquals(
+            "Alice",
+            resolveLocalNickname(incoming = "peer-a1b2c3d4", existing = "Alice")
+        )
+    }
+
+    @Test
+    fun `resolveLocalNickname keeps existing when incoming is blank`() {
+        assertEquals(
+            "Alice",
+            resolveLocalNickname(incoming = null, existing = "Alice")
+        )
+    }
+
+    @Test
+    fun `resolveLocalNickname returns null when both blank`() {
+        assertNull(resolveLocalNickname(incoming = null, existing = null))
+        assertNull(resolveLocalNickname(incoming = "  ", existing = ""))
+    }
+
+    @Test
+    fun `resolveLocalNickname falls back to existing synthetic when nothing real`() {
+        assertEquals(
+            "peer-a1b2c3d4",
+            resolveLocalNickname(incoming = null, existing = "peer-a1b2c3d4")
+        )
+    }
 }

@@ -7,6 +7,7 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
 import com.scmessenger.android.network.DiagnosticsReporter
 
+import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.utils.Permissions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -320,6 +321,15 @@ class SettingsViewModel @Inject constructor(
             _notifyDmRequestInForeground.value = settings.notifyDmRequestInForeground
             _soundEnabled.value = settings.soundEnabled
             _badgeEnabled.value = settings.badgeEnabled
+            // Push into NotificationHelper so the notify() gates actually see them.
+            NotificationHelper.updateSettings(
+                dmEnabled = settings.notifyDmEnabled,
+                dmRequestEnabled = settings.notifyDmRequestEnabled,
+                dmInForeground = settings.notifyDmInForeground,
+                dmRequestInForeground = settings.notifyDmRequestInForeground,
+                sound = settings.soundEnabled,
+                badge = settings.badgeEnabled
+            )
             Timber.d("Loaded mesh settings: $settings")
         } catch (e: Exception) {
             _error.value = "Failed to load settings: ${e.message}"
@@ -654,6 +664,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setNotificationsEnabled(enabled: Boolean) {
+        // Apply immediately so in-flight notify() calls honor the toggle,
+        // then persist to DataStore.
+        NotificationHelper.updateSettings(enabled = enabled)
         viewModelScope.launch {
             preferencesRepository.setNotificationsEnabled(enabled)
         }
@@ -665,6 +678,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmEnabled(enabled: Boolean) {
         _notifyDmEnabled.value = enabled
+        NotificationHelper.updateSettings(dmEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmEnabled = enabled))
         }
@@ -672,6 +686,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestEnabled(enabled: Boolean) {
         _notifyDmRequestEnabled.value = enabled
+        NotificationHelper.updateSettings(dmRequestEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestEnabled = enabled))
         }
@@ -679,6 +694,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmInForeground(enabled: Boolean) {
         _notifyDmInForeground.value = enabled
+        NotificationHelper.updateSettings(dmInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmInForeground = enabled))
         }
@@ -686,6 +702,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestInForeground(enabled: Boolean) {
         _notifyDmRequestInForeground.value = enabled
+        NotificationHelper.updateSettings(dmRequestInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestInForeground = enabled))
         }
@@ -693,6 +710,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setSoundEnabled(enabled: Boolean) {
         _soundEnabled.value = enabled
+        NotificationHelper.updateSettings(sound = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(soundEnabled = enabled))
         }
@@ -700,6 +718,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setBadgeEnabled(enabled: Boolean) {
         _badgeEnabled.value = enabled
+        NotificationHelper.updateSettings(badge = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(badgeEnabled = enabled))
         }

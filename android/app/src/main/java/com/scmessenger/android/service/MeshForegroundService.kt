@@ -94,6 +94,50 @@ class MeshForegroundService : Service() {
 
         // Initialize service health monitor (wired for heartbeat tracking)
         serviceHealthMonitor = ServiceHealthMonitor(this)
+
+        // Hydrate NotificationHelper gates from persisted prefs + mesh settings.
+        // Without this, NotificationHelper's in-memory flags stay at their
+        // defaults (all true) and user-disabled notifications still fire.
+        hydrateNotificationGates()
+    }
+
+    /**
+     * Push persisted notification preferences into NotificationHelper and keep
+     * the global toggle live for the process lifetime of this service.
+     *
+     * - Global toggle: PreferencesRepository (DataStore).
+     * - Per-kind / sound / badge: MeshSettings via MeshRepository.loadSettings().
+     */
+    private fun hydrateNotificationGates() {
+        serviceScope.launch {
+            launch {
+                preferencesRepository.notificationsEnabled.collect { enabled ->
+                    Timber.i("Notification gate hydrated from DataStore: enabled=$enabled")
+                    NotificationHelper.updateSettings(enabled = enabled)
+                }
+            }
+            try {
+                val settings = withContext(Dispatchers.Default) {
+                    meshRepository.loadSettings()
+                }
+                NotificationHelper.updateSettings(
+                    dmEnabled = settings.notifyDmEnabled,
+                    dmRequestEnabled = settings.notifyDmRequestEnabled,
+                    dmInForeground = settings.notifyDmInForeground,
+                    dmRequestInForeground = settings.notifyDmRequestInForeground,
+                    sound = settings.soundEnabled,
+                    badge = settings.badgeEnabled
+                )
+                Timber.i(
+                    "Notification sub-settings hydrated from MeshSettings: " +
+                        "dm=${settings.notifyDmEnabled} dmReq=${settings.notifyDmRequestEnabled} " +
+                        "dmFg=${settings.notifyDmInForeground} dmReqFg=${settings.notifyDmRequestInForeground} " +
+                        "sound=${settings.soundEnabled} badge=${settings.badgeEnabled}"
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to hydrate notification sub-settings from MeshSettings")
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -196,12 +240,10 @@ class MeshForegroundService : Service() {
                 }
                 isRunning = true
 
-                // Show mesh status notification (wired via NotificationHelper)
-                NotificationHelper.showMeshStatusNotification(
-                    context = this@MeshForegroundService,
-                    title = "Mesh Service Started",
-                    message = "Mesh network is now active"
-                )
+                // Started/Stopped status is carried by the ongoing foreground
+                // service notification (same ID/channel/group). Posting a
+                // second mesh-status notification here looked like a separate
+                // app and is redundant — removed for one app identity.
 
                 // Wire CoreDelegate callbacks to MeshEventBus
                 wireCoreDelegate()
@@ -396,14 +438,9 @@ class MeshForegroundService : Service() {
             // Wire stopMonitoring + isServiceHealthy check into service lifecycle
             serviceHealthMonitor.stopMonitoring()
 
-            // Show mesh status notification (wired via NotificationHelper)
-            NotificationHelper.showMeshStatusNotification(
-                context = this@MeshForegroundService,
-                title = "Mesh Service Stopped",
-                message = "Mesh network is now inactive"
-            )
-
-
+            // Mesh-stopped status is carried by removing the ongoing FGS
+            // notification below. A separate "Mesh Service Stopped" toast
+            // notification looked like a foreign app — removed.
 
             // Clean up
             withContext(Dispatchers.Default) {
@@ -702,7 +739,9 @@ class MeshForegroundService : Service() {
     }
 
     companion object {
-        private const val NOTIFICATION_ID = 1001
+        // Single mesh status identity: reuse NotificationHelper's FGS id so the
+        // ongoing service notification and any helper-posted status share one ID.
+        private const val NOTIFICATION_ID = NotificationHelper.NOTIFICATION_ID_FOREGROUND_SERVICE
 
         /**
          * R3-F1: a user-initiated Stop (notification action or the service
