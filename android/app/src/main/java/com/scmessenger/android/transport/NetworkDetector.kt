@@ -86,8 +86,11 @@ class NetworkDetector @Inject constructor(
 
     /** Standard ports that are typically allowed on cellular */
     private val allowedStandardPorts = setOf(
-        80,  // HTTP
-        443, // HTTPS
+        80, 443,
+        // CELL-ROUTE-AWS-001: mesh relay :9001 is reachable on many carriers
+        // (live cell test proved phone→AWS TCP :9001). Do not deprioritize it
+        // as "carrier-blocked" or racing bootstrap never tries the cloud node.
+        9001,
     )
 
     /**

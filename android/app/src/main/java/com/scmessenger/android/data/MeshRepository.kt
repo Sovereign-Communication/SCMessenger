@@ -8154,8 +8154,21 @@ open class MeshRepository(
             // Core unavailable - don't mark as delivered even if BLE succeeded
             return DeliveryAttemptResult(acked = false, routePeerId = wifiPeerId)
         }
-        val sanitizedCandidates = routePeerCandidates
+        val sanitizedBase = routePeerCandidates
             .map { it.trim() }
+            .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
+            .distinct()
+
+        // CELL-ROUTE-AWS-001b: on cellular, inject proven PUBLIC relay peer ids
+        // as additional routes. Pair each peer with ITS OWN public multiaddrs
+        // (never dial AWS addr under Windows peerId).
+        val publicRelayRoutes: List<Pair<String, String>> = if (networkDetector.isCellularNetwork) {
+            getPublicInternetRelayRoutes()
+        } else {
+            emptyList()
+        }
+        val publicRelayPeerIds = publicRelayRoutes.map { it.first }.distinct()
+        val sanitizedCandidates = (sanitizedBase + publicRelayPeerIds)
             .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
             .distinct()
 
@@ -8200,15 +8213,6 @@ open class MeshRepository(
 
         primeRelayBootstrapConnections()
 
-        // CELL-ROUTE-AWS-001: on cellular, a LAN-only route (dialCandidates=0)
-        // must fall back to proven public relays (AWS :9001) instead of parking
-        // the outbox as "stored" until WiFi returns.
-        val publicRelayAddrs = if (networkDetector.isCellularNetwork) {
-            getPublicInternetRelayMultiaddrs()
-        } else {
-            emptyList()
-        }
-
         for (routePeerId in sanitizedCandidates) {
             val liveRouteHints = getDialHintsForRoutePeer(routePeerId)
             var dialCandidates = buildDialCandidatesForPeer(
@@ -8216,19 +8220,30 @@ open class MeshRepository(
                 rawAddresses = listeners + liveRouteHints,
                 includeRelayCircuits = true
             )
-            if (dialCandidates.isEmpty() && publicRelayAddrs.isNotEmpty()) {
-                dialCandidates = publicRelayAddrs
-                Timber.i(
-                    "CELL-ROUTE-AWS-001: route=$routePeerId had 0 dial candidates on cellular; " +
-                        "falling back to ${publicRelayAddrs.size} public relay addr(s)"
-                )
-                logDeliveryAttempt(
-                    messageId = traceMessageId,
-                    medium = "core",
-                    phase = "cellular_fallback",
-                    outcome = "attempt",
-                    detail = "ctx=$attemptContext route=$routePeerId public_relays=${publicRelayAddrs.size}"
-                )
+            // CELL-ROUTE-AWS-001b: this route IS a public relay peer — use only
+            // that peer's public multiaddrs (correct peer↔addr pairing).
+            val publicAddrsForThisRoute = publicRelayRoutes
+                .filter { it.first == routePeerId }
+                .map { it.second }
+                .distinct()
+            if (publicAddrsForThisRoute.isNotEmpty()) {
+                val lanOnly = dialCandidates.none { addr ->
+                    val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+                    !(v4 == null || v4.startsWith("192.168.") || v4.startsWith("10.") || v4.startsWith("127."))
+                }
+                if (dialCandidates.isEmpty() || (networkDetector.isCellularNetwork && lanOnly)) {
+                    dialCandidates = publicAddrsForThisRoute
+                    Timber.i(
+                        "CELL-ROUTE-AWS-001b: route=$routePeerId using ${publicAddrsForThisRoute.size} paired public addrs on cellular"
+                    )
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_fallback",
+                        outcome = "attempt",
+                        detail = "ctx=$attemptContext route=$routePeerId paired_public=${publicAddrsForThisRoute.size}"
+                    )
+                }
             }
             Timber.d("[ROUTE] Transport: route=$routePeerId dialCandidates=${dialCandidates.size} (${dialCandidates.joinToString { it.substringBefore("/") }})")
             if (dialCandidates.isNotEmpty()) {
@@ -10390,7 +10405,13 @@ open class MeshRepository(
         val healthyRelayAddrs = relayCircuitBreaker.getHealthyRelays().toSet()
 
         // 1. Static Bootstrap Relays (prioritized by network type)
-        val prioritizedNodes = emptyList<String>()
+        // CELL-ROUTE-AWS-001b: seed public cloud relays so Windows-via-AWS
+        // circuits exist on cellular (prioritizedNodes was hard-empty).
+        val prioritizedNodes = if (networkDetector.isCellularNetwork) {
+            getPublicInternetRelayRoutes().map { it.second }.distinct()
+        } else {
+            emptyList()
+        }
 
         prioritizedNodes.forEach { bootstrap ->
             val relayInfo = parseBootstrapRelay(bootstrap)
@@ -10600,26 +10621,51 @@ open class MeshRepository(
      * relays — usable on cellular when the destination route is LAN-only.
      */
     private fun getPublicInternetRelayMultiaddrs(): List<String> {
+        return getPublicInternetRelayRoutes().map { it.second }
+    }
+
+    /**
+     * CELL-ROUTE-AWS-001b: (dialablePeerId, public multiaddr) pairs for proven
+     * public relays. peerId is taken from the multiaddr /p2p/ segment when
+     * present so connectToPeer(route, addrs) pairs correctly.
+     */
+    private fun getPublicInternetRelayRoutes(): List<Pair<String, String>> {
         val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
-            .map { it.multiaddr }
-        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt()).map { it.multiaddr }
+            .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
+        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt())
+            .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
         return (proven + seeds)
-            .distinct()
-            .filter { addr ->
-                val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
-                when {
-                    v4 == null -> addr.contains("/dns4/") || addr.contains("/ip6/")
-                    v4.startsWith("192.168.") -> false
-                    v4.startsWith("10.") -> false
-                    v4.startsWith("127.") -> false
-                    v4.startsWith("169.254.") -> false
-                    v4.startsWith("172.") -> {
-                        val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
-                        !(second in 16..31)
+            .mapNotNull { (addr, storedPeerId, storedPk) ->
+                if (!isPublicInternetMultiaddr(addr)) return@mapNotNull null
+                val fromMultiaddr = Regex("/p2p/([^/]+)").find(addr)?.groupValues?.get(1)
+                val dialable = fromMultiaddr
+                    ?: storedPeerId?.let { toDialableRoutePeerId(it, storedPk ?: it) }
+                    ?: storedPk?.let { pk ->
+                        if (PeerKeyUtils.isValidPublicKey(pk)) {
+                            PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(pk)
+                        } else null
                     }
-                    else -> true
-                }
+                    ?: return@mapNotNull null
+                if (!PeerIdValidator.isLibp2pPeerId(dialable)) return@mapNotNull null
+                dialable to addr
             }
+            .distinctBy { it.first to it.second }
+    }
+
+    private fun isPublicInternetMultiaddr(addr: String): Boolean {
+        val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+        return when {
+            v4 == null -> addr.contains("/dns4/") || addr.contains("/ip6/")
+            v4.startsWith("192.168.") -> false
+            v4.startsWith("10.") -> false
+            v4.startsWith("127.") -> false
+            v4.startsWith("169.254.") -> false
+            v4.startsWith("172.") -> {
+                val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
+                !(second in 16..31)
+            }
+            else -> true
+        }
     }
 
     /**
