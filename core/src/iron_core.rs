@@ -3509,6 +3509,20 @@ impl IronCore {
             IronCoreError::Internal
         })?;
 
+        // RCA-INSTRUMENT (trace-only): entry log after decode -- discriminates
+        // which IronCore instance handled the envelope (H2 dual-core check) and
+        // captures the decoded type/recipient/sender before any branch.
+        tracing::info!(
+            event = "rca_receive_entry",
+            instance = self as *const Self as usize,
+            message_id = %message.id,
+            message_type = ?message.message_type,
+            recipient_id = %message.recipient_id,
+            sender_id = %message.sender_id,
+            payload_len = message.payload.len(),
+            "RCA receive_message entry"
+        );
+
         // DERIVE THE CANONICAL STORAGE PEER ID. History/inbox/audit are keyed
         // and queried by IDENTITY_ID (block_peer stores by identity_id; history
         // recent/conversation query by identity_id EXACT match on peer_id), but
@@ -3617,6 +3631,12 @@ impl IronCore {
         if message.message_type == crate::MessageType::Receipt {
             if let Ok(receipt) = crate::message::types::decode_receipt(&message.payload) {
                 if let Some(delegate) = self.delegate.read().as_ref() {
+                    tracing::info!(
+                        event = "rca_receipt_delegate",
+                        instance = self as *const Self as usize,
+                        message_id = %receipt.message_id,
+                        "RCA receipt-branch delegate fire"
+                    );
                     let status_str = match receipt.status {
                         crate::DeliveryStatus::Sent => "Sent".to_string(),
                         crate::DeliveryStatus::Delivered => "Delivered".to_string(),
@@ -3697,6 +3717,12 @@ impl IronCore {
 
         // Notify delegate
         if let Some(delegate) = self.delegate.read().as_ref() {
+            tracing::info!(
+                event = "rca_content_delegate",
+                instance = self as *const Self as usize,
+                message_id = %message.id,
+                "RCA content-branch delegate fire"
+            );
             delegate.on_message_received(
                 message.sender_id.clone(),
                 message.sender_id.clone(),

@@ -2015,6 +2015,7 @@ open class MeshRepository(
                     senderTimestamp: ULong,
                     data: ByteArray
                 ) {
+                    Timber.i("[RCA] onMessageReceived entry: sender=$senderId msg=$messageId")
                     Timber.i("Message from $senderId: $messageId")
                     repoScope.launch {
                         // DELIVERY-DIVERGENCE FIX (2026-08-25): the previous order ran
@@ -2462,6 +2463,7 @@ open class MeshRepository(
                 }
 
                 override fun onReceiptReceived(messageId: String, status: String) {
+                    Timber.i("[RCA] onReceiptReceived entry: msg=$messageId status=$status")
                     // [VERBOSE] Log: Receipt arrived from core
                     Timber.i(
                         "[RECEIPT-RX] Received from core: msg=$messageId status=$status"
@@ -2657,6 +2659,7 @@ open class MeshRepository(
                     )
                 }
             }
+            Timber.i("[RCA] setDelegate invoked: coreDelegate=$coreDelegate corePresent=${ironCore != null}")
             ironCore?.setDelegate(coreDelegate)
 
             // 4. Start Android transports. Individual transport failures should

@@ -395,6 +395,15 @@ impl MeshService {
         // Store the core instance
         *self.core.lock() = Some(core.clone());
 
+        // RCA-INSTRUMENT (trace-only): which core instance is installed and
+        // whether an external (Kotlin) delegate is already registered.
+        tracing::info!(
+            event = "rca_core_installed",
+            instance = Arc::as_ptr(&core) as usize,
+            external_delegate = self.external_delegate.lock().is_some(),
+            "RCA core installed in MeshService"
+        );
+
         // P1_CORE_001: Activate drift if relaying is enabled
         let budget = *self.relay_budget.lock();
         if budget > 0 {
@@ -2148,6 +2157,13 @@ impl crate::CoreDelegate for MeshServiceCoreDelegate {
         data: Vec<u8>,
     ) {
         if let Some(service) = self.service.upgrade() {
+            let ext_present = service.external_delegate.lock().is_some();
+            tracing::info!(
+                event = "rca_forward_message",
+                message_id = %message_id,
+                external_delegate = ext_present,
+                "RCA MeshServiceCoreDelegate forward on_message_received"
+            );
             if let Some(delegate) = service.external_delegate.lock().as_ref() {
                 delegate.on_message_received(
                     sender_id,
@@ -2162,6 +2178,13 @@ impl crate::CoreDelegate for MeshServiceCoreDelegate {
 
     fn on_receipt_received(&self, message_id: String, status: String) {
         if let Some(service) = self.service.upgrade() {
+            let ext_present = service.external_delegate.lock().is_some();
+            tracing::info!(
+                event = "rca_forward_receipt",
+                message_id = %message_id,
+                external_delegate = ext_present,
+                "RCA MeshServiceCoreDelegate forward on_receipt_received"
+            );
             if let Some(delegate) = service.external_delegate.lock().as_ref() {
                 delegate.on_receipt_received(message_id, status);
             }
