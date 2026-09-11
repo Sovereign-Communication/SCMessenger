@@ -4933,11 +4933,21 @@ pub async fn start_swarm_with_config(
                                                                     message_id: relay_message_id,
                                                                 }
                                                             } else {
+                                                                // R2: store the raw envelope, not a DriftFrame. The
+                                                                // incoming RelayMessage is already frame-wrapped (same
+                                                                // as all /sc/message traffic); dispatch wraps again
+                                                                // (wrap_in_drift_frame). Storing the wrapped bytes
+                                                                // double-framed the payload and the destination hit
+                                                                // bincode "unexpected end of file" on decode.
+                                                                let custody_payload = match DriftFrame::from_bytes(&request.envelope_data) {
+                                                                    Ok(frame) => frame.payload,
+                                                                    Err(_) => request.envelope_data.clone(),
+                                                                };
                                                                 match relay_custody_store.accept_custody(
                                                                     peer.to_string(),
                                                                     destination.to_string(),
                                                                     relay_message_id.clone(),
-                                                                    request.envelope_data.clone(),
+                                                                    custody_payload,
                                                                     resolved_identity_id,
                                                                     resolved_device_id,
                                                                 ) {
@@ -5405,13 +5415,24 @@ pub async fn start_swarm_with_config(
                                             &pending_custody_dispatches,
                                             &relay_custody_store,
                                         ) {
-                                            tracing::warn!(
-                                                "Ignoring convergence marker message={} destination={} from={} reason={}",
-                                                marker.relay_message_id,
-                                                marker.destination_peer_id,
-                                                propagation_source,
-                                                reason
-                                            );
+                                            // R3: destination nodes correctly hold no pending_* state after
+                                            // delivery — markers cancel sender/carrier in-flight work only.
+                                            if reason == "marker_not_locally_tracked" {
+                                                tracing::debug!(
+                                                    "Ignoring convergence marker (expected on destination) message={} destination={} from={}",
+                                                    marker.relay_message_id,
+                                                    marker.destination_peer_id,
+                                                    propagation_source
+                                                );
+                                            } else {
+                                                tracing::warn!(
+                                                    "Ignoring convergence marker message={} destination={} from={} reason={}",
+                                                    marker.relay_message_id,
+                                                    marker.destination_peer_id,
+                                                    propagation_source,
+                                                    reason
+                                                );
+                                            }
                                             continue;
                                         }
                                         if seen_delivery_convergence_markers.insert(marker.key()) {
@@ -8677,11 +8698,16 @@ pub async fn start_swarm_with_config(
                                                                         message_id: relay_message_id,
                                                                     }
                                                                 } else {
+                                                                    // R2: unwrap DriftFrame before custody (see native arm).
+                                                                    let custody_payload = match DriftFrame::from_bytes(&request.envelope_data) {
+                                                                        Ok(frame) => frame.payload,
+                                                                        Err(_) => request.envelope_data.clone(),
+                                                                    };
                                                                     match relay_custody_store.accept_custody(
                                                                         peer.to_string(),
                                                                         destination.to_string(),
                                                                         relay_message_id.clone(),
-                                                                        request.envelope_data.clone(),
+                                                                        custody_payload,
                                                                         resolved_identity_id,
                                                                         resolved_device_id,
                                                                     ) {
