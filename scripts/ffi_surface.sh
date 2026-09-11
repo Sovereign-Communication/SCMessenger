@@ -59,8 +59,18 @@ EXIT_CODE=0
 if [[ -n "$KT_FILE" ]]; then
     CURRENT_KT=$(extract_kotlin_symbols "$KT_FILE")
     if $UPDATE; then
-        echo "$CURRENT_KT" > "$SNAPSHOT_DIR/kotlin-symbols.txt"
-        echo "Updated Kotlin snapshot"
+        if [[ -z "$CURRENT_KT" ]]; then
+            # Empty extraction means the binding file is present but broken or
+            # empty (e.g. a build that died before generation finished). Writing
+            # it would silently lower the contract for every future run.
+            echo "[FAIL] Refusing to write Kotlin snapshot: no symbols extracted from $KT_FILE"
+            echo "       (binding file empty or malformed). Regenerate with:"
+            echo "       cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings"
+            EXIT_CODE=1
+        else
+            echo "$CURRENT_KT" > "$SNAPSHOT_DIR/kotlin-symbols.txt"
+            echo "Updated Kotlin snapshot"
+        fi
     else
         if [[ -f "$SNAPSHOT_DIR/kotlin-symbols.txt" ]]; then
             EXPECTED_KT=$(cat "$SNAPSHOT_DIR/kotlin-symbols.txt")
@@ -77,15 +87,24 @@ if [[ -n "$KT_FILE" ]]; then
         fi
     fi
 else
-    echo "WARN: Kotlin bindings not generated yet. Skipping."
+    echo "[FAIL] Kotlin bindings not generated (missing under core/target/generated-sources)."
+    echo "       Nothing was checked. Regenerate with:"
+    echo "       cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings"
     EXIT_CODE=1
 fi
 
 if [[ -n "$SWIFT_FILE" ]]; then
     CURRENT_SWIFT=$(extract_swift_symbols "$SWIFT_FILE")
     if $UPDATE; then
-        echo "$CURRENT_SWIFT" > "$SNAPSHOT_DIR/swift-symbols.txt"
-        echo "Updated Swift snapshot"
+        if [[ -z "$CURRENT_SWIFT" ]]; then
+            echo "[FAIL] Refusing to write Swift snapshot: no symbols extracted from $SWIFT_FILE"
+            echo "       (binding file empty or malformed). Regenerate with:"
+            echo "       cargo run -p scmessenger-core --bin gen_swift --features gen-bindings"
+            EXIT_CODE=1
+        else
+            echo "$CURRENT_SWIFT" > "$SNAPSHOT_DIR/swift-symbols.txt"
+            echo "Updated Swift snapshot"
+        fi
     else
         if [[ -f "$SNAPSHOT_DIR/swift-symbols.txt" ]]; then
             EXPECTED_SWIFT=$(cat "$SNAPSHOT_DIR/swift-symbols.txt")
@@ -102,7 +121,9 @@ if [[ -n "$SWIFT_FILE" ]]; then
         fi
     fi
 else
-    echo "WARN: Swift bindings not generated yet. Skipping."
+    echo "[FAIL] Swift bindings not generated (missing under core/target/generated-sources)."
+    echo "       Nothing was checked. Regenerate with:"
+    echo "       cargo run -p scmessenger-core --bin gen_swift --features gen-bindings"
     EXIT_CODE=1
 fi
 
