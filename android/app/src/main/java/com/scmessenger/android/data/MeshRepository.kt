@@ -138,6 +138,43 @@ open class MeshRepository(
         /** Cap on seed-tier candidates swept per bootstrap pass (poison-fanout guard). */
         internal const val MAX_BOOTSTRAP_SEEDS = 4
 
+        /** Cap on last-resort cellular candidates (fail>=3 && success==0) so a poisoned
+         *  dead-tier ledger cannot fan out dials. C8. */
+        internal const val MAX_LAST_RESORT_CELL = 2
+
+        /**
+         * C7: delivery and bootstrap share dialThrottleState. Keying by purpose
+         * keeps a bootstrap dial of a multiaddr from skipping a delivery
+         * connectToPeer of the same multiaddr for 15s (and vice versa).
+         */
+        internal fun dialThrottleKey(purpose: String, multiaddr: String): String =
+            "${purpose.trim().ifEmpty { "delivery" }}|${multiaddr.trim()}"
+
+        /**
+         * C5: public-relay admission must match isDialableAddress. DNS forms
+         * are rejected there (rebinding), so they must not enter the public
+         * route filter either — otherwise getPublicInternetRelayRoutes emits
+         * addresses that normalizeAddressHint later drops, and cellular
+         * delivery silently loses the route.
+         */
+        internal fun isPublicInternetMultiaddr(addr: String): Boolean {
+            val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+            return when {
+                // C5: do not admit /dns4/ (or any /dns*) here. /ip6/ is admitted
+                // and then gated by isRestrictedIpv6 on the dial path.
+                v4 == null -> addr.contains("/ip6/")
+                v4.startsWith("192.168.") -> false
+                v4.startsWith("10.") -> false
+                v4.startsWith("127.") -> false
+                v4.startsWith("169.254.") -> false
+                v4.startsWith("172.") -> {
+                    val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
+                    !(second in 16..31)
+                }
+                else -> true
+            }
+        }
+
         /**
          * Merge proven and seed-tier relay candidates for a bootstrap sweep.
          * Pure so the proven/seed merge policy is unit-testable without the
@@ -8222,17 +8259,27 @@ open class MeshRepository(
 
         for (routePeerId in sanitizedCandidates) {
             val liveRouteHints = getDialHintsForRoutePeer(routePeerId)
-            var dialCandidates = buildDialCandidatesForPeer(
-                routePeerId = routePeerId,
-                rawAddresses = listeners + liveRouteHints,
-                includeRelayCircuits = true
-            )
             // CELL-ROUTE-AWS-001b: this route IS a public relay peer — use only
             // that peer's public multiaddrs (correct peer↔addr pairing).
             val publicAddrsForThisRoute = publicRelayRoutes
                 .filter { it.first == routePeerId }
                 .map { it.second }
                 .distinct()
+            // C6: shared `listeners` belong to the recipient (or a third peer).
+            // Merging them into a public-relay route attaches foreign LAN addrs
+            // to AWS/Windows and burns cellular dial time on unreachable hops.
+            // When paired public addrs exist, only that route's own live hints
+            // plus its paired public addrs are dial candidates.
+            val rawForThisRoute = if (publicAddrsForThisRoute.isNotEmpty()) {
+                liveRouteHints + publicAddrsForThisRoute
+            } else {
+                listeners + liveRouteHints
+            }
+            var dialCandidates = buildDialCandidatesForPeer(
+                routePeerId = routePeerId,
+                rawAddresses = rawForThisRoute,
+                includeRelayCircuits = true
+            )
             if (publicAddrsForThisRoute.isNotEmpty()) {
                 val lanOnly = dialCandidates.none { addr ->
                     val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
@@ -10635,13 +10682,27 @@ open class MeshRepository(
      * CELL-ROUTE-AWS-001b: (dialablePeerId, public multiaddr) pairs for proven
      * public relays. peerId is taken from the multiaddr /p2p/ segment when
      * present so connectToPeer(route, addrs) pairs correctly.
+     *
+     * C8: on cellular, also surface a capped last-resort tier of public
+     * dead-ledger rows (fail>=3 && success==0) that proven and seed both
+     * exclude. Without this, a node that only ever failed while offline
+     * stays invisible forever after restart. Ghosts stay filtered.
      */
     private fun getPublicInternetRelayRoutes(): List<Pair<String, String>> {
         val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
             .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
         val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt())
             .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
-        return (proven + seeds)
+        val lastResort = if (networkDetector.isCellularNetwork) {
+            getRecentlyDeadAddresses()
+                .filter { it.successCount == 0u && it.failureCount >= 3u }
+                .filterNot { isGhostLedgerEntry(it) }
+                .take(MAX_LAST_RESORT_CELL)
+                .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
+        } else {
+            emptyList()
+        }
+        return (proven + seeds + lastResort)
             .mapNotNull { (addr, storedPeerId, storedPk) ->
                 if (!isPublicInternetMultiaddr(addr)) return@mapNotNull null
                 val fromMultiaddr = Regex("/p2p/([^/]+)").find(addr)?.groupValues?.get(1)
@@ -10659,21 +10720,8 @@ open class MeshRepository(
             .distinctBy { it.first to it.second }
     }
 
-    private fun isPublicInternetMultiaddr(addr: String): Boolean {
-        val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
-        return when {
-            v4 == null -> addr.contains("/dns4/") || addr.contains("/ip6/")
-            v4.startsWith("192.168.") -> false
-            v4.startsWith("10.") -> false
-            v4.startsWith("127.") -> false
-            v4.startsWith("169.254.") -> false
-            v4.startsWith("172.") -> {
-                val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
-                !(second in 16..31)
-            }
-            else -> true
-        }
-    }
+    private fun isPublicInternetMultiaddr(addr: String): Boolean =
+        Companion.isPublicInternetMultiaddr(addr)
 
     /**
      * R1: true when the multiaddr's host already appears in a live peer's
@@ -10768,7 +10816,9 @@ open class MeshRepository(
                 // R2-3: the dial throttle (shouldAttemptDial) is also a
                 // no-evidence skip, not a reachability result — a round where
                 // every candidate was throttled must not book backoff either.
-                if (!shouldAttemptDial(addr)) {
+                // C7: bootstrap purpose so delivery dials of the same multiaddr
+                // are not skipped 15s after this bootstrap dial.
+                if (!shouldAttemptDial(addr, purpose = "bootstrap")) {
                     anyBreakerBlocked = true
                     continue
                 }
@@ -10838,7 +10888,7 @@ open class MeshRepository(
         }
 
         addresses.forEach { addr ->
-            if (!shouldAttemptDial(addr)) return@forEach
+            if (!shouldAttemptDial(addr, purpose = "bootstrap")) return@forEach
             repoScope.launch {
                 try {
                     bridge.dial(addr)
@@ -10923,7 +10973,7 @@ open class MeshRepository(
         // Filter out circuit-breaker-blocked and throttle-blocked addresses,
         // and deprioritize addresses whose host:port is confirmed blocked
         val candidateAddresses = prioritizedAddresses.filter { addr ->
-            relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr)
+            relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr, purpose = "bootstrap")
         }.sortedByDescending { addr ->
             // Boost priority for addresses whose ports are confirmed reachable
             // Deprioritize addresses with ports likely blocked by current network (isPortLikelyBlocked)
@@ -11180,9 +11230,17 @@ open class MeshRepository(
         return portRegex?.groupValues?.get(1)?.toIntOrNull()
     }
 
-    private fun shouldAttemptDial(multiaddr: String): Boolean {
-        val key = multiaddr.trim()
-        if (key.isEmpty()) return false
+    /**
+     * C7: throttle state is keyed by (purpose, multiaddr). Delivery dials
+     * (connectToPeer) and bootstrap dials used to share one key, so a
+     * bootstrap dial of an address made delivery skip the same address for
+     * the full backoff window (up to 15s) — starving cellular delivery of a
+     * just-probed public relay.
+     */
+    private fun shouldAttemptDial(multiaddr: String, purpose: String = "delivery"): Boolean {
+        val trimmed = multiaddr.trim()
+        if (trimmed.isEmpty()) return false
+        val key = dialThrottleKey(purpose, trimmed)
 
         val now = System.currentTimeMillis()
         val (attempts, nextAllowedMs) = dialThrottleState[key] ?: (0 to 0L)
