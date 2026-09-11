@@ -10552,6 +10552,28 @@ open class MeshRepository(
     }
 
     /**
+     * R1: true when the multiaddr's host already appears in a live peer's
+     * listeners or in our current address snapshots. Used to clear stuck
+     * circuit-breakers so bootstrap does not skip a reachable host.
+     */
+    private fun isAddrHostConnected(addr: String): Boolean {
+        val host = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+            ?: Regex("/ip6/([^/]+)/").find(addr)?.groupValues?.get(1)
+            ?: return false
+        if (_discoveredPeers.value.values.any { peer ->
+                peer.listeners.any { it.contains(host) } ||
+                    peer.peerId.isNotEmpty() && addr.contains(host)
+            }) {
+            return true
+        }
+        // Also treat ourselves as connected when peersDiscovered > 0 and host
+        // is the LAN/external host we are already using.
+        val peerCount = meshService?.getStats()?.peersDiscovered?.toInt() ?: 0
+        return peerCount > 0 &&
+            (host.startsWith("192.168.") || host.startsWith("10.") || host == "18.234.62.247")
+    }
+
+    /**
      * P0_NETWORK_001: Bootstrap relay connections with circuit breaker and
      * WebSocket fallback for cellular networks.
      *
@@ -10602,6 +10624,12 @@ open class MeshRepository(
         var anyDialAttempted = false
         for (addr in addresses) {
             try {
+                // R1: a live peer is proof of reachability — do not bootstrap-skip
+                // an address whose host we are already talking to.
+                if (isAddrHostConnected(addr)) {
+                    Timber.d("Bootstrap: %s host already connected; clearing breaker", addr)
+                    relayCircuitBreaker.reset(addr)
+                }
                 // Check circuit breaker before attempting
                 if (!relayCircuitBreaker.allowRequest(addr)) {
                     Timber.d("Circuit breaker blocked %s, skipping", addr)

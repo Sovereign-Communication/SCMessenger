@@ -40,7 +40,10 @@ class CircuitBreaker @Inject constructor(
     /** Circuit breaker configuration */
     data class CircuitBreakerConfig(
         val failureThreshold: Int = 3,
-        val openTimeoutMs: Long = 300_000L, // 5 minutes
+        // Align OPEN recovery with bootstrap re-probe cadence (30s). A 5-minute
+        // open window made every 30s bootstrap pass a no-op while the mesh was
+        // already healthy (R1: all ledger candidates stayed OPEN).
+        val openTimeoutMs: Long = HALF_OPEN_TIMEOUT_MS,
         val halfOpenTimeoutMs: Long = HALF_OPEN_TIMEOUT_MS,
         val successThreshold: Int = 2,
         val maxHalfOpenProbes: Int = 3
