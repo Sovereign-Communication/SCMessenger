@@ -57,23 +57,23 @@ Final: ANALYSIS only -- the Rule-8 APPROVE decision stays with the CEO seat.
 # Adversarial Security Review: PR #270
 
 ## Severity: Critical
-**Evidence**: `observation.rs` line 64-65: `if !self.listen_ports.is_empty() && !self.listen_ports.contains(&address.port())`  
-**Issue**: Empty `listen_ports` (wasm) is treated as "accept all", but `swarm.rs` line 5337: `address_observer.set_listen_ports(listen_ports_from_multiaddrs(&bound_addresses))`  
+**Evidence**: `observation.rs` line 64-65: `if !self.listen_ports.is_empty() && !self.listen_ports.contains(&address.port())`\\
+**Issue**: Empty `listen_ports` (wasm) is treated as "accept all", but `swarm.rs` line 5337: `address_observer.set_listen_ports(listen_ports_from_multiaddrs(&bound_addresses))`\\
 **Analysis**: `bound_addresses` is empty for wasm (no listeners), so `listen_ports_from_multiaddrs` returns empty `listen_ports`. This causes `record_observation` to accept all observations (correct), but `swarm.rs` line 5185: `if listen_ports.contains(&primary.port())` fails for all addresses (since `listen_ports` is empty), causing `swarm` to never advertise any external address. This breaks the mesh for wasm clients.
 
 ## Severity: Medium
-**Evidence**: `swarm.rs` line 5185: `if listen_ports.contains(&primary.port())`  
-**Issue**: Defense-in-depth check is redundant with `AddressObserver` filtering, but fails to handle empty `listen_ports` correctly.  
+**Evidence**: `swarm.rs` line 5185: `if listen_ports.contains(&primary.port())`\\
+**Issue**: Defense-in-depth check is redundant with `AddressObserver` filtering, but fails to handle empty `listen_ports` correctly.\\
 **Analysis**: For non-wasm nodes, `listen_ports` is non-empty, so the check works. For wasm, `listen_ports` is empty, so the check fails and logs a warning, but the mesh still works because `AddressObserver` accepts all observations. However, the redundant check is unnecessary and could cause confusion.
 
 ## Severity: Low
-**Evidence**: `observation.rs` line 142: `if !self.listen_ports.is_empty() && !self.listen_ports.contains(&obs.address.port())`  
-**Issue**: The `recalculate_consensus` filter is redundant with `record_observation` filtering.  
+**Evidence**: `observation.rs` line 142: `if !self.listen_ports.is_empty() && !self.listen_ports.contains(&obs.address.port())`\\
+**Issue**: The `recalculate_consensus` filter is redundant with `record_observation` filtering.\\
 **Analysis**: The `record_observation` filter already drops invalid observations, so `recalculate_consensus`'s filter is unnecessary. This is a minor performance overhead but not a security issue.
 
 ## Severity: Low
-**Evidence**: `swarm.rs` line 5337: `address_observer.set_listen_ports(listen_ports_from_multiaddrs(&bound_addresses))`  
-**Issue**: `bound_addresses` is updated before `set_listen_ports` is called, but `bound_addresses` may contain addresses with ports not in the current listener set.  
+**Evidence**: `swarm.rs` line 5337: `address_observer.set_listen_ports(listen_ports_from_multiaddrs(&bound_addresses))`\\
+**Issue**: `bound_addresses` is updated before `set_listen_ports` is called, but `bound_addresses` may contain addresses with ports not in the current listener set.\\
 **Analysis**: This is correct behavior. `bound_addresses` contains all current listeners, so `listen_ports_from_multiaddrs` correctly extracts the current listen ports.
 
 ## Verdict

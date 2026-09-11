@@ -64,9 +64,8 @@ impl AddressObserver {
     pub fn set_listen_ports(&mut self, ports: impl IntoIterator<Item = u16>) {
         self.listen_ports = ports.into_iter().collect();
         if !self.listen_ports.is_empty() {
-            self.observations.retain(|_, observation| {
-                self.listen_ports.contains(&observation.address.port())
-            });
+            self.observations
+                .retain(|_, observation| self.listen_ports.contains(&observation.address.port()));
         }
         self.recalculate_consensus();
     }
@@ -98,7 +97,6 @@ impl AddressObserver {
             );
             return;
         }
-
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

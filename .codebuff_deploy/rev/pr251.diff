@@ -5,7 +5,7 @@ index 8b164a6d..35370d6b 100644
 @@ -1052,6 +1052,39 @@ mod tests {
          assert_eq!(ingest_ble_notification(&mut buffer, &value), Some(value));
      }
- 
+
 +    #[test]
 +    fn ingest_unfragmented_with_plausible_looking_header_passes_through() {
 +        // Live regression (P0 send-crypto root cause / #251): an *unfragmented*
@@ -49,7 +49,7 @@ index aa047166..f65a5a84 100644
 @@ -9,6 +9,22 @@ use thiserror::Error;
  /// Maximum GATT characteristic write size (protocol limitation)
  pub const MAX_CHARACTERISTIC_SIZE: usize = 512;
- 
+
 +/// Upper bound on the number of fragments a single GATT message may declare.
 +///
 +/// A real envelope is at most a few KB (the Drift transport caps payloads at
@@ -68,9 +68,9 @@ index aa047166..f65a5a84 100644
 +
  /// Default maximum outstanding writes before backpressure
  pub const DEFAULT_MAX_OUTSTANDING_WRITES: usize = 10;
- 
+
 @@ -68,6 +84,11 @@ impl GattFragmentHeader {
- 
+
      /// Create a new fragment header
      pub fn new(total_fragments: u16, fragment_index: u16) -> Result<Self, GattError> {
 +        if total_fragments == 0 || total_fragments as usize > MAX_GATT_FRAGMENTS {
@@ -84,7 +84,7 @@ index aa047166..f65a5a84 100644
 @@ -299,6 +320,41 @@ mod tests {
          assert!(result.is_err());
      }
- 
+
 +    #[test]
 +    fn test_gatt_fragment_header_zero_total_rejected() {
 +        let result = GattFragmentHeader::new(0, 0);
