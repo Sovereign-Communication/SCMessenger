@@ -1,8 +1,60 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-10T02:50Z (D10 landed+deployed, mesh rejoined, ANR class closed twice, rewrite-source killed; PR #279 head 2bdc3c86)
+Last updated: 2026-09-11T22:25Z (3-node PASS with emulator androidulaator; 001d installed; Pixel passive)
 Entry point: `/CTO`. This file is the whole context load.
+
+# ===== SECTION 0 — RECOVERY BANNER (2026-09-11) =====
+
+- Settings mixup FIXED (MiMo works in this folder). Backup:
+  `.mimocode/mimocode.json.bak-openrouter-override-20260910`.
+- **Live ship line is PR #281** `unified/v040-3node-parity` in
+  `MiMoSCMessengerFresh` — not PR #279 below (still open/CONFLICTING).
+- Open product snag: Pixel **Message Store Unavailable** start-path (likely
+  dual Sled on `filesDir`). Do **not** `pm clear` without identity export.
+- **Unsaved-work recover:** `HANDOFF/RECOVER_UNSAVED_WORK_2026-09-11.md`.
+  Pushed: `freebuff/v040-android-mesh-resilience` (19 commits),
+  `recovery/setup-gates-20260911` (3), `fix/mimocode-requests-and-v040-land` (1).
+  Still dirty: scm-t13-fdht transport, SCMessenger 29-file tree, cand-merge.
+- **RECEIPT-UI-001 FIXED** `351fa29d`: `mark_delivered` now sets
+  `status=Delivered` (bubble stayed Pending when status=Queued).
+  AWS ACK one-shot+no queue still OPEN (cli main.rs).
+- **Notifications + nickname** `20da9a85`: updateSettings was dead code;
+  gates hydrated; channel/action unified; localNickname never overwritten.
+  Tests 21/21.
+- **Worktree recovery audit** done — priority: SCMessenger 27-file tree,
+  scm-mimo-fix-reqs push, freebuff-api-reset 3 commits, seed_dial WIP,
+  t13-fdht swarm dirty.
+- **SELF-AS-PEER-001 FIXED** `f92f47ba`: own pk no longer in ledger/UI.
+- **Pixel STAND-DOWN (operator 20:35Z):** no more Pixel cell tests. Seat
+  drives **emulator `scm_test_34` / `emulator-5554`** for Android iteration
+  and 3-node verify vs Windows+AWS. APK `247b2531` installed on emulator.
+- **Cell 20:30–20:32Z FAIL strict:** `CELL-ROUTE-AWS-001c` pre-pass fired 6×
+  but failed `Delivery pending retry` (5) / `connect_timeout` (1).
+  Phone→AWS transport works (`inbox_receive` from `147.81.41.188`).
+  Residual **CELL-ROUTE-AWS-001d**: longer wait / receipt poll.
+  Checkpoint `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T203500Z_CELL_STAND_DOWN.md`.
+- **CELL-ROUTE-AWS-001 CODED** `f92f47ba`: cellular + 0 dial candidates →
+  public proven relay multiaddrs (AWS :9001). **Needs operator cell test**
+  (send while off WiFi); seat pulls logs after.
+- **STOP-RACE-001 FIXED + OPERATOR VERIFIED** `9ea21d31`.
+- **CELL stored ≠ custody**: UI `stored` is local outbox retry. Cell route
+  kept Windows LAN with `dialCandidates=0`; delivered after WIFI. Ticket:
+  `HANDOFF/todo/CELL_ROUTE_AWS_001_2026-09-11.md`.
+- **GHOST-IDENTITY-001** FIXED + **rule-8 harness APPROVE** (high/0.98/$0.00)
+  on #281 `44459c7c`:
+  `HANDOFF/review/V040_PR281_GHOST_IDENTITY_001_RULE8_HARNESS_APPROVE_2026-09-11.md`.
+- **Pixel is PASSIVE ONLY for every seat:** install + log-pull. No UI taps,
+  no phone sends, no mesh toggles. Runbook:
+  `HANDOFF/RUNBOOK_PIXEL_PASSIVE_VERIFICATION_2026-09-11.md`.
+- Skills for this desktop: `.mimocode/skills/{orchestrate,cto,ceo,onboard,…}`.
+- Destructive gate: `scripts/recovery_preflight.py --action <name>`.
+- **Harness REQUIRED** for substantive changes: free default; paid max
+  **$0.10/use** via `scripts/harness_gate.py --allow-paid --max-cost 0.10`.
+  Incomplete harness evidence = BLOCKED/UNVERIFIED.
+- Harness: `$env:PYTHONPATH=C:\Users\SCM\Documents\GitHub\Harness` then
+  `$env:MIMO_PYTHON -m harness.cli`. Full brief:
+  `HANDOFF/RECOVERY_READINESS_2026-09-11.md`.
 
 # ===== RESUME HERE (2026-09-10) =====
 

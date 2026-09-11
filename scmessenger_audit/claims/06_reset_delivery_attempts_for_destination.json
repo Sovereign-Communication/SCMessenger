@@ -1,0 +1,71 @@
+{
+  "context": "Security audit of reset_delivery_attempts_for_destination in core/src/store/relay_custody.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Scans entire prefix then filters in-memory; O(N) scan with no index on delivery_attempts",
+      "source_refs": [
+        1,
+        10,
+        16,
+        23
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Resets delivery_attempts for non-Delivered records only, but does not check if record is already in retry backoff",
+      "source_refs": [
+        1,
+        10,
+        16,
+        23
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly skips Delivered state records",
+      "source_refs": [
+        10
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Logs reset count with destination peer ID for audit",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+      ]
+    }
+  ]
+}

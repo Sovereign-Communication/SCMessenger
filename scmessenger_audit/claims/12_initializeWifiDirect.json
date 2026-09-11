@@ -1,0 +1,58 @@
+{
+  "context": "Security audit of initializeWifiDirect in android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Catches all exceptions and sets wifiDirect=null without retry or specific error handling",
+      "source_refs": [
+        22
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "No validation that WiFi Direct is actually supported on the device before init",
+      "source_refs": [
+        3,
+        8,
+        9,
+        10,
+        14
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Callbacks properly wire peer discovery, data reception, and connection info",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "context": "Security audit of sort_by_reliability in core/src/routing/local.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Uses expect() on partial_cmp - panics if reliability_score is NaN (e.g. uninitialized peer)",
+      "source_refs": [
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "No secondary sort stability guarantee beyond peer_id; equal scores may reorder non-deterministically",
+      "source_refs": [
+        6
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly sorts descending by reliability_score with peer_id tiebreaker",
+      "source_refs": [
+        3,
+        4,
+        6
+      ]
+    }
+  ]
+}

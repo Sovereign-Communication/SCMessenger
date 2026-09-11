@@ -1,0 +1,48 @@
+{
+  "context": "Security audit of is_poison_circuit_listener in core/src/transport/swarm.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Function does not validate that the Multiaddr contains at most one /p2p-circuit component before counting",
+      "source_refs": [
+        1,
+        4
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Function returns true for un-tracked reservations with a single circuit, but spec requires false for tracked reservations only",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Function correctly rejects addresses with zero circuit components",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    }
+  ]
+}

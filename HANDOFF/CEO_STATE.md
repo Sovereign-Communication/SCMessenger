@@ -1,8 +1,28 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T21:35Z (CEO audit: PR279 framing CONFIRMED, E4/A2 closed, adb absent)
+Last updated: 2026-09-11T04:00Z (recovery second-pass: skills + preflight + harness)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
+
+## Section 0 — recovery banner (2026-09-11)
+
+- Settings mixup FIXED (MiMo works in `SCMessenger/`); backup at
+  `.mimocode/mimocode.json.bak-openrouter-override-20260910`.
+- **Audit target is PR #281** `unified/v040-3node-parity` in
+  `MiMoSCMessengerFresh` (CI green as of integration). PR #279 remains the
+  older CTO campaign (OPEN, CONFLICTING) — do not treat as ship line.
+- Open blocker audited from last session: Pixel **Message Store Unavailable**
+  after install; `pm clear` did not fix it. Do not authorize another identity
+  wipe without export.
+- Desktop skills live at `.mimocode/skills/{ceo,cto,orchestrate,onboard,…}`.
+- Destructive gate (CEO stays read-only):
+  `scripts/recovery_preflight.py --action audit_readiness`.
+- **Harness REQUIRED** on claimed CTO changes: free default, paid max
+  **$0.10/use**. Missing harness evidence = audit FAIL
+  (`scripts/harness_gate.py`).
+- Harness advisory lane: PYTHONPATH=`C:\Users\SCM\Documents\GitHub\Harness`,
+  `$env:MIMO_PYTHON -m harness.cli`. Full brief:
+  `HANDOFF/RECOVERY_READINESS_2026-09-11.md`.
 
 ## Role
 

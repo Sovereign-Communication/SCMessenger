@@ -1,0 +1,37 @@
+{
+  "context": "Security audit of stopAdvertisingInternal in android/app/src/main/java/com/scmessenger/android/transport/ble/BleAdvertiser.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "When SecurityException caught, isAdvertising set to false but advertiser.stopAdvertising NOT called",
+      "source_refs": [
+        2,
+        3,
+        4,
+        11,
+        15,
+        17
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "stopRotation() called even if stopAdvertising failed, potentially leaving timer running",
+      "source_refs": [
+        6,
+        13
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly checks permission and isAdvertising flag before stopping",
+      "source_refs": [
+        3,
+        4,
+        16
+      ]
+    }
+  ]
+}

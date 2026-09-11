@@ -1,0 +1,66 @@
+{
+  "context": "Security audit of refreshInfoCounts in android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "All three async calls run sequentially (not in parallel), adding latency",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Catches Exception broadly and returns 0/empty string, masking specific failure modes",
+      "source_refs": [
+        5,
+        11,
+        17
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "defect",
+      "text": "No loading state or error propagation to UI - _infoCounts updated with zeros on any failure",
+      "source_refs": [
+        1,
+        21
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Uses Dispatchers.IO for database/IO operations",
+      "source_refs": [
+        2
+      ]
+    }
+  ]
+}

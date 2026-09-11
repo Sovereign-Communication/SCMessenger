@@ -1,0 +1,60 @@
+{
+  "context": "Security audit of mergeBootstrapCandidates in android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "No validation that proven/seeds are valid multiaddr strings before adding to bootstrap list",
+      "source_refs": [
+        2,
+        3,
+        4,
+        6,
+        7,
+        8,
+        9,
+        11,
+        12
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Seeds are truncated to maxSeeds after filtering, but proven entries are not bounded",
+      "source_refs": [
+        2,
+        3,
+        4,
+        6,
+        7,
+        8,
+        9,
+        11,
+        12
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly deduplicates and preserves proven entries first",
+      "source_refs": [
+        2,
+        6,
+        7,
+        9,
+        12
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Trims whitespace and filters empty strings",
+      "source_refs": [
+        6,
+        7,
+        8,
+        12
+      ]
+    }
+  ]
+}

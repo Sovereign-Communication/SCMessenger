@@ -1,0 +1,61 @@
+{
+  "context": "Security audit of resolveShareTarget in android/app/src/main/java/com/scmessenger/android/utils/DiagnosticsShareController.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Tries cacheDir first then filesDir, but both use same FileProvider authority - no isolation",
+      "source_refs": [
+        4,
+        11,
+        17
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "IllegalArgumentException caught silently for each root; no logging of which root was actually used",
+      "source_refs": [
+        13
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Creates parent directories if missing",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Returns null cleanly when no FileProvider root accepts the file",
+      "source_refs": [
+        11,
+        17
+      ]
+    }
+  ]
+}

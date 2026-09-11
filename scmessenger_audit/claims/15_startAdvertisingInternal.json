@@ -1,0 +1,93 @@
+{
+  "context": "Security audit of startAdvertisingInternal in android/app/src/main/java/com/scmessenger/android/transport/ble/BleAdvertiser.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "No validation that identity data length <= 24 bytes before calling addServiceData (silently drops oversized)",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "SecurityException caught but isAdvertising flag not reset, leaving inconsistent state",
+      "source_refs": [
+        41,
+        43
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly checks BLUETOOTH_ADVERTISE permission before starting",
+      "source_refs": [
+        2,
+        3,
+        6,
+        7,
+        12,
+        13,
+        19,
+        35,
+        42
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Rotation timer started if interval configured",
+      "source_refs": [
+        37,
+        38,
+        39
+      ]
+    }
+  ]
+}

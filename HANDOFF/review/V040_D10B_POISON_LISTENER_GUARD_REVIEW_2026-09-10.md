@@ -77,6 +77,22 @@ follow-up).
 
 ## Reviewer verdict
 
-PENDING — independent reviewer required (not the author). Same dispatch
-packet mechanics as D10: assign via the qwen free lane / MAC lane per the
-orchestrator runbook, record APPROVE/REJECT with evidence here.
+PENDING — independent reviewer required (not the author).
+
+### Dispatch attempt log (2026-09-10, CTO seat, all lanes exercised)
+
+| Lane | Model | Result |
+|---|---|---|
+| qwen (tier=thinking) | qwen3-30b-a3b (rotated) | Responded but output was a 6-line verdict shell with ZERO analysis — invalid as adversarial review evidence |
+| qwen (--model qwen-max) | qwen-max -> qwen3-14b (rotated) | 400: input length limit 30,720 tokens (full swarm.rs too large); retried 14b — degenerate repetition-loop echo, unusable |
+| qwen (regions restructure) | qwen3-coder-plus -> qwen3-coder-plus-2025-09-23 | Degenerate repetition-loop echo (383 lines of source echo), unusable |
+| gemini | gemini-2.5-flash | API key not configured |
+| groq | llama-3.3-70b-versatile | 404 model not found; retries exhausted |
+| qwenpaid | (retired) | Removed by operator ruling 2026-08-31 — must not restore |
+
+Conclusion: the free review lanes are currently UNABLE to produce a valid
+rule-8 verdict (capacity/degeneracy/credential failures). Reviewer assignment
+escalated to the operator: MAC lane (GPT/Codex) or any human/model reviewer
+the operator picks. Dispatch packet: this file +
+`tmp/cto/REV_D10/REVIEW_TASK_D10_D10B.md` + diffs under `tmp/cto/REV_D10/`.
+MERGE TO MAIN REMAINS BLOCKED until an independent APPROVE is recorded here.

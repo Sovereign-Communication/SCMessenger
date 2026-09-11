@@ -1,0 +1,95 @@
+{
+  "context": "Security audit of initializeWifiAware in android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Catches all exceptions and sets wifiAware=null without distinguishing init failure from availability failure",
+      "source_refs": [
+        26
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "No retry logic for transient WiFi Aware initialization failures",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly checks isAvailable() after construction",
+      "source_refs": [
+        20
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Callbacks properly wire peer discovery and data reception",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30
+      ]
+    }
+  ]
+}

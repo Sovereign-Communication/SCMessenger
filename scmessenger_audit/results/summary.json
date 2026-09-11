@@ -1,0 +1,182 @@
+[
+  {
+    "file": "02_is_self_endpoint.json",
+    "elapsed": 221.45651984214783,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "it:free: cost=$0.000000, finish_reason=stop, 8.8s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 35.6s\n[panel] google/gemma-4-31b-it:free FAILED (503): Provider returned error -- rotating to next model.\n[panel] calling cohere/north-mini-code:free ...\n[panel] cohere/north-mini-code:free returned reasoning-only output (no visible content) -- rotating to next model.\n[panel] calling openrouter/free ...\n[panel] openrouter/free returned reasoning-only output (no visible content) -- rotating to next model.\n[panel] calling inclusionai/ling-3.0-flash-fin:free ...\n[panel] inclusionai/ling-3.0-flash-fin:free: cost=$0.000000, finish_reason=stop, 6.6s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: unparseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/02_is_self_endpoint.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/02_is_self_endpoint.json'\n"
+  },
+  {
+    "file": "03_is_valid_reservation_base.json",
+    "elapsed": 70.83297204971313,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 5.1s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 6.0s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 37.2s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/03_is_valid_reservation_base.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/03_is_valid_reservation_base.json'\n"
+  },
+  {
+    "file": "04_is_canonical_reservation_addr.json",
+    "elapsed": 96.02423453330994,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "clusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 5.1s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 14.3s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 36.9s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: unparseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/04_is_canonical_reservation_addr.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/04_is_canonical_reservation_addr.json'\n"
+  },
+  {
+    "file": "05_set_configured_external_address.json",
+    "elapsed": 113.81353306770325,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "lusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 5.0s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 8.4s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 33.0s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/05_set_configured_external_address.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/05_set_configured_external_address.json'\n"
+  },
+  {
+    "file": "06_reset_delivery_attempts_for_destination.json",
+    "elapsed": 135.18522548675537,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 44.6s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 45.9s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 72.5s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/06_reset_delivery_attempts_for_destination.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/06_reset_delivery_attempts_for_destination.json'\n"
+  },
+  {
+    "file": "07_sort_by_reliability.json",
+    "elapsed": 91.98831605911255,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "t 2/3): $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 6.8s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 25.9s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 28.6s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/07_sort_by_reliability.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/07_sort_by_reliability.json'\n"
+  },
+  {
+    "file": "08_active_peer_selection_contract.json",
+    "elapsed": 112.24184966087341,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "lusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 16.6s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 21.3s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 50.7s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/08_active_peer_selection_contract.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/08_active_peer_selection_contract.json'\n"
+  },
+  {
+    "file": "09_attemptEscalation.json",
+    "elapsed": 106.89648628234863,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "empt 2/3): $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 23.9s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 24.8s\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 39.9s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/09_attemptEscalation.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/09_attemptEscalation.json'\n"
+  },
+  {
+    "file": "10_sendViaTransport.json",
+    "elapsed": 92.59699845314026,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "ttempt 2/3): $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 16.7s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 19.1s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 25.5s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/10_sendViaTransport.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/10_sendViaTransport.json'\n"
+  },
+  {
+    "file": "11_initializeWifiAware.json",
+    "elapsed": 164.0675745010376,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": " attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 9.9s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 33.2s\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 33.2s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n[convergence] google/gemma-4-31b-it:free: HTTP 503; rotating.\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/11_initializeWifiAware.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/11_initializeWifiAware.json'\n"
+  },
+  {
+    "file": "12_initializeWifiDirect.json",
+    "elapsed": 206.48769283294678,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 13.8s\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 18.3s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 30.7s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n[convergence] google/gemma-4-31b-it:free: no parseable JSON; rotating.\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/12_initializeWifiDirect.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/12_initializeWifiDirect.json'\n"
+  },
+  {
+    "file": "13_mergeBootstrapCandidates.json",
+    "elapsed": 136.44901847839355,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "dia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 18.0s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 25.9s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=error, 59.4s\n[panel] google/gemma-4-31b-it:free returned malformed/missing claim JSON -- rotating.\n[panel] calling cohere/north-mini-code:free ...\n[panel] cohere/north-mini-code:free: cost=$0.000000, finish_reason=stop, 21.0s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n[convergence] google/gemma-4-31b-it:free: empty response; rotating.\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/13_mergeBootstrapCandidates.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/13_mergeBootstrapCandidates.json'\n"
+  },
+  {
+    "file": "14_recordConnectionFailure.json",
+    "elapsed": 77.28279709815979,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "$0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 6.5s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 17.8s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 44.9s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/14_recordConnectionFailure.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/14_recordConnectionFailure.json'\n"
+  },
+  {
+    "file": "15_startAdvertisingInternal.json",
+    "elapsed": 123.87978553771973,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "ling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] nvidia/nemotron-3-super-120b-a12b:free returned empty response -- rotating to next model.\n[panel] calling cohere/north-mini-code:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 10.3s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 25.5s\n[panel] cohere/north-mini-code:free returned reasoning-only output (no visible content) -- rotating to next model.\n[panel] calling openrouter/free ...\n[panel] openrouter/free: cost=$0.000000, finish_reason=stop, 23.3s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/15_startAdvertisingInternal.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/15_startAdvertisingInternal.json'\n"
+  },
+  {
+    "file": "16_stopAdvertisingInternal.json",
+    "elapsed": 195.2178840637207,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "$0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 7.2s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 20.5s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 97.0s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/16_stopAdvertisingInternal.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/16_stopAdvertisingInternal.json'\n"
+  },
+  {
+    "file": "17_shareDiagnosticsBundle.json",
+    "elapsed": 85.44024229049683,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": " $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 22.2s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 24.1s\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 25.5s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/17_shareDiagnosticsBundle.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/17_shareDiagnosticsBundle.json'\n"
+  },
+  {
+    "file": "18_resolveShareTarget.json",
+    "elapsed": 102.80147218704224,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "mpt 2/3): $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 6.5s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 12.0s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 45.5s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/18_resolveShareTarget.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/18_resolveShareTarget.json'\n"
+  },
+  {
+    "file": "19_refreshInfoCounts.json",
+    "elapsed": 180.62524700164795,
+    "returncode": 1,
+    "escalation_triggered": false,
+    "plan_generated": false,
+    "escalation_reason": "",
+    "stdout_tail": "",
+    "stderr_tail": "empt 2/3): $0.000000\n  inclusionai/ling-3.0-flash-fin:free (panel attempt 3/3): $0.000000\n  google/gemma-4-31b-it:free (judge attempt 1/1): $0.000000\n  google/gemma-4-31b-it:free (convergence attempt 1/1): $0.000000\n[preflight] TOTAL worst-case: $0.000000 (ceiling: $0.020000)\n[panel] calling nvidia/nemotron-3-super-120b-a12b:free ...\n[panel] calling google/gemma-4-26b-a4b-it:free ...\n[panel] calling google/gemma-4-31b-it:free ...\n[panel] google/gemma-4-26b-a4b-it:free: cost=$0.000000, finish_reason=stop, 8.5s\n[panel] nvidia/nemotron-3-super-120b-a12b:free: cost=$0.000000, finish_reason=stop, 18.4s\n[panel] google/gemma-4-31b-it:free: cost=$0.000000, finish_reason=stop, 122.4s\n[judge] calling google/gemma-4-31b-it:free ...\n[judge] synthesis status: parseable\n\n[TOTAL] actual cost this run: $0.000000 (ceiling: $0.020000)\n[FATAL] cannot write --out scmessenger_audit/results/19_refreshInfoCounts.json: [Errno 2] No such file or directory: 'scmessenger_audit/results/19_refreshInfoCounts.json'\n"
+  }
+]

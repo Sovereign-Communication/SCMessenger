@@ -1,0 +1,95 @@
+{
+  "context": "Security audit of sendViaTransport in android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "BLE fallback via GATT server connectedDevices.first() uses arbitrary peer when original peerId fails",
+      "source_refs": [
+        1,
+        4,
+        7,
+        12,
+        16,
+        17,
+        19,
+        27,
+        30
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "No verification that the fallback peer is actually the intended recipient (peerId mismatch)",
+      "source_refs": [
+        1,
+        4,
+        7,
+        12,
+        16,
+        19,
+        27,
+        30
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "defect",
+      "text": "Returns false for INTERNET/TCP_MDNS without attempting SwarmBridge send",
+      "source_refs": [
+        32,
+        33,
+        36,
+        37
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Correctly tries multiple BLE paths (L2CAP -> GATT client -> GATT server) before fallback",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41
+      ]
+    }
+  ]
+}

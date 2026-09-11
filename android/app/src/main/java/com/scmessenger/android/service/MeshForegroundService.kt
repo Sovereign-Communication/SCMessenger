@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -77,6 +78,24 @@ class MeshForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         Timber.d("MeshForegroundService created")
+
+        // NOTIF-GATE FIX (2026-09-10): hydrate the NotificationHelper singleton's
+        // runtime notification gate from the persisted preference. The helper's
+        // fields default to true and its updateSettings() had NO call sites, so
+        // the Settings screen notification toggle was persisted but never took
+        // effect — notifications kept firing after the user disabled them.
+        // The service owns notification posting, so it hydrates the gate before
+        // any message-driven notification can fire (first-load race window is
+        // one async DataStore read; peers need far longer to converge).
+        serviceScope.launch {
+            try {
+                val enabled = preferencesRepository.notificationsEnabled.first()
+                NotificationHelper.updateSettings(enabled = enabled)
+                Timber.i("Notification gate hydrated from preferences: enabled=%s", enabled)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to hydrate notification settings")
+            }
+        }
 
         // Initialize WakeLock
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager

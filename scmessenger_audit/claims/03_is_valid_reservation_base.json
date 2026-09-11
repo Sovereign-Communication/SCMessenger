@@ -1,0 +1,67 @@
+{
+  "context": "Security audit of is_valid_reservation_base in core/src/transport/swarm.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Does not validate that the base address is dialable (reachable) before accepting as reservation base",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "reassurance",
+      "text": "Correctly rejects bases containing circuit components (prevents nesting)",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly delegates self-endpoint check to is_self_endpoint",
+      "source_refs": [
+        16
+      ]
+    }
+  ]
+}

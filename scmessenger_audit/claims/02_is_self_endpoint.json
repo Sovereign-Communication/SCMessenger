@@ -1,0 +1,70 @@
+{
+  "context": "Security audit of is_self_endpoint in core/src/transport/swarm.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Wildcard bind (unspecified IP) claims all IPv6 candidates unconditionally, including public IPv6 relays on same port",
+      "source_refs": [
+        4,
+        6,
+        11,
+        15,
+        16,
+        21,
+        29,
+        33,
+        36,
+        40,
+        41,
+        42,
+        43,
+        46,
+        48,
+        49,
+        55
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Port-only matching before IP comparison allows cross-interface false positives when multiple local interfaces share a port",
+      "source_refs": [
+        44
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "defect",
+      "text": "No validation that the candidate address is actually reachable via the matched local interface",
+      "source_refs": [
+        8,
+        15,
+        21,
+        29,
+        36,
+        49
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Exact IP+port match correctly identifies self endpoints",
+      "source_refs": [
+        4,
+        6,
+        8,
+        11,
+        15,
+        16,
+        21,
+        29,
+        33,
+        36,
+        41,
+        42,
+        49
+      ]
+    }
+  ]
+}

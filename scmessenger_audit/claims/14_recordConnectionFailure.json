@@ -1,0 +1,107 @@
+{
+  "context": "Security audit of recordConnectionFailure in android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "String-based detail filtering is fragile; 'Device offline' substring could match unrelated failures",
+      "source_refs": [
+        1,
+        5,
+        11,
+        12,
+        13,
+        14,
+        15,
+        18
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "No structured error taxonomy - relies on English error message substrings",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "defect",
+      "text": "Local/epoch failures are silently dropped from ledger, losing visibility into transient conditions",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ]
+    },
+    {
+      "claim_id": "C4",
+      "kind": "reassurance",
+      "text": "Correctly records endpoint-fault failures (refused/timeout/TLS) to ledger",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ]
+    }
+  ]
+}

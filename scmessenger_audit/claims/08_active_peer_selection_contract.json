@@ -1,0 +1,36 @@
+{
+  "context": "Security audit of active_peer_selection_contract in core/src/routing/local.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "Test function masquerading as contract; uses assert_eq! which panics instead of returning Result",
+      "source_refs": [
+        18,
+        26
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Hardcodes hint value (100) and peer IDs; not a general contract verification",
+      "source_refs": [
+        23,
+        24,
+        25,
+        26
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Validates active_peers ordering and peers_for_hint behavior for the happy path",
+      "source_refs": [
+        23,
+        24,
+        25,
+        26
+      ]
+    }
+  ]
+}

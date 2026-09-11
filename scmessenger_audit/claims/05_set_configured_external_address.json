@@ -1,0 +1,44 @@
+{
+  "context": "Security audit of set_configured_external_address in core/src/transport/swarm.rs. Function extracted from recent changes (last 7 days).",
+  "claims": [
+    {
+      "claim_id": "C1",
+      "kind": "defect",
+      "text": "No validation that the SocketAddr is a public/routable address before storing as external",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "claim_id": "C2",
+      "kind": "defect",
+      "text": "Error conversion loses the original SendError context (channel disconnected vs full)",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "claim_id": "C3",
+      "kind": "reassurance",
+      "text": "Correctly returns error when swarm task is not running",
+      "source_refs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    }
+  ]
+}

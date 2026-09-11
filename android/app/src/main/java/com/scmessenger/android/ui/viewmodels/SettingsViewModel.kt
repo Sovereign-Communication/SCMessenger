@@ -6,7 +6,7 @@ import com.scmessenger.android.BuildConfig
 import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
 import com.scmessenger.android.network.DiagnosticsReporter
-
+import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.utils.Permissions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -320,6 +320,17 @@ class SettingsViewModel @Inject constructor(
             _notifyDmRequestInForeground.value = settings.notifyDmRequestInForeground
             _soundEnabled.value = settings.soundEnabled
             _badgeEnabled.value = settings.badgeEnabled
+            // NOTIF-GATE FIX: push all notification runtime gates to the helper
+            // singleton (updateSettings previously had no call sites, so helper
+            // fields stayed at their WS14 defaults regardless of saved settings).
+            NotificationHelper.updateSettings(
+                dmEnabled = settings.notifyDmEnabled,
+                dmRequestEnabled = settings.notifyDmRequestEnabled,
+                dmInForeground = settings.notifyDmInForeground,
+                dmRequestInForeground = settings.notifyDmRequestInForeground,
+                sound = settings.soundEnabled,
+                badge = settings.badgeEnabled
+            )
             Timber.d("Loaded mesh settings: $settings")
         } catch (e: Exception) {
             _error.value = "Failed to load settings: ${e.message}"
@@ -654,6 +665,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setNotificationsEnabled(enabled: Boolean) {
+        // NOTIF-GATE FIX (2026-09-10): the NotificationHelper singleton's
+        // updateSettings() had no call sites, so this toggle was persisted but
+        // never reached the runtime gate that suppresses message notifications.
+        // Apply to the helper immediately (same-process singleton) AND persist.
+        NotificationHelper.updateSettings(enabled = enabled)
         viewModelScope.launch {
             preferencesRepository.setNotificationsEnabled(enabled)
         }
@@ -665,6 +681,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmEnabled(enabled: Boolean) {
         _notifyDmEnabled.value = enabled
+        NotificationHelper.updateSettings(dmEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmEnabled = enabled))
         }
@@ -672,6 +689,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestEnabled(enabled: Boolean) {
         _notifyDmRequestEnabled.value = enabled
+        NotificationHelper.updateSettings(dmRequestEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestEnabled = enabled))
         }
@@ -679,6 +697,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmInForeground(enabled: Boolean) {
         _notifyDmInForeground.value = enabled
+        NotificationHelper.updateSettings(dmInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmInForeground = enabled))
         }
@@ -686,6 +705,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestInForeground(enabled: Boolean) {
         _notifyDmRequestInForeground.value = enabled
+        NotificationHelper.updateSettings(dmRequestInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestInForeground = enabled))
         }
@@ -693,6 +713,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setSoundEnabled(enabled: Boolean) {
         _soundEnabled.value = enabled
+        NotificationHelper.updateSettings(sound = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(soundEnabled = enabled))
         }
@@ -700,6 +721,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setBadgeEnabled(enabled: Boolean) {
         _badgeEnabled.value = enabled
+        NotificationHelper.updateSettings(badge = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(badgeEnabled = enabled))
         }
