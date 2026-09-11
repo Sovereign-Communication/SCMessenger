@@ -97,7 +97,11 @@ class MainActivity : ComponentActivity() {
         schedulePermissionReset()
 
         if (meshRepository.hasRequiredRuntimePermissions()) {
-            meshRepository.onRuntimePermissionsGranted()
+            // HANG-MAIN-001: permission result runs on main. Transport refresh is
+            // IO work; never take repository locks on the UI thread.
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                meshRepository.onRuntimePermissionsGranted()
+            }
             // R2-4: first-launch path — permissions were just granted through
             // this callback, so this is the moment the FGS can legally start.
             ensureMeshForegroundService()
@@ -345,7 +349,11 @@ class MainActivity : ComponentActivity() {
         platformBridge.notifyForeground()
         checkPermissions()
         if (meshRepository.hasRequiredRuntimePermissions()) {
-            meshRepository.onRuntimePermissionsGranted()
+            // HANG-MAIN-001: onResume is main-thread. Do not touch repository
+            // locks or FFI here.
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                meshRepository.onRuntimePermissionsGranted()
+            }
             ensureMeshForegroundService()
         }
     }

@@ -620,6 +620,12 @@ open class MeshRepository(
     open val incomingMessages = messageUpdates.filter { it.direction == uniffi.api.MessageDirection.RECEIVED }
 
     private val repoScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    // HANG-LOCK-001: dedicated lifecycle lock for start/stop only. Must NEVER be the
+    // same monitor as outbox/receipt I/O — startMeshService holds this across
+    // meshService.start() + migrateToCanonicalIds (10-60s on device). A shared
+    // @Synchronized(this) froze any main-thread path that touched outbox/permissions.
+    private val serviceLifecycleLock = Any()
+    private val outboxIoLock = Any()
     private var pendingOutboxRetryJob: kotlinx.coroutines.Job? = null
     private var coverTrafficJob: kotlinx.coroutines.Job? = null
     private var maintenanceJob: kotlinx.coroutines.Job? = null
@@ -1620,8 +1626,10 @@ open class MeshRepository(
     /**
      * Start the mesh service with the given configuration.
      * This initializes the Rust core, starts BLE transport, and wires up events.
+     *
+     * HANG-LOCK-001: uses [serviceLifecycleLock] (not the object monitor) so a
+     * multi-second start cannot freeze main-thread outbox/receipt/permission paths.
      */
-    @Synchronized
     fun startMeshService(config: uniffi.api.MeshServiceConfig) {
         Timber.i("service_start_requested")
         if (meshService?.getState() == uniffi.api.ServiceState.RUNNING) {
@@ -1633,6 +1641,7 @@ open class MeshRepository(
             return
         }
 
+        synchronized(serviceLifecycleLock) {
         try {
             Timber.d("Starting MeshService...")
             if (meshService == null) {
@@ -2803,6 +2812,7 @@ open class MeshRepository(
             stopMeshService()
             return
         }
+        } // synchronized(serviceLifecycleLock)
     }
 
     private fun sendDeliveryReceiptAsync(
@@ -4237,8 +4247,13 @@ open class MeshRepository(
     /**
      * Stop the mesh service and all transports.
      */
-    @Synchronized
+    /**
+     * Stop the mesh service and all transports.
+     * HANG-LOCK-001: shares [serviceLifecycleLock] with start only (reentrant),
+     * never the outbox/permission monitors.
+     */
     fun stopMeshService() {
+        synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
         networkDetector.stopMonitoring()
         pendingOutboxRetryJob?.cancel()
@@ -4339,22 +4354,39 @@ open class MeshRepository(
         serviceStartedAtEpochSec = 0L
 
         Timber.i("Mesh service stopped")
+        } // synchronized(serviceLifecycleLock)
     }
 
     /**
      * Pause the mesh service (reduced activity).
+     * HANG-MAIN-001: pause() is a blocking Rust FFI (10s+ when the core is busy).
+     * Never run it on the caller thread — MainActivity/lifecycle paths used to
+     * freeze the UI here (ANR: main in uniffi meshservice_pause).
      */
     fun pauseMeshService() {
-        meshService?.pause()
-        Timber.d("Mesh service paused")
+        repoScope.launch {
+            try {
+                meshService?.pause()
+                Timber.d("Mesh service paused")
+            } catch (e: Exception) {
+                Timber.w(e, "pauseMeshService failed")
+            }
+        }
     }
 
     /**
      * Resume the mesh service (full activity).
+     * HANG-MAIN-001: same as pause — always off the caller thread.
      */
     fun resumeMeshService() {
-        meshService?.resume()
-        Timber.d("Mesh service resumed")
+        repoScope.launch {
+            try {
+                meshService?.resume()
+                Timber.d("Mesh service resumed")
+            } catch (e: Exception) {
+                Timber.w(e, "resumeMeshService failed")
+            }
+        }
     }
 
     /**
@@ -5977,7 +6009,11 @@ open class MeshRepository(
 
     fun hasRequiredRuntimePermissions(): Boolean = hasAllPermissions(Permissions.required)
 
-    @Synchronized
+    /**
+     * Refresh transports after runtime permissions are granted.
+     * HANG-LOCK-001: must NOT be @Synchronized — MainActivity.onResume calls this
+     * on the main thread; a shared object monitor behind startMeshService froze UI.
+     */
     fun onRuntimePermissionsGranted() {
         if (meshService?.getState() != uniffi.api.ServiceState.RUNNING) {
             Timber.d("Permission refresh skipped: mesh service is not running")
@@ -7516,8 +7552,19 @@ open class MeshRepository(
         }
     }
 
+    /**
+     * Report device state to Rust.
+     * HANG-MAIN-001: updateDeviceState is a blocking FFI that has ANR'd the main
+     * thread. Always dispatch to IO regardless of caller.
+     */
     fun updateDeviceState(profile: uniffi.api.DeviceProfile) {
-        meshService?.updateDeviceState(profile)
+        repoScope.launch {
+            try {
+                meshService?.updateDeviceState(profile)
+            } catch (e: Exception) {
+                Timber.w(e, "updateDeviceState failed")
+            }
+        }
     }
 
     fun overrideRelayMax(max: UInt) {
@@ -8956,9 +9003,11 @@ open class MeshRepository(
 
     /**
      * Synchronous load for internal use (must only be called from IO dispatcher).
+     * HANG-LOCK-001: outbox I/O uses [outboxIoLock], never the object monitor /
+     * startMeshService lock.
      */
-    @Synchronized
     private fun loadPendingOutboxSync(): List<PendingOutboundEnvelope> {
+        synchronized(outboxIoLock) {
         if (!pendingOutboxFile.exists()) return emptyList()
         return try {
             val raw = pendingOutboxFile.readText()
@@ -9001,6 +9050,7 @@ open class MeshRepository(
             Timber.w(e, "Failed to parse pending outbox")
             emptyList()
         }
+        }
     }
 
     /**
@@ -9008,8 +9058,8 @@ open class MeshRepository(
      */
     internal fun loadPendingOutbox(): List<PendingOutboundEnvelope> = loadPendingOutboxSync()
 
-    @Synchronized
     private fun savePendingOutbox(queue: List<PendingOutboundEnvelope>) {
+        synchronized(outboxIoLock) {
         try {
             val arr = org.json.JSONArray()
             queue.forEach { item ->
@@ -9037,6 +9087,7 @@ open class MeshRepository(
         } catch (e: Exception) {
             Timber.w(e, "Failed to persist pending outbox")
         }
+        } // synchronized(outboxIoLock)
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -10005,33 +10056,35 @@ open class MeshRepository(
         return (filtered + "listeners:${listeners.joinToString(",")}").joinToString(";")
     }
 
-    @Synchronized
     private fun removePendingOutbound(historyRecordId: String) {
         if (historyRecordId.isBlank()) return
-        val queue = loadPendingOutbox().toMutableList()
-        val removed = queue.removeAll { it.historyRecordId == historyRecordId }
-        if (removed) savePendingOutbox(queue)
+        synchronized(outboxIoLock) {
+            val queue = loadPendingOutbox().toMutableList()
+            val removed = queue.removeAll { it.historyRecordId == historyRecordId }
+            if (removed) savePendingOutbox(queue)
+        }
     }
 
-    @Synchronized
     private fun promotePendingOutboundForPeer(peerId: String, excludingMessageId: String? = null) {
         val trimmedPeerId = peerId.trim()
         if (trimmedPeerId.isEmpty()) return
         val now = System.currentTimeMillis() / 1000
-        val queue = loadPendingOutbox().toMutableList()
-        var changed = false
-        for (idx in queue.indices) {
-            val item = queue[idx]
-            val routePeerId = item.routePeerId?.trim()
-            if (item.peerId != trimmedPeerId && routePeerId != trimmedPeerId) continue
-            if (!excludingMessageId.isNullOrBlank() && item.historyRecordId == excludingMessageId) continue
-            if (item.terminalFailureCode != null) continue
-            if (item.nextAttemptAtEpochSec <= now) continue
-            queue[idx] = item.copy(nextAttemptAtEpochSec = now)
-            changed = true
+        synchronized(outboxIoLock) {
+            val queue = loadPendingOutbox().toMutableList()
+            var changed = false
+            for (idx in queue.indices) {
+                val item = queue[idx]
+                val routePeerId = item.routePeerId?.trim()
+                if (item.peerId != trimmedPeerId && routePeerId != trimmedPeerId) continue
+                if (!excludingMessageId.isNullOrBlank() && item.historyRecordId == excludingMessageId) continue
+                if (item.terminalFailureCode != null) continue
+                if (item.nextAttemptAtEpochSec <= now) continue
+                queue[idx] = item.copy(nextAttemptAtEpochSec = now)
+                changed = true
+            }
+            if (!changed) return
+            savePendingOutbox(queue)
         }
-        if (!changed) return
-        savePendingOutbox(queue)
         logDeliveryState(
             messageId = excludingMessageId ?: "unknown",
             state = "forwarding",
@@ -10051,7 +10104,6 @@ open class MeshRepository(
         }
     }
 
-    @Synchronized
     private fun markDeliveredReceiptSeen(messageId: String): Boolean {
         pruneDeliveredReceiptCache()
         val now = System.currentTimeMillis()

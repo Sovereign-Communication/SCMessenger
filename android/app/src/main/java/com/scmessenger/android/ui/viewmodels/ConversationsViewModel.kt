@@ -73,7 +73,7 @@ class ConversationsViewModel @Inject constructor(
         loadInboxCount()
 
         // Listen for message updates (sent or received) to refresh the list
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             meshRepository.messageUpdates.collect {
                 loadMessages()
             }
@@ -81,7 +81,7 @@ class ConversationsViewModel @Inject constructor(
 
         // Receipt/transport events can change delivery state without a new message
         // body; refresh to keep conversation badges and previews accurate.
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             MeshEventBus.messageEvents.collect { event ->
                 when (event) {
                     is MessageEvent.Delivered,
@@ -104,7 +104,7 @@ class ConversationsViewModel @Inject constructor(
             Timber.d("loadMessages skipped — ViewModelScope not active (destroyed)")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true

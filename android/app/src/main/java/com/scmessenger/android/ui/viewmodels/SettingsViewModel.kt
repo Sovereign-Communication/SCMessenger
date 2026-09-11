@@ -483,7 +483,7 @@ class SettingsViewModel @Inject constructor(
      * Load mesh settings from repository.
      */
     fun loadSettings() {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 _isLoading.value = true
                 _error.value = null

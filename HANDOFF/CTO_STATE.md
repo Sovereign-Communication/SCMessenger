@@ -1,10 +1,27 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-10T02:50Z (D10 landed+deployed, mesh rejoined, ANR class closed twice, rewrite-source killed; PR #279 head 2bdc3c86)
+Last updated: 2026-09-11T2250Z (HANG-LOCK-001 holistic UI-hang RCA landed on unified/v040-3node-parity; PR #281)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-10) =====
+# ===== RESUME HERE (2026-09-11 HANG CLASS) =====
+
+## Live banner (Section 0)
+
+- **HANG-LOCK-001 / HANG-MAIN-001 / HANG-ANR-001** — holistic UI-hang fix
+  compiled + unit-tested + APK `A74594C6…` installed on emulator-5554.
+  RCA: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T224500Z_HANG_HOLISTIC_RCA.md`.
+  Live Pixel dropbox proved main inside `meshservice_pause` /
+  `update_device_state` (older APK). Class closed by: lifecycle vs outbox
+  lock split, all pause/resume/updateDeviceState off caller thread,
+  PlatformBridge overrides IO+mutex, FileLoggingTree async, ViewModel IO
+  sweep, ShareReceiver goAsync, AnrWatchdog no longer restarts during hang.
+- **Live ship line is PR #281** `unified/v040-3node-parity` in
+  `MiMoSCMessengerFresh` — NOT PR #279 / `cto/t2-disk-ruling`.
+- Pixel cell tests STAND-DOWN (operator). Emulator is the Android iteration lane.
+- Cellular 001d still UNVERIFIED on real cellular (emulator cannot test cell).
+
+# ===== SUPERSEDED 2026-09-10 RESUME BLOCK (kept for history) =====
 
 All state below verified from fresh commands 2026-09-10T02:45-02:50Z.
 

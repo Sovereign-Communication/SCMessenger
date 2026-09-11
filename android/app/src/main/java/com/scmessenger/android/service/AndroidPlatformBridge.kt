@@ -299,82 +299,76 @@ class AndroidPlatformBridge @Inject constructor(
     // ========================================================================
 
     override fun onBatteryChanged(batteryPct: UByte, isCharging: Boolean) {
-        // Compute and apply adjustment profile
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = batteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = currentMotionState
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Local adjustment calculation
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-
-        // 3. Apply adjustments to mesh service
-        applyAdjustments(bleAdjustment, relayAdjustment)
-
-        Timber.d("Adjustment profile: $profile for battery $batteryPct%, charging=$isCharging")
+        // HANG-MAIN-001: Rust may invoke PlatformBridge overrides on the main
+        // thread. updateDeviceState is a blocking FFI — always hop to IO.
+        scope.launch {
+            deviceStateMutex.withLock {
+                val deviceProfile = uniffi.api.DeviceProfile(
+                    peerId = null,
+                    deviceId = null,
+                    batteryPct = batteryPct,
+                    isCharging = isCharging,
+                    hasWifi = hasWifi,
+                    motionState = currentMotionState
+                )
+                meshRepository.updateDeviceState(deviceProfile)
+                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
+                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
+                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
+                applyAdjustments(bleAdjustment, relayAdjustment)
+                Timber.d("Adjustment profile: $profile for battery $batteryPct%, charging=$isCharging")
+            }
+        }
     }
 
     override fun onNetworkChanged(hasWifi: Boolean, hasCellular: Boolean) {
-        val previousWifi = this.hasWifi
-
-        // Recompute and apply adjustment
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = currentBatteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = currentMotionState
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Recompute profile
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-
-        applyAdjustments(bleAdjustment, relayAdjustment)
-
-        // 3. When WiFi comes back, immediately flush pending messages
-        if (hasWifi && !previousWifi) {
-            Timber.i("WiFi recovered — triggering immediate outbox flush")
-            meshRepository.notifyNetworkRecovered()
+        // HANG-MAIN-001: same as onBatteryChanged — never FFI on the callback thread.
+        scope.launch {
+            deviceStateMutex.withLock {
+                val previousWifi = this@AndroidPlatformBridge.hasWifi
+                val deviceProfile = uniffi.api.DeviceProfile(
+                    peerId = null,
+                    deviceId = null,
+                    batteryPct = currentBatteryPct,
+                    isCharging = isCharging,
+                    hasWifi = hasWifi,
+                    motionState = currentMotionState
+                )
+                meshRepository.updateDeviceState(deviceProfile)
+                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
+                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
+                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
+                applyAdjustments(bleAdjustment, relayAdjustment)
+                if (hasWifi && !previousWifi) {
+                    Timber.i("WiFi recovered — triggering immediate outbox flush")
+                    meshRepository.notifyNetworkRecovered()
+                }
+            }
         }
     }
 
     override fun onMotionChanged(motion: uniffi.api.MotionState) {
         currentMotionState = motion
-
-        // Recompute adjustment based on motion
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = currentBatteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = motion
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Recompute
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-        applyAdjustments(bleAdjustment, relayAdjustment)
-        Timber.d("Motion changed: $motion, profile: $profile")
+        // HANG-MAIN-001: motion callback can arrive on main from Rust or from
+        // the screen on/off receiver path — hop before updateDeviceState.
+        scope.launch {
+            deviceStateMutex.withLock {
+                val deviceProfile = uniffi.api.DeviceProfile(
+                    peerId = null,
+                    deviceId = null,
+                    batteryPct = currentBatteryPct,
+                    isCharging = isCharging,
+                    hasWifi = hasWifi,
+                    motionState = motion
+                )
+                meshRepository.updateDeviceState(deviceProfile)
+                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
+                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
+                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
+                applyAdjustments(bleAdjustment, relayAdjustment)
+                Timber.d("Motion changed: $motion, profile: $profile")
+            }
+        }
     }
 
     override fun onBleDataReceived(peerId: String, data: ByteArray) {

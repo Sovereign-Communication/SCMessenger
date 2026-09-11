@@ -97,7 +97,7 @@ class ChatViewModel @Inject constructor(
             Timber.d("ChatViewModel loadMessages skipped — ViewModelScope not active")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
