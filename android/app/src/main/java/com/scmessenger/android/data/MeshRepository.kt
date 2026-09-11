@@ -8200,13 +8200,36 @@ open class MeshRepository(
 
         primeRelayBootstrapConnections()
 
+        // CELL-ROUTE-AWS-001: on cellular, a LAN-only route (dialCandidates=0)
+        // must fall back to proven public relays (AWS :9001) instead of parking
+        // the outbox as "stored" until WiFi returns.
+        val publicRelayAddrs = if (networkDetector.isCellularNetwork) {
+            getPublicInternetRelayMultiaddrs()
+        } else {
+            emptyList()
+        }
+
         for (routePeerId in sanitizedCandidates) {
             val liveRouteHints = getDialHintsForRoutePeer(routePeerId)
-            val dialCandidates = buildDialCandidatesForPeer(
+            var dialCandidates = buildDialCandidatesForPeer(
                 routePeerId = routePeerId,
                 rawAddresses = listeners + liveRouteHints,
                 includeRelayCircuits = true
             )
+            if (dialCandidates.isEmpty() && publicRelayAddrs.isNotEmpty()) {
+                dialCandidates = publicRelayAddrs
+                Timber.i(
+                    "CELL-ROUTE-AWS-001: route=$routePeerId had 0 dial candidates on cellular; " +
+                        "falling back to ${publicRelayAddrs.size} public relay addr(s)"
+                )
+                logDeliveryAttempt(
+                    messageId = traceMessageId,
+                    medium = "core",
+                    phase = "cellular_fallback",
+                    outcome = "attempt",
+                    detail = "ctx=$attemptContext route=$routePeerId public_relays=${publicRelayAddrs.size}"
+                )
+            }
             Timber.d("[ROUTE] Transport: route=$routePeerId dialCandidates=${dialCandidates.size} (${dialCandidates.joinToString { it.substringBefore("/") }})")
             if (dialCandidates.isNotEmpty()) {
                 connectToPeer(routePeerId, dialCandidates)
@@ -10573,6 +10596,33 @@ open class MeshRepository(
     }
 
     /**
+     * CELL-ROUTE-AWS-001: public (non-RFC1918) multiaddrs from proven ledger
+     * relays — usable on cellular when the destination route is LAN-only.
+     */
+    private fun getPublicInternetRelayMultiaddrs(): List<String> {
+        val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .map { it.multiaddr }
+        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt()).map { it.multiaddr }
+        return (proven + seeds)
+            .distinct()
+            .filter { addr ->
+                val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+                when {
+                    v4 == null -> addr.contains("/dns4/") || addr.contains("/ip6/")
+                    v4.startsWith("192.168.") -> false
+                    v4.startsWith("10.") -> false
+                    v4.startsWith("127.") -> false
+                    v4.startsWith("169.254.") -> false
+                    v4.startsWith("172.") -> {
+                        val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
+                        !(second in 16..31)
+                    }
+                    else -> true
+                }
+            }
+    }
+
+    /**
      * R1: true when the multiaddr's host already appears in a live peer's
      * listeners or in our current address snapshots. Used to clear stuck
      * circuit-breakers so bootstrap does not skip a reachable host.
@@ -11192,18 +11242,52 @@ open class MeshRepository(
      * Own LAN-facing IP literals from listener/external snapshots (no ports).
      * GHOST-IDENTITY-001: used to drop ledger rows that dial THIS device
      * under a retired peer_id (self-dial poison after identity rotation).
+     * Includes IPv6 (2600:381:… self-dial rows observed 2026-09-11).
      */
     fun getOwnLanAddrLiterals(): Set<String> {
         val out = linkedSetOf<String>()
-        val regex = Regex("""/ip4/(\d{1,3}(?:\.\d{1,3}){3})/""")
+        val v4 = Regex("""/ip4/(\d{1,3}(?:\.\d{1,3}){3})/""")
+        val v6 = Regex("""/ip6/([^/]+)/""")
         for (ma in listeningAddressesSnapshot + externalAddressesSnapshot) {
-            regex.find(ma)?.groupValues?.get(1)?.let { out.add(it) }
+            v4.find(ma)?.groupValues?.get(1)?.let { out.add(it) }
+            v6.find(ma)?.groupValues?.get(1)?.let { host ->
+                if (host != "::1" && host != "0:0:0:0:0:0:0:1") out.add(host)
+            }
         }
         return out
     }
 
-    /** GHOST-IDENTITY-001: true when this ledger row must not resurrect as a node. */
+    /**
+     * SELF-AS-PEER-001 (2026-09-11): all encodings of THIS node's identity.
+     * Any ledger row whose peer_id/public_key matches these is self-dial
+     * poison (own pk appeared as an external node).
+     */
+    fun ownIdentityKeySet(): Set<String> {
+        val out = linkedSetOf<String>()
+        try {
+            val info = getIdentityInfoSync() ?: identityInfo.value
+            info?.publicKeyHex?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            info?.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            info?.identityId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        } catch (_: Exception) { }
+        try {
+            identityCachePrefs.getString(IDENTITY_CACHE_PUBLIC_KEY, null)
+                ?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        } catch (_: Exception) { }
+        return out
+    }
+
+    /** GHOST-IDENTITY-001 + SELF-AS-PEER-001: true when this ledger row must not resurrect as a node. */
     fun isGhostLedgerEntry(entry: uniffi.api.LedgerEntry): Boolean {
+        val own = ownIdentityKeySet()
+        val pid = entry.peerId?.trim()?.lowercase().orEmpty()
+        val pk = entry.publicKey?.trim()?.lowercase().orEmpty()
+        if (pid.isNotEmpty() && pid in own) {
+            return true
+        }
+        if (pk.isNotEmpty() && pk in own) {
+            return true
+        }
         return GhostIdentityGate.isGhost(
             peerId = entry.peerId,
             publicKey = entry.publicKey,
