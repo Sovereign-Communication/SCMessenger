@@ -8206,15 +8206,29 @@ open class MeshRepository(
         // CELL-ROUTE-AWS-001b: on cellular, inject proven PUBLIC relay peer ids
         // as additional routes. Pair each peer with ITS OWN public multiaddrs
         // (never dial AWS addr under Windows peerId).
+        // On cellular put public relays FIRST so a LAN-only Windows route does
+        // not burn the attempt window before AWS is tried.
         val publicRelayRoutes: List<Pair<String, String>> = if (networkDetector.isCellularNetwork) {
             getPublicInternetRelayRoutes()
         } else {
             emptyList()
         }
         val publicRelayPeerIds = publicRelayRoutes.map { it.first }.distinct()
-        val sanitizedCandidates = (sanitizedBase + publicRelayPeerIds)
-            .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
-            .distinct()
+        if (networkDetector.isCellularNetwork && publicRelayPeerIds.isEmpty()) {
+            Timber.w(
+                "CELL-ROUTE-AWS-001b: cellular but no public relay routes " +
+                    "(ledger proven+seed empty or all private/dns). base=${sanitizedBase.size}"
+            )
+        }
+        val sanitizedCandidates = if (networkDetector.isCellularNetwork) {
+            (publicRelayPeerIds + sanitizedBase)
+                .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
+                .distinct()
+        } else {
+            (sanitizedBase + publicRelayPeerIds)
+                .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
+                .distinct()
+        }
 
         if (sanitizedCandidates.isEmpty()) {
             // AND-NO-ROUTE-001: Add diagnostic context for empty route candidates
