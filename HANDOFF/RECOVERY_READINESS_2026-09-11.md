@@ -28,6 +28,26 @@ Next product work (in order):
 1. Finish Message Store start-path RCA/fix (single Sled owner or split paths).
 2. Reinstall Pixel **without** another blind `pm clear` (identity export first).
 3. Passive 3-node log proof; keep CI green on #281.
+
+## 2b. Pixel verification protocol (operator 2026-09-11)
+
+**PASSIVE ONLY for every agent seat.** The seat may install and collect logs.
+The operator drives the phone.
+
+| Allowed on Pixel | Forbidden on Pixel |
+|---|---|
+| `adb install -r` | UI taps / swipes / Dashboard navigation |
+| `adb shell am start` / force-stop | sending messages from the phone |
+| `adb logcat` / `run-as` file pull | mesh start/stop from Settings UI |
+| wait + re-pull after operator action | `pm clear` without identity export + preflight + approval |
+
+Evidence path: `files/logs/scmessenger-mesh.log` (UTF-16) +
+`files/mesh_diagnostics.log`. FileLoggingTree captures Timber
+(`GHOST-IDENTITY-001`, `UNIFICATION loadPeers`). Windows (`/api/diagnostics`)
+and AWS (`ssh` / docker logs) remain actively drivable.
+
+If Dashboard `loadPeers` evidence is required, **ask the operator to open the
+peers list** — do not tap it yourself.
 4. Rule-8 / operator gates still apply for merge to main.
 
 ## 3. Skills installed for this desktop

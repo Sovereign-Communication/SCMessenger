@@ -44,6 +44,9 @@ the operator says so. Settings mixup is fixed: project
 - Do not start/stop nodes, build, install, send messages, or run the BLE probe
   yourself; those belong to the CTO package's phases. Read-only node queries are
   allowed for auditing.
+- **Pixel is passive-only for every seat (2026-09-11):** install + log-pull
+  only. No UI taps, no phone-side message sends, no mesh toggles. Operator
+  drives the device; you audit artifacts and logs.
 - Escalate to the operator when a checkpoint fails schema, the CTO stalls a full
   watch cycle without artifacts, or a gate verdict conflicts with live evidence.
 

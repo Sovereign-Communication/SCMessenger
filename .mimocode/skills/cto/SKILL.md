@@ -78,6 +78,27 @@ $env:MIMO_PYTHON scripts/recovery_preflight.py --action <name>
 Also: never delete `target/debug` while a build is live; never `pm clear` to
 "unlock" storage without confirming no identity is needed for the next test.
 
+## Pixel / Android verification is PASSIVE ONLY
+
+Operator ruling (2026-09-11): the CTO/controller seat **must not actively
+drive** the Pixel UI. Allowed:
+
+- `adb install -r` / replace-install APKs
+- `adb shell am start` / force-stop / logcat / `run-as` file pulls
+- passive log collection from mesh_diagnostics + FileLoggingTree
+
+Forbidden on Pixel:
+
+- UI taps / swipes / navigation to force Dashboard loadPeers
+- sending messages from the phone
+- toggling mesh from Settings
+- `pm clear` without identity export + preflight + operator approval
+
+The **operator** drives the phone. The seat installs, then **waits for the
+operator** and pulls logs. If Dashboard loadPeers evidence is needed, ask the
+operator to open the peers list; do not tap it yourself. Windows and AWS
+remain actively drivable (CLI/API/ssh) per the controller package.
+
 ## Harness verification requirement (operator 2026-09-11)
 
 Substantive changes need **sovereign-harness** evidence in addition to Windows
