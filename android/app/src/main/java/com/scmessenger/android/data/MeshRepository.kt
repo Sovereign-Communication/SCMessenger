@@ -8213,7 +8213,75 @@ open class MeshRepository(
         } else {
             emptyList()
         }
+        // CELL-ROUTE-AWS-001c: on cellular, try the paired public-relay route
+        // BEFORE SmartTransportRouter (which burns the window on failing LAN
+        // core/wifi-direct attempts). Success is a real swarm ACK.
+        if (networkDetector.isCellularNetwork && publicRelayRoutes.isNotEmpty() && !localAcked) {
+            val firstRelay = publicRelayRoutes.first()
+            val relayPeer = firstRelay.first
+            val relayAddrs = publicRelayRoutes.filter { it.first == relayPeer }.map { it.second }.distinct()
+            Timber.i(
+                "CELL-ROUTE-AWS-001c: pre-pass dial relay=$relayPeer addrs=${relayAddrs.size} ctx=$attemptContext"
+            )
+            logDeliveryAttempt(
+                messageId = traceMessageId,
+                medium = "core",
+                phase = "cellular_pre_pass",
+                outcome = "attempt",
+                detail = "ctx=$attemptContext route=$relayPeer addrs=${relayAddrs.size}"
+            )
+            try {
+                connectToPeer(relayPeer, relayAddrs)
+                val connected = awaitPeerConnection(relayPeer, timeoutMs = 3000L)
+                if (connected) {
+                    val err = bridge.sendMessageStatus(
+                        relayPeer,
+                        encryptedData,
+                        recipientIdentityId,
+                        intendedDeviceId
+                    )
+                    if (err == null) {
+                        Timber.i("[OK] CELL-ROUTE-AWS-001c cellular pre-pass ACK via $relayPeer")
+                        logDeliveryAttempt(
+                            messageId = traceMessageId,
+                            medium = "core",
+                            phase = "cellular_pre_pass",
+                            outcome = "success",
+                            detail = "ctx=$attemptContext route=$relayPeer"
+                        )
+                        return DeliveryAttemptResult(
+                            acked = true,
+                            routePeerId = relayPeer,
+                            coreSwarmAcked = true
+                        )
+                    }
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_pre_pass",
+                        outcome = "failed",
+                        detail = "ctx=$attemptContext route=$relayPeer reason=$err"
+                    )
+                } else {
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_pre_pass",
+                        outcome = "failed",
+                        detail = "ctx=$attemptContext route=$relayPeer reason=connect_timeout"
+                    )
+                }
+            } catch (ex: Exception) {
+                Timber.w(ex, "CELL-ROUTE-AWS-001c pre-pass failed")
+            }
+        }
+
         val publicRelayPeerIds = publicRelayRoutes.map { it.first }.distinct()
+        if (networkDetector.isCellularNetwork) {
+            Timber.i(
+                "CELL-ROUTE-AWS-001b: cellular routes public=${publicRelayPeerIds.size} base=${sanitizedBase.size} ctx=$attemptContext"
+            )
+        }
         if (networkDetector.isCellularNetwork && publicRelayPeerIds.isEmpty()) {
             Timber.w(
                 "CELL-ROUTE-AWS-001b: cellular but no public relay routes " +
