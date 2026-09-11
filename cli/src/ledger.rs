@@ -232,8 +232,12 @@ impl ConnectionLedger {
             .map(|e| LedgerMigrationEntry {
                 multiaddr: e.multiaddr,
                 peer_id: e.last_peer_id,
-                // Operator-trusted bootstrap nodes were verified by fiat.
-                locally_verified: e.locally_verified || e.is_bootstrap,
+                // V040-T13 F1: the legacy flag was never trustworthy --
+                // record_identified_peer marked every advertised listen
+                // address as verified. Only operator-configured bootstrap
+                // nodes are verified by fiat; everything else migrates
+                // unverified and is re-proven by the first live dial.
+                locally_verified: e.is_bootstrap,
                 is_bootstrap: e.is_bootstrap,
                 // Legacy clock was UNIX seconds; the core converter
                 // multiplies to millis on import.
@@ -1253,10 +1257,11 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_migration_preserves_verified_and_archives() {
+    fn test_legacy_migration_strips_untrusted_verified_flag_and_archives() {
         let dir = tempfile::tempdir().expect("tempdir");
         let pid_verified = PeerId::random().to_string();
         let pid_hearsay = PeerId::random().to_string();
+        let pid_bootstrap = PeerId::random().to_string();
         let legacy = serde_json::json!({
             "version": 1,
             "last_saved": 1700000000,
@@ -1291,6 +1296,24 @@ mod tests {
                     "is_bootstrap": false,
                     "known_topics": [],
                     "label": null
+                },
+                // Operator-configured bootstrap: verified by fiat even though
+                // the legacy flag says otherwise (F1: `is_bootstrap` is the
+                // only trusted input).
+                "/ip4/198.51.100.155/tcp/9001": {
+                    "address": "198.51.100.155:9001",
+                    "multiaddr": "/ip4/198.51.100.155/tcp/9001",
+                    "last_peer_id": pid_bootstrap,
+                    "observed_peer_ids": [pid_bootstrap],
+                    "last_seen": 1700000000,
+                    "first_seen": 1699999000,
+                    "consecutive_failures": 0,
+                    "backoff_seconds": 0,
+                    "next_attempt_after": 0,
+                    "locally_verified": false,
+                    "is_bootstrap": true,
+                    "known_topics": [],
+                    "label": null
                 }
             }
         });
@@ -1304,18 +1327,33 @@ mod tests {
         let report = l
             .run_legacy_migration(dir.path(), None, &[])
             .expect("migration runs");
-        assert_eq!(report.offered, 2);
-        assert_eq!(report.imported, 1);
+        assert_eq!(report.offered, 3);
+        assert_eq!(report.imported, 2);
         assert_eq!(report.rejected, 1);
         assert!(report.archived);
 
+        // V040-T13 F1: the legacy `locally_verified` flag was never
+        // trustworthy -- `record_identified_peer` marked every advertised
+        // listen address as verified. The entry migrates UNVERIFIED and is
+        // re-proven by the first live dial.
         let entry = l
             .core
             .entry_for_multiaddr("/ip4/198.51.100.130/tcp/9001")
-            .expect("verified legacy entry imported");
-        assert!(entry.locally_verified, "verified history preserved");
+            .expect("legacy entry imported");
+        assert!(
+            !entry.locally_verified,
+            "legacy verified flag is not trusted"
+        );
         assert!(!entry.is_bootstrap);
         assert_eq!(entry.peer_id.as_deref(), Some(pid_verified.as_str()));
+
+        // Operator bootstrap survives as verified by fiat.
+        let bootstrap = l
+            .core
+            .entry_for_multiaddr("/ip4/198.51.100.155/tcp/9001")
+            .expect("bootstrap legacy entry imported");
+        assert!(bootstrap.locally_verified);
+        assert!(bootstrap.is_bootstrap);
 
         // Idempotence: file gone -> nothing offered on a second run.
         let report2 = l
