@@ -77,13 +77,25 @@ Lessons encoded from this snag:
 | Item | Value |
 |---|---|
 | Checkout | `C:\Users\SCM\Documents\GitHub\Harness` |
-| Invoke | `$env:PYTHONPATH = "C:\Users\SCM\Documents\GitHub\Harness"` then `$env:MIMO_PYTHON -m harness.cli …` |
+| Seat wrapper | `$env:MIMO_PYTHON scripts/harness_gate.py …` |
+| Direct invoke | `$env:PYTHONPATH = "C:\Users\SCM\Documents\GitHub\Harness"` then `$env:MIMO_PYTHON -m harness.cli …` |
 | Subcommands | `verify`, `apply`, `continue`, `lint-claims`, `ledger`, `spend`, `trust`, `models` |
 | Spend key | live; limit **$0.75/day**, remaining **$0.75** at integration time |
+| **Required policy** | **All substantive changes** must be harness-verified |
+| Default tier | **free** |
+| Paid ceiling | **$0.10 per escalation/use** (`--allow-paid --max-cost 0.10`) |
 | Write rule | Product audits → `Harness/audits/scmessenger/…` with **absolute** `--out` only |
 
-Harness is **advisory**. It is not a Windows build gate and not rule-8
-APPROVE. Do not put harness runner debris in the SCMessenger worktree.
+Harness is **required additional evidence**, not a substitute for Windows
+build gates or rule-8 APPROVE. Incomplete harness coverage = BLOCKED/UNVERIFIED.
+Do not put harness runner debris in the SCMessenger worktree.
+
+Readiness smoke (2026-09-11): free `verify` panel 3/3 + judge `real`,
+cost **$0.00**, evidence
+`Harness/audits/scmessenger/_runs/readiness-20260911/smoke_verify.json`.
+`spend` + `ledger verify` + free `models` + `trust` all OK.
+`harness_gate.py --max-cost 0.25` correctly **BLOCK** (exit 4).
+`harness_gate.py --kind smoke` exit 0.
 
 ## 6. Onboarding commands (Windows)
 
@@ -91,6 +103,7 @@ APPROVE. Do not put harness runner debris in the SCMessenger worktree.
 $env:MIMO_PYTHON scripts/orchestration_contract.py
 $env:MIMO_PYTHON scripts/orchestrate_strict.py --dry-run
 $env:MIMO_PYTHON scripts/recovery_preflight.py --action audit_readiness
+$env:MIMO_PYTHON scripts/harness_gate.py --kind smoke
 git config core.hooksPath   # must be .githooks
 gh pr view 281 --repo Sovereign-Communication/SCMessenger
 gh pr checks 281 --repo Sovereign-Communication/SCMessenger
