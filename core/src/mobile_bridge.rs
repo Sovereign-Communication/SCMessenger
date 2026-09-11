@@ -3428,6 +3428,10 @@ impl HistoryManager {
     pub fn mark_delivered(&self, id: String) -> Result<(), crate::IronCoreError> {
         if let Some(mut record) = self.get(id.clone())? {
             record.delivered = true;
+            // RECEIPT-UI-001: UDL documents status monotone Queued→Delivered.
+            // Leaving status=Queued made MessageBubble stay Pending after any
+            // loadMessages() even when delivered=true.
+            record.status = MessageStatus::Delivered;
             self.add(record)?;
         }
         Ok(())
