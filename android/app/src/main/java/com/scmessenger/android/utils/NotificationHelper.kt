@@ -535,43 +535,6 @@ object NotificationHelper {
         }
     }
 
-    /**
-     * Show mesh status notification (connection issues, etc).
-     */
-    fun showMeshStatusNotification(
-        context: Context,
-        title: String,
-        message: String
-    ) {
-        // Gate: honor the global notifications toggle. The ongoing foreground
-        // service notification is exempt (Android requires it) and is built
-        // separately via buildForegroundServiceNotification / startForeground.
-        if (!notificationsEnabled) {
-            trackNotificationEvent("suppressed_settings")
-            Timber.d("Notifications disabled globally, skipping mesh-status notification")
-            return
-        }
-        if (isDndEnabled(context)) return
-
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESH_STATUS)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        if (!hasNotificationPermission(context)) {
-            Timber.w("POST_NOTIFICATIONS permission missing; skipping mesh status notification")
-            return
-        }
-        try {
-            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID_MESH_STATUS, notification)
-        } catch (e: SecurityException) {
-            Timber.e(e, "Security exception while posting mesh status notification")
-        }
-    }
-
     // Helper methods
 
     private fun createReplyIntent(context: Context, peerId: String, messageId: String): Intent {
