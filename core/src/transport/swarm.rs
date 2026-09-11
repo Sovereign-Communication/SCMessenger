@@ -3270,9 +3270,9 @@ fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCor
     // Only the 64-hex identity-confusion shape is a candidate ghost.
     // Libp2p PeerIds (`12D3KooW…`) are self-certifying and allowed.
     let is_hex64 = peer_key.len() == 64
-        && peer_key
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b));
+        && peer_key.bytes().all(|b| {
+            b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b)
+        });
     if !is_hex64 {
         return false;
     }
@@ -3280,12 +3280,16 @@ fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCor
         // Fail closed on ghost shape when we cannot consult the ledger.
         return true;
     };
-    let proven = core.ledger_manager.get_preferred_relays(64).iter().any(|e| {
-        e.success_count > 0
+    let proven = core
+        .ledger_manager
+        .get_preferred_relays(64)
+        .iter()
+        .any(|e| {
+            e.success_count > 0
             && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
             && (e.peer_id.as_deref() == Some(peer_key)
                 || e.public_key.as_deref() == Some(peer_key))
-    });
+        });
     !proven
 }
 
