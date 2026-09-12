@@ -1,7 +1,7 @@
 ﻿# SCMessenger Round-5 Harness Audit + Handoff Addendum
 
-**Date:** 2026-09-10  
-**Harness baseline:** main @ PR #4 + PR #5 + PR #6 merged (`95bfee8`)  
+**Date:** 2026-09-10
+**Harness baseline:** main @ PR #4 + PR #5 + PR #6 merged (`95bfee8`)
 **Method:** `harness verify --claims-file --source-file --converge` on the 19
 recently-edited functions in `scmessenger_audit/` (read-only). Absolute `--out`
 paths. Free tier $0.00 for the batch; one paid-tier confirmation pass.
@@ -213,18 +213,18 @@ within ceiling, no silent write failures. Not a predetermined pass/fail.
 
 Cost $0.00134. Panel (ling + granite + llama-8b):
 
-- **C1:** 2 real / 1 not_real  
-- **C2:** 2 real / 1 not_real (granite+llama say real; ling says not)  
-- **C3 (reassurance):** mixed  
+- **C1:** 2 real / 1 not_real
+- **C2:** 2 real / 1 not_real (granite+llama say real; ling says not)
+- **C3 (reassurance):** mixed
 
 **Harness learning (not product):** the printed tally said `C1=real (3/3); C2=real (3/3)` while panel JSON is 2R/1NR — the `(N/3)` suffix is **participation**, not unanimity. Specialist prose still inverted some claims. Deterministic majority still leans **C2 real** on paid vs **C2 not_real** on free majority — this is a **product-policy** claim (stopRotation vs failed stopAdvertising), not a harness flake.
 
 ### Exercise outcome
 
-- **3/3 free runs persisted**, EXIT 0, $0.00  
-- Shortfall/defer reported honestly (01 2/3)  
-- One natural paid confirm, under ceiling  
-- Ledger still clean (`chain_broken_on_load: false`)  
+- **3/3 free runs persisted**, EXIT 0, $0.00
+- Shortfall/defer reported honestly (01 2/3)
+- One natural paid confirm, under ceiling
+- Ledger still clean (`chain_broken_on_load: false`)
 - **No forced convergence.** Remaining work is SCMessenger product rulings + D6/D2 ship gates — not more panels.
 
 ---
