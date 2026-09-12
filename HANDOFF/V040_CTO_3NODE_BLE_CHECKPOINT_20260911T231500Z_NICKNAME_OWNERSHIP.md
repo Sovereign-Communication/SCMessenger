@@ -46,3 +46,11 @@ Log: `UNIFICATION upsertFederatedContact: peer 1c158e86… incomingNick=androidu
 
 - Existing poisoned Windows ledger rows on Pixel need reclaim/clear after APK install (reclaim runs on next setLocalNickname; may need one Settings edit or load-time sanitize).
 - load-time sanitize of duplicate non-synthetic nicks across peer_ids (optional follow-up).
+
+## LIVE VERIFY 2026-09-12T0045Z (APK 28A0E407 / commit d2a33098)
+
+- Pixel installed, pid 28685, mesh FGS active, BLE running, 0 ANR / 0 Slow main in window.
+- ledger.json after install: **24 entries, every nickname is None**.
+  - Windows `30d0fa67` multiaddrs present, **nick clean** (was 22 poisoned rows / 2 peers).
+  - Emulator `1c158e86` multiaddrs present, nick None (will re-federate; ownership rules keep it exclusive).
+- **PASS for poison clear on Windows.** Operator: confirm Dashboard does not show Windows as androidulaator.
