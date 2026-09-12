@@ -82,9 +82,9 @@ class AndroidPlatformBridge @Inject constructor(
     @Volatile private var hasWifi: Boolean = false
     @Volatile private var hasCellular: Boolean = false
     @Volatile private var currentMotionState: uniffi.api.MotionState = uniffi.api.MotionState.UNKNOWN
-    @Volatile private var lastScanIntervalMs: Long? = null
-    @Volatile private var lastAdvertiseIntervalMs: Long? = null
-    @Volatile private var lastTxPowerDbm: Int? = null
+    @Volatile private var lastScanIntervalMs: UInt? = null
+    @Volatile private var lastAdvertiseIntervalMs: UInt? = null
+    @Volatile private var lastTxPowerDbm: Byte? = null
     @Volatile private var lastRelayMaxPerHour: UInt? = null
 
     /**

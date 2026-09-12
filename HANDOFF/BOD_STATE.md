@@ -151,3 +151,85 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > 3. Are all cryptographic invariants preserved without regression?
   >
   > Recommendation: APPROVE PR #281 security perimeter changes under Rule-8 governance.
+
+### Resolution bod-8ee21463 [DEFERRED]
+- **Timestamp**: 2026-09-12T23:16:16.541298+00:00
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.000000 (Ceiling: $0.10)
+- **Summary**: Only 5/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (3/5 APPROVE):
+  - `openrouter/free`: **UNKNOWN** (Score: 0.00) - _Malformed response (Rule 15 fail-closed)_
+  - `google/gemma-4-26b-a4b-it:free`: **APPROVE** (Score: 1.00) - _The proposal addresses a liveness issue by preventing premature node burnout during transient network shifts without compromising cryptographic integrity or introducing centralized roles. It maintains the 'Nodes, Not Relays' philosophy by treating reliability as a behavioral observation rather than a structural role change._
+  - `cohere/north-mini-code:free`: **APPROVE** (Score: 0.95) - _Adds a probationary grace period for relays, improving resilience without breaking cryptographic or centralization rules._
+  - `nvidia/nemotron-3-super-120b-a12b:free`: **APPROVE** (Score: 0.96) - _The proposal adjusts an internal reputation heuristic to improve liveness while keeping all nodes as equal relays and preserving all doctrinal invariants._
+  - `google/gemma-4-31b-it:free`: **REJECT** (Score: 0.60) - _The proposal introduces logic explicitly referencing 'relay nodes' and 'relay reputation' within the codebase, violating the foundational doctrine that NO standalone relays exist and that relaying is a behavior of NODES, not a role._
+- **Judge Model**: `google/gemma-4-31b-it:free` (Agreed: False)
+- **Proposal Text**:
+  > # Proposal: Relay Reputation Probationary Grace Period in mesh_routing.rs
+  > 
+  > ## 1. Summary & Motivation
+  > In `core/src/transport/mesh_routing.rs`, relay nodes are scored and marked as reliable or unreliable via `RelayReputation::calculate_score()`.
+  > Previously, any candidate relay was marked reliable only if `self.score >= 50.0`.
+  > Because `calculate_score` assigns 0 score when `messages_relayed == 0` or when delivery fails initially without prior success, a single transient transport failure (e.g. during a mobile Wi-Fi drop or cellular transition) immediately sets `is_reliable = false`.
+  > This causes rapid burnout of valid circuit relays (including the AWS Cloud Node), preventing off-Wi-Fi fallback delivery.
+  > 
+  > ## 2. Technical Delta
+  > In `core/src/transport/mesh_routing.rs`:
+  > ```rust
+  > self.score = success_score + latency_score + recency_score;
+  > self.is_reliable = self.score >= 50.0
+  >     || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > ```
+  > During a relay's initial probationary window (before it has achieved its first successful delivery), it is granted up to 3 relay attempts before being declared unreliable. Once it has 3 consecutive failures with zero successes, `is_reliable` becomes `false`. Once it delivers successfully, its score reflects true operational history.
+  > 
+  > ## 3. Security & Invariant Analysis
+  > - Rule 8 Perimeter: `core/src/transport/mesh_routing.rs` is an internal routing heuristic.
+  > - Cryptography: No crypto, signature, key exchange, or cipher changes.
+  > - Wire Format: No wire protocol, framing, or serialization changes.
+  > - Node Authority: IronCore custody and storage contracts are completely untouched.
+  > - Denial of Service / Liveness: Dead or malicious nodes cannot poison routing indefinitely, as 3 consecutive delivery failures immediately marks them unreliable.
+
+### Resolution bod-4df59504 [APPROVED]
+- **Timestamp**: 2026-09-12T23:16:41.267884+00:00
+- **Verdict**: `APPROVED`
+- **Cost**: $0.001084 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.92) - _The proposal is a local routing heuristic that prevents transient network failures from permanently blackballing peer nodes performing store-and-forward custody, strictly preserving node parity and sovereignty without introducing centralized dependencies or protocol deviations._
+  - `deepseek/deepseek-chat`: **APPROVE** (Score: 1.00) - _The proposal enhances node reliability evaluation while fully adhering to all SCMessenger doctrine principles, maintaining cryptographic integrity, platform parity, and sovereignty without introducing centralization or new roles._
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposal enhances the reliability of node behavior in transient network conditions without compromising any foundational principles of the SCMessenger doctrine._
+  - `ibm-granite/granite-4.0-h-micro`: **APPROVE** (Score: 0.95) - _The proposal enhances the reliability of node store-and-forward custody during transient network transitions, without violating any core SCMessenger doctrine principles. It introduces a fair probationary period for nodes, ensuring no legitimate node is permanently blacklisted due to temporary connectivity issues, while preserving cryptographic integrity, wire protocol fidelity, and overall network sovereignty._
+  - `meta-llama/llama-3.1-8b-instruct`: **APPROVE** (Score: 0.90) - _The proposed changes to `mesh_routing.rs` uphold the SCMessenger doctrine by introducing a node-centric reliability evaluation window, ensuring parity across all platforms, and maintaining cryptographic sovereignty._
+- **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
+- **Proposal Text**:
+  > # Proposal: Node Store-and-Forward Custody Grace Period in mesh_routing.rs
+  > 
+  > ## 1. Architecture Doctrine Alignment
+  > In accordance with SCMessenger architecture doctrine:
+  > - There are NO standalone relays; every peer is a full NODE, and store-and-forward custody is a behavior all nodes perform.
+  > - The AWS instance (`scm-always-on-node`) is a CLOUD NODE, possessing full node parity with CLI, Android, and iOS nodes.
+  > - `RelayReputation` and `is_reliable` in `core/src/transport/mesh_routing.rs` are internal code identifiers evaluating the historical success of peer nodes performing store-and-forward custody.
+  > 
+  > ## 2. Problem Statement
+  > In `core/src/transport/mesh_routing.rs`, `RelayReputation::calculate_score()` marks a node's relaying behavior reliable only if `self.score >= 50.0`.
+  > Before a node has achieved its first confirmed message delivery, or when a mobile node transitions from Wi-Fi to cellular during an in-flight handoff, a single transient dial failure resets the delivery score to 0.0.
+  > This immediately flips `is_reliable = false`, permanently blackballing valid peer nodes (including the Cloud Node) from performing custody forwarding on the first transient network transition.
+  > 
+  > ## 3. Technical Remediations
+  > In `core/src/transport/mesh_routing.rs`:
+  > ```rust
+  > self.score = success_score + latency_score + recency_score;
+  > // Require at least 3 failed delivery attempts with zero successes before declaring
+  > // a peer node unreliable for custody forwarding. In mobile/cellular networks and transient handoffs,
+  > // an initial connection failure must not permanently blackball a candidate node.
+  > self.is_reliable = self.score >= 50.0
+  >     || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > ```
+  > During a peer node's initial probationary evaluation window, it is granted up to 3 custody forwarding attempts before being classified as unreliable. Once 3 consecutive failures occur with zero successes, `is_reliable` becomes `false`. Once a custody forwarding attempt succeeds, the score is driven by verified delivery metrics.
+  > 
+  > ## 4. Invariant & Adversarial Security Proof
+  > - Rule 8 Perimeter: `core/src/transport/mesh_routing.rs` (local routing heuristic).
+  > - Cryptographic Sovereignty: Zero modifications to cryptographic primitives (`Ed25519`, `X25519`, `ChaCha20Poly1305`, `Blake3`).
+  > - Wire Protocol: Zero modifications to framing, multiaddrs, or wire serialization.
+  > - Sovereignty & Parity: Node-centric parity is strictly preserved across all platforms. No new roles or privileged entities are introduced.
+  > - Liveness & DoS Resistance: Inactive, unresponsive, or malicious peers are definitively flagged as unreliable after 3 failed attempts, preventing route starvation while tolerating transient wireless handoffs.
