@@ -4703,6 +4703,11 @@ open class MeshRepository(
             nickname = finalContact.nickname
         )
         Timber.i("UNIFICATION addContact saved: peerId $canonicalContactId nickname ${finalContact.nickname?.take(16) ?: "null"} localNickname ${finalContact.localNickname?.take(16) ?: "null"} pubKey ${finalContact.publicKey.take(8)}... display=${(finalContact.localNickname ?: finalContact.nickname)?.take(16) ?: "PK:${finalContact.publicKey.take(8)}"}")
+        val exclusiveNick = normalizeNickname(finalContact.localNickname ?: finalContact.nickname)
+            ?.takeUnless { isSyntheticFallbackNickname(it) }
+        if (exclusiveNick != null) {
+            reclaimExclusiveFederatedNickname(canonicalContactId, exclusiveNick)
+        }
     }
 
     /**
@@ -5385,6 +5390,57 @@ open class MeshRepository(
         }
     }
 
+    /**
+     * NICKNAME-OWNERSHIP-001: a non-synthetic display name belongs to exactly one
+     * identity. If peerId now claims nick, strip that federated nick from every
+     * other discovered peer (never touch localNickname — user-defined).
+     * Device RCA 2026-09-11: emulator "androidulaator" painted onto Windows rows.
+     */
+    private fun reclaimExclusiveFederatedNickname(ownerPeerId: String, nick: String?) {
+        val exclusive = normalizeNickname(nick)?.takeUnless { isSyntheticFallbackNickname(it) } ?: return
+        val owner = ownerPeerId.trim()
+        if (owner.isEmpty()) return
+        try {
+            val contacts = contactManager?.list().orEmpty()
+            val ownerKeys = contacts
+                .filter { it.peerId == owner || normalizePublicKey(it.publicKey) == normalizePublicKey(owner) }
+                .mapNotNull { normalizePublicKey(it.publicKey) }
+                .toSet() + listOfNotNull(normalizePublicKey(owner))
+            _discoveredPeers.update { current ->
+                var updated = current
+                var changed = false
+                for ((k, v) in current) {
+                    if (k == owner || v.peerId == owner) continue
+                    val isOwnerAlias = v.libp2pPeerId == owner ||
+                        normalizePublicKey(v.publicKey)?.let { it in ownerKeys } == true
+                    if (isOwnerAlias) continue
+                    if (!v.nickname.equals(exclusive, ignoreCase = true)) continue
+                    Timber.w(
+                        "NICKNAME-OWNERSHIP-001: reclaiming federated nick=$exclusive from non-owner peer=$k (owner=$owner)"
+                    )
+                    updated = updated + (k to v.copy(nickname = null))
+                    changed = true
+                }
+                if (changed) updated else current
+            }
+            contacts.forEach { c ->
+                if (c.peerId == owner) return@forEach
+                val isOwnerAlias = normalizePublicKey(c.publicKey)?.let { it in ownerKeys } == true
+                if (isOwnerAlias) return@forEach
+                val contactNick = c.nickname?.trim().orEmpty()
+                if (!contactNick.equals(exclusive, ignoreCase = true)) return@forEach
+                Timber.w(
+                    "NICKNAME-OWNERSHIP-001: clearing contact federated nick=$exclusive from ${c.peerId} (owner=$owner)"
+                )
+                kotlin.runCatching {
+                    contactManager?.setNickname(c.peerId, null)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "reclaimExclusiveFederatedNickname failed for $ownerPeerId")
+        }
+    }
+
     fun setLocalNickname(peerId: String, nickname: String?) {
         // UNIFICATION: user-defined localNickname save — verbose logging, never overwritten by federated sync
         val normalizedInput = nickname?.trim()?.takeIf { it.isNotEmpty() }
@@ -5392,6 +5448,9 @@ open class MeshRepository(
         try {
             contactManager?.setLocalNickname(peerId, nickname)
             Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
+            if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
+                reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+            }
             _discoveredPeers.update { current ->
                 val normalized = peerId.trim()
                 if (current.containsKey(normalized)) {
@@ -9373,7 +9432,12 @@ open class MeshRepository(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> KEEP EXISTING.
+            // Last-writer-wins let a self-reported nick (BLE/identity_sync)
+            // permanently steal another node's name. User-defined localNickname
+            // is the only intended overwrite path (setContactNickname).
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
     }
 
@@ -9662,16 +9726,24 @@ open class MeshRepository(
         // A null here means "routing metadata only, no identity claim".
         dialHints.forEach { multiaddr ->
             kotlin.runCatching {
-                // Double-check: if we are about to write a synthetic over an existing
-                // authoritative ledger entry, skip. Read current ledger entry for this
-                // multiaddr/peer to ensure we don't clobber Claude with peer-30...
-                val shouldWriteNick = if (normalizedNickname == null) {
-                    // Synthetic or null -> only write if ledger has no authoritative nick
-                    val existingNick = getAllLedgerEntries().firstOrNull {
-                        it.multiaddr == multiaddr && it.peerId == normalizedRoute
-                    }?.nickname?.trim()?.takeIf { it.isNotEmpty() }
-                    existingNick == null || isSyntheticFallbackNickname(existingNick)
-                } else true
+                // NICKNAME-OWNERSHIP-001: only write a real nickname onto a
+                // ledger row that already belongs to normalizedRoute (or has no
+                // peer_id). Fan-out of a real nick onto every dial candidate
+                // painted the emulator name onto Windows multiaddrs.
+                val owningEntry = getAllLedgerEntries().firstOrNull {
+                    it.multiaddr == multiaddr
+                }
+                val ownsOrUnclaimed = owningEntry == null ||
+                    owningEntry.peerId.isNullOrBlank() ||
+                    owningEntry.peerId == normalizedRoute
+                val shouldWriteNick = when {
+                    normalizedNickname == null -> {
+                        val existingNick = owningEntry?.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                        ownsOrUnclaimed &&
+                            (existingNick == null || isSyntheticFallbackNickname(existingNick))
+                    }
+                    else -> ownsOrUnclaimed
+                }
                 ledgerManager?.annotateIdentity(
                     multiaddr,
                     normalizedRoute,

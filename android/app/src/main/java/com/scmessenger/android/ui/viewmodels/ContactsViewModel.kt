@@ -191,7 +191,9 @@ class ContactsViewModel @Inject constructor(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> keep existing.
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
         // UNIFICATION verbose logging for nickname merge decisions (diagnose ChristyLove -> peer-... revert)
         if (incomingNormalized != existingNormalized) {

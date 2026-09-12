@@ -654,18 +654,46 @@ fn annotate_identity_locked(
         if normalized_public_key.is_some() {
             entry.public_key = normalized_public_key;
         }
-        if normalized_nickname.is_some() {
+        // NICKNAME-OWNERSHIP-001: never write a nickname onto an entry that
+        // already claims a different peer_id. Device RCA 2026-09-11: emulator
+        // nick "androidulaator" landed on Windows ledger rows via multiaddr
+        // fan-out + last-writer-wins.
+        if normalized_nickname.is_some()
+            && entry.peer_id.as_deref().map(|p| p == peer_id).unwrap_or(true)
+        {
             entry.nickname = normalized_nickname;
         }
         entry.last_seen = Some(current_timestamp());
         false
     } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-        entry.peer_id = Some(peer_id);
-        if normalized_public_key.is_some() {
-            entry.public_key = normalized_public_key;
-        }
-        if normalized_nickname.is_some() {
-            entry.nickname = normalized_nickname;
+        let existing_peer = entry.peer_id.clone();
+        let owns_entry = existing_peer
+            .as_deref()
+            .map(|p| p.is_empty() || p == peer_id)
+            .unwrap_or(true);
+        if owns_entry {
+            // Only claim peer_id when the row is unowned or already ours.
+            entry.peer_id = Some(peer_id);
+            if normalized_public_key.is_some() {
+                entry.public_key = normalized_public_key;
+            }
+            if normalized_nickname.is_some() {
+                entry.nickname = normalized_nickname;
+            }
+        } else if normalized_public_key.is_none() && normalized_nickname.is_none() {
+            // Observe-only: different peer at this multiaddr. Record sighting;
+            // do NOT steal peer_id or paint nickname.
+            record_observed_peer_id_locked(entry, &peer_id);
+            entry.last_seen = Some(current_timestamp());
+        } else {
+            // Refuse identity claim on a multiaddr owned by another peer.
+            tracing::debug!(
+                target: "ledger",
+                multiaddr = %entry.multiaddr,
+                existing_peer = ?existing_peer,
+                incoming_peer = %peer_id,
+                "annotate_identity refused: multiaddr owned by different peer"
+            );
         }
         entry.last_seen = Some(current_timestamp());
         false
