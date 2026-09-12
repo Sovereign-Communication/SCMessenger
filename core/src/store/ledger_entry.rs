@@ -659,7 +659,11 @@ fn annotate_identity_locked(
         // nick "androidulaator" landed on Windows ledger rows via multiaddr
         // fan-out + last-writer-wins.
         if normalized_nickname.is_some()
-            && entry.peer_id.as_deref().map(|p| p == peer_id).unwrap_or(true)
+            && entry
+                .peer_id
+                .as_deref()
+                .map(|p| p == peer_id)
+                .unwrap_or(true)
         {
             entry.nickname = normalized_nickname;
         }
