@@ -214,7 +214,11 @@ class DashboardViewModel @Inject constructor(
             val dialable = meshRepository.getDialableAddresses()
             val seed = meshRepository.getSeedAddresses(16u)
             val deadRecent = meshRepository.getRecentlyDeadAddresses(7)
-            val ledgerEntries = (dialable + seed + deadRecent).distinctBy { it.multiaddr }
+            // GHOST-IDENTITY-001: seed/dead already filtered in MeshRepository; double-check here
+            // so a future caller that skips those helpers cannot resurrect PK:577fd171-class ghosts.
+            val ledgerEntries = (dialable + seed + deadRecent)
+                .distinctBy { it.multiaddr }
+                .filterNot { meshRepository.isGhostLedgerEntry(it) }
             val relayHops = meshRepository.getRelayHopPeerIds()
             val routeAliasToCanonical = discoveredSnapshot
                 .mapNotNull { (routeKey, info) ->
@@ -657,8 +661,12 @@ class DashboardViewModel @Inject constructor(
                 val authoritativeNick = selectAuthoritativeNickname(existing.nickname, info.nickname)
                     ?: selectAuthoritativeNickname(info.nickname, existing.nickname)
                     ?: existing.nickname
-                val authoritativeLocal = selectAuthoritativeNickname(existing.localNickname, info.localNickname)
-                    ?: existing.localNickname ?: info.localNickname
+                // NICKNAME-AUTHORITY: preserve user-defined localNickname; only fill
+                // when existing is blank/synthetic. Mirrors MeshRepository merge.
+                val authoritativeLocal = com.scmessenger.android.utils.resolveLocalNickname(
+                    incoming = info.localNickname,
+                    existing = existing.localNickname
+                )
                 merged[mapKey] = existing.copy(
                     peerId = canonicalPeerId,
                     publicKey = existing.publicKey ?: info.publicKey,
@@ -924,7 +932,9 @@ class DashboardViewModel @Inject constructor(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> keep existing.
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
     }
 

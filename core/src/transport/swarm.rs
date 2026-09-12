@@ -421,6 +421,110 @@ fn infer_seed_network_mode(my_addrs: &[String]) -> crate::transport::addr_filter
 /// - WebSocket relay addresses (contain "/ws/" or "/wss/")
 ///
 /// Only direct IP addresses (IPv4 or IPv6) are advertised via mDNS.
+/// Keep libp2p's confirmed external-address set in lockstep with the
+/// observer's current consensus primary. The observer is the single source of
+/// truth for which observed address may be advertised; any confirmed address
+/// that is not the current primary is a stale promotion and is retracted.
+/// (The two promotion sites below are the only add_external_address callers in
+/// the tree, so this cannot delete an address some other subsystem confirmed.)
+/// Map a connection's remote multiaddr to the transport string understood by
+/// `IronCore::routing_peer_seen` (which routes through `parse_transport_type`).
+/// A relayed circuit is reported as such even though it rides TCP physically:
+/// the routing engine must distinguish reachability-through-a-helper from a
+/// direct path so failover can prefer the direct ladder. Websockets ride TCP.
+fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
+    use libp2p::multiaddr::Protocol;
+    // Scan the WHOLE address for a circuit hop before classifying: a circuit
+    // riding a websocket or QUIC path (e.g. /tcp/4001/ws/.../p2p-circuit)
+    // must be reported as relay, not as its underlying transport -- the
+    // engine needs the direct-vs-helper distinction for failover.
+    let mut quic = false;
+    let mut ws = false;
+    for proto in remote_addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => return "relay",
+            Protocol::Quic | Protocol::QuicV1 => quic = true,
+            Protocol::Ws(_) | Protocol::Wss(_) => ws = true,
+            _ => {}
+        }
+    }
+    if quic {
+        "quic"
+    } else if ws {
+        "ws"
+    } else {
+        "tcp"
+    }
+}
+
+/// The listen-port allowlist admits only TCP-based listeners. A websocket
+/// rides TCP underneath and a p2p-circuit path resolves to its TCP hop, so
+/// those multiaddrs are fine; UDP/QUIC sockets are structurally excluded
+/// because observations carry no transport and promotion always reconstructs
+/// /tcp/ -- admitting a UDP port could otherwise advertise a TCP endpoint for
+/// a listener that never speaks TCP.
+fn listen_port_from_bound_addr(addr: &Multiaddr) -> Option<u16> {
+    use libp2p::multiaddr::Protocol;
+    for proto in addr.iter() {
+        if matches!(proto, Protocol::Udp(_) | Protocol::Quic | Protocol::QuicV1) {
+            return None;
+        }
+    }
+    ConnectionTracker::extract_socket_addr(addr).map(|socket| socket.port())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_external_address(
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    observer: &AddressObserver,
+    bound_addresses: &[Multiaddr],
+) {
+    // V040-T14 P0 (defense-in-depth on the publication path): never advertise
+    // an address whose port we do not listen on. The observer already refuses
+    // such observations; this guard holds even if a future path builds an
+    // un-filtered observer. Empty listen set (no dialable listener bound)
+    // means there is nothing to advertise -- refuse, never accept-any: any
+    // observed port outside our listen set is the ephemeral-source-port class
+    // this P0 removes. A refused primary also retracts any previously
+    // advertised address, so a stale promotion cannot linger.
+    let listen_ports = listen_ports_from_multiaddrs(bound_addresses);
+    let primary_addr = observer.primary_external_address();
+    let primary_addr = match primary_addr {
+        Some(addr) if listen_ports.contains(&addr.port()) => Some(addr),
+        Some(addr) => {
+            if !listen_ports.is_empty() {
+                tracing::warn!(
+                    "Refusing to advertise observed address {}: port {} is not a listen port",
+                    addr,
+                    addr.port()
+                );
+            }
+            None
+        }
+        None => None,
+    };
+    let primary = primary_addr.map(|addr| {
+        let (ip, port) = (addr.ip(), addr.port());
+        match ip {
+            std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port)
+                .parse()
+                .expect("formatted multiaddr is always valid"),
+            std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port)
+                .parse()
+                .expect("formatted multiaddr is always valid"),
+        }
+    });
+    let stale: Vec<Multiaddr> = swarm.external_addresses().cloned().collect();
+    for addr in &stale {
+        if Some(addr) != primary.as_ref() {
+            swarm.remove_external_address(addr);
+        }
+    }
+    if let Some(addr) = primary {
+        swarm.add_external_address(addr);
+    }
+}
+
 pub fn build_mdns_advertised_addrs(all_listeners: &[Multiaddr]) -> Vec<Multiaddr> {
     all_listeners
         .iter()
@@ -482,6 +586,227 @@ fn resolve_dial_target(
         }
     }
     Ok(explicit_peer_id.or(embedded_peer_id))
+}
+
+/// Normalize an IP for self-address comparison: IPv4-mapped IPv6
+/// (`::ffff:127.0.0.1`) is the same socket as the mapped IPv4, so both sides
+/// are reduced to the concrete form before comparing (review R3 finding 1).
+fn normalize_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
+    if let std::net::IpAddr::V6(v6) = ip {
+        if let Some(v4) = v6.to_ipv4_mapped() {
+            return std::net::IpAddr::V4(v4);
+        }
+    }
+    ip
+}
+
+/// Socket proto + port for self-address comparison. TCP and UDP are DIFFERENT
+/// sockets even on the same port: a TCP listener on port N must not classify
+/// a UDP/QUIC candidate on port N as self (review R3 finding 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SocketProto {
+    Tcp,
+    Udp,
+}
+
+/// Extract the first IP + socket (proto, port) pair from a multiaddr, if any.
+/// Returns the FIRST coherent pair (a multiaddr's later components -- relay
+/// hop, /p2p ids -- must not shadow the socket address that an actual dial
+/// would open). DNS-form addresses yield None (never statically resolvable;
+/// additionally rejected for untrusted dials before this check).
+fn addr_ip_socket(addr: &Multiaddr) -> Option<(std::net::IpAddr, SocketProto, u16)> {
+    let mut ip = None;
+    let mut socket = None;
+    for p in addr.iter() {
+        match p {
+            libp2p::multiaddr::Protocol::Ip4(a) if ip.is_none() => {
+                ip = Some(std::net::IpAddr::V4(a));
+            }
+            libp2p::multiaddr::Protocol::Ip6(a) if ip.is_none() => {
+                ip = Some(std::net::IpAddr::V6(a));
+            }
+            libp2p::multiaddr::Protocol::Tcp(a) if socket.is_none() => {
+                socket = Some((SocketProto::Tcp, a));
+            }
+            libp2p::multiaddr::Protocol::Udp(a) if socket.is_none() => {
+                socket = Some((SocketProto::Udp, a));
+            }
+            _ => {}
+        }
+        if ip.is_some() && socket.is_some() {
+            break;
+        }
+    }
+    ip.zip(socket)
+        .map(|(ip, (proto, port))| (normalize_ip(ip), proto, port))
+}
+
+/// The set of sockets THIS node owns, precomputed once per dial dispatch so
+/// the seed path (many candidates per command) does not re-enumerate per
+/// candidate (review R3 finding 3).
+///
+/// - `own`: concrete listener/external addresses minus /p2p-circuit forms (a
+///   circuit address names the RELAY's socket, not one we own);
+/// - `local_ips`: the machine's interface IPs (covers the unspecified-bind
+///   case: 0.0.0.0:PORT accepts on every interface, so our own interface IP
+///   on that port is us);
+/// - bound ports, SEPARATED by protocol: `tcp_ports`/`udp_ports` derive from
+///   ACTUAL listeners only (an external address's port may not be locally
+///   bound, so it must not pair with a local interface IP -- review C5).
+///
+/// The trusted Wi-Fi Aware loopback-proxy dials bypass this entirely: the
+/// caller passes trusted=true and the address check is skipped at the call
+/// site (dial_skip_reason), NOT inside this helper.
+struct OwnSockets {
+    own: Vec<Multiaddr>,
+    local_ips: Vec<std::net::IpAddr>,
+    tcp_ports: Vec<u16>,
+    udp_ports: Vec<u16>,
+}
+
+impl OwnSockets {
+    fn for_swarm(swarm: &libp2p::swarm::Swarm<IronCoreBehaviour>) -> Self {
+        let own: Vec<Multiaddr> = swarm
+            .listeners()
+            .cloned()
+            .chain(swarm.external_addresses().cloned())
+            .filter(|a| {
+                !a.iter()
+                    .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+            })
+            .collect();
+        let (tcp_ports, udp_ports) = {
+            let mut tcp = Vec::new();
+            let mut udp = Vec::new();
+            for a in swarm.listeners() {
+                if let Some((_, proto, port)) = addr_ip_socket(a) {
+                    match proto {
+                        SocketProto::Tcp => tcp.push(port),
+                        SocketProto::Udp => udp.push(port),
+                    }
+                }
+            }
+            (tcp, udp)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let local_ips: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
+            .map(|ifaces| {
+                ifaces
+                    .into_iter()
+                    .map(|iface| normalize_ip(iface.ip()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // Browser nodes cannot open listeners, so no interface enumeration
+        // exists there; the own-listeners/external checks are moot (empty
+        // sets), and the only live guards are the peer-id ones.
+        #[cfg(target_arch = "wasm32")]
+        let local_ips: Vec<std::net::IpAddr> = Vec::new();
+        Self {
+            own,
+            local_ips,
+            tcp_ports,
+            udp_ports,
+        }
+    }
+
+    /// Would a socket dial of `addr` land on one of OUR OWN sockets?
+    ///
+    /// Rules:
+    /// - the socket (proto + port) must be one WE listen on -- a loopback or
+    ///   local IP on a socket we do not own is a different local service and
+    ///   stays dialable;
+    /// - loopback + our socket: we bound it, so loopback reaches us;
+    /// - one of OUR interface IPs + our socket: us;
+    /// - concrete own address (listener or confirmed external) + its socket:
+    ///   us;
+    /// - a REMOTE host using one of our ports is NOT us: only loopback or a
+    ///   named own/local IP counts as self.
+    fn targets_self(&self, addr: &Multiaddr) -> bool {
+        let Some((ip, proto, port)) = addr_ip_socket(addr) else {
+            return false;
+        };
+        let bound_ports = match proto {
+            SocketProto::Tcp => &self.tcp_ports,
+            SocketProto::Udp => &self.udp_ports,
+        };
+        if !bound_ports.contains(&port) {
+            return false;
+        }
+        if ip.is_loopback() {
+            return true;
+        }
+        if self.local_ips.contains(&ip) {
+            return true;
+        }
+        self.own
+            .iter()
+            .any(|o| addr_ip_socket(o) == Some((ip, proto, port)))
+    }
+}
+
+/// Pure self-address predicate over an `OwnSockets` snapshot (kept for the
+/// unit tests -- the production path uses `OwnSockets::targets_self`).
+#[cfg(test)]
+fn addr_targets_self(
+    addr: &Multiaddr,
+    own: &[Multiaddr],
+    local_ips: &[std::net::IpAddr],
+    tcp_ports: &[u16],
+    udp_ports: &[u16],
+) -> bool {
+    let sockets = OwnSockets {
+        own: own.to_vec(),
+        local_ips: local_ips.to_vec(),
+        tcp_ports: tcp_ports.to_vec(),
+        udp_ports: udp_ports.to_vec(),
+    };
+    sockets.targets_self(addr)
+}
+
+/// SINGLE OWNER of the "should we even attempt this dial?" decision at the
+/// dispatch site (used by both the native and wasm `SwarmCommand::Dial` arms,
+/// through which every CLI/seed/scheduler dial funnels).
+///
+/// Returns a skip reason when the dial is pointless or self-inflicted:
+/// 1. The target is ourselves.
+/// 2. The target peer already has a live connection -- respond over the
+///    existing link instead of dialing (the user-visible half of the
+///    5-minute cycle: periodic re-dials of a connected peer).
+/// 3. The address resolves to one of OUR OWN listeners / loopback / external
+///    addresses (the other half of the cycle: poisoned ledger entries from
+///    the pre-#267 mDNS/DCUtR misattribution era attribute our own addresses
+///    to other peers, so the CLI's periodic re-dial loop dials OURSELVES;
+///    the connection opens, negotiation fails with "Unexpected peer ID" /
+///    "Local peer ID", and the socket aborts -- the yamux 10053 closes seen
+///    every 300s in 3-node validation, 2026-09-03).
+///
+/// `trusted` dials (the Wi-Fi Aware loopback proxy) are exempt from rule 3:
+/// the caller deliberately dials OUR OWN loopback proxy, so the address check
+/// would block a legitimate path.
+fn dial_skip_reason(
+    swarm: &libp2p::swarm::Swarm<IronCoreBehaviour>,
+    addr: &Multiaddr,
+    target_peer_id: Option<PeerId>,
+    trusted: bool,
+) -> Option<&'static str> {
+    if let Some(pid) = target_peer_id {
+        if pid == *swarm.local_peer_id() {
+            return Some("target is self (local peer id)");
+        }
+        if swarm.is_connected(&pid) {
+            return Some("peer already connected -- respond over existing link");
+        }
+    }
+    // The address check is deliberately skipped for trusted dials: the
+    // Wi-Fi Aware loopback-proxy path (dial_trusted_local_proxy) exists to
+    // dial OUR OWN loopback proxy, so the self-socket rule would block a
+    // legitimate path. The trusted flag is NOT known to OwnSockets -- the
+    // exemption lives here, at the one call site that understands it.
+    if !trusted && OwnSockets::for_swarm(swarm).targets_self(addr) {
+        return Some("address is our own listener/external/interface addr -- self-dial");
+    }
+    None
 }
 
 /// Direct port-ladder synthesis is only valid before a relay circuit marker.
@@ -603,6 +928,151 @@ fn build_routable_relay_addrs(
         .collect()
 }
 
+/// D10 (2026-09-09): structural self-endpoint check, wildcard-aware.
+///
+/// `addr_filter::is_self_address` matches concrete host:port strings against
+/// the identify-time snapshot of our own transport addresses. That snapshot
+/// can be INCOMPLETE during the startup race (identify of a relay can arrive
+/// before our binds are recorded), and our binds are often wildcard forms
+/// (`/ip4/0.0.0.0/tcp/9001`) that never string-match a concrete reflection
+/// (`/ip4/192.168.0.222/tcp/9001`).
+///
+/// This check closes that hole structurally: the candidate's (host, port)
+/// matches self if it matches ANY known local address on host, port, OR
+/// port-only when our own binding for that port is a wildcard. Purely
+/// structural — no network I/O, no identity lookups.
+///
+/// Returns true only when `known_local_addrs` is non-empty AND at least one
+/// entry matches; with no known local addresses this cannot self-match (the
+/// caller-visible effect is that the reservation gate then relies on the
+/// string-based `is_self_address` snapshot alone, as before D10).
+fn is_self_endpoint(addr: &Multiaddr, known_local_addrs: &[Multiaddr]) -> bool {
+    use libp2p::multiaddr::Protocol;
+
+    let extract_ip_port = |m: &Multiaddr| -> Option<(std::net::IpAddr, u16)> {
+        let mut ip: Option<std::net::IpAddr> = None;
+        let mut port: Option<u16> = None;
+        for proto in m.iter() {
+            match proto {
+                Protocol::Ip4(v4) => ip = Some(std::net::IpAddr::V4(v4)),
+                Protocol::Ip6(v6) => ip = Some(std::net::IpAddr::V6(v6)),
+                Protocol::Tcp(p) => port = Some(p),
+                _ => {}
+            }
+        }
+        match (ip, port) {
+            (Some(ip), Some(port)) => Some((ip, port)),
+            _ => None,
+        }
+    };
+
+    let (cand_ip, cand_port) = match extract_ip_port(addr) {
+        Some(v) => v,
+        None => return false,
+    };
+    if known_local_addrs.is_empty() {
+        return false;
+    }
+    for local in known_local_addrs {
+        let (local_ip, local_port) = match extract_ip_port(local) {
+            Some(v) => v,
+            None => continue,
+        };
+        if local_port != cand_port {
+            continue;
+        }
+        // Exact host match on the same port is unambiguous self.
+        if local_ip == cand_ip {
+            return true;
+        }
+        // D10 refinement (test-driven): a wildcard bind covers our local
+        // interfaces on that port, but public hosts on the same port are
+        // foreign relays in the standard same-port topology (Windows:9001
+        // <-> AWS:9001). So a wildcard bind claims a concrete candidate
+        // only when the candidate host is loopback/private/link-local —
+        // the reflection shape the observed poison actually took — or is
+        // in the same wildcard family for IPv6 (conservative: v6 locals
+        // are rarely enumerated in time during the race).
+        if local_ip.is_unspecified() {
+            let wildcard_claims = match cand_ip {
+                std::net::IpAddr::V4(v4) => {
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                }
+                std::net::IpAddr::V6(_) => true,
+            };
+            if wildcard_claims {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// D10: validate a relay-reservation candidate base at the moment of use.
+///
+/// The base for `listen_on(<base>/p2p/<relay>/p2p-circuit>)` must be a DIRECT,
+/// NON-CIRCUIT address that is NOT one of this node's own endpoints.
+///
+/// Why this gate exists (evidence: HANDOFF/
+/// V040_CTO_3NODE_BLE_CHECKPOINT_20260909T225500Z_ANR_MAIN_FFI_FIX.md):
+/// libp2p-mdns advertises the swarm's ListenAddresses verbatim, and a
+/// reservation `listen_on` whose base was a nested circuit route or the
+/// node's own address produced a poison listener
+/// (`/ip4/<self>/tcp/9001/p2p/<self>/p2p-circuit/p2p/<AWS>/p2p-circuit/
+/// p2p/<self>`) whose bulk overflowed the mDNS response
+/// (`TxtRecordTooLong`, `os error 10040`) and killed LAN discovery for
+/// every peer on the network.
+///
+/// `known_local_addrs` must be the CURRENT swarm listen + external address
+/// set at the moment of the reservation, not an identify-time snapshot.
+fn is_valid_reservation_base(addr: &Multiaddr, known_local_addrs: &[Multiaddr]) -> bool {
+    // (1) No circuit components: the reservation builder appends the single
+    // trailing `/p2p-circuit`; a base that already contains one would nest.
+    if addr
+        .iter()
+        .any(|proto| matches!(proto, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return false;
+    }
+    // (2) Must be discoverable at all (loopback/CGNAT/multicast/DNS forms are
+    // already rejected by the existing gate).
+    if !is_discoverable_multiaddr(addr) {
+        return false;
+    }
+    // (3) Must not be one of our own endpoints (wildcard-aware).
+    if is_self_endpoint(addr, known_local_addrs) {
+        return false;
+    }
+    true
+}
+
+/// D10b: poison-listener guard predicate (event-loop enforcement).
+///
+/// libp2p-mdns advertises the swarm's listen addresses verbatim, so ANY
+/// listener address with circuit segments that is not a tracked single-circuit
+/// relay reservation is poison: it overflows the mDNS response
+/// (`TxtRecordTooLong`, `os error 10040`) and kills LAN discovery
+/// network-wide. Two live shapes have been observed:
+/// - nested double-circuit routes (`.../p2p-circuit/p2p/<x>/p2p-circuit/...`)
+///   leaked from relay-assist paths before D10;
+/// - a relay-assist reservation whose reported address carried TWO circuit
+///   segments even under the D10 base gate (base validated direct, but the
+///   relay returned a deeper route).
+///
+/// A reported address with exactly ONE circuit segment is legitimate only for
+/// a listener created by the guarded reservation path.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_poison_circuit_listener(address: &Multiaddr, is_tracked_reservation: bool) -> bool {
+    let circuit_count = address
+        .iter()
+        .filter(|proto| matches!(proto, libp2p::multiaddr::Protocol::P2pCircuit))
+        .count();
+    if circuit_count == 0 {
+        return false;
+    }
+    circuit_count > 1 || !is_tracked_reservation
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn relay_reservation_multiaddr(base: &Multiaddr, relay_peer_id: PeerId) -> Multiaddr {
     use libp2p::multiaddr::Protocol;
@@ -620,6 +1090,29 @@ fn relay_reservation_multiaddr(base: &Multiaddr, relay_peer_id: PeerId) -> Multi
     normalized
         .with(Protocol::P2p(relay_peer_id))
         .with(Protocol::P2pCircuit)
+}
+
+/// D10: the reservation address this builder produces must contain EXACTLY
+/// ONE `/p2p-circuit` segment, in terminal position. This is the structural
+/// guarantee the reviewer asked for: no double-append, no nesting, regardless
+/// of what the base contained.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_canonical_reservation_addr(addr: &Multiaddr) -> bool {
+    use libp2p::multiaddr::Protocol;
+    let mut circuit_count = 0usize;
+    let mut saw_non_circuit_after_circuit = false;
+    for proto in addr.iter() {
+        match proto {
+            Protocol::P2pCircuit => {
+                circuit_count += 1;
+            }
+            _ if circuit_count > 0 => {
+                saw_non_circuit_after_circuit = true;
+            }
+            _ => {}
+        }
+    }
+    circuit_count == 1 && !saw_non_circuit_after_circuit
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1248,24 +1741,6 @@ fn extract_peer_id_bytes(bytes: &[u8]) -> [u8; 32] {
     result
 }
 
-/// Map a connection's remote multiaddr to the transport string understood by
-/// `IronCore::routing_peer_seen` (which routes through `parse_transport_type`).
-/// A relayed circuit is reported as such even though it rides TCP physically:
-/// the routing engine must distinguish reachability-through-a-helper from a
-/// direct path so failover can prefer the direct ladder. Websockets ride TCP.
-fn endpoint_transport_string(remote_addr: &Multiaddr) -> &'static str {
-    use libp2p::multiaddr::Protocol;
-    for proto in remote_addr.iter() {
-        match proto {
-            Protocol::P2pCircuit => return "relay",
-            Protocol::Quic | Protocol::QuicV1 => return "quic",
-            Protocol::Ws(_) | Protocol::Wss(_) => return "ws",
-            _ => {}
-        }
-    }
-    "tcp"
-}
-
 fn verify_registration_message(
     peer: &PeerId,
     message: &RegistrationMessage,
@@ -1404,6 +1879,64 @@ fn log_route_decision(
         route.relay_success_score,
         route.latest_success_order
     );
+}
+
+/// R7-G2 single-owner register-and-flush: the ONE place that records the
+/// canonical key for teardown, mirrors the live connection into the transport
+/// manager, and performs the once-per-connection reconnect flush over the real
+/// swarm. Both native reconnect sites (identify and ConnectionEstablished)
+/// call it, plus the wasm connect arm (R8-F4 parity).
+fn register_and_flush_swarm_peer(
+    core: &std::sync::Arc<crate::IronCore>,
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    registered_swarm_peers: &mut HashMap<PeerId, String>,
+    flushed_this_connection: &mut HashSet<PeerId>,
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+    peer_id: PeerId,
+    pk_hex: &str,
+) {
+    registered_swarm_peers.insert(peer_id, pk_hex.to_string());
+    core.set_swarm_peer_connection(pk_hex, true);
+
+    // The gate is deliberately outside the egress closure: a duplicate event
+    // leaves the outbox untouched instead of claiming that a flush happened.
+    let skip_flush = !flushed_this_connection.insert(peer_id) || !swarm.is_connected(&peer_id);
+    let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+        flush_outbox_over_swarm(
+            swarm,
+            &peer_id,
+            message_id,
+            envelope,
+            reconnect_request_to_message,
+        )
+    };
+    core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
+}
+
+/// R2-B1 / R3-C3 single-owner outbox egress: frame the envelope and dispatch
+/// it over the messaging request-response protocol to `peer_id`. Returns
+/// false when the peer is not connected at send time so the flush applies
+/// its retry path instead of assuming an in-flight success. Both reconnect
+/// sites (identify + ConnectionEstablished) use this one helper.
+fn flush_outbox_over_swarm(
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    peer_id: &libp2p::PeerId,
+    message_id: &str,
+    envelope: &[u8],
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+) -> bool {
+    if !swarm.is_connected(peer_id) {
+        return false;
+    }
+    let framed = wrap_in_drift_frame(envelope);
+    let request_id = swarm.behaviour_mut().messaging.send_request(
+        peer_id,
+        Libp2pMessageRequest {
+            envelope_data: framed,
+        },
+    );
+    reconnect_request_to_message.insert(request_id, message_id.to_string());
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1562,15 +2095,12 @@ fn routing_decision_to_ranked_routes(
         } => {
             // Direct route -- use target peer directly
             let mut score = transport_quality_score(decision.decided_by, decision.confidence);
-            // Factor transport type into score: BLE < WiFi < Circuit < TCP < QUIC
+            // Factor transport type into score: BLE < WiFi < TCP < QUIC
             let transport_bonus = match transport {
                 RoutingTransportType::QUIC => 0.15,
                 RoutingTransportType::TCP => 0.10,
-                // A relayed circuit rides TCP but adds a helper-node hop, so
-                // it ranks below a direct TCP path yet above the short-range
-                // wireless transports.
-                RoutingTransportType::Circuit => 0.07,
                 RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                RoutingTransportType::Circuit => 0.07,
                 RoutingTransportType::BLE => 0.0,
             };
             score = (score + transport_bonus).min(1.0);
@@ -1597,11 +2127,8 @@ fn routing_decision_to_ranked_routes(
                 let transport_bonus = match transport {
                     RoutingTransportType::QUIC => 0.15,
                     RoutingTransportType::TCP => 0.10,
-                    // A relayed circuit rides TCP but adds a helper-node hop, so
-                    // it ranks below a direct TCP path yet above the short-range
-                    // wireless transports.
-                    RoutingTransportType::Circuit => 0.07,
                     RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                    RoutingTransportType::Circuit => 0.07,
                     RoutingTransportType::BLE => 0.0,
                 };
                 score = (score + transport_bonus).min(1.0);
@@ -1662,11 +2189,8 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
-                        // A relayed circuit rides TCP but adds a helper-node hop, so
-                        // it ranks below a direct TCP path yet above the short-range
-                        // wireless transports.
-                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::BLE => 0.0,
                     };
                     score = (score + transport_bonus).min(1.0);
@@ -1693,11 +2217,8 @@ fn routing_decision_to_ranked_routes(
                     let transport_bonus = match transport {
                         RoutingTransportType::QUIC => 0.15,
                         RoutingTransportType::TCP => 0.10,
-                        // A relayed circuit rides TCP but adds a helper-node hop, so
-                        // it ranks below a direct TCP path yet above the short-range
-                        // wireless transports.
-                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::WiFiAware | RoutingTransportType::WiFiDirect => 0.05,
+                        RoutingTransportType::Circuit => 0.07,
                         RoutingTransportType::BLE => 0.0,
                     };
                     score = (score + transport_bonus).min(1.0);
@@ -2034,6 +2555,9 @@ pub enum SwarmCommand {
     GetExternalAddresses {
         reply: mpsc::Sender<Vec<SocketAddr>>,
     },
+    /// Set or clear the operator-configured external address (T14). The
+    /// configured address takes primacy over all peer observations.
+    SetConfiguredExternalAddress { addr: Option<SocketAddr> },
     /// Dial a peer at a specific address
     Dial {
         addr: Multiaddr,
@@ -2424,6 +2948,16 @@ impl SwarmHandle {
             .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))
     }
 
+    /// Set or clear the operator-configured external address (T14). The
+    /// configured address wins over every observed address and is registered
+    /// in the swarm's external-address registry immediately.
+    pub async fn set_configured_external_address(&self, addr: Option<SocketAddr>) -> Result<()> {
+        self.command_tx
+            .send(SwarmCommand::SetConfiguredExternalAddress { addr })
+            .await
+            .map_err(|_| anyhow::anyhow!("Swarm task not running"))
+    }
+
     /// Get listening addresses
     pub async fn get_listeners(&self) -> Result<Vec<Multiaddr>> {
         let (reply_tx, mut reply_rx) = mpsc::channel(1);
@@ -2715,6 +3249,48 @@ fn ledger_verified_pair(
     };
     core.ledger_manager
         .is_locally_verified_pair(addr, &peer_id.to_string())
+}
+
+/// GHOST-IDENTITY-001 (2026-09-11 RCA PK:577fd171).
+///
+/// Gossipsub `Subscribed` used to auto-subscribe EVERY discovered topic,
+/// including `/scmessenger/peer/<retired-pk>/v1`. That re-advertised dead
+/// identities mesh-wide after phone reinstall. A peer-topic is a ghost when
+/// its id is 64-hex (identity-confusion class: pk stored as peer_id) and we
+/// have no proven ledger entry for it (`success_count == 0` or missing).
+/// Mesh-wide topics (`sc-lobby`, `sc-mesh`, …) always auto-negotiate.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCore>>) -> bool {
+    let Some(rest) = topic_str.strip_prefix("/scmessenger/peer/") else {
+        return false;
+    };
+    let Some(peer_key) = rest.strip_suffix("/v1") else {
+        return false;
+    };
+    // Only the 64-hex identity-confusion shape is a candidate ghost.
+    // Libp2p PeerIds (`12D3KooW…`) are self-certifying and allowed.
+    let is_hex64 = peer_key.len() == 64
+        && peer_key.bytes().all(|b| {
+            b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b)
+        });
+    if !is_hex64 {
+        return false;
+    }
+    let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
+        // Fail closed on ghost shape when we cannot consult the ledger.
+        return true;
+    };
+    let proven = core
+        .ledger_manager
+        .get_preferred_relays(64)
+        .iter()
+        .any(|e| {
+            e.success_count > 0
+            && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
+            && (e.peer_id.as_deref() == Some(peer_key)
+                || e.public_key.as_deref() == Some(peer_key))
+        });
+    !proven
 }
 
 /// Build and start the libp2p swarm, returning a handle for communication.
@@ -3031,6 +3607,13 @@ pub async fn start_swarm_with_config(
         // Track outbound request IDs to message IDs for direct sends
         let mut request_to_message: HashMap<libp2p::request_response::OutboundRequestId, String> =
             HashMap::new();
+        // Reconnect-flush request IDs are tracked separately from route-dispatch
+        // IDs so an outbound failure can wake the durable outbox entry without
+        // disturbing the normal pending-message retry state.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
+        > = HashMap::new();
 
         // Track outbound relay request IDs
         let mut pending_relay_requests: HashMap<
@@ -3125,7 +3708,7 @@ pub async fn start_swarm_with_config(
                 if is_self {
                     if !self_dial_logged.contains(addr) {
                         tracing::info!(
-                            "  ⊘ Skipping self-dial bootstrap addr (matches local peer): {}",
+                            "  Skipping self-dial bootstrap addr (matches local peer): {}",
                             addr
                         );
                         self_dial_logged.insert(addr.clone());
@@ -3228,6 +3811,35 @@ pub async fn start_swarm_with_config(
             // P0.12: Deduplicate bridge events to prevent UI freezing and bridge spam
             // We track the last reported 'PeerIdentified' and 'PeerDiscovered' state.
             let mut reported_peer_info: HashMap<PeerId, (String, Vec<Multiaddr>)> = HashMap::new();
+            // R1-A3: canonical pk (hex) this loop registered per wire peer, so the
+            // last-connection teardown can de-register EXACTLY what was registered.
+            // Re-deriving from the peer id fails for hashed peers that the identify
+            // site registered (its key comes from identify, not the peer id).
+            let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+            // R2-B2: peers already flushed during the current connection; a
+            // re-connect re-inserts them, a close clears them (see
+            // ConnectionClosed arm below). One flush per connection prevents
+            // identify+ConnectionEstablished duplicate drains.
+            //
+            // R6-F2: the gate is per-PEER, not per-connection, on purpose. The
+            // reconnect flush drains messages that accumulated while the peer
+            // was UNREACHABLE; while any connection is live, prepare_message
+            // direct-sends over the registered link and never touches the
+            // outbox, so a second concurrent connection (e.g. TCP + relay) has
+            // nothing new to drain. Entries that failed egress carry backoff
+            // timers and flush on the next genuine reconnect. Same-peer
+            // multi-connection flush suppression is intentional.
+            //
+            // Concurrency model (R5-E1/E2): everything that touches this map,
+            // connection_tracker, and set_swarm_peer_connection runs in THIS
+            // single-threaded select! task -- there is no other caller of
+            // set_swarm_peer_connection on this target (the wasm loop is
+            // cfg-excluded and runs its own single task), so no interleaving
+            // between the registration, flush, and teardown steps is
+            // possible, and libp2p never emits ConnectionClosed for a
+            // connection before its ConnectionEstablished was processed.
+            let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+                std::collections::HashSet::new();
             let mut reported_peer_discoveries: std::collections::HashSet<PeerId> =
                 std::collections::HashSet::new();
             // mDNS can report several socket addresses for one peer.  Keep one
@@ -3378,12 +3990,37 @@ pub async fn start_swarm_with_config(
                             .collect();
                         for key in timed_out {
                             if let Some(entry) = pending_dials.remove(&key) {
-                                // P1 Item 3: Complete and apply backoff on timeout
+                                // P1 Item 3: Complete and apply backoff on timeout.
+                                // Liveness guard (mirrors the OutgoingConnectionError
+                                // path): a queued dial to one address timing out with no
+                                // signal is NOT evidence the peer is dead when the peer
+                                // currently has a live connection (identify flows over it
+                                // every 60s). The dead-mark printed by this path would
+                                // name the peer the addr-key was registered under, so a
+                                // stale-address timeout would dead-mark a peer whose live
+                                // path is fine -- the 5-minute dead cycle. Skip the
+                                // record_dial_failure entirely (no dead escalation, no
+                                // attempt-count burn) when any live path exists; the
+                                // address itself is still allowed to time out again.
                                 let key_str = key.to_string();
                                 dial_policy_manager.complete_dial_attempt(&key_str);
-                                dial_policy_manager.record_dial_failure(&key_str, None);
-                                if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
-                                    core.ledger_manager.record_failure(key_str.clone());
+                                let stale_addr_state =
+                                    dial_policy_manager.get_backoff_state(&key_str);
+                                let peer_has_live_path = stale_addr_state
+                                    .as_ref()
+                                    .and_then(|st| st.peer_id)
+                                    .map(|pid| swarm.is_connected(&pid))
+                                    .unwrap_or(false);
+                                if peer_has_live_path {
+                                    tracing::debug!(
+                                        addr=%key,
+                                        "[DIAL-POLICY] Pending dial timed out while peer has a live connection -- no dead mark"
+                                    );
+                                } else {
+                                    dial_policy_manager.record_dial_failure(&key_str, None);
+                                    if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                                        core.ledger_manager.record_failure(key_str.clone());
+                                    }
                                 }
 
                                 tracing::debug!("Pending dial to {} timed out after {}s with no connection signal", key, PENDING_DIAL_TIMEOUT_SECS);
@@ -3526,7 +4163,7 @@ pub async fn start_swarm_with_config(
                                 if is_self {
                                     if !self_dial_logged.contains(addr) {
                                         tracing::info!(
-                                            "  ⊘ Skipping self-dial bootstrap addr (matches local peer): {}",
+                                            "  Skipping self-dial bootstrap addr (matches local peer): {}",
                                             addr
                                         );
                                         self_dial_logged.insert(addr.clone());
@@ -3869,6 +4506,22 @@ pub async fn start_swarm_with_config(
                                                 }
                                             }
                                         } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if !response.accepted {
+                                                if let Some(core) =
+                                                    core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                {
+                                                    core.retry_outbox_message_now(&message_id);
+                                                }
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_response",
+                                                message_id = %message_id,
+                                                accepted = response.accepted,
+                                                "Reconnect-flush request completed"
+                                            );
+                                        } else if let Some(message_id) =
                                             request_to_message.remove(&request_id)
                                         {
                                             // Response to our outbound message request
@@ -3917,6 +4570,20 @@ pub async fn start_swarm_with_config(
                                             e
                                         );
                                     }
+                                } else if let Some(message_id) =
+                                    reconnect_request_to_message.remove(&request_id)
+                                {
+                                    if let Some(core) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        core.retry_outbox_message_now(&message_id);
+                                    }
+                                    tracing::debug!(
+                                        event = "outbox_reconnect_failure",
+                                        message_id = %message_id,
+                                        error = %error,
+                                        "Reconnect-flush request failed; entry is eligible on next reconnect"
+                                    );
                                 } else if let Some(message_id) = request_to_message.remove(&request_id) {
                                     if let Some(pending) = pending_messages.remove(&message_id) {
                                         tracing::warn!(
@@ -4038,36 +4705,9 @@ pub async fn start_swarm_with_config(
                                             address_observer.record_observation(peer, observed_addr);
 
                                             if let Some(primary) = address_observer.primary_external_address() {
-                                                // V040-T14 P0 (defense-in-depth on the
-                                                // publication path): never advertise an
-                                                // address whose port we do not listen on.
-                                                // The observer already refuses such
-                                                // observations; this guard holds even if a
-                                                // future path builds an un-filtered observer.
-                                                // Empty listen set (no dialable listener
-                                                // bound) means there is nothing to advertise
-                                                // -- refuse, never accept-any: any observed
-                                                // port outside our listen set is the
-                                                // ephemeral-source-port class this P0 removes.
-                                                let listen_ports =
-                                                    listen_ports_from_multiaddrs(&bound_addresses);
-                                                if listen_ports.contains(&primary.port()) {
-                                                    tracing::info!("Consensus external address: {}", primary);
-                                                    // Convert SocketAddr to Multiaddr and add to swarm
-                                                    let (ip, port) = (primary.ip(), primary.port());
-                                                    let maddr: Multiaddr = match ip {
-                                                        std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                                        std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                                    };
-                                                    swarm.add_external_address(maddr);
-                                                } else if !listen_ports.is_empty() {
-                                                    tracing::warn!(
-                                                        "Refusing to advertise observed address {}: port {} is not a listen port",
-                                                        primary,
-                                                        primary.port()
-                                                    );
-                                                }
+                                                tracing::info!("Consensus external address: {}", primary);
                                             }
+                                            sync_external_address(&mut swarm, &address_observer, &bound_addresses);
                                         }
 
                                         if let Some(reply_tx) = pending_reflections.remove(&request_id) {
@@ -4335,11 +4975,21 @@ pub async fn start_swarm_with_config(
                                                                     message_id: relay_message_id,
                                                                 }
                                                             } else {
+                                                                // R2: store the raw envelope, not a DriftFrame. The
+                                                                // incoming RelayMessage is already frame-wrapped (same
+                                                                // as all /sc/message traffic); dispatch wraps again
+                                                                // (wrap_in_drift_frame). Storing the wrapped bytes
+                                                                // double-framed the payload and the destination hit
+                                                                // bincode "unexpected end of file" on decode.
+                                                                let custody_payload = match DriftFrame::from_bytes(&request.envelope_data) {
+                                                                    Ok(frame) => frame.payload,
+                                                                    Err(_) => request.envelope_data.clone(),
+                                                                };
                                                                 match relay_custody_store.accept_custody(
                                                                     peer.to_string(),
                                                                     destination.to_string(),
                                                                     relay_message_id.clone(),
-                                                                    request.envelope_data.clone(),
+                                                                    custody_payload,
                                                                     resolved_identity_id,
                                                                     resolved_device_id,
                                                                 ) {
@@ -4769,7 +5419,15 @@ pub async fn start_swarm_with_config(
 
                                 // AUTO-NEGOTIATE: If a peer subscribes to a topic we don't know,
                                 // subscribe to it ourselves. "A node is a node."
-                                if !subscribed_topics.contains(&topic_str) {
+                                // GHOST-IDENTITY-001: NEVER auto-negotiate retired-identity peer
+                                // topics (`/scmessenger/peer/<old-pk>/v1`) — that is the amplifier
+                                // that made PK:577fd171 reappear mesh-wide after Pixel reinstall.
+                                if is_ghost_peer_topic(&topic_str, &core_handle) {
+                                    tracing::info!(
+                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
+                                        topic_str
+                                    );
+                                } else if !subscribed_topics.contains(&topic_str) {
                                     tracing::info!("Auto-subscribing to discovered topic: {}", topic_str);
                                     let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
                                     if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&ident_topic) {
@@ -4807,13 +5465,24 @@ pub async fn start_swarm_with_config(
                                             &pending_custody_dispatches,
                                             &relay_custody_store,
                                         ) {
-                                            tracing::warn!(
-                                                "Ignoring convergence marker message={} destination={} from={} reason={}",
-                                                marker.relay_message_id,
-                                                marker.destination_peer_id,
-                                                propagation_source,
-                                                reason
-                                            );
+                                            // R3: destination nodes correctly hold no pending_* state after
+                                            // delivery — markers cancel sender/carrier in-flight work only.
+                                            if reason == "marker_not_locally_tracked" {
+                                                tracing::debug!(
+                                                    "Ignoring convergence marker (expected on destination) message={} destination={} from={}",
+                                                    marker.relay_message_id,
+                                                    marker.destination_peer_id,
+                                                    propagation_source
+                                                );
+                                            } else {
+                                                tracing::warn!(
+                                                    "Ignoring convergence marker message={} destination={} from={} reason={}",
+                                                    marker.relay_message_id,
+                                                    marker.destination_peer_id,
+                                                    propagation_source,
+                                                    reason
+                                                );
+                                            }
                                             continue;
                                         }
                                         if seen_delivery_convergence_markers.insert(marker.key()) {
@@ -5147,7 +5816,7 @@ pub async fn start_swarm_with_config(
                                     .filter(|a| is_discoverable_multiaddr(a))
                                     .collect();
                                 tracing::info!(
-                                    "🆔 Identified peer {} — agent: {}, protocols: {}, discoverable_addrs: {}",
+                                    "Identified peer {} - agent: {}, protocols: {}, discoverable_addrs: {}",
                                     peer_id,
                                     info.agent_version,
                                     info.protocols.len(),
@@ -5155,6 +5824,18 @@ pub async fn start_swarm_with_config(
                                 );
                                 // Identity protocol confirms this peer is presently reachable.
                                 multi_path_delivery.record_recipient_seen_now(peer_id, peer_id);
+
+                                // Liveness proof beats stale dial-policy state: identify
+                                // runs over an established connection on a fixed interval,
+                                // so a peer that just identified is by definition reachable
+                                // RIGHT NOW. Clear any accumulated dial backoff / dead marks
+                                // for this peer -- otherwise secondary-address dial failures
+                                // (NAT'd or stale addresses) dead-mark a peer whose live
+                                // path identify keeps confirming, and the dead state
+                                // persists until the NEXT ConnectionEstablished, which on a
+                                // stable link may never come (the 5-minute dead cycle seen
+                                // in 3-node validation, 2026-09-03).
+                                dial_policy_manager.reset_peer_backoff(peer_id);
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
@@ -5190,34 +5871,7 @@ pub async fn start_swarm_with_config(
                                         observed_addr
                                     );
 
-                                    if let Some(primary) = address_observer.primary_external_address() {
-                                        // V040-T14 P0 (defense-in-depth on the
-                                        // publication path): never advertise an address
-                                        // whose port we do not listen on (the observer
-                                        // already refuses such observations). Empty
-                                        // listen set (no dialable listener bound)
-                                        // means there is nothing to advertise --
-                                        // refuse, never accept-any: any observed port
-                                        // outside our listen set is the
-                                        // ephemeral-source-port class this P0 removes.
-                                        let listen_ports =
-                                            listen_ports_from_multiaddrs(&bound_addresses);
-                                        if listen_ports.contains(&primary.port()) {
-                                            // Convert SocketAddr to Multiaddr and add to swarm
-                                            let (ip, port) = (primary.ip(), primary.port());
-                                            let maddr: Multiaddr = match ip {
-                                                std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
-                                                std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
-                                            };
-                                            swarm.add_external_address(maddr);
-                                        } else if !listen_ports.is_empty() {
-                                            tracing::warn!(
-                                                "Refusing to advertise observed address {}: port {} is not a listen port",
-                                                primary,
-                                                primary.port()
-                                            );
-                                        }
-                                    }
+                                    sync_external_address(&mut swarm, &address_observer, &bound_addresses);
                                 } else {
                                     tracing::trace!(
                                         "Identify observed_addr not socket-like: {}",
@@ -5296,10 +5950,55 @@ pub async fn start_swarm_with_config(
                                         if !routable_relay_addrs.is_empty() {
                                             // Pick the first routable relay address and register a circuit reservation.
                                             // Format: /ip4/<relay-ip>/tcp/<port>/p2p/<relay-peer-id>/p2p-circuit
-                                            let relay_circuit_addr = relay_reservation_multiaddr(
-                                                &routable_relay_addrs[0],
-                                                peer_id,
-                                            );
+                                            //
+                                            // D10 (2026-09-09): re-validate the base against the CURRENT
+                                            // swarm address set at the moment of use. The identify-time
+                                            // snapshot (bound_addresses) can be incomplete during the
+                                            // startup race, and a reservation based on one of our own
+                                            // endpoints or on a circuit route creates a poison listener
+                                            // that overflows the mDNS response and kills LAN discovery
+                                            // network-wide (evidence in the D10 checkpoint).
+                                            let mut known_local_addrs: Vec<Multiaddr> =
+                                                swarm.listeners().cloned().collect();
+                                            known_local_addrs
+                                                .extend(swarm.external_addresses().cloned());
+
+                                            let mut reservation_base: Option<Multiaddr> = None;
+                                            for candidate in &routable_relay_addrs {
+                                                if is_valid_reservation_base(
+                                                    candidate,
+                                                    &known_local_addrs,
+                                                ) {
+                                                    reservation_base = Some(candidate.clone());
+                                                    break;
+                                                }
+                                            }
+
+                                            if reservation_base.is_none() {
+                                                tracing::warn!(
+                                                    "[D10] Relay {} reservation skipped: no valid direct non-self base among {} candidate(s)",
+                                                    peer_id,
+                                                    routable_relay_addrs.len()
+                                                );
+                                                // Mark as reserved-without-listener is NOT allowed; fall
+                                                // through to the else branch by leaving already_reserved
+                                                // unset, so a later identify (with complete binds) retries.
+                                            }
+
+                                            let relay_circuit_addr = reservation_base
+                                                .map(|base| {
+                                                    relay_reservation_multiaddr(&base, peer_id)
+                                                });
+
+                                            let Some(relay_circuit_addr) = relay_circuit_addr
+                                            else {
+                                                // D10: every candidate base was invalid (circuit
+                                                // route, self-endpoint, or undiscoverable). Skip
+                                                // the reservation entirely — a later identify with
+                                                // complete binds retries, and no poison listener is
+                                                // ever created.
+                                                continue;
+                                            };
 
                                             tracing::info!(
                                                 "Attempting relay circuit reservation via {}: {}",
@@ -5310,6 +6009,10 @@ pub async fn start_swarm_with_config(
                                                     tracing::info!(
                                                         "[OK] Relay circuit reservation registered: {:?} via {}",
                                                         listener_id, peer_id
+                                                    );
+                                                    debug_assert!(
+                                                        is_canonical_reservation_addr(&relay_circuit_addr),
+                                                        "reservation address must carry exactly one trailing /p2p-circuit"
                                                     );
                                                     successful_relay_reservations.insert(peer_id, listener_id);
                                                     relay_peer_addrs.insert(peer_id, routable_relay_addrs.clone());
@@ -5342,15 +6045,44 @@ pub async fn start_swarm_with_config(
                                     None => true,
                                 };
 
+                                // D2 (live 2026-09-09): the application layer (Kotlin delegate
+                                // candidate sets, UI) must never receive loopback or link-local
+                                // listeners a peer advertised from its own multiport binds —
+                                // dialing them resolves into the DIALER's host. The kademlia and
+                                // Rust ledger-ingest paths already filter; this closes the last
+                                // unfiltered consumer.
+                                let discoverable_listen_addrs: Vec<Multiaddr> = info
+                                    .listen_addrs
+                                    .iter()
+                                    .filter(|a| is_discoverable_multiaddr(a))
+                                    .cloned()
+                                    .collect();
+
                                 if should_report {
-                                    reported_peer_info.insert(peer_id, (info.agent_version.clone(), info.listen_addrs.clone()));
+                                    reported_peer_info.insert(peer_id, (info.agent_version.clone(), discoverable_listen_addrs.clone()));
                                     // Emit event for application layer
                                     let public_key_hex = info.public_key.clone().try_into_ed25519().map(|pk| hex::encode(pk.to_bytes())).ok();
                                     // Site-3: flush outbox now that peer identity is confirmed.
                                     if let Some(pk_hex) = &public_key_hex {
                                         if let Some(c) = &core_handle {
                                             if let Some(c_arc) = c.upgrade() {
-                                                c_arc.handle_peer_connection_event(pk_hex, true);
+                                                // R1-A1/A3: only register while a connection to
+                                                // this peer is actually live (a late identify
+                                                // event for an already-closed peer must not
+                                                // leave a stale "connected" registration), and
+                                                // register BEFORE the flush so the flush's
+                                                // send_to_peer lookup can resolve a transport.
+                                                if connection_tracker.get_connection(&peer_id).is_some() {
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        pk_hex,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -5358,24 +6090,45 @@ pub async fn start_swarm_with_config(
                                         peer_id,
                                         public_key: public_key_hex,
                                         agent_version: info.agent_version.clone(),
-                                        listen_addrs: info.listen_addrs.clone(),
+                                        listen_addrs: discoverable_listen_addrs,
                                         protocols: info.protocols.iter().map(|p| p.to_string()).collect(),
                                     }).await;
                                 }
                             }
 
-                            SwarmEvent::NewListenAddr { address, .. } => {
+                            SwarmEvent::NewListenAddr { listener_id, address, .. } => {
+                                // D10b: poison-listener guard. Circuit listeners are
+                                // legitimate ONLY as tracked single-circuit relay
+                                // reservations. Anything else (nested double-circuit
+                                // routes, untracked circuit listeners) is removed here
+                                // BEFORE libp2p-mdns can advertise it — the overflow of
+                                // the mDNS response by such listeners killed LAN
+                                // discovery network-wide (D10 checkpoint evidence), and
+                                // the D10 base gate alone proved insufficient (round 2:
+                                // a relay returned a deeper route for a validated base).
+                                let is_reserved = successful_relay_reservations
+                                    .values()
+                                    .any(|lid| *lid == listener_id);
+                                if is_poison_circuit_listener(&address, is_reserved) {
+                                    tracing::warn!(
+                                        "[D10b] Poison-listener guard: removing circuit listener (tracked_reservation={}, circuits>1 or untracked): {}",
+                                        is_reserved, address
+                                    );
+                                    let _ = swarm.remove_listener(listener_id);
+                                } else if is_discoverable_multiaddr(&address) {
                                 tracing::info!("Listening on {}", address);
+                                // D2 (live 2026-09-09): only routable listeners enter the
+                                // bound/advertised set. Loopback/link-local are already
+                                // excluded by is_discoverable_multiaddr; keep the startup
+                                // event (mobile await_listener gates on the first NewListenAddr).
                                 bound_addresses.push(address.clone());
                                 // V040-T14 P0: the external-address consensus may only
                                 // accept observations whose port we actually listen on.
-                                // An observed address with any other port is the
-                                // NAT-mapped source port of an outbound flow (ephemeral,
-                                // never dialable) and must not be advertised.
                                 address_observer.set_listen_ports(listen_ports_from_multiaddrs(
                                     &bound_addresses,
                                 ));
                                 let _ = event_tx.send(SwarmEvent2::ListeningOn(address)).await;
+                                }
                             }
 
                             SwarmEvent::ConnectionEstablished { peer_id, endpoint, connection_id, .. } => {
@@ -5397,6 +6150,22 @@ pub async fn start_swarm_with_config(
                                 // Complete the dial attempt since it succeeded
                                 dial_policy_manager.complete_dial_attempt(&addr_key);
 
+                                // D1 (live 2026-09-09): a FRESH connection episode re-arms
+                                // custody dispatch attempts for this destination. Attempts
+                                // burn at the periodic-pull cadence (~15s) and hit the
+                                // 12-attempt guard in ~5 minutes while the destination is
+                                // merely restarting; without a re-arm the entry is wedged
+                                // forever ("Max delivery attempts (12) exceeded" refused on
+                                // every later pull while the destination sat connected).
+                                // Gated on the 0->1 transition (same per-path storm guard as
+                                // the outbox flush above): one re-arm per connection episode,
+                                // not per path. The per-episode cap still prevents infinite
+                                // retry churn against a connected-but-not-accepting peer.
+                                if !had_active_connection {
+                                    relay_custody_store
+                                        .reset_delivery_attempts_for_destination(&peer_id.to_string());
+                                }
+
                                 // Prune resolved_to_dns mappings for this peer / hostname
                                 let stripped_remote: Multiaddr = remote_addr.iter().filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_))).collect();
                                 let mut dns_to_prune = None;
@@ -5409,6 +6178,15 @@ pub async fn start_swarm_with_config(
                                     resolved_to_dns.retain(|_, v| v != &dns);
                                 }
 
+                                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
+                                let transport = endpoint_transport_string(&remote_addr);
+                                tracing::info!(
+                                    "[TRANSPORT-LANE] peer={} direction={} transport={} addr={} (promiscuous mode — any PeerID accepted)",
+                                    peer_id,
+                                    direction,
+                                    transport,
+                                    remote_addr
+                                );
                                 tracing::info!(
                                     "Connected to {} via {} (promiscuous mode — any PeerID accepted)",
                                     peer_id,
@@ -5506,7 +6284,43 @@ pub async fn start_swarm_with_config(
                                         }
 
                                         if !had_active_connection {
-                                            c_arc.handle_peer_connection_event(&peer_id.to_string(), true);
+                                            // RCA drop-hop fix: register the peer under its
+                                            // canonical key (the Ed25519 key embedded in the
+                                            // peer id) before flushing. The bare libp2p peer id
+                                            // string is base58 -- hex::decode() of it fails
+                                            // inside the flush (outbox_peer_id_decode_failed)
+                                            // and without a registration the flush's
+                                            // send_to_peer returns PeerNotFound forever.
+                                            let canonical_pk = crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                                &peer_id.to_string(),
+                                            );
+                                            match canonical_pk {
+                                                Some(pk_hex) => {
+                                                    register_and_flush_swarm_peer(
+                                                        &c_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        &pk_hex,
+                                                    );
+                                                }
+                                                None => {
+                                                    // R1-A5: a peer id that does not embed an
+                                                    // Ed25519 key cannot be registered/flushed by
+                                                    // canonical key at this site. The old base58
+                                                    // string call was a guaranteed silent no-op
+                                                    // (hex::decode fails inside the flush) -- log
+                                                    // loudly instead of pretending a flush ran.
+                                                    // The identify site registers such peers from
+                                                    // identify's own public key when connected.
+                                                    tracing::warn!(
+                                                        "Cannot derive canonical Ed25519 key from peer id {} -- deferring registration/flush to identify",
+                                                        peer_id
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -5757,7 +6571,14 @@ pub async fn start_swarm_with_config(
                                 );
                             }
                             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                                tracing::info!("[ERROR] Disconnected from {}", peer_id);
+                                tracing::info!(
+                                    "[ERROR] Disconnected from {}",
+                                    peer_id
+                                );
+                                tracing::info!(
+                                    "[TRANSPORT-LANE] peer={} event=disconnected",
+                                    peer_id
+                                );
                                 // Allow a later mDNS advertisement to restore
                                 // a peer after its last direct path closes.
                                 mdns_dial_attempted.remove(&peer_id);
@@ -5767,6 +6588,21 @@ pub async fn start_swarm_with_config(
                                 pending_ledger_exchanges.remove(&peer_id);
                                 reported_peer_discoveries.remove(&peer_id);
                                 reported_peer_info.remove(&peer_id);
+
+                                // RCA drop-hop fix (R1-A3): mirror the last-connection
+                                // teardown into the transport manager, de-registering by the
+                                // key this loop REGISTERED (map-tracked) rather than
+                                // re-deriving from the peer id -- derivation fails for hashed
+                                // peer ids that the identify site registered, which would
+                                // otherwise leak a stale "connected" registration.
+                                flushed_this_connection.remove(&peer_id);
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
 
                                 // P0.13: Clear relay tracking so we can re-reserve on reconnect
                                 if let Some(listener_id) = successful_relay_reservations.remove(&peer_id) {
@@ -5884,10 +6720,36 @@ pub async fn start_swarm_with_config(
                                     for (failed_addr, _) in errors {
                                         let stripped_failed: Multiaddr = failed_addr.iter().filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_))).collect();
 
-                                        // P1 Item 3: Apply backoff on transient dial failure
+                                        // P1 Item 3: Apply backoff on transient dial failure.
+                                        // Liveness guard: if this peer has ANY live
+                                        // connection right now (identify is flowing over it on
+                                        // a fixed interval), a dial failure against one
+                                        // secondary address (NAT-reflected, stale, or
+                                        // non-routable) is NOT evidence the peer is dead --
+                                        // it is evidence only that THAT address is unusable.
+                                        // Escalating to a 3-strike dead mark here previously
+                                        // dead-marked a peer whose live path identify kept
+                                        // confirming, and nothing cleared the mark until the
+                                        // next ConnectionEstablished (never, on a stable
+                                        // link) -- the 5-minute dead cycle. Dead-mark only
+                                        // when the peer has no live path at all; otherwise
+                                        // treat the failure as address-scoped only.
+                                        let peer_has_live_path = peer_id
+                                            .as_ref()
+                                            .map(|pid| swarm.is_connected(pid))
+                                            .unwrap_or(false);
                                         let addr_key = multiaddr_to_key(&stripped_failed);
-                                        dial_policy_manager.record_dial_failure(&addr_key, peer_id);
-                                        dial_policy_manager.complete_dial_attempt(&addr_key);
+                                        if peer_has_live_path {
+                                            dial_policy_manager.complete_dial_attempt(&addr_key);
+                                            tracing::debug!(
+                                                peer_id=?peer_id,
+                                                addr=%stripped_failed,
+                                                "[DIAL-POLICY] Dial failure on secondary addr while peer has a live connection -- address-scoped, no dead mark"
+                                            );
+                                        } else {
+                                            dial_policy_manager.record_dial_failure(&addr_key, peer_id);
+                                            dial_policy_manager.complete_dial_attempt(&addr_key);
+                                        }
                                         if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
                                             core.ledger_manager.record_failure(stripped_failed.to_string());
                                         }
@@ -6021,6 +6883,22 @@ pub async fn start_swarm_with_config(
                                 }).await;
                             }
 
+                            SwarmEvent::ExpiredListenAddr { address, .. } => {
+                                // libp2p-tcp emits this when a network interface
+                                // goes down: the listener itself stays alive but the
+                                // address is no longer reachable. Retract the port
+                                // from the observer allowlist and the advertised set,
+                                // mirroring ListenerClosed without the failure event.
+                                tracing::info!("Listen address expired: {}", address);
+                                bound_addresses.retain(|bound| bound != &address);
+                                address_observer.set_listen_ports(
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
+                                );
+                                sync_external_address(&mut swarm, &address_observer, &bound_addresses);
+                            }
+
                             SwarmEvent::ListenerClosed { listener_id, addresses, reason } => {
                                 tracing::warn!(
                                     "Listener {:?} closed for addresses {:?}: {:?}",
@@ -6028,6 +6906,13 @@ pub async fn start_swarm_with_config(
                                     addresses,
                                     reason
                                 );
+                                bound_addresses.retain(|bound| !addresses.contains(bound));
+                                address_observer.set_listen_ports(
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
+                                );
+                                sync_external_address(&mut swarm, &address_observer, &bound_addresses);
                                 if reason.is_err() {
                                     let _ = event_tx.send(SwarmEvent2::ListenerFailed {
                                         listener_id: format!("{:?}", listener_id),
@@ -6256,6 +7141,18 @@ pub async fn start_swarm_with_config(
                                                 let addresses = address_observer.external_addresses().to_vec();
                                                 let _ = reply.send(addresses).await;
                                             }
+                                            SwarmCommand::SetConfiguredExternalAddress { addr } => {
+                                                address_observer.set_configured_external(addr);
+                                                if let Some(configured) = addr {
+                                                    let (ip, port) = (configured.ip(), configured.port());
+                                                    let maddr: Multiaddr = match ip {
+                                                        std::net::IpAddr::V4(ip4) => format!("/ip4/{}/tcp/{}", ip4, port).parse().expect("formatted multiaddr is always valid"),
+                                                        std::net::IpAddr::V6(ip6) => format!("/ip6/{}/tcp/{}", ip6, port).parse().expect("formatted multiaddr is always valid"),
+                                                    };
+                                                    swarm.add_external_address(maddr);
+                                                    tracing::info!("Configured external address registered: {}", configured);
+                                                }
+                                            }
 
                                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
                                                 if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
@@ -6316,6 +7213,29 @@ pub async fn start_swarm_with_config(
                                         continue;
                                     }
                                 };
+                                if let Some(reason) =
+                                    dial_skip_reason(&swarm, &addr, target_peer_id, trusted)
+                                {
+                                    tracing::info!(
+                                        "[DIAL-SKIP] {}: {} (target {:?})",
+                                        addr,
+                                        reason,
+                                        target_peer_id
+                                    );
+                                    // A skipped dial is NEITHER success nor failure:
+                                    // replying Ok would make the CLI ledger record a
+                                    // phantom connection (inflating the peer slot and
+                                    // reaping the peer's other addresses as stale),
+                                    // while a plain Err would burn backoff on a dial
+                                    // we deliberately did not dispatch. The caller
+                                    // recognizes the "skipped:" prefix and releases
+                                    // its in-flight claims neutrally (see
+                                    // `complete_dial_skipped` in the CLI ledger).
+                                    let _ = reply
+                                        .send(Err(format!("skipped: {}", reason)))
+                                        .await;
+                                    continue;
+                                }
                                 let mut base_prefix = Multiaddr::empty();
                                 let mut found_ip = false;
 
@@ -6802,9 +7722,48 @@ pub async fn start_swarm_with_config(
                                 // the first one to arrive would resolve the reply — so a fast
                                 // failure on candidate 2 could mask a slower success on
                                 // candidate 1. Callers retry.
+                                //
+                                // Connected-peer gate (review F4): seed candidates are
+                                // address-only (peer id stripped), so libp2p's
+                                // PeerCondition cannot suppress a redundant dial to a peer
+                                // we are already connected to. Respond over the existing
+                                // link instead: skip candidates that match a connected
+                                // peer's known addresses (from the identify-fed
+                                // `reported_peer_info`, in scope here).
+                                let connected_addrs: HashSet<Multiaddr> = swarm
+                                    .connected_peers()
+                                    .filter_map(|pid| reported_peer_info.get(pid))
+                                    .flat_map(|(_, addrs)| addrs.iter().cloned())
+                                    .collect();
+                                // One snapshot of our own sockets per command;
+                                // the per-candidate check below reuses it.
+                                let own_sockets = OwnSockets::for_swarm(&swarm);
                                 let mut queued: Option<Multiaddr> = None;
                                 let mut last_error = String::new();
                                 for candidate in &candidates {
+                                    if connected_addrs.contains(candidate) {
+                                        tracing::debug!(
+                                            "[DIAL-SKIP] seed candidate {}: peer already connected -- respond over existing link",
+                                            candidate
+                                        );
+                                        continue;
+                                    }
+                                    // Same self-address guard as the Dial arm:
+                                    // candidate-level filtering rejects OUR
+                                    // listeners/external addrs, but poisoned
+                                    // entries naming an interface IP on one of
+                                    // our listen ports (unspecified-bind case)
+                                    // need the full socket check (review C2).
+                                    // The OwnSockets snapshot is built ONCE per
+                                    // command (not per candidate) -- see the
+                                    // connected_addrs block above.
+                                    if own_sockets.targets_self(candidate) {
+                                        tracing::debug!(
+                                            "[DIAL-SKIP] seed candidate {}: address is our own socket -- self-dial",
+                                            candidate
+                                        );
+                                        continue;
+                                    }
                                     let candidate_key = multiaddr_to_key(candidate);
                                     if !dial_policy_manager.register_dial_attempt(&candidate_key, None) {
                                         tracing::debug!(
@@ -6980,7 +7939,7 @@ pub async fn start_swarm_with_config(
                 if is_self {
                     if !self_dial_logged.contains(addr) {
                         tracing::info!(
-                            "  ⊘ Skipping self-dial bootstrap addr (matches local peer): {}",
+                            "  Skipping self-dial bootstrap addr (matches local peer): {}",
                             addr
                         );
                         self_dial_logged.insert(addr.clone());
@@ -7011,6 +7970,12 @@ pub async fn start_swarm_with_config(
         let mut pending_direct_replies: HashMap<
             libp2p::request_response::OutboundRequestId,
             mpsc::Sender<Result<(), String>>,
+        > = HashMap::new();
+        // Reconnect-flush requests have no caller reply channel; retain their
+        // message IDs so transport failures can make the outbox eligible again.
+        let mut reconnect_request_to_message: HashMap<
+            libp2p::request_response::OutboundRequestId,
+            String,
         > = HashMap::new();
 
         let mut bound_addresses = Vec::new();
@@ -7049,6 +8014,12 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // R8-F4: same lifecycle contracts as the native loop -- canonical pk
+        // (hex) this loop registered per wire peer, and the once-per-connection
+        // flush gate. Both are owned by this single-threaded select task.
+        let mut registered_swarm_peers: HashMap<PeerId, String> = HashMap::new();
+        let mut flushed_this_connection: std::collections::HashSet<PeerId> =
+            std::collections::HashSet::new();
         // wasm/browser transport has no TCP/UDP listeners, so the observer
         // keeps its accept-all default here: there is no listen-port set to
         // filter against (V040-T14 P0 does not apply to a node that cannot
@@ -7153,6 +8124,9 @@ pub async fn start_swarm_with_config(
                                 let addresses = address_observer.external_addresses().to_vec();
                                 let _ = reply.send(addresses).await;
                             }
+                            SwarmCommand::SetConfiguredExternalAddress { addr } => {
+                                address_observer.set_configured_external(addr);
+                            }
                             SwarmCommand::DiscoveryDial { peer_id, addr } => {
                                 if !crate::transport::addr_filter::is_dialable_multiaddr_parsed(
                                     &addr,
@@ -7199,8 +8173,20 @@ pub async fn start_swarm_with_config(
                                     let _ = reply.send(Err("Address rejected by dial filter".to_string())).await;
                                     continue;
                                 }
-                                let dial_result = match resolve_dial_target(&addr, requested_peer_id) {
-                                    Ok(Some(target_peer_id)) => {
+                                let resolved_target = match resolve_dial_target(&addr, requested_peer_id) {
+                                    Ok(t) => t,
+                                    Err(error) => {
+                                        let _ = reply.send(Err(error)).await;
+                                        continue;
+                                    }
+                                };
+                                if let Some(reason) = dial_skip_reason(&swarm, &addr, resolved_target, trusted) {
+                                    tracing::info!("[DIAL-SKIP] (wasm) {}: {}", addr, reason);
+                                    let _ = reply.send(Err(format!("skipped: {}", reason))).await;
+                                    continue;
+                                }
+                                let dial_result = match resolved_target {
+                                    Some(target_peer_id) => {
                                         let dial_opts = libp2p::swarm::dial_opts::DialOpts::peer_id(target_peer_id)
                                             .addresses(vec![addr])
                                             .condition(
@@ -7209,11 +8195,7 @@ pub async fn start_swarm_with_config(
                                             .build();
                                         swarm.dial(dial_opts)
                                     }
-                                    Ok(None) => swarm.dial(addr),
-                                    Err(error) => {
-                                        let _ = reply.send(Err(error)).await;
-                                        continue;
-                                    }
+                                    None => swarm.dial(addr),
                                 };
                                 match dial_result {
                                     Ok(_) => { let _ = reply.send(Ok(())).await; }
@@ -7458,6 +8440,22 @@ pub async fn start_swarm_with_config(
                                                         &reason,
                                                     );
                                                 }
+                                            } else if let Some(message_id) =
+                                                reconnect_request_to_message.remove(&request_id)
+                                            {
+                                                if !response.accepted {
+                                                    if let Some(core) =
+                                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                                    {
+                                                        core.retry_outbox_message_now(&message_id);
+                                                    }
+                                                }
+                                                tracing::debug!(
+                                                    event = "outbox_reconnect_response",
+                                                    message_id = %message_id,
+                                                    accepted = response.accepted,
+                                                    "WASM reconnect-flush request completed"
+                                                );
                                             } else if let Some(reply_tx) =
                                                 pending_direct_replies.remove(&request_id)
                                             {
@@ -7479,6 +8477,20 @@ pub async fn start_swarm_with_config(
                                                 &dispatch.destination_peer.to_string(),
                                                 &dispatch.custody_id,
                                                 &reason,
+                                            );
+                                        } else if let Some(message_id) =
+                                            reconnect_request_to_message.remove(&request_id)
+                                        {
+                                            if let Some(core) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {
+                                                core.retry_outbox_message_now(&message_id);
+                                            }
+                                            tracing::debug!(
+                                                event = "outbox_reconnect_failure",
+                                                message_id = %message_id,
+                                                error = %error,
+                                                "WASM reconnect-flush request failed; entry is eligible on next reconnect"
                                             );
                                         } else if let Some(reply_tx) =
                                             pending_direct_replies.remove(&request_id)
@@ -7736,11 +8748,16 @@ pub async fn start_swarm_with_config(
                                                                         message_id: relay_message_id,
                                                                     }
                                                                 } else {
+                                                                    // R2: unwrap DriftFrame before custody (see native arm).
+                                                                    let custody_payload = match DriftFrame::from_bytes(&request.envelope_data) {
+                                                                        Ok(frame) => frame.payload,
+                                                                        Err(_) => request.envelope_data.clone(),
+                                                                    };
                                                                     match relay_custody_store.accept_custody(
                                                                         peer.to_string(),
                                                                         destination.to_string(),
                                                                         relay_message_id.clone(),
-                                                                        request.envelope_data.clone(),
+                                                                        custody_payload,
                                                                         resolved_identity_id,
                                                                         resolved_device_id,
                                                                     ) {
@@ -7990,6 +9007,36 @@ pub async fn start_swarm_with_config(
                                 }
 
                                 let public_key_hex = info.public_key.clone().try_into_ed25519().map(|pk| hex::encode(pk.to_bytes())).ok();
+
+                                // R11-F1: hashed PeerIds do not carry an Ed25519 key,
+                                // so the WASM connect arm cannot register them. Identify
+                                // carries the verified public key even for those PeerIds;
+                                // use it as the canonical transport-manager key while the
+                                // connection tracker still proves that this peer is live.
+                                // For self-certifying peers, ConnectionEstablished already
+                                // registered and flushed the peer. Only use this Identify
+                                // fallback when that event could not derive a canonical key
+                                // (hashed PeerId); otherwise this branch needlessly repeats
+                                // the registration bookkeeping.
+                                if !registered_swarm_peers.contains_key(&peer_id) {
+                                    if let Some(pk_hex) = &public_key_hex {
+                                        if connection_tracker.get_connection(&peer_id).is_some() {
+                                            if let Some(core_arc) =
+                                                core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                            {                                                    register_and_flush_swarm_peer(
+                                                        &core_arc,
+                                                        &mut swarm,
+                                                        &mut registered_swarm_peers,
+                                                        &mut flushed_this_connection,
+                                                        &mut reconnect_request_to_message,
+                                                        peer_id,
+                                                        pk_hex,
+                                                    );
+                                            }
+                                        }
+                                    }
+                                }
+
                                 let _ = event_tx.send(SwarmEvent2::PeerIdentified {
                                     peer_id,
                                     public_key: public_key_hex,
@@ -8009,17 +9056,57 @@ pub async fn start_swarm_with_config(
                                 // the Identify feed inserts nothing -- there is no
                                 // dialed-set to maintain.
                                 // Clone the remote address before `endpoint` is consumed
-                                // (T4's routing feed uses it to classify the transport).
+                                // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // R8-F4: the zero-to-one connection transition drives the
+                                // reconnect flush on native; capture the same signal here
+                                // BEFORE this path joins the tracker.
+                                let had_active_connection =
+                                    connection_tracker.get_connection(&peer_id).is_some();
                                 connection_tracker.add_connection(
                                     peer_id,
                                     remote_addr.clone(),
-                                    match endpoint {
+                                    match &endpoint {
                                         libp2p::core::ConnectedPoint::Listener { local_addr, .. } => local_addr.clone(),
                                         libp2p::core::ConnectedPoint::Dialer { .. } => "/ip4/0.0.0.0/tcp/0".parse().expect("static multiaddr parse cannot fail"),
                                     },
                                     connection_id.to_string(),
                                 );
+                                // R8-F4: mirror the native register-and-flush lifecycle.
+                                // Without this the transport manager never learns swarm
+                                // peers on wasm, prepare_message's is_peer_connected gate
+                                // always routes Full-mode sends to the outbox, and nothing
+                                // ever flushes them (the drop-hop class, wasm variant).
+                                if !had_active_connection {
+                                    if let Some(core_arc) =
+                                        core_handle.as_ref().and_then(|weak| weak.upgrade())
+                                    {
+                                        match crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(
+                                            &peer_id.to_string(),
+                                        ) {
+                                            Some(pk_hex) => {
+                                                register_and_flush_swarm_peer(
+                                                    &core_arc,
+                                                    &mut swarm,
+                                                    &mut registered_swarm_peers,
+                                                    &mut flushed_this_connection,
+                                                    &mut reconnect_request_to_message,
+                                                    peer_id,
+                                                    &pk_hex,
+                                                );
+                                            }
+                                            None => {
+                                                // R1-A5 policy: hashed peer ids carry no
+                                                // recoverable Ed25519 key; skip registration
+                                                // rather than fabricate a key (WASM).
+                                                tracing::debug!(
+                                                    "Peer {} has no embedded Ed25519 key; skipping swarm registration (WASM)",
+                                                    peer_id
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 dispatch_pending_custody_for_peer(
                                     &mut swarm,
                                     &relay_custody_store,
@@ -8147,6 +9234,17 @@ pub async fn start_swarm_with_config(
                                 connection_tracker.remove_connection(&peer_id);
                                 ledger_exchanged_peers.remove(&peer_id);
                                 pending_ledger_exchanges.remove(&peer_id);
+                                // R8-F4: mirror the native teardown -- de-register by the
+                                // key the connect arm registered (map-tracked), re-arm the
+                                // flush gate, and clear the manager's connected state.
+                                flushed_this_connection.remove(&peer_id);
+                                if let Some(pk_hex) = registered_swarm_peers.remove(&peer_id) {
+                                    if let Some(c) = &core_handle {
+                                        if let Some(c_arc) = c.upgrade() {
+                                            c_arc.set_swarm_peer_connection(&pk_hex, false);
+                                        }
+                                    }
+                                }
                                 let stale_dispatches: Vec<libp2p::request_response::OutboundRequestId> =
                                     pending_custody_dispatches
                                         .iter()
@@ -8286,6 +9384,12 @@ pub async fn start_swarm_with_config(
                                     addresses,
                                     reason
                                 );
+                                bound_addresses.retain(|bound| !addresses.contains(bound));
+                                address_observer.set_listen_ports(
+                                    bound_addresses
+                                        .iter()
+                                        .filter_map(listen_port_from_bound_addr),
+                                );
                                 if reason.is_err() {
                                     let _ = event_tx.send(SwarmEvent2::ListenerFailed {
                                         listener_id: format!("{:?}", listener_id),
@@ -8332,7 +9436,7 @@ pub async fn start_swarm_with_config(
                         if is_self {
                             if !self_dial_logged.contains(addr) {
                                 tracing::info!(
-                                    "  ⊘ Skipping self-dial bootstrap addr (matches local peer): {}",
+                                    "  Skipping self-dial bootstrap addr (matches local peer): {}",
                                     addr
                                 );
                                 self_dial_logged.insert(addr.clone());
@@ -8396,15 +9500,15 @@ use libp2p::{gossipsub, request_response};
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mdns_dial_addr, build_routable_relay_addrs, endpoint_transport_string,
-        extract_ed25519_public_key_from_peer_id, is_ledger_exchange_path_failure, peer_is_blocked,
-        rearm_ledger_exchange_after_failure, resolve_dial_target, select_drift_fallback_carrier,
+        addr_targets_self, build_mdns_dial_addr, build_routable_relay_addrs,
+        endpoint_transport_string, extract_ed25519_public_key_from_peer_id,
+        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
+        resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
-        try_envelope_hint_dial, validate_delivery_convergence_marker_shape,
-        verify_registration_message, wrap_in_drift_frame, DeliveryConvergenceMarker,
-        PendingCustodyDispatch, PendingMessage, RelayAbuseGuardrails, RelayRequest,
-        RELAY_DUPLICATE_WINDOW_MS, RELAY_PEER_BUCKET_BURST_CAPACITY,
-        RELAY_PEER_BUCKET_REFILL_PER_SEC,
+        validate_delivery_convergence_marker_shape, verify_registration_message,
+        wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
+        RelayAbuseGuardrails, RelayRequest, RELAY_DUPLICATE_WINDOW_MS,
+        RELAY_PEER_BUCKET_BURST_CAPACITY, RELAY_PEER_BUCKET_REFILL_PER_SEC,
     };
     use crate::identity::IdentityKeys;
     use crate::store::relay_custody::RelayCustodyStore;
@@ -8412,6 +9516,138 @@ mod tests {
     use libp2p::{Multiaddr, PeerId};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+    #[test]
+    fn addr_targets_self_detects_own_listeners_and_loopback_only() {
+        // The self-dial storm (3-node validation 2026-09-03): poisoned ledger
+        // entries attribute OUR OWN listeners to other peers, so the periodic
+        // re-dial loop dialed ourselves every ~300s (yamux 10053 closes +
+        // "Unexpected peer ID" negotiation failures). The predicate must catch
+        // loopback + our socket, our interface IPs, and concrete own IPs,
+        // while NOT blocking a remote host that happens to use one of our
+        // ports or another local service on a socket we do not own.
+        let own: Vec<Multiaddr> = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse().unwrap(), // unspecified bind
+            "/ip4/172.31.31.151/tcp/9002/ws".parse().unwrap(), // concrete listener
+            "/ip4/54.235.20.24/tcp/9001".parse().unwrap(), // confirmed external
+        ];
+        // Note: the unspecified 0.0.0.0 bind contributes NO concrete
+        // (ip, port) pair to `own`; the local-interface set covers it.
+        let local_ips: Vec<std::net::IpAddr> = vec![
+            "127.0.0.1".parse().unwrap(),
+            "192.168.0.121".parse().unwrap(),
+        ];
+        // TCP listeners on 9001 and 9002; UDP (QUIC) listener on 9001 only.
+        let tcp_ports: Vec<u16> = vec![9001, 9002];
+        let udp_ports: Vec<u16> = vec![9001];
+
+        // Loopback + our port: us (the observed Windows storm).
+        assert!(addr_targets_self(
+            &"/ip4/127.0.0.1/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // IPv6 loopback + our port: us (the observed AWS storm).
+        assert!(addr_targets_self(
+            &"/ip6/::1/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // IPv4-MAPPED IPv6 loopback is the same socket as 127.0.0.1 (R3-1).
+        assert!(addr_targets_self(
+            &"/ip6/::ffff:127.0.0.1/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Our interface IP + our port (unspecified bind): us (F2 class).
+        assert!(addr_targets_self(
+            &"/ip4/192.168.0.121/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Concrete own IP + our port: us.
+        assert!(addr_targets_self(
+            &"/ip4/172.31.31.151/tcp/9002".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        assert!(addr_targets_self(
+            &"/ip4/54.235.20.24/tcp/9001/p2p/12D3KooW9uRMQTswPUjUn2YfTLx5sjH26v2AtjRfgiE73WLprBfD"
+                .parse()
+                .unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // A QUIC self-address (UDP port we listen on) is also self.
+        assert!(addr_targets_self(
+            &"/ip4/127.0.0.1/udp/9001/quic-v1".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Protocol separation (R3-2): UDP on 9002 is NOT self -- we only
+        // listen TCP on 9002; a same-port-different-proto candidate targets
+        // a different socket (possibly another local service).
+        assert!(!addr_targets_self(
+            &"/ip4/192.168.0.121/udp/9002/quic-v1".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Loopback with a port we do NOT listen on: NOT us (legitimate local
+        // service dial, e.g. the Wi-Fi Aware proxy path is trusted and exempt,
+        // but other local listeners must stay reachable).
+        assert!(!addr_targets_self(
+            &"/ip4/127.0.0.1/tcp/12345".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Remote host using one of our ports: NOT us (the unspecified
+        // 0.0.0.0 listener does not name the remote IP, and 203.0.113.7 is
+        // not a local interface).
+        assert!(!addr_targets_self(
+            &"/ip4/203.0.113.7/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // A DNS address cannot be resolved statically: never self.
+        assert!(!addr_targets_self(
+            &"/dns4/example.com/tcp/9001".parse().unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+        // Circuit address whose relay HOP is our own listener: us (a node
+        // never needs to relay through itself). The relay hop's socket is
+        // the one the dial would open.
+        assert!(addr_targets_self(
+            &"/ip4/172.31.31.151/tcp/9002/p2p/12D3KooW9uRMQTswPUjUn2YfTLx5sjH26v2AtjRfgiE73WLprBfD/p2p-circuit/p2p/12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw"
+                .parse()
+                .unwrap(),
+            &own,
+            &local_ips,
+            &tcp_ports,
+            &udp_ports
+        ));
+    }
 
     #[test]
     fn endpoint_transport_string_classifies_endpoint_multiaddrs() {
@@ -8425,14 +9661,20 @@ mod tests {
         let circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
             .parse()
             .unwrap();
+        let ws_circuit: Multiaddr = "/ip4/1.2.3.4/tcp/4001/ws/p2p/12D3KooW9GBK2bAmn23LkvXQZQVGVhU8hn2V4qQALewAZCE1HGMd/p2p-circuit"
+            .parse()
+            .unwrap();
 
         assert_eq!(endpoint_transport_string(&tcp), "tcp");
         assert_eq!(endpoint_transport_string(&quic), "quic");
         assert_eq!(endpoint_transport_string(&ws), "ws");
         assert_eq!(endpoint_transport_string(&wss), "ws");
         assert_eq!(endpoint_transport_string(&circuit), "relay");
-        // The distinction is what matters most: a circuit must never collapse
-        // into the plain-TCP classification.
+        assert_eq!(
+            endpoint_transport_string(&ws_circuit),
+            "relay",
+            "a circuit riding a websocket must still be a relay, not ws"
+        );
         assert_ne!(
             endpoint_transport_string(&tcp),
             endpoint_transport_string(&circuit)
@@ -8852,6 +10094,39 @@ mod tests {
     }
 
     #[test]
+    fn poison_listener_guard_rejects_nested_double_circuit() {
+        // Live poison shape (round 2, 2026-09-10T05:05Z Windows node):
+        // relay-assist reported a listener whose base was itself a circuit
+        // route — two circuit segments, mDNS overflow, LAN discovery death.
+        let addr: Multiaddr = "/ip4/172.31.18.74/tcp/9090/p2p/12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31/p2p-circuit/p2p/12D3KooWR9ioPPRJ2tGPbWj9NVKXAve2iwZX4csLbDd1Tn6Hpi3B/p2p-circuit/p2p/12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw"
+            .parse()
+            .unwrap();
+        assert!(super::is_poison_circuit_listener(&addr, false));
+        assert!(super::is_poison_circuit_listener(&addr, true)); // even tracked, >1 circuit = poison
+    }
+
+    #[test]
+    fn poison_listener_guard_rejects_untracked_single_circuit() {
+        let relay = PeerId::random();
+        let addr: Multiaddr = format!("/ip4/18.234.62.247/tcp/9001/p2p/{}/p2p-circuit", relay)
+            .parse()
+            .unwrap();
+        // Untracked circuit listener (not created by the guarded reservation
+        // path): poison even with a single circuit segment.
+        assert!(super::is_poison_circuit_listener(&addr, false));
+        // Tracked single-circuit reservation: legitimate.
+        assert!(!super::is_poison_circuit_listener(&addr, true));
+    }
+
+    #[test]
+    fn poison_listener_guard_passes_direct_listeners() {
+        let addr: Multiaddr = "/ip4/192.168.0.222/tcp/9001".parse().unwrap();
+        assert!(!super::is_poison_circuit_listener(&addr, false));
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/9001".parse().unwrap();
+        assert!(!super::is_poison_circuit_listener(&loopback, false));
+    }
+
+    #[test]
     fn identify_log_dedup_suppresses_within_ttl() {
         // Clear the map first
         super::last_identified_log().write().clear();
@@ -9151,12 +10426,12 @@ mod ledger_seeding_hardening_tests {
             success_count,
             failure_count: 0,
             last_seen: None,
-            topics: Vec::new(),
-            locally_verified: false,
-            is_bootstrap: false,
             first_seen: None,
-            observed_peer_ids: Vec::new(),
             label: None,
+            is_bootstrap: false,
+            locally_verified: false,
+            observed_peer_ids: Vec::new(),
+            topics: Vec::new(),
         }
     }
 
@@ -9475,5 +10750,171 @@ mod ledger_seeding_hardening_tests {
              loop than any honest exchange ever needs"
         );
         assert!(LEDGER_EXCHANGE_MAX_REQUEST_PEERS <= 64);
+    }
+
+    // ------------------------------------------------------------------
+    // D10 (2026-09-09) -- relay-reservation base validation.
+    //
+    // A reservation base must be a direct, non-circuit, non-self address.
+    // A poison reservation listener (nested self-circuit route) overflows
+    // the mDNS response and kills LAN discovery network-wide.
+    // ------------------------------------------------------------------
+
+    use super::{
+        is_canonical_reservation_addr, is_valid_reservation_base, relay_reservation_multiaddr,
+    };
+
+    fn relay_id() -> PeerId {
+        // Deterministic-enough random peer for the RELAY (a different node).
+        PeerId::random()
+    }
+
+    #[test]
+    fn d10_nested_circuit_base_is_rejected() {
+        let relay = relay_id();
+        // The poison shape observed on Windows (evidence: D10 checkpoint):
+        // a route THROUGH a relay that is itself reached via a circuit.
+        let nested: Multiaddr = format!(
+            "/ip4/192.168.0.222/tcp/9001/p2p/{}/p2p-circuit/p2p/{}/p2p-circuit",
+            PeerId::random(),
+            relay
+        )
+        .parse()
+        .expect("valid multiaddr");
+        assert!(
+            !is_valid_reservation_base(&nested, &[]),
+            "a base containing /p2p-circuit must never produce a reservation listener"
+        );
+    }
+
+    #[test]
+    fn d10_concrete_self_base_is_rejected() {
+        let self_concrete: Multiaddr = "/ip4/192.168.0.222/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        // The wildcard-bind race: our own bind is 0.0.0.0:9001 and the
+        // candidate is our private LAN reflection on the same port. The
+        // wildcard rule claims private candidates; no exact knowledge needed.
+        let known_local = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap(),
+            "/ip4/0.0.0.0/tcp/9876".parse::<Multiaddr>().unwrap(),
+        ];
+        assert!(
+            !is_valid_reservation_base(&self_concrete, &known_local),
+            "a private reflection covered by our own wildcard bind must be rejected as self"
+        );
+    }
+
+    #[test]
+    fn d10_wildcard_bind_does_not_claim_public_hosts_on_same_port() {
+        // The standard same-port topology: we bind 0.0.0.0:9001 and the AWS
+        // relay listens on 18.234.62.247:9001. The wildcard bind must NOT
+        // claim the foreign public endpoint as self (that would disable
+        // reservations in the default deployment).
+        let foreign: Multiaddr = "/ip4/18.234.62.247/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        let known_local = vec!["/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap()];
+        assert!(
+            is_valid_reservation_base(&foreign, &known_local),
+            "public foreign relay on the same port as our wildcard bind is NOT self"
+        );
+    }
+
+    #[test]
+    fn d10_exact_host_match_is_rejected_even_without_wildcard() {
+        let self_concrete: Multiaddr = "/ip4/10.0.0.5/tcp/9001".parse().expect("valid multiaddr");
+        let known_local = vec!["/ip4/10.0.0.5/tcp/9002".parse::<Multiaddr>().unwrap()];
+        // Same host, different port: the string-based matcher treats this as a
+        // different address, but the D10 structural check keys on host+port
+        // pairs; a host:port the node already OWNS on another port is still
+        // not a relay endpoint... except that hosts are shared. The structural
+        // rule is: same host AND same port = self. Different port on same host
+        // is a DIFFERENT endpoint and stays eligible.
+        assert!(
+            is_valid_reservation_base(&self_concrete, &known_local),
+            "same host with a different port is a different endpoint, not self"
+        );
+        let same_port: Multiaddr = "/ip4/10.0.0.5/tcp/9002".parse().unwrap();
+        assert!(
+            !is_valid_reservation_base(&same_port, &known_local),
+            "exact host:port match against a known local address must be rejected as self"
+        );
+    }
+
+    #[test]
+    fn d10_empty_local_set_does_not_block_foreign_relay() {
+        let relay_addr: Multiaddr = "/ip4/203.0.113.7/tcp/443".parse().expect("valid multiaddr");
+        // Startup race with NO binds recorded yet: D10 cannot self-match, so
+        // the gate must not blanket-reject foreign relays (that would disable
+        // reservations entirely until binds exist).
+        assert!(
+            is_valid_reservation_base(&relay_addr, &[]),
+            "empty known-local set must not reject a foreign relay base"
+        );
+    }
+
+    #[test]
+    fn d10_valid_foreign_base_is_accepted_and_reservation_is_canonical() {
+        let relay = relay_id();
+        let base: Multiaddr = "/ip4/18.234.62.247/tcp/9001"
+            .parse()
+            .expect("valid multiaddr");
+        let known_local = vec![
+            "/ip4/0.0.0.0/tcp/9001".parse::<Multiaddr>().unwrap(),
+            "/ip6/::/tcp/9001".parse::<Multiaddr>().unwrap(),
+        ];
+        // The relay's WAN endpoint shares our listen PORT but not our hosts;
+        // wildcard matching is per-IP-family, so this must stay eligible.
+        assert!(
+            is_valid_reservation_base(&base, &known_local),
+            concat!(
+                "a foreign relay on the same port as our wildcard IPv4 bind is NOT self ",
+                "(its IP differs from the bind family/host)"
+            )
+        );
+
+        let reservation = relay_reservation_multiaddr(&base, relay);
+        assert!(
+            is_canonical_reservation_addr(&reservation),
+            "reservation must carry exactly one trailing /p2p-circuit: {reservation}"
+        );
+        // The relay hop must be encoded immediately before the circuit marker.
+        let mut protos = reservation.iter();
+        assert!(
+            protos.any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(id) if id == relay)),
+            "reservation must embed the relay peer id"
+        );
+        assert!(
+            reservation.to_string().ends_with("/p2p-circuit"),
+            "reservation must terminate at the circuit marker"
+        );
+    }
+
+    #[test]
+    fn d10_reservation_builder_never_nests_circuit_from_circuit_base() {
+        let relay = relay_id();
+        // Even if a circuit base slips past upstream filters, the builder's
+        // structural normalization must not produce a nested-circuit address.
+        let circuit_base: Multiaddr = format!(
+            "/ip4/203.0.113.7/tcp/443/p2p/{}/p2p-circuit",
+            PeerId::random()
+        )
+        .parse()
+        .expect("valid multiaddr");
+        let reservation = relay_reservation_multiaddr(&circuit_base, relay);
+        assert!(
+            is_canonical_reservation_addr(&reservation),
+            "normalization must collapse any base to a single trailing circuit: {reservation}"
+        );
+    }
+
+    #[test]
+    fn d10_loopback_base_is_rejected() {
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/9001".parse().expect("valid multiaddr");
+        assert!(
+            !is_valid_reservation_base(&loopback, &[]),
+            "loopback bases are undiscoverable and must never anchor a reservation"
+        );
     }
 }

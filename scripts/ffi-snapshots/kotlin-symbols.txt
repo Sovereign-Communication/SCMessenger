@@ -315,6 +315,7 @@ fun `setNickname`(`nickname`: kotlin.String)
 fun `setNickname`(`peerId`: kotlin.String, `nickname`: kotlin.String?)
 fun `setPlatformBridge`(`bridge`: PlatformBridge?)
 fun `setPrivacyConfig`(`json`: kotlin.String)
+fun `setSwarmPeerConnection`(`publicKeyHex`: kotlin.String, `connected`: kotlin.Boolean)
 fun `signData`(`data`: kotlin.ByteArray): SignatureResult
 fun `startSwarm`(`listenAddr`: kotlin.String, `bootstrapAddrs`: List<kotlin.String>)
 fun `start`()

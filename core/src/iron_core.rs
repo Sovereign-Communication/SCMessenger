@@ -76,6 +76,12 @@ use crate::IronCoreError;
 // - `transport` — Wired as `transport_manager` field.
 // - `relay` — Wired as `bootstrap_manager` field.
 //
+// State ownership rule: IronCore owns subsystem lifetimes and cross-subsystem
+// wiring; each subsystem owns its internal mutable state. Bridges and UI layers
+// issue commands and consume snapshots, but never duplicate core state.
+// Data flows inward through IronCore APIs and outward through immutable return
+// values or delegate events.
+//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Delegate trait for protocol events that consumers (like MeshService) implement
@@ -3074,7 +3080,141 @@ impl IronCore {
     /// - `outbox_retry_attempt`: attempting to send message (attempt #X)
     /// - `outbox_delivery_success`: message sent successfully
     /// - `outbox_delivery_failed_transient`: delivery failed with backoff retry
+    /// Reconnect-flush entry for callers without a live send path (tests,
+    /// non-swarm event sources): the flush falls back to the transport-manager
+    /// queue and entries stay in the outbox pending receipt, exactly the
+    /// pre-egress semantics (R1-A2 disposition).
     pub fn handle_peer_connection_event(&self, peer_id: &str, connected: bool) {
+        self.handle_peer_connection_event_with_egress(peer_id, connected, false, &mut |_, _| false);
+    }
+
+    /// Mirror a live libp2p swarm connection into the transport manager so the
+    /// routing and send paths see the peer as reachable over an active swarm
+    /// link.
+    ///
+    /// RCA (drop-hop, e97c3f82 fleet, 2026-09-04): the transport manager's
+    /// `peer_transports` registry is populated ONLY by
+    /// `TransportEvent::PeerDiscovered`, and no production code path emitted
+    /// that event for swarm peers -- the registry's only writer was a unit
+    /// test. Every swarm peer therefore read as "not connected":
+    ///
+    /// - `prepare_message_internal`'s `is_peer_connected(recipient_pk)` gate
+    ///   always returned false on CLI/desktop, so every prepared message fell
+    ///   into the outbox instead of being sent over the live connection, and
+    /// - the outbox flush's `send_to_peer` lookup then returned
+    ///   `PeerNotFound`, so those messages were retried forever (zero
+    ///   `transport_handoff` lines in a full session log).
+    ///
+    /// libp2p TCP/relay connections are Internet transport; the canonical key
+    /// registered is the same hex pubkey the outbox flush hex-decodes into its
+    /// `[u8; 32]` recipient key (the peer id's embedded Ed25519 key, cf.
+    /// `public_key_hex_from_libp2p_peer_id`). `connected=false` removes the
+    /// registration so a dead peer cannot keep the direct-send path warm.
+    pub(crate) fn set_swarm_peer_connection(&self, public_key_hex: &str, connected: bool) {
+        use crate::transport::abstraction::{TransportCapabilities, TransportEvent, TransportType};
+        let Ok(bytes) = hex::decode(public_key_hex) else {
+            tracing::warn!(
+                event = "swarm_peer_registration_invalid_key",
+                key = %public_key_hex,
+                "set_swarm_peer_connection: key is not valid hex; peer stays unregistered"
+            );
+            return;
+        };
+        let Ok(peer_key) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            tracing::warn!(
+                event = "swarm_peer_registration_invalid_key",
+                key = %public_key_hex,
+                len = bytes.len(),
+                "set_swarm_peer_connection: key is not 32 bytes; peer stays unregistered"
+            );
+            return;
+        };
+        let transport = TransportType::Internet;
+        // R2-B4: acquire the manager guard per operation instead of holding it
+        // across all of them -- the inner manager calls take their own locks,
+        // and narrow scopes keep read-guard/write-lock nesting shallow.
+        // R10-F1 (safety of read-guard + interior mutability): these calls
+        // mutate TransportManager's inner `parking_lot::RwLock` fields behind
+        // the outer read guard, so two concurrent callers COULD interleave
+        // their inner writes. That is safe here BY CALLER CENSUS, not by lock
+        // discipline: the only callers are the native swarm select task and
+        // the wasm select task (each single-threaded, mutually cfg-exclusive),
+        // plus single-threaded unit tests. No concurrent pair exists (verified
+        // R9-F1/R10-F1: the only transport_manager.write() callers live in
+        // perform_maintenance, which has zero native callers). If a second
+        // concurrent caller is ever introduced, this method must move to the
+        // outer write() guard or a compound event.
+        // R6-F3: malformed keys must not fail silently -- the RCA symptom this
+        // whole fix addresses was peers silently reading as unregistered.
+        if connected {
+            // Idempotent: ensure the Internet transport state exists so
+            // ConnectionEstablished can mark the peer connected.
+            self.transport_manager.read().ensure_transport_registered(
+                transport,
+                TransportCapabilities::for_transport(transport),
+            );
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::PeerDiscovered {
+                    peer_id: peer_key,
+                    transport,
+                    addr: vec![],
+                });
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::ConnectionEstablished {
+                    peer_id: peer_key,
+                    transport,
+                });
+        } else {
+            self.transport_manager
+                .read()
+                .handle_event(TransportEvent::PeerDisconnected {
+                    peer_id: peer_key,
+                    transport,
+                });
+        }
+    }
+}
+// R5-E3: this is deliberately a SEPARATE impl block. The block above is
+// `#[uniffi::export]`-annotated, and the UniFFI proc-macro rejects any method
+// whose parameters are not UDL-representable (here: the egress FnMut). These
+// crate-internal members must live outside that macro's reach.
+impl IronCore {
+    /// R3-C2: grace window after a successful swarm egress. The retry loop
+    /// may re-dispatch once inside this window if no receipt arrives; both
+    /// the entry and the retry are receipt-idempotent (receipts clear the
+    /// entry regardless of state, and the recipient's inbox dedupes by
+    /// message id), so this trades a rare duplicate for never marking a
+    /// delivered message as Failed.
+    pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
+
+    pub(crate) fn retry_outbox_message_now(&self, message_id: &str) -> bool {
+        self.outbox.write().retry_now(message_id)
+    }
+
+    pub(crate) fn handle_peer_connection_event_with_egress(
+        &self,
+        peer_id: &str,
+        connected: bool,
+        skip_flush: bool,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
+    ) {
+        if !connected || skip_flush {
+            // R3-C1: an explicit skip (duplicate connect event for a
+            // connection that already flushed, or the losing site of the
+            // once-per-connection gate) leaves the outbox untouched -- no
+            // drain, no attempt counting, no fake success. The entries
+            // belong to the flush that actually owns this connection.
+            tracing::debug!(
+                event = "outbox_flush_skipped",
+                peer_id = %peer_id,
+                connected = connected,
+                skip_flush = skip_flush,
+                "Flush skipped for this connection; entries remain in the outbox"
+            );
+            return;
+        }
         if connected {
             tracing::info!(
                 event = "outbox_reconnect_detected",
@@ -3102,7 +3242,10 @@ impl IronCore {
             );
 
             if let Ok(recipient_bytes) = hex::decode(peer_id) {
-                if let Ok(recipient_pk) = recipient_bytes.try_into() {
+                // R2-B3: the pubkey itself is no longer needed here (the
+                // egress closure addresses the peer directly), but keep the
+                // validity gate so a malformed outbox key fails loudly.
+                if let Ok(_recipient_pk) = <[u8; 32]>::try_from(recipient_bytes.as_slice()) {
                     let mut succeeded = 0;
                     let mut failed = 0;
 
@@ -3119,95 +3262,106 @@ impl IronCore {
                             current_attempt
                         );
 
-                        match self.transport_manager.read().send_to_peer(
-                            recipient_pk,
-                            msg.envelope_data.clone(),
-                            1,
-                        ) {
-                            Ok(crate::transport::manager::SendResult::Queued(transport_type)) => {
-                                tracing::info!(
-                                    event = "outbox_transport_queued",
+                        // R1-A2: real egress when the caller owns a live send
+                        // path (native swarm loop). The transport-manager
+                        // outgoing queue has no production consumer, so
+                        // without this the reconnect flush parked messages
+                        // forever. Dispatched-over-swarm is NOT delivery: the
+                        // entry stays Enqueued until an application-level
+                        // receipt calls mark_message_sent.
+                        if egress(&msg_id, &msg.envelope_data) {
+                            // R3-C2: a real dispatch runs NO failure ladder --
+                            // never Failed, never exponential backoff. The entry
+                            // stays Enqueued with a fixed grace window (re-flush
+                            // safety net for a lost in-flight send); only a
+                            // receipt (mark_message_sent) clears it.
+                            tracing::info!(
+                                event = "outbox_egress_dispatched",
+                                message_id = %msg_id,
+                                peer_id = %peer_id,
+                                attempt = current_attempt,
+                                "Envelope dispatched over live swarm link; awaiting receipt"
+                            );
+                            msg.attempts = current_attempt;
+                            msg.state = crate::store::outbox::MessageState::Enqueued;
+                            let now_secs = web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            msg.next_retry_at = Some(now_secs + Self::OUTBOX_EGRESS_GRACE_SECS);
+                            let restore = msg.clone();
+                            if let Err(e) = self.outbox.write().enqueue(msg) {
+                                tracing::error!(
+                                    event = "outbox_enqueue_failed",
                                     message_id = %msg_id,
-                                    peer_id = %peer_id,
-                                    transport = ?transport_type,
-                                    "Message queued to transport; awaiting delivery receipt"
+                                    error = %e,
+                                    "Failed to re-enqueue message after swarm egress; restoring drained ownership"
                                 );
-                                succeeded += 1;
-                                msg.attempts = current_attempt;
-                                msg.state = crate::store::outbox::MessageState::Enqueued;
-                                let now_secs = web_time::SystemTime::now()
-                                    .duration_since(web_time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                if current_attempt >= 12 {
-                                    msg.state = crate::store::outbox::MessageState::Failed;
-                                    msg.next_retry_at = None;
-                                } else {
-                                    let receipt_timeout =
-                                        2u64.saturating_pow(current_attempt.min(12)).min(3600);
-                                    msg.next_retry_at = Some(now_secs + receipt_timeout);
-                                }
-                                // Transport queuing is not delivery confirmation. Keep the
-                                // message in the outbox until an application-level receipt
-                                // calls mark_message_sent.
-                                if let Err(e) = self.outbox.write().enqueue(msg) {
+                                if let Err(restore_error) =
+                                    self.outbox.write().restore_drained(restore)
+                                {
                                     tracing::error!(
-                                        event = "outbox_enqueue_failed",
+                                        event = "outbox_restore_failed",
                                         message_id = %msg_id,
-                                        error = %e,
-                                        "Failed to re-enqueue message after transport queue"
+                                        error = %restore_error,
+                                        "Drained message could not be restored after enqueue failure"
                                     );
                                 }
                             }
-                            Err(e) => {
-                                msg.attempts = current_attempt;
-                                if current_attempt >= 3 {
-                                    // Persistent failure after 3 attempts: mark as Failed, keep in outbox for UX
-                                    msg.state = crate::store::outbox::MessageState::Failed;
-                                    msg.next_retry_at = None;
-                                    tracing::debug!(
-                                        event = "outbox_delivery_failed_persistent",
-                                        message_id = %msg_id,
-                                        peer_id = %peer_id,
-                                        error = %e,
-                                        attempt = current_attempt,
-                                        "Delivery attempt failed 3 times; marking as Failed in outbox"
-                                    );
-                                    if let Err(e) = self.outbox.write().enqueue(msg) {
-                                        tracing::error!(
-                                            event = "outbox_enqueue_failed",
-                                            message_id = %msg_id,
-                                            error = %e,
-                                            "Failed to re-enqueue message after persistent failure"
-                                        );
-                                    }
-                                    failed += 1;
-                                } else {
-                                    // Transient failure (< 3 attempts): leave as Enqueued with exponential backoff
-                                    msg.state = crate::store::outbox::MessageState::Enqueued;
-                                    let backoff_secs =
-                                        2u64.saturating_pow(current_attempt.min(12)).min(3600);
-                                    let now_secs = web_time::SystemTime::now()
-                                        .duration_since(web_time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    msg.next_retry_at = Some(now_secs + backoff_secs);
+                            succeeded += 1;
+                            continue;
+                        }
 
-                                    tracing::debug!(
-                                        event = "outbox_delivery_failed_transient",
-                                        message_id = %msg_id,
-                                        peer_id = %peer_id,
-                                        error = %e,
-                                        attempt = current_attempt,
-                                        backoff_secs = backoff_secs,
-                                        "Delivery attempt failed; re-enqueueing with backoff"
-                                    );
-
-                                    let _ = self.outbox.write().enqueue(msg);
-                                    failed += 1;
-                                }
+                        // R2-B3, amended R9-F3: no live egress path -- do
+                        // NOT park in the transport-manager outgoing queue
+                        // (no production consumer; parking would also
+                        // dual-state with the outbox entry). Egress=false is
+                        // ALWAYS transient: in production it means the
+                        // connection dropped between the flush gate's
+                        // is_connected check and the send (reconnect
+                        // timing), and marking the entry Failed here would
+                        // permanently skip it -- flush_peer_messages only
+                        // drains Enqueued entries, so a genuine reconnect
+                        // could never deliver it. The attempt counter is
+                        // diagnostic-only now: it feeds the backoff curve
+                        // (2^attempt, capped at 3600s) and grows u32-
+                        // saturating; no threshold converts the entry to
+                        // Failed. Only a receipt clears it.
+                        msg.attempts = current_attempt;
+                        msg.state = crate::store::outbox::MessageState::Enqueued;
+                        let backoff_secs = 2u64.saturating_pow(current_attempt.min(12)).min(3600);
+                        let now_secs = web_time::SystemTime::now()
+                            .duration_since(web_time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        msg.next_retry_at = Some(now_secs + backoff_secs);
+                        tracing::debug!(
+                            event = "outbox_delivery_deferred_no_egress",
+                            message_id = %msg_id,
+                            peer_id = %peer_id,
+                            attempt = current_attempt,
+                            backoff_secs = backoff_secs,
+                            "Flush has no egress path; deferred with backoff until next reconnect"
+                        );
+                        let restore = msg.clone();
+                        if let Err(e) = self.outbox.write().enqueue(msg) {
+                            tracing::error!(
+                                event = "outbox_enqueue_failed",
+                                message_id = %msg_id,
+                                error = %e,
+                                "Failed to re-enqueue message after flush without egress; restoring drained ownership"
+                            );
+                            if let Err(restore_error) = self.outbox.write().restore_drained(restore)
+                            {
+                                tracing::error!(
+                                    event = "outbox_restore_failed",
+                                    message_id = %msg_id,
+                                    error = %restore_error,
+                                    "Drained message could not be restored after enqueue failure"
+                                );
                             }
                         }
+                        failed += 1;
                     }
 
                     tracing::info!(
@@ -3215,7 +3369,7 @@ impl IronCore {
                         peer_id = %peer_id,
                         succeeded = succeeded,
                         failed = failed,
-                        "Outbox flush complete: {} queued for transport, {} scheduled for retry",
+                        "Outbox flush complete: {} dispatched over swarm, {} scheduled for retry/failed",
                         succeeded,
                         failed
                     );
@@ -5000,8 +5154,318 @@ mod tests {
             core.outbox_contains_for_recipient(&recipient, &prepared.message_id),
             "transport queueing must not be treated as delivery"
         );
-        assert_eq!(core.transport_manager.read().pending_sends().len(), 1);
+        // R2-B3: the flush never parks in the transport-manager outgoing
+        // queue (no production consumer); without a live egress path the
+        // attempt is retried with backoff while the entry stays in the
+        // outbox until an application receipt clears it.
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    #[test]
+    fn swarm_peer_registration_drives_is_connected_and_flush() {
+        // Regression for the RCA drop-hop (2026-09-04): swarm peers were never
+        // registered in the transport manager (no production emitter of
+        // TransportEvent::PeerDiscovered), so is_peer_connected() stayed false
+        // and every prepared message fell into the outbox while the outbox
+        // flush's send_to_peer() returned PeerNotFound forever. The swarm
+        // loop's identify/connection handlers now call
+        // set_swarm_peer_connection, which must drive both gates.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        let recipient_bytes: [u8; 32] = hex::decode(&recipient).unwrap().try_into().unwrap();
+
+        // Fresh core: peer unknown -> reads as disconnected -> prepare queues
+        // to the outbox (this is the state that stranded every CLI send).
+        assert!(!core
+            .transport_manager
+            .read()
+            .is_peer_connected(recipient_bytes));
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "swarm-peer-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+
+        // Simulate the swarm loop's identify/connection handler.
+        core.set_swarm_peer_connection(&recipient, true);
+        assert!(
+            core.transport_manager
+                .read()
+                .is_peer_connected(recipient_bytes),
+            "registered swarm peer must read as connected (prepare_message direct-send gate)"
+        );
+
+        // R2-B3: without an egress path the flush never parks in the
+        // transport-manager queue (no production consumer) -- it treats the
+        // attempt as failed/backoff and the entry stays in the outbox.
+        core.handle_peer_connection_event(&recipient, true);
+        assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
+        // Transport queueing is not delivery: the message stays in the outbox
+        // until an application-level receipt calls mark_message_sent.
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+        assert!(core.mark_message_sent(prepared.message_id));
+
+        // Last-connection teardown must remove the registration so a dead peer
+        // cannot keep the direct-send path warm.
+        core.set_swarm_peer_connection(&recipient, false);
+        assert!(
+            !core
+                .transport_manager
+                .read()
+                .is_peer_connected(recipient_bytes),
+            "disconnected swarm peer must no longer read as connected"
+        );
+    }
+
+    #[test]
+    fn swarm_peer_registration_is_multi_peer_safe() {
+        // R1-A4: register_transport() per connect REPLACED the Internet
+        // TransportState, wiping connected_peers of every peer registered
+        // earlier -- peer B connecting made peer A read as disconnected and
+        // stranded A's direct-send path. ensure_transport_registered must be
+        // non-clobbering and teardown must stay per-peer.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let a = core.get_identity_info().public_key_hex.clone().unwrap();
+        let a_bytes: [u8; 32] = hex::decode(&a).unwrap().try_into().unwrap();
+        let mut b_bytes = a_bytes;
+        b_bytes[0] ^= 0xFF;
+        let b = hex::encode(b_bytes);
+
+        core.set_swarm_peer_connection(&a, true);
+        core.set_swarm_peer_connection(&b, true);
+        {
+            let tm = core.transport_manager.read();
+            assert!(
+                tm.is_peer_connected(a_bytes),
+                "peer A must survive peer B's registration (R1-A4 clobber)"
+            );
+            assert!(tm.is_peer_connected(b_bytes));
+        }
+
+        core.set_swarm_peer_connection(&a, false);
+        let tm = core.transport_manager.read();
+        assert!(!tm.is_peer_connected(a_bytes));
+        assert!(
+            tm.is_peer_connected(b_bytes),
+            "peer B must survive peer A's teardown"
+        );
+    }
+
+    #[test]
+    fn reconnect_flush_egresses_over_live_link() {
+        // R1-A2: with an egress path the flush hands the drained envelope to
+        // the caller's live send path and keeps the entry Enqueued pending the
+        // application receipt; without egress it parks in the transport
+        // manager exactly as before.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "egress-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared.message_id));
+
+        let mut egressed: Vec<Vec<u8>> = Vec::new();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_, envelope: &[u8]| {
+                egressed.push(envelope.to_vec());
+                true
+            },
+        );
+        assert_eq!(
+            egressed.len(),
+            1,
+            "flush must hand the envelope to the egress path"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &prepared.message_id),
+            "swarm dispatch is not delivery: entry stays until receipt"
+        );
+        assert_eq!(
+            core.transport_manager.read().pending_sends().len(),
+            0,
+            "egress path must not park messages in the consumer-less transport queue"
+        );
+        assert!(core.mark_message_sent(prepared.message_id));
+        assert_eq!(core.outbox_count(), 0);
+
+        // R3-C1: an explicit skip leaves the outbox untouched -- no drain,
+        // no attempt counting, no fake success on the losing site.
+        let prepared_skip = core
+            .prepare_message(
+                recipient.clone(),
+                "skip-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared_skip.message_id));
+        let mut egress_calls = 0usize;
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            true, // skip: duplicate connect event
+            &mut |_, _| {
+                egress_calls += 1;
+                true
+            },
+        );
+        assert_eq!(egress_calls, 0, "skipped flush must not call egress");
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &prepared_skip.message_id),
+            "skipped flush must leave the outbox untouched"
+        );
+        assert!(core.mark_message_sent(prepared_skip.message_id));
+
+        // R3-C2: a real dispatch never marks Failed and never schedules an
+        // exponential retry -- only a fixed grace window; a receipt after the
+        // window still clears the entry.
+        let prepared_grace = core
+            .prepare_message(
+                recipient.clone(),
+                "grace-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_, _: &[u8]| true,
+        );
+        {
+            let snapshot = core.outbox.read().peek_for_peer(&recipient);
+            let entry = snapshot
+                .iter()
+                .find(|m| m.message_id == prepared_grace.message_id)
+                .expect("entry must stay in outbox after egress");
+            assert_eq!(
+                entry.state,
+                crate::store::outbox::MessageState::Enqueued,
+                "dispatch must never mark Failed (R3-C2)"
+            );
+            let nra = entry
+                .next_retry_at
+                .expect("grace window must be set after egress");
+            let now_secs = web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            assert!(
+                nra > now_secs && nra <= now_secs + IronCore::OUTBOX_EGRESS_GRACE_SECS + 5,
+                "grace window must be a fixed near-term retry, not exponential (R3-C2)"
+            );
+        }
+        assert!(core.mark_message_sent(prepared_grace.message_id));
+
+        // No-egress fallback keeps the legacy park semantics.
+        let prepared2 = core
+            .prepare_message(
+                recipient.clone(),
+                "fallback-regression".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.set_swarm_peer_connection(&recipient, true);
+        core.handle_peer_connection_event(&recipient, true);
+        assert_eq!(
+            core.transport_manager.read().pending_sends().len(),
+            0,
+            "no-egress flush must NOT park in the consumer-less queue (R2-B3)"
+        );
+        assert!(core.outbox_contains_for_recipient(&recipient, &prepared2.message_id));
+        assert!(core.mark_message_sent(prepared2.message_id));
+
+        // R9-F3: egress=false is ALWAYS transient (production meaning: the
+        // connection raced away between the flush gate and the send). No
+        // flush may convert the entry to Failed -- flush_peer_messages only
+        // drains Enqueued entries, so a Failed entry could never be
+        // delivered by a later genuine reconnect. (Peer deliberately marked
+        // disconnected first so prepare_message outboxes instead of
+        // direct-sending over the still-registered live link.)
+        core.set_swarm_peer_connection(&recipient, false);
+        let prepared_r9 = core
+            .prepare_message(
+                recipient.clone(),
+                "r9-f3-no-failed".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_, _: &[u8]| false,
+        );
+        {
+            let snapshot = core.outbox.read().peek_for_peer(&recipient);
+            let entry = snapshot
+                .iter()
+                .find(|m| m.message_id == prepared_r9.message_id)
+                .expect("entry must remain in the outbox after a no-egress flush");
+            assert_eq!(
+                entry.state,
+                crate::store::outbox::MessageState::Enqueued,
+                "no-egress flush must never mark the entry Failed (R9-F3)"
+            );
+            assert!(
+                entry.next_retry_at.is_some(),
+                "no-egress flush must schedule a backoff retry, not a terminal state (R9-F3)"
+            );
+        }
+        // The invariant that matters: a later genuine reconnect still drains
+        // it once the backoff elapses. Deterministic: rewind the entry's
+        // next_retry_at into the past instead of sleeping out the 2s backoff
+        // (R10-F4 -- wall-clock sleeps are CI-flaky). Safe as a test-only
+        // mutation because enqueue replaces by message_id.
+        {
+            let mut ob = core.outbox.write();
+            let mut entry = ob
+                .drain_for_peer(&recipient)
+                .into_iter()
+                .find(|m| m.message_id == prepared_r9.message_id)
+                .expect("deferred entry must still be present before the recovery flush");
+            entry.next_retry_at = Some(0);
+            ob.enqueue(entry)
+                .expect("re-enqueue of drained entry cannot hit limits");
+        }
+        let mut delivered_after_recovery = 0usize;
+        core.handle_peer_connection_event_with_egress(
+            &recipient,
+            true,
+            false,
+            &mut |_, _: &[u8]| {
+                delivered_after_recovery += 1;
+                true
+            },
+        );
+        assert_eq!(
+            delivered_after_recovery, 1,
+            "a recovered connection must re-drain the entry the race deferred (R9-F3)"
+        );
+        assert!(core.mark_message_sent(prepared_r9.message_id));
     }
 
     #[test]

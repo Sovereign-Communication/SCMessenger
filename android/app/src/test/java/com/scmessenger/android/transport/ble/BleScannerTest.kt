@@ -9,6 +9,7 @@ import io.mockk.unmockkStatic
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -133,6 +134,28 @@ class BleScannerTest {
         assertEquals(before.advertisementsSeen, after.advertisementsSeen)
         assertEquals(before.peersDiscovered, after.peersDiscovered)
         assertEquals(before.scanFailures, after.scanFailures)
+    }
+
+    @Test
+    fun dutyCycleStop_clearsIsScanningFlag() {
+        // Regression test for the duty-cycle restart stranding defect:
+        // stopScanningInternal() (the window-scoped stop used by the duty
+        // cycle runnable) must clear isScanning, because the scheduled
+        // startScanningInternal() restart only runs when isScanning is
+        // false. Before the fix, the flag stayed true and BLE discovery
+        // died after the first duty-cycle window.
+        val scanner = newScanner()
+
+        val isScanningField: Field = BleScanner::class.java.getDeclaredField("isScanning")
+        isScanningField.isAccessible = true
+        isScanningField.set(scanner, true)
+        assertTrue("isScanning should be true before stop", isScanningField.getBoolean(scanner))
+
+        val stopMethod = BleScanner::class.java.getDeclaredMethod("stopScanningInternal")
+        stopMethod.isAccessible = true
+        stopMethod.invoke(scanner)
+
+        assertFalse("isScanning must be false after stopScanningInternal", isScanningField.getBoolean(scanner))
     }
 
     @Test

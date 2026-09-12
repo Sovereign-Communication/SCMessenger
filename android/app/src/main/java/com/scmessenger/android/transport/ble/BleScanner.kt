@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelUuid
 import kotlinx.coroutines.*
@@ -59,7 +60,16 @@ class BleScanner(
     // Duty cycle management
     private var scanWindowMs: Long = 10000L  // 10 seconds
     private var scanIntervalMs: Long = 30000L  // 30 seconds
-    private val handler by lazy { Handler(Looper.getMainLooper()) }
+    // D8 fix: BT binder calls (startScan/stopScan/isLeEnabled) MUST NOT run on the
+    // main thread. With a half-wedged Bluetooth stack each call blocks ~5s and the
+    // app ANRs at launch (live 2026-09-09: BT stack died at 23:21:56, rebound
+    // 23:23:42, app launched into it at 23:26 -> main thread frozen, 5s stalls at
+    // every duty-cycle boundary). A dedicated HandlerThread keeps every BT binder
+    // call off main; UI never waits on the radio.
+    private val bleThread: HandlerThread by lazy {
+        HandlerThread("BleScannerThread").apply { start() }
+    }
+    private val handler by lazy { Handler(bleThread.looper) }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var dutyCycleRunnable: Runnable? = null
 
@@ -511,13 +521,25 @@ class BleScanner(
     @SuppressLint("MissingPermission")
     private fun stopScanningInternal() {
         val s = scanner
-        if (s == null) return
+        if (s == null) {
+            // Duty-cycle fix: even a missing scanner must not strand the flag,
+            // or the scheduled startScanningInternal() restart never fires.
+            isScanning = false
+            return
+        }
 
         try {
             s.stopScan(scanCallback)
             Timber.v("BLE scan window ended")
+            // Duty-cycle fix: startDutyCycle()'s scheduled restart only runs
+            // startScanningInternal() when isScanning is false. Leaving the
+            // flag true here stranded scanning after the first duty-cycle
+            // window (live logcat: "BLE scan window ended" then
+            // "peersDiscovered=0" forever).
+            isScanning = false
         } catch (e: Exception) {
             Timber.e(e, "Failed to stop BLE scan window")
+            isScanning = false
         }
     }
 

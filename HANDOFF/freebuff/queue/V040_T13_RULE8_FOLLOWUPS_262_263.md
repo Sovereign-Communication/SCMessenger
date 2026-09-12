@@ -1,6 +1,10 @@
 # V040-T13 -- Rule-8 follow-ups from the #262 / #263 adversarial review
 
-Status: OPEN (filed 2026-08-31)
+Status: OPEN -- **F7 and F-DHT are RULED 2026-08-31**, see
+        `inbox/RULING_2026-08-31_T13_FDHT_A_and_F7_B.md`.
+        F-DHT: Option A (gate all four hearsay feeds, incl. the wasm arm).
+        F7: **Option B** (widen hint to [u8;8]) PLUS C (ordering defect).
+        B is a WIRE-FORMAT change -- it must land before the v0.4.0 tag.
 Priority: P1 -- none is exploitable today; each erodes a primitive the mesh
 depends on, and F1's fix is one line
 Lane: Freebuff / DeepSeek V4 Flash
@@ -68,10 +72,9 @@ completes a handshake reaches it.**
 End-to-end encryption means the exposure is metadata and delivery denial, not
 plaintext -- but the attack surface moved from "in Bluetooth range" to "anywhere".
 
-**Fix direction (design decision, propose before implementing):** widen the hint
-beyond 4 bytes, require more than a hint match before treating a peer as a
-direct next-hop, or gate hint registration on a proven outbound connection
-rather than any completed handshake. Write the proposal to `inbox/` first.
+**RULED 2026-08-31: Option B (widen to `[u8; 8]`) plus C (ordering defect).**
+Proposal phase is closed. See `inbox/RULING_2026-08-31_T13_FDHT_A_and_F7_B.md`
+for the wire-compat obligations and the pre-tag sequencing constraint.
 
 ## F-DHT -- the disclosure rule does not cover Kademlia (spec gap, not a PR defect)
 
@@ -84,11 +87,12 @@ This is pre-existing; #262's only `swarm.rs` change is a test fixture. But it
 means the T2 specification's claim that "hearsay is never re-published" is true
 of the ledger exchange and the invite path, and **false** of the DHT.
 
-That was a gap in the spec, not in the implementation. Decide deliberately:
-either the DHT is an accepted disclosure channel with a written rationale, or
-`add_address` gets the same predicate the export paths have. Do not fix silently
--- this is an architecture call, so write the options to `inbox/` and let the
-operator rule.
+That was a gap in the spec, not in the implementation.
+
+**RULED 2026-08-31: Option A** -- `add_address` gets the same predicate the
+export paths have, on all four hearsay feeds. The inventory in this ticket cited
+only `4524`; the confirmed set is `4525`, `4673`, `5150` (native Identify) and
+`7865` (**wasm** Identify). Proposal phase is closed.
 
 ## Also recorded (lower priority, from the same review)
 
@@ -109,7 +113,14 @@ operator rule.
 
 - F1 fixed and a test proves a migrated hearsay entry lands `locally_verified: false`.
 - F2 fixed and a test proves a wire entry cannot set `last_seen` in the future.
-- F7 and F-DHT: **proposals written to `inbox/`, not implemented**, until ruled on.
+- **F-DHT (RULED: Option A)**: all four hearsay feeds gated, including the wasm
+  Identify arm, proven with `cargo check -p scmessenger-wasm --target
+  wasm32-unknown-unknown` -- a native-only run passes with the wasm arm open.
+- **F7 (RULED: Option B + C)**: hint widened to `[u8; 8]`, AND the
+  `peers_for_hint` ordering defect fixed. B is a **wire-format change**
+  (`NeighborhoodSummary.reachable_hints` is gossiped) -- state the persisted-state
+  disposition and the three-node cutover in the PR body, and land it **before the
+  v0.4.0 tag**. See `inbox/RULING_2026-08-31_T13_FDHT_A_and_F7_B.md`.
 - F3-F6, F9, F10 addressed or explicitly deferred with a reason.
 - `cargo test --workspace --no-run`, `cargo fmt --check`, clippy `-D warnings`.
   Never read `$?` after a pipe.

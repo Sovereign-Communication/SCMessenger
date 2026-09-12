@@ -35,14 +35,6 @@ pub struct OptimizedRoutingEngine {
     adaptive_ttl: AdaptiveTTLManager,
     /// Multipath delivery manager for redundant route tracking
     multipath: MultiPathDelivery,
-    /// Our own peer ID. Retained for parity with `base_engine`'s copy; not read
-    /// directly today but kept for future direct access without traversing base_engine.
-    #[allow(dead_code)]
-    local_id: PeerId,
-    /// Our recipient hint. Retained for parity with `base_engine`'s copy; not read
-    /// directly today but kept for future direct access without traversing base_engine.
-    #[allow(dead_code)]
-    local_hint: [u8; 8],
     /// Current discovery phase
     current_phase: DiscoveryPhase,
     /// Whether we're in the middle of a discovery operation
@@ -59,8 +51,6 @@ impl OptimizedRoutingEngine {
             prefetch_manager: ResumePrefetchManager::with_defaults(),
             adaptive_ttl: AdaptiveTTLManager::with_defaults(),
             multipath: MultiPathDelivery::new(),
-            local_id,
-            local_hint,
             current_phase: DiscoveryPhase::LocalCache,
             discovery_in_progress: false,
         }
@@ -533,16 +523,6 @@ mod tests {
 
     fn make_hint(id: u8) -> [u8; 8] {
         [id, 0, 0, 0, 0, 0, 0, 0]
-    }
-
-    #[test]
-    fn test_optimized_engine_creation() {
-        let local_id = make_peer_id(1);
-        let local_hint = make_hint(1);
-
-        let engine = OptimizedRoutingEngine::new(local_id, local_hint);
-        assert_eq!(engine.local_id, local_id);
-        assert_eq!(engine.local_hint, local_hint);
     }
 
     #[test]

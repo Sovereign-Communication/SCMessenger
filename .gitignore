@@ -373,5 +373,20 @@ HANDOFF/logs/
 
 .qwen/worktrees/
 
+# scratch/ -- local-only utilities and live node-driver captures (runtime
+# mesh traffic, watcher state, operator-interview specs). Runtime output,
+# not repo content; kept on disk deliberately. The four root-level utility
+# files are already tracked and stay visible via the negations.
+scratch/*
+!scratch/discover_mdns.js
+!scratch/list_groq_models.py
+!scratch/sweep.py
+!scratch/view_diff.py
+
+# Windows node storage backups (2026-09-03) -- contain relay_network_key.pb
+# (the node's relay identity key) and runtime custody data. This repository
+# is PUBLIC; these must never be committed. Structural block, not cleanup.
+.codebuff_deploy/windows/backup-*
+
 # Freebuff tool state (worktree tracking) - never commit
 .freebuff/

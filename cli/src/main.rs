@@ -42,6 +42,39 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Register this node's identity (device_id + seniority) with a relay peer so
+/// custody can accept store-and-forward requests *to* this node.
+///
+/// Android already does this on Identify (`mobile_bridge.rs`); the CLI never
+/// did, which produced `identity_registration_missing` on AWS whenever another
+/// node tried to relay to a Windows/Linux peer through the cloud node.
+async fn register_identity_with_relay(
+    core: &IronCore,
+    swarm_handle: &SwarmHandle,
+    peer_id: PeerId,
+) {
+    match core.build_registration_request() {
+        Ok(request) => match swarm_handle.register_identity(peer_id, request).await {
+            Ok(()) => {
+                tracing::info!(
+                    "[CUSTODY] Registered local identity with peer {} (relay-ready)",
+                    peer_id
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[CUSTODY] Failed to register local identity with {}: {}",
+                    peer_id,
+                    e
+                );
+            }
+        },
+        Err(e) => {
+            tracing::debug!("[CUSTODY] No registration request for {}: {:?}", peer_id, e);
+        }
+    }
+}
+
 /// Convert a Path to a string, returning an error if the path contains invalid UTF-8.
 /// This is safer than using .unwrap() which would panic on non-UTF-8 paths.
 fn path_to_string(path: &std::path::Path) -> Result<String> {
@@ -639,6 +672,16 @@ impl DialScheduler {
                             ledger::DialKey::Addr(_) => None,
                         };
                         l.complete_dial(&key, true, now2, learned);
+                    }
+                    Err(msg) if msg.to_string().starts_with("skipped:") => {
+                        // The core dial guard deliberately did not dispatch
+                        // this dial (target is self / peer already connected /
+                        // address is our own). NEITHER success nor failure:
+                        // release the in-flight claims neutrally so no phantom
+                        // connection slot, stale-address reap, or backoff burn
+                        // follows a dial that never happened.
+                        tracing::debug!("Dial to {} {}", addr_str, msg);
+                        l.complete_dial_skipped(&key);
                     }
                     Err(_) => {
                         l.record_failure(&addr_str);
@@ -2118,7 +2161,15 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         event_tx,
         Some(multiport_config),
         relay_bootstrap,
-        None,
+        // A4 fix (live 2026-09-09): the swarm owns the real custody engine, and
+        // with storage_path = None its relay-custody store fell back to a peer-id
+        // default location instead of the node's data dir — so the custody audit
+        // history (relay_custody_audit_*) reset on every redeploy on AWS (the
+        // engine's own store lived in the ephemeral container layer while custody
+        // CONTENT in /data/storage survived). Point it at the same data dir the
+        // CLI's IronCore already uses so the audit trail is persistent like the
+        // custody records themselves.
+        Some(path_to_string(&storage_path)?),
         Some(Arc::downgrade(&core)),
         false,
         Some(discovery_config),
@@ -2128,6 +2179,27 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
 
     // ── WebSocket P2P Bridge for WASM ────────────────────────────────────
     // Redundant explicit bind removed; handled by MultiPortConfig.
+
+    // T14: push the operator-configured external address (config key
+    // `external_addr`) into the swarm so the configured endpoint wins over
+    // every peer observation before any reflection traffic arrives.
+    if let Some(external) = config.external_addr.as_deref() {
+        match external.parse::<std::net::SocketAddr>() {
+            Ok(socket) => {
+                if let Err(e) = swarm_handle
+                    .set_configured_external_address(Some(socket))
+                    .await
+                {
+                    tracing::warn!("Failed to register configured external address: {}", e);
+                } else {
+                    println!("{} External address configured: {}", "[OK]".green(), socket);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Ignoring invalid external_addr {:?}: {}", external, e);
+            }
+        }
+    }
 
     println!("{} Network started", "[OK]".green());
 
@@ -2608,6 +2680,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         listen_addrs.iter().map(|a| a.to_string()).collect();
                                     l.record_identified_peer(&peer_id.to_string(), &advertised);
                                 }
+                                // Register with this peer so it can custody-store
+                                // messages for us (required for cell/AWS relay).
+                                register_identity_with_relay(&core_rx, &swarm_handle, peer_id).await;
                                 if let Err(e) = swarm_handle.share_ledger(peer_id).await {
                                     tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
                                 }
@@ -2729,13 +2804,18 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 if let Some(ref pk_hex) = sender_public_key_hex {
                                                     match core_rx.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
                                                         Ok(ack_bytes) => {
-                                                            tracing::debug!("Sending delivery ACK for {} to {}", msg.id, peer_id);
+                                                            // INFO (was debug): receipt emission is the
+                                                            // decisive evidence line for delivery-confirmation
+                                                            // audits across nodes; at DEBUG it is invisible at
+                                                            // the node's default INFO level and a lost ACK is
+                                                            // indistinguishable from an unsent one.
+                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
                                                             if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
-                                                                tracing::debug!("Failed to send delivery ACK to {}: {}", peer_id, e);
+                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, peer_id, e);
                                                             }
                                                         }
                                                         Err(e) => {
-                                                            tracing::debug!("Failed to prepare delivery ACK: {}", e);
+                                                            tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
                                                         }
                                                     }
                                                 }
@@ -3504,7 +3584,10 @@ async fn cmd_relay(
         event_tx,
         Some(multiport_config),
         bootstrap_multiaddrs,
-        None,
+        // A4 fix (live 2026-09-09): same as cmd_start - persist the custody
+        // audit trail inside the node's data dir instead of a peer-id default
+        // location that dies with the container on redeploy.
+        Some(path_to_string(&storage_path)?),
         Some(Arc::downgrade(&core)),
         true,
         Some(discovery_config),
@@ -3512,6 +3595,26 @@ async fn cmd_relay(
     )
     .await?;
     println!("{} P2P swarm started on {}", "[OK]".green(), listen_addr);
+
+    // T14: same configured-external-address primacy as `cmd_start`; the
+    // headless relay must also advertise the operator-configured endpoint.
+    if let Some(external) = config.external_addr.as_deref() {
+        match external.parse::<std::net::SocketAddr>() {
+            Ok(socket) => {
+                if let Err(e) = swarm_handle
+                    .set_configured_external_address(Some(socket))
+                    .await
+                {
+                    tracing::warn!("Failed to register configured external address: {}", e);
+                } else {
+                    println!("{} External address configured: {}", "[OK]".green(), socket);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Ignoring invalid external_addr {:?}: {}", external, e);
+            }
+        }
+    }
 
     // Subscribe to topics
     for topic in known_topics {
@@ -3784,6 +3887,9 @@ async fn cmd_relay(
                         let advertised: Vec<String> =
                             listen_addrs.iter().map(|a| a.to_string()).collect();
                         l.record_identified_peer(&peer_id.to_string(), &advertised);
+                        drop(l);
+                        // Relay nodes must also register so peers can custody to us.
+                        register_identity_with_relay(core_arc.as_ref(), &swarm_handle, peer_id).await;
                         if let Err(e) = swarm_handle.share_ledger(peer_id).await {
                             tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
                         }

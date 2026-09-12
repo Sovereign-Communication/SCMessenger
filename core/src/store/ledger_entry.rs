@@ -654,18 +654,50 @@ fn annotate_identity_locked(
         if normalized_public_key.is_some() {
             entry.public_key = normalized_public_key;
         }
-        if normalized_nickname.is_some() {
+        // NICKNAME-OWNERSHIP-001: never write a nickname onto an entry that
+        // already claims a different peer_id. Device RCA 2026-09-11: emulator
+        // nick "androidulaator" landed on Windows ledger rows via multiaddr
+        // fan-out + last-writer-wins.
+        if normalized_nickname.is_some()
+            && entry
+                .peer_id
+                .as_deref()
+                .map(|p| p == peer_id)
+                .unwrap_or(true)
+        {
             entry.nickname = normalized_nickname;
         }
         entry.last_seen = Some(current_timestamp());
         false
     } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-        entry.peer_id = Some(peer_id);
-        if normalized_public_key.is_some() {
-            entry.public_key = normalized_public_key;
-        }
-        if normalized_nickname.is_some() {
-            entry.nickname = normalized_nickname;
+        let existing_peer = entry.peer_id.clone();
+        let owns_entry = existing_peer
+            .as_deref()
+            .map(|p| p.is_empty() || p == peer_id)
+            .unwrap_or(true);
+        if owns_entry {
+            // Only claim peer_id when the row is unowned or already ours.
+            entry.peer_id = Some(peer_id);
+            if normalized_public_key.is_some() {
+                entry.public_key = normalized_public_key;
+            }
+            if normalized_nickname.is_some() {
+                entry.nickname = normalized_nickname;
+            }
+        } else if normalized_public_key.is_none() && normalized_nickname.is_none() {
+            // Observe-only: different peer at this multiaddr. Record sighting;
+            // do NOT steal peer_id or paint nickname.
+            record_observed_peer_id_locked(entry, &peer_id);
+            entry.last_seen = Some(current_timestamp());
+        } else {
+            // Refuse identity claim on a multiaddr owned by another peer.
+            tracing::debug!(
+                target: "ledger",
+                multiaddr = %entry.multiaddr,
+                existing_peer = ?existing_peer,
+                incoming_peer = %peer_id,
+                "annotate_identity refused: multiaddr owned by different peer"
+            );
         }
         entry.last_seen = Some(current_timestamp());
         false
@@ -1334,23 +1366,32 @@ impl LedgerManager {
     // eviction only on capacity pressure via evict_one_locked. This matches
     // get_preferred_relays ranking and replaces the previous insertion-order.
     pub fn dialable_addresses(&self) -> Vec<LedgerEntry> {
+        // D3c fix (live 2026-09-09): the previous hard exclusion
+        // (`failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD`) permanently removed
+        // proven endpoints that accumulated 3 local-epoch failures (e.g. dials
+        // attempted while the phone was mid-radio-flap) - the cloud relay fell
+        // out of the candidate set entirely and cellular bootstrap deadlocked
+        // with zero candidates. Failure counts here now DEMOTE, not exclude: a
+        // proven endpoint that goes quiet sinks to the tail and can always be
+        // dialed again; one successful connection resets the counter
+        // (`record_connection` sets failure_count = 0). Per-epoch retry-rate
+        // protection stays with the circuit breaker and the dial throttle.
         let entries = self.entries.lock();
         let mut out: Vec<LedgerEntry> = entries
             .iter()
             // Proven either by a real connection (success_count) or by
             // operator fiat (is_bootstrap, set only via add_bootstrap) --
             // a fresh node must dial its configured seeds before it has any
-            // connection history.
-            .filter(|e| {
-                (e.success_count > 0 || e.is_bootstrap)
-                    && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD
-            })
+            // connection history. Failure counts demote (sort below), they do
+            // not exclude -- D3c live fix, see comment above.
+            .filter(|e| e.success_count > 0 || e.is_bootstrap)
             .cloned()
             .collect();
         out.sort_by(|a, b| {
-            b.last_seen
-                .unwrap_or(0)
-                .cmp(&a.last_seen.unwrap_or(0))
+            // Dead-counter demotion first: healthy-but-stale outranks flapping.
+            a.failure_count
+                .cmp(&b.failure_count)
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
                 .then_with(|| {
                     let a_total = a.success_count as u64 + a.failure_count as u64;
                     let b_total = b.success_count as u64 + b.failure_count as u64;
@@ -1486,15 +1527,24 @@ impl LedgerManager {
     // dialable_addresses — proven relays float by recency; deep deprioritize
     // (not prune) keeps ephemeral peers tail-ranked until failure threshold.
     pub fn get_preferred_relays(&self, limit: u32) -> Vec<LedgerEntry> {
+        // D3c fix: match `dialable_addresses` - failure counts demote, never
+        // exclude (see the rationale there). Without this, a proven cloud relay
+        // poisoned by 3 local-epoch failures vanished from every candidate list
+        // and cellular bootstrap had nothing to dial.
         let entries = self.entries.lock();
         let mut preferred: Vec<LedgerEntry> = entries
             .iter()
-            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
+            .filter(|e| e.success_count > 0)
             .cloned() // Clone now so we can sort
             .collect();
-        // Sort by last_seen descending (freshness) — primary stability signal:
-        // a 24/7 AWS relay has a recent last_seen; a phone slept since yesterday.
-        preferred.sort_by_key(|b| std::cmp::Reverse(b.last_seen.unwrap_or(0)));
+        // Sort by failure_count ascending (demote flapping), then last_seen
+        // descending (freshness — primary stability signal: a 24/7 AWS relay
+        // has a recent last_seen; a phone slept since yesterday).
+        preferred.sort_by(|a, b| {
+            a.failure_count
+                .cmp(&b.failure_count)
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
+        });
         preferred.truncate(limit as usize);
         preferred
     }
@@ -3194,11 +3244,19 @@ mod tests {
     /// lift an entry out of the dead tier. `record_connection` used to only
     /// increment `success_count`, so an address that once had transient
     /// failures stayed at `failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD`
-    /// forever — excluded from `dialable_addresses`, `get_preferred_relays`
-    /// and the ledger-exchange response — even while the node was actively
+    /// forever - excluded from `dialable_addresses`, `get_preferred_relays`
+    /// and the ledger-exchange response - even while the node was actively
     /// connected to it. This stranded healthy peers (e.g. the AWS parity node
     /// at /ip4/54.235.20.24/tcp/9001, success=2 fail=3) so they were never
     /// shared to the Android app via ledger exchange.
+    ///
+    /// UPDATED (D3c demote-not-exclude, live 2026-09-09): dialing accessors
+    /// now DEMOTE dead-tier entries instead of excluding them (a poisoned
+    /// proven endpoint must stay dialable so one successful connection can
+    /// reset it - the cellular-bootstrap deadlock came from the old hard
+    /// exclusion). Disclosure (`exchange_response_entries`) keeps its own
+    /// stricter dead-tier policy, so the exchange assertions below are
+    /// unchanged in spirit: the entry is only shareable once revived.
     #[test]
     fn record_connection_resets_failures_and_revives_dead_entry() {
         let (_dir, mgr) = manager();
@@ -3210,16 +3268,27 @@ mod tests {
         for _ in 0..LEDGER_DEAD_FAILURE_THRESHOLD {
             mgr.record_failure(addr.to_string());
         }
-        assert_eq!(mgr.dialable_addresses().len(), 0, "entry must be dead");
+        // Demoted, not excluded: still dialable (so a retry can revive it),
+        // but ranked last by failure_count.
+        let dialable = mgr.dialable_addresses();
+        assert_eq!(
+            dialable.len(),
+            1,
+            "dead-tier entry must be demoted, not excluded"
+        );
+        assert_eq!(
+            dialable[0].failure_count, LEDGER_DEAD_FAILURE_THRESHOLD,
+            "dead-tier failure_count must survive untouched"
+        );
         assert_eq!(
             mgr.get_preferred_relays(8).len(),
-            0,
-            "dead entry must not be a preferred relay"
+            1,
+            "demoted entry stays a preferred relay candidate (ranked last)"
         );
         assert!(
             mgr.exchange_response_entries(8, "some-peer", &[])
                 .is_empty(),
-            "dead entry must not be shared"
+            "disclosure keeps the stricter dead-tier exclusion"
         );
 
         // A live connection revives it: failure_count resets, success bumps.
@@ -3251,7 +3320,7 @@ mod tests {
         let hop_addr = "/ip4/148.64.77.201/tcp/9021"; // routable sibling address of the same peer
 
         // Same peer, two addresses: the PRIMARY in the dead tier (accumulated
-        // failures) while a DIFFERENT hop address of the same peer is live — the
+        // failures) while a DIFFERENT hop address of the same peer is live - the
         // exact AWS parity state observed on the Windows node, where the hop
         // success recorded against the hop multiaddr and left the primary's
         // failure counter high.
@@ -3261,25 +3330,27 @@ mod tests {
         }
         // A live connection on the sibling address proves the peer is reachable.
         mgr.record_connection(hop_addr.to_string(), p.clone());
+        // UPDATED (D3c demote-not-exclude): both addresses stay dialable; the
+        // dead primary sorts AFTER the healthy sibling (failure_count demotion).
+        let stored = mgr.dialable_addresses();
+        assert_eq!(stored.len(), 2, "demotion keeps both addresses dialable");
         assert_eq!(
-            mgr.dialable_addresses().len(),
-            1,
-            "per-address dialing must still exclude the dead primary"
+            stored[1].multiaddr, primary_addr,
+            "dead primary must rank below the live sibling"
+        );
+        assert_eq!(
+            stored[1].failure_count, LEDGER_DEAD_FAILURE_THRESHOLD,
+            "per-address failure counter is untouched by sibling liveness"
         );
 
         // Disclosure is peer-liveness aware: because the peer is live via the hop
         // address, its primary address is shared too (a fresh install can learn
         // and dial the parity node), WITHOUT resetting the dead address's failure
-        // counter (no retry loop — it is still excluded from dialing).
+        // counter (asserted above - no retry-loop erasure).
         let shared = mgr.exchange_response_entries(8, "some-peer", &[]);
         assert!(
             shared.iter().any(|s| s.multiaddr == primary_addr),
             "live peer's dead-tier address must become exchange-shareable"
-        );
-        let stored = mgr.dialable_addresses();
-        assert!(
-            stored.iter().all(|e| e.multiaddr != primary_addr),
-            "dead address must stay out of dialing even while shareable"
         );
     }
 
@@ -4743,13 +4814,17 @@ mod tests {
 
     #[test]
     fn dead_threshold_all_accessors() {
+        // D3c fix semantics: failure counts DEMOTE, never exclude. A proven
+        // endpoint that accumulated local-epoch failures (failure_count >= the
+        // old LEDGER_DEAD_FAILURE_THRESHOLD) must remain dialable and must NOT
+        // be disclosed to exchange peers at a better rank than healthy ones.
         let (_dir, mgr) = manager();
-        let included = "/ip4/198.51.100.40/tcp/9001".to_string();
-        let excluded = "/ip4/198.51.100.41/tcp/9001".to_string();
+        let healthy = "/ip4/198.51.100.40/tcp/9001".to_string();
+        let flapping = "/ip4/198.51.100.41/tcp/9001".to_string();
         {
             let mut entries = mgr.entries.lock();
             entries.push(LedgerEntry {
-                multiaddr: included.clone(),
+                multiaddr: healthy.clone(),
                 peer_id: Some(peer()),
                 public_key: None,
                 nickname: None,
@@ -4765,12 +4840,12 @@ mod tests {
                 label: None,
             });
             entries.push(LedgerEntry {
-                multiaddr: excluded.clone(),
+                multiaddr: flapping.clone(),
                 peer_id: Some(peer()),
                 public_key: None,
                 nickname: None,
                 success_count: 1,
-                failure_count: 3,
+                failure_count: 5,
                 last_seen: Some(7001),
                 topics: Vec::new(),
 
@@ -4782,13 +4857,39 @@ mod tests {
             });
         }
 
+        // Both stay dialable (no permanent exclusion).
         let dialable = mgr.dialable_addresses();
-        assert!(dialable.iter().any(|e| e.multiaddr == included));
-        assert!(!dialable.iter().any(|e| e.multiaddr == excluded));
+        assert!(dialable.iter().any(|e| e.multiaddr == healthy));
+        assert!(dialable.iter().any(|e| e.multiaddr == flapping));
+        // ...but the healthy one outranks the flapping one.
+        let healthy_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
+        assert!(
+            healthy_pos < flapping_pos,
+            "healthy entry must rank above the failure-demoted one"
+        );
 
-        let shared = mgr.exchange_response_entries(10, "requester-peer", &[]);
-        assert!(shared.iter().any(|e| e.multiaddr == included));
-        assert!(!shared.iter().any(|e| e.multiaddr == excluded));
+        let preferred = mgr.get_preferred_relays(5);
+        assert!(preferred.iter().any(|e| e.multiaddr == healthy));
+        assert!(preferred.iter().any(|e| e.multiaddr == flapping));
+        let healthy_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
+        assert!(
+            healthy_pos < flapping_pos,
+            "healthy entry must rank above the failure-demoted one in relays"
+        );
     }
 
     /// V040-T2 acceptance 3 (disclosure rule): an entry with

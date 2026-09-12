@@ -228,14 +228,6 @@ class IdentityViewModel @Inject constructor(
     }
 
     /**
-     * Check if an identity backup exists on disk (SharedPreferences or sentinel file).
-     * Used by IdentityScreen to distinguish "no identity ever created" from
-     * "identity exists but Rust core hasn't hydrated yet" — the latter should show
-     * a "Restoring identity…" spinner instead of the creation form.
-     */
-    fun isBackupAvailable(): Boolean = meshRepository.isIdentityInitialized()
-
-    /**
      * Create a new identity (first-time setup).
      *
      * P0_ANDROID_IDENTITY_PROOF_OF_WORK: Emits 6 named stages via [progressStage]

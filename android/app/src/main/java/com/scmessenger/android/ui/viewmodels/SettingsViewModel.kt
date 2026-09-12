@@ -7,6 +7,7 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
 import com.scmessenger.android.network.DiagnosticsReporter
 
+import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.utils.Permissions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -174,6 +175,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Contact/message counts + core build provenance for the Info section. */
+    data class InfoCounts(
+        val contactCount: UInt = 0u,
+        val messageCount: UInt = 0u,
+        val buildProvenance: String = ""
+    )
+
+    // Declared BEFORE the init block on purpose: refreshInfoCounts() is called
+    // from init and its IO coroutine can complete before later property
+    // initializers run. Kotlin executes initializers in declaration order, so
+    // the StateFlow must exist before any writer can touch it (init-order NPE
+    // surfaced by the full unit suite, 2026-09-10).
+    private val _infoCounts = MutableStateFlow(InfoCounts())
+    val infoCounts: StateFlow<InfoCounts> = _infoCounts.asStateFlow()
+
     init {
         // P0_SHARED_IDENTITY: mirror the centralized meshRepository.identityInfo
         // StateFlow into the local _identityInfo so any identity change from
@@ -241,10 +257,47 @@ class SettingsViewModel @Inject constructor(
                 lastServiceState = state
             }
         }
+
+        // ANR-2026-09-09 recurrence fix: InfoSection used to call
+        // getContactCount()/getMessageCount()/getBuildProvenance() directly in
+        // composition — synchronous FFI on the main thread on EVERY
+        // recomposition of SettingsScreen (verified ANR source in the 4-23
+        // device logs). Load once on IO here and publish as StateFlow; the
+        // screen collects instead of calling.
+        refreshInfoCounts()
     }
 
-    fun getBuildProvenance(): String {
-        return meshRepository.getBuildProvenance()
+    /**
+     * Reload the Info-section counts on IO. Cheap enough to re-run on service
+     * RUNNING transitions; never called from composition. Safe to call from
+     * init because [_infoCounts] is declared before the init block.
+     */
+    fun refreshInfoCounts() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val contactCount = try {
+                meshRepository.getContactCount()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load contact count")
+                0u
+            }
+            val messageCount = try {
+                meshRepository.getMessageCount()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load message count")
+                0u
+            }
+            val buildProvenance = try {
+                meshRepository.getBuildProvenance()
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load build provenance")
+                ""
+            }
+            _infoCounts.value = InfoCounts(
+                contactCount = contactCount,
+                messageCount = messageCount,
+                buildProvenance = buildProvenance
+            )
+        }
     }
 
     /**
@@ -268,6 +321,15 @@ class SettingsViewModel @Inject constructor(
             _notifyDmRequestInForeground.value = settings.notifyDmRequestInForeground
             _soundEnabled.value = settings.soundEnabled
             _badgeEnabled.value = settings.badgeEnabled
+            // Push into NotificationHelper so the notify() gates actually see them.
+            NotificationHelper.updateSettings(
+                dmEnabled = settings.notifyDmEnabled,
+                dmRequestEnabled = settings.notifyDmRequestEnabled,
+                dmInForeground = settings.notifyDmInForeground,
+                dmRequestInForeground = settings.notifyDmRequestInForeground,
+                sound = settings.soundEnabled,
+                badge = settings.badgeEnabled
+            )
             Timber.d("Loaded mesh settings: $settings")
         } catch (e: Exception) {
             _error.value = "Failed to load settings: ${e.message}"
@@ -421,7 +483,7 @@ class SettingsViewModel @Inject constructor(
      * Load mesh settings from repository.
      */
     fun loadSettings() {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 _isLoading.value = true
                 _error.value = null
@@ -602,6 +664,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setNotificationsEnabled(enabled: Boolean) {
+        // Apply immediately so in-flight notify() calls honor the toggle,
+        // then persist to DataStore.
+        NotificationHelper.updateSettings(enabled = enabled)
         viewModelScope.launch {
             preferencesRepository.setNotificationsEnabled(enabled)
         }
@@ -613,6 +678,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmEnabled(enabled: Boolean) {
         _notifyDmEnabled.value = enabled
+        NotificationHelper.updateSettings(dmEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmEnabled = enabled))
         }
@@ -620,6 +686,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestEnabled(enabled: Boolean) {
         _notifyDmRequestEnabled.value = enabled
+        NotificationHelper.updateSettings(dmRequestEnabled = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestEnabled = enabled))
         }
@@ -627,6 +694,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmInForeground(enabled: Boolean) {
         _notifyDmInForeground.value = enabled
+        NotificationHelper.updateSettings(dmInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmInForeground = enabled))
         }
@@ -634,6 +702,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNotifyDmRequestInForeground(enabled: Boolean) {
         _notifyDmRequestInForeground.value = enabled
+        NotificationHelper.updateSettings(dmRequestInForeground = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(notifyDmRequestInForeground = enabled))
         }
@@ -641,6 +710,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setSoundEnabled(enabled: Boolean) {
         _soundEnabled.value = enabled
+        NotificationHelper.updateSettings(sound = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(soundEnabled = enabled))
         }
@@ -648,6 +718,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setBadgeEnabled(enabled: Boolean) {
         _badgeEnabled.value = enabled
+        NotificationHelper.updateSettings(badge = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(badgeEnabled = enabled))
         }
@@ -704,21 +775,6 @@ class SettingsViewModel @Inject constructor(
      */
     fun clearError() {
         _error.value = null
-    }
-
-    /**
-     * Get ledger summary for diagnostics.
-     */
-    fun getLedgerSummary(): String {
-        return meshRepository.getLedgerSummary()
-    }
-
-    fun getConnectionPathState(): uniffi.api.ConnectionPathState {
-        return meshRepository.getConnectionPathState()
-    }
-
-    fun getNatStatus(): String {
-        return meshRepository.getNatStatus()
     }
 
     /**
@@ -790,13 +846,6 @@ class SettingsViewModel @Inject constructor(
 
     // MARK: - Identity Helpers
     /**
-     * Get contact count for info display.
-     */
-    fun getContactCount(): UInt {
-        return meshRepository.getContactCount()
-    }
-
-    /**
      * Get blocked peer count for info display.
      */
     fun getBlockedCount(): UInt {
@@ -818,38 +867,10 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Get transport health summary for diagnostics.
-     */
-    fun getTransportHealthSummary(): Map<String, com.scmessenger.android.transport.TransportHealthMonitor.TransportHealth> {
-        return meshRepository.getTransportHealthSummary()
-    }
-
-    /**
-     * Get network diagnostics snapshot for settings display.
-     */
-    fun getNetworkDiagnosticsSnapshot(): com.scmessenger.android.transport.NetworkDiagnostics {
-        return meshRepository.getNetworkDiagnosticsSnapshot()
-    }
-
-    /**
-     * Get network failure summary for settings display.
-     */
-    fun getNetworkFailureSummary(): com.scmessenger.android.utils.NetworkFailureMetrics.Summary {
-        return meshRepository.getNetworkFailureSummary()
-    }
-
-    /**
      * Reset service runtime stats for a fresh diagnostics window.
      */
     fun resetServiceStats() {
         meshRepository.resetServiceStats()
-    }
-
-    /**
-     * Get list of currently active transports for status display.
-     */
-    fun getActiveTransports(): List<com.scmessenger.android.service.TransportType> {
-        return meshRepository.getActiveTransports()
     }
 
     /**
@@ -919,21 +940,6 @@ class SettingsViewModel @Inject constructor(
                 Timber.e(e, "Failed to clear BLE peer cache")
             }
         }
-    }
-
-    /**
-     * Test connectivity to ledger relay nodes.
-     * Returns true if at least one relay is reachable.
-     */
-    fun testLedgerRelayConnectivity(): Boolean {
-        return meshRepository.testLedgerRelayConnectivity()
-    }
-
-    /**
-     * Get message count for info display.
-     */
-    fun getMessageCount(): UInt {
-        return meshRepository.getMessageCount()
     }
 
     /**

@@ -109,49 +109,65 @@ class ShareReceiver : BroadcastReceiver() {
 
     /**
      * Show contact picker dialog to select recipient.
+     * HANG-MAIN-001: onReceive runs on main. MeshRepository construction and
+     * listContacts() FFI must never run there — goAsync + IO, then post the dialog.
      */
     private fun showContactPicker(context: Context, content: String) {
-        try {
-            val repository = MeshRepository(context.applicationContext)
-            val contacts = repository.listContacts()
-
-            if (contacts.isEmpty()) {
-                Toast.makeText(context, context.getString(R.string.share_error_no_contacts), Toast.LENGTH_SHORT).show()
-                Timber.w("No contacts to share with")
-                return
-            }
-
-            val contactNames = contacts.map { contact ->
-                contact.nickname ?: contact.peerId.take(8)
-            }.toTypedArray()
-
-            // NOTE: Showing AlertDialog from BroadcastReceiver context can fail on newer
-            // Android versions due to background UI restrictions. For production, this should
-            // launch a transparent Activity to handle the share flow.
-            // For now, attempt dialog but catch WindowManager.BadTokenException
+        val pendingResult = goAsync()
+        val appContext = context.applicationContext
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        scope.launch {
             try {
-                AlertDialog.Builder(context)
-                    .setTitle(R.string.share_title_share_to_contact)
-                    .setItems(contactNames) { dialog, which ->
-                        val selectedContact = contacts[which]
-                        sendMessageToContact(context, repository, selectedContact.peerId, content)
-                        dialog.dismiss()
+                val repository = MeshRepository(appContext)
+                val contacts = withContext(Dispatchers.IO) { repository.listContacts() }
+
+                if (contacts.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(appContext, appContext.getString(R.string.share_error_no_contacts), Toast.LENGTH_SHORT).show()
                     }
-                    .setNegativeButton(R.string.cancel) { dialog, _ ->
-                        dialog.dismiss()
+                    Timber.w("No contacts to share with")
+                    return@launch
+                }
+
+                val contactNames = contacts.map { contact ->
+                    contact.nickname ?: contact.peerId.take(8)
+                }.toTypedArray()
+
+                withContext(Dispatchers.Main) {
+                    try {
+                        AlertDialog.Builder(appContext)
+                            .setTitle(R.string.share_title_share_to_contact)
+                            .setItems(contactNames) { dialog, which ->
+                                val selectedContact = contacts[which]
+                                sendMessageToContact(appContext, repository, selectedContact.peerId, content)
+                                dialog.dismiss()
+                            }
+                            .setNegativeButton(R.string.cancel) { dialog, _ ->
+                                dialog.dismiss()
+                            }
+                            .show()
+                    } catch (e: android.view.WindowManager.BadTokenException) {
+                        Timber.w("Cannot show dialog from BroadcastReceiver context, using toast fallback")
+                        Toast.makeText(
+                            appContext,
+                            appContext.getString(R.string.share_toast_open_app_fallback),
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
-                    .show()
-            } catch (e: android.view.WindowManager.BadTokenException) {
-                Timber.w("Cannot show dialog from BroadcastReceiver context, using toast fallback")
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.share_toast_open_app_fallback),
-                    Toast.LENGTH_LONG
-                ).show()
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to show contact picker")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        appContext,
+                        appContext.getString(R.string.share_error_failed_to_load_contacts),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } finally {
+                pendingResult.finish()
+                scope.cancel()
             }
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to show contact picker")
-            Toast.makeText(context, context.getString(R.string.share_error_failed_to_load_contacts), Toast.LENGTH_SHORT).show()
         }
     }
 

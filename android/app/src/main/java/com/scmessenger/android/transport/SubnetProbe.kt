@@ -269,12 +269,34 @@ class SubnetProbe(
         try {
             val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                 ?: return result
-            val active = cm.activeNetwork ?: return result
-            val link: LinkProperties = cm.getLinkProperties(active) ?: return result
-            for (addr in link.linkAddresses) {
-                val ip = addr.address
-                if (ip is Inet4Address && !ip.isLoopbackAddress) {
-                    result += ip.hostAddress.orEmpty()
+            // Enumerate across ALL networks, not just the active one. The active
+            // network can be a VPN or cellular while Wi-Fi (the interface the
+            // candidate-subnet sweep scans) carries the device's LAN address;
+            // missing it here let the probe dial the device's own listener
+            // (self-dial -> NoAddresses exception every sweep).
+            val networks = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                cm.allNetworks
+            } else {
+                null
+            }
+            if (networks != null) {
+                for (net in networks) {
+                    val link = cm.getLinkProperties(net) ?: continue
+                    for (addr in link.linkAddresses) {
+                        val ip = addr.address
+                        if (ip is Inet4Address && !ip.isLoopbackAddress) {
+                            result += ip.hostAddress.orEmpty()
+                        }
+                    }
+                }
+            } else {
+                // Legacy fallback (< API 21) — should not happen on minSdk 26.
+                val link = cm.activeNetwork?.let { cm.getLinkProperties(it) }
+                for (addr in link?.linkAddresses.orEmpty()) {
+                    val ip = addr.address
+                    if (ip is Inet4Address && !ip.isLoopbackAddress) {
+                        result += ip.hostAddress.orEmpty()
+                    }
                 }
             }
         } catch (t: Throwable) {

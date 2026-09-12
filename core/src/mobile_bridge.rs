@@ -172,6 +172,26 @@ pub struct MeshService {
     pub(crate) nearby_ble_peers: Arc<Mutex<HashSet<String>>>,
     core: std::sync::Arc<Mutex<Option<std::sync::Arc<crate::IronCore>>>>,
     platform_bridge: std::sync::Arc<Mutex<Option<Box<dyn PlatformBridge>>>>,
+    /// Bumped on every write to `platform_bridge` (set_platform_bridge and
+    /// detached-notify windows) so a window restores the bridge only when
+    /// no other write happened meanwhile (R10-F1).
+    bridge_generation: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Depth of active detached-notify windows: incremented while the
+    /// bridge is taken out of the slot, decremented on restore (R10-F2).
+    notify_window_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Device profile reported while a detached-notify window hid the
+    /// platform bridge; replayed once all windows close so a concurrent
+    /// update is never silently dropped (R10-F2).
+    pending_device_profile: Mutex<Option<DeviceProfile>>,
+    /// Lifecycle event coalesced while a notify window was open (R11-4);
+    /// latest event wins, delivered by the next drain. R17-F1: each entry
+    /// records the thread that stashed it -- an echo may overwrite only a
+    /// same-thread stash (see StashedLifecycle).
+    pending_lifecycle: Mutex<Option<StashedLifecycle>>,
+    /// Non-reentrant budget for drain_to_fixed_point (R12-F1): 1 = a drain
+    /// is already running on this thread; nested calls return immediately
+    /// so recursive re-entry cannot multiply the delivery bound.
+    drain_budget: std::sync::atomic::AtomicUsize,
     storage_path: Option<String>,
     log_directory: Option<String>,
     swarm_bridge: std::sync::Arc<SwarmBridge>,
@@ -200,6 +220,10 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
+            pending_lifecycle: Mutex::new(None),
             storage_path: None,
             log_directory: None,
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -208,6 +232,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             device_state: RwLock::new(None),
+            drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
             external_delegate: Arc::new(Mutex::new(None)),
@@ -227,6 +252,10 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
+            pending_lifecycle: Mutex::new(None),
             storage_path: Some(storage_path),
             log_directory: None,
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -235,6 +264,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             device_state: RwLock::new(None),
+            drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
             external_delegate: Arc::new(Mutex::new(None)),
@@ -258,6 +288,10 @@ impl MeshService {
             stats: Arc::new(Mutex::new(ServiceStats::default())),
             core: std::sync::Arc::new(Mutex::new(None)),
             platform_bridge: std::sync::Arc::new(Mutex::new(None)),
+            bridge_generation: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notify_window_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_device_profile: Mutex::new(None),
+            pending_lifecycle: Mutex::new(None),
             storage_path: Some(storage_path),
             log_directory: Some(log_directory),
             swarm_bridge: std::sync::Arc::new(SwarmBridge::new()),
@@ -266,6 +300,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             device_state: RwLock::new(None),
+            drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
             external_delegate: Arc::new(Mutex::new(None)),
@@ -402,6 +437,10 @@ impl MeshService {
         }
 
         // Initialize WiFi Aware and WiFi Direct transports if enabled and platform bridge is set
+        // Detached-notify audit (R10-F4): the lock is dropped before any
+        // PlatformBridge method runs; the bridge handle handed to the
+        // transports does not synchronously re-enter MeshService. Verified
+        // non-reentrant.
         if self.platform_bridge.lock().is_some() {
             let aware_bridge = Arc::new(PlatformWifiAwareBridge::new_platform_ref(
                 self.platform_bridge.clone(),
@@ -513,16 +552,17 @@ impl MeshService {
 
     pub fn pause(&self) {
         tracing::info!("MeshService paused (activity reduced)");
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
-            bridge.on_entering_background();
-        }
+        self.notify(PendingLifecycle::Background);
+        // R12-F5: ONE fixed-point drain tail drains both queues in the
+        // required precedence (device profile before lifecycle) regardless
+        // of the entry path.
+        self.drain_to_fixed_point();
     }
 
     pub fn resume(&self) {
         tracing::info!("MeshService resumed (full activity)");
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
-            bridge.on_entering_foreground();
-        }
+        self.notify(PendingLifecycle::Foreground);
+        self.drain_to_fixed_point();
     }
 
     pub fn get_state(&self) -> ServiceState {
@@ -542,7 +582,13 @@ impl MeshService {
     }
 
     pub fn set_platform_bridge(&self, bridge: Option<Box<dyn PlatformBridge>>) {
-        *self.platform_bridge.lock() = bridge;
+        // The generation bump is inside the slot lock so a write is atomic
+        // with its bump; dispatch_bridge_event snapshots the generation under
+        // the same lock (R11-1).
+        let mut slot = self.platform_bridge.lock();
+        self.bridge_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        *slot = bridge;
     }
 
     /// Update keepalive interval for a peer connection.
@@ -1296,6 +1342,19 @@ impl MeshService {
     }
 
     pub fn update_device_state(&self, profile: DeviceProfile) {
+        // Pure-echo filter (R10-F5): a re-entrant report of the profile
+        // this service just applied carries no new information; process
+        // it as a no-op so an echoing platform cannot loop the
+        // stash/replay path below.
+        if self
+            .notify_window_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+            && *self.current_device_profile.lock() == Some(profile.clone())
+        {
+            tracing::debug!("Echoed device profile during notify window: ignored");
+            return;
+        }
         let new_state = DeviceState::from_profile(&profile);
 
         // Read old state for transition logging (cheap read-lock).
@@ -1417,16 +1476,39 @@ impl MeshService {
 
         // P0_RELIABILITY_001: Notify platform bridge of state change if it's subscribed.
         // This ensures the platform (Android/iOS) UI stays in sync with core adjustments.
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
+        // Detached notify: the platform callback echoes back into
+        // update_device_state (UniFFI re-entry), which must observe the
+        // bridge as absent rather than self-deadlock on this mutex. A
+        // report arriving while the bridge is hidden is stashed and
+        // replayed once all windows close (R10-F2), so no state update
+        // is ever dropped.
+        match self.dispatch_bridge_event(|bridge| {
             bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
             bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
             bridge.on_motion_changed(profile.motion_state);
+        }) {
+            BridgeDispatch::WindowOpen => {
+                // Atomic with the window state (R11-2): stash for replay
+                // once every window closes (R10-F2).
+                *self.pending_device_profile.lock() = Some(profile);
+                tracing::debug!("Notify window open: device profile stashed for replay");
+            }
+            BridgeDispatch::NoBridge => {
+                tracing::debug!("No platform bridge: device-state notification skipped");
+            }
+            BridgeDispatch::Dispatched => {}
         }
 
         // B1_CORE_ENTRY_007: Periodic routing engine maintenance
         // Advance the routing engine by one tick to maintain up-to-date routing state.
         // Called on device state changes to ensure routing stays synchronized with network conditions.
         let _ = self.routing_tick();
+
+        // R10-F2/R12-F1: a report stashed while the bridge was detached
+        // replays via the single fixed-point drain once every window has
+        // closed; the budget guard makes this tail call a no-op when this
+        // update was itself launched by the drain.
+        self.drain_to_fixed_point();
     }
 
     /// Return the recommended behavior adjustments for the *current* device state.
@@ -1946,14 +2028,256 @@ impl MeshService {
             );
             return;
         }
-        if let Some(bridge) = self.platform_bridge.lock().as_ref() {
+        // R11-5: dispatch outside the slot lock via the detached-window
+        // machinery (re-entry-safe), instead of holding the mutex across the
+        // callback. Proximity packets are ephemeral: one arriving while no
+        // bridge is available (window open or none installed) is dropped
+        // with a warning, never queued.
+        match self.dispatch_bridge_event(|bridge| {
             bridge.send_proximity_packet(peer_id, transport, data);
+        }) {
+            BridgeDispatch::Dispatched => {}
+            BridgeDispatch::WindowOpen => {
+                tracing::warn!("Proximity packet dropped: notify window open");
+            }
+            BridgeDispatch::NoBridge => {
+                tracing::warn!("Proximity packet dropped: platform bridge unavailable");
+            }
         }
     }
 }
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Public-entry notification: deliver the event immediately, or stash
+    /// it for the fixed-point drain when a notify window is open (R11-4).
+    /// A same-event echo of the in-flight notification terminates inside
+    /// notify_lifecycle via the thread-local marker (R12-F3) and reports
+    /// WindowOpen, which stashes here -- a same-event stash is a no-op
+    /// re-write of the value already pending (latest-wins coalescing).
+    fn notify(&self, event: PendingLifecycle) {
+        // R12: same-event echo suppression, correlated by R15-F1/F2.
+        // Suppression fires ONLY for a synchronous echo: the SAME variant
+        // re-entering on the SAME thread that dispatched the in-flight
+        // delivery (the platform callback invoked by it). That duplicate is
+        // a pure re-derivation -- idempotent under latest-wins -- so neither
+        // dispatch nor stash (else the drain redelivers forever; the
+        // 17-count regression). EVERYTHING else -- including an external
+        // same-variant event from another thread (R15-F1 scenario) or the
+        // Background -> Foreground -> Background sequence -- fails the
+        // correlation check and is stashed via the WindowOpen path, then
+        // delivered exactly once (proven by
+        // external_same_variant_event_from_another_thread_is_not_lost and
+        // distinct_lifecycle_event_during_window_is_coalesced).
+        let is_echo = NOTIFYING_LIFECYCLE.lock().as_ref().is_some_and(|m| {
+            m.event == event && m.dispatching_thread == std::thread::current().id()
+        });
+        if is_echo {
+            // R16-F1: stash-aware suppression (see comment block above).
+            // Overwrite ONLY when a DIFFERENT event is stashed (an
+            // intervening distinct transition made this call a later real
+            // state). pending == None means the pure echo of the in-flight
+            // delivery -- including a drain delivery, whose queue it just
+            // consumed -- and must be suppressed, else the drain redelivers
+            // until the cap (the 33-count regression this exact commit's
+            // first test run caught).
+            let mut pending = self.pending_lifecycle.lock();
+            if let Some(stashed) = pending.as_ref() {
+                // R17-F1: an echo may overwrite a stash only when BOTH the
+                // event differs AND the stash belongs to this same thread
+                // (one thread's own real transition sequence, e.g. the
+                // resume();pause() chain -- latest-wins within that thread).
+                // A stash from ANOTHER thread is newer external state; this
+                // echo re-derives the already-in-flight delivery and must
+                // never clobber it (the R17 lost-state cell).
+                if stashed.event != event && stashed.owner == std::thread::current().id() {
+                    *pending = Some(StashedLifecycle {
+                        event,
+                        owner: std::thread::current().id(),
+                    });
+                }
+            }
+            return;
+        }
+        if self.notify_lifecycle(event) == BridgeDispatch::WindowOpen {
+            // R17-F1: record the stashing thread so a later same-thread
+            // echo may overwrite (its thread's own latest-wins sequence)
+            // but a cross-thread echo cannot.
+            *self.pending_lifecycle.lock() = Some(StashedLifecycle {
+                event,
+                owner: std::thread::current().id(),
+            });
+        }
+    }
+
+    /// Notify one lifecycle event with the single-flight marker set, so a
+    /// re-entrant call while a delivery is in flight is stashed via
+    /// notify()'s WindowOpen path instead of deadlocking or interleaving
+    /// (R11-4, R14-F4).
+    ///
+    /// R15-F1/F2: the marker records (event, dispatching thread) with RAII
+    /// stack discipline -- restored on drop (unwind-safe, no cross-owner
+    /// erase). notify() correlates echoes on the dispatching thread only.
+    fn notify_lifecycle(&self, event: PendingLifecycle) -> BridgeDispatch {
+        // R14-F2: check-and-set is ONE lock critical section (no TOCTOU),
+        // and the guard restores the previous value rather than clearing.
+        let previous = {
+            let mut marker = NOTIFYING_LIFECYCLE.lock();
+            if marker.is_some() {
+                // Single-flight: a delivery is in flight; the caller
+                // stashes via notify()'s WindowOpen path.
+                return BridgeDispatch::WindowOpen;
+            }
+            marker.replace(MarkerEntry {
+                event,
+                dispatching_thread: std::thread::current().id(),
+            })
+        };
+        let _marker = LifecycleNotifyGuard(previous);
+        let outcome = match event {
+            PendingLifecycle::Background => {
+                self.dispatch_bridge_event(|bridge| bridge.on_entering_background())
+            }
+            PendingLifecycle::Foreground => {
+                self.dispatch_bridge_event(|bridge| bridge.on_entering_foreground())
+            }
+        };
+        drop(_marker);
+        outcome
+    }
+
+    /// R12-F1/F5 / R13-F1/F2/F4: the ONE drain owner, replacing the
+    /// per-site tail drains whose nested round-counter resets let a
+    /// recursively stashing bridge multiply the delivery bound.
+    ///
+    /// - Non-reentrant via `drain_budget` (1 = a drain is running; nested
+    ///   calls return immediately and the outer loop's next iteration
+    ///   observes their stashes). The budget is held by an RAII guard, so a
+    ///   panic inside a delivery cannot leak it and lock out all future
+    ///   drains (R13-F1).
+    /// - Iterates both queues to a fixed point in the required precedence
+    ///   (device profile before lifecycle), bounded by DRAIN_ROUNDS_CAP
+    ///   (R12-F5).
+    /// - Lifecycle delivery goes through `notify`, so an event taken just
+    ///   before a window races open is RE-STASHED (WindowOpen path), never
+    ///   dropped (R13-F2).
+    /// - After the loop, the budget is released and the queues rechecked:
+    ///   a stash that landed during the final iteration is drained by this
+    ///   same call instead of waiting for a future caller (R13-F4). The
+    ///   recheck loop itself is bounded by the same cap.
+    /// - Cap exit leaves anything still pending stashed for the next
+    ///   drain: a single-slot latest-wins queue cannot grow, so this
+    ///   defers rather than accumulates (R13-F5/R14-F5/R15-F3 contract).
+    ///   The "next drain" is GUARANTEED by these exact call sites, all in
+    ///   this file: `MeshService::pause` (tail), `MeshService::resume`
+    ///   (tail), and `MeshService::update_device_state` (tail after the
+    ///   dispatch returns, i.e. after the window has closed) -- the three
+    ///   functions that open notify windows. A window close is therefore
+    ///   always followed by a drain call on the closing thread.
+    fn drain_to_fixed_point(&self) {
+        use std::sync::atomic::Ordering;
+        // R14-F1: acquisition IS the CAS; a nested/concurrent drain (budget
+        // already 1) gets None and returns immediately.
+        let Some(_budget) = DrainBudgetGuard::acquire(&self.drain_budget) else {
+            return;
+        };
+        for _outer in 0..2 {
+            for _round in 0..DRAIN_ROUNDS_CAP {
+                if self.notify_window_depth.load(Ordering::Acquire) > 0 {
+                    break;
+                }
+                let profile = self.pending_device_profile.lock().take();
+                let lifecycle = self.pending_lifecycle.lock().take().map(|s| s.event);
+                match (profile, lifecycle) {
+                    (None, None) => break,
+                    (p, l) => {
+                        if let Some(profile) = p {
+                            tracing::info!(
+                                "Replaying device profile stashed during detached notify"
+                            );
+                            self.update_device_state(profile);
+                        }
+                        if let Some(event) = l {
+                            tracing::info!("Delivering coalesced lifecycle event: {:?}", event);
+                            // notify() re-stashes on WindowOpen (R13-F2).
+                            self.notify(event);
+                        }
+                    }
+                }
+            }
+            if self.pending_device_profile.lock().is_none()
+                && self.pending_lifecycle.lock().is_none()
+            {
+                break;
+            }
+            tracing::warn!("Drain cap reached with pending stashes; deferring to the next drain");
+            // R13-F4: recheck-and-continue once a nested drain released the
+            // budget; the outer bound keeps this from spinning.
+        }
+    }
+
+    /// Invoke `f` with the platform bridge detached from its mutex.
+    ///
+    /// Platform callbacks may re-enter `MeshService` synchronously through
+    /// the UniFFI FFI: the pre-fix Android bridge echoed lifecycle and
+    /// device-state notifications back into `pause()`/`update_device_state()`.
+    /// Holding the non-reentrant `platform_bridge` mutex across such a
+    /// callback self-deadlocks the calling thread -- observed as Android
+    /// main-thread ANRs (RCA 2026-09-06).
+    ///
+    /// Atomicity (R11-1/R11-2): the depth increment, generation snapshot,
+    /// and bridge take all happen inside ONE slot-lock critical section, and
+    /// the restore mirrors it (see `RestoreBridgeGuard::drop`), so no
+    /// observer can ever see `depth == 0` with an empty slot, and no
+    /// `set_platform_bridge` write can interleave between the generation
+    /// snapshot and the take.
+    ///
+    /// Lives in the non-UniFFI impl block: `#[uniffi::export]` rewrites
+    /// this impl and cannot emit generic methods.
+    fn dispatch_bridge_event<F>(&self, f: F) -> BridgeDispatch
+    where
+        F: FnOnce(&dyn PlatformBridge),
+    {
+        let (bridge, generation_at_detach) = {
+            let mut slot = self.platform_bridge.lock();
+            if self
+                .notify_window_depth
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 0
+            {
+                return BridgeDispatch::WindowOpen;
+            }
+            let generation_at_detach = self
+                .bridge_generation
+                .load(std::sync::atomic::Ordering::Acquire);
+            // R12-F2: the depth increment lives in the same critical
+            // section as the take, so a concurrent dispatcher can never
+            // observe depth == 0 with an empty slot (which made it skip
+            // stashing a real update).
+            self.notify_window_depth
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            (slot.take(), generation_at_detach)
+        };
+        let Some(bridge) = bridge else {
+            // No bridge installed: undo the depth increment taken under the
+            // lock (the guard below is not constructed on this path).
+            self.notify_window_depth
+                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            return BridgeDispatch::NoBridge;
+        };
+        let _restore = RestoreBridgeGuard {
+            slot: self.platform_bridge.clone(),
+            slot_generation: self.bridge_generation.clone(),
+            generation_at_detach,
+            window_depth: self.notify_window_depth.clone(),
+            bridge: Some(bridge),
+        };
+        if let Some(b) = _restore.bridge.as_deref() {
+            f(b);
+        }
+        BridgeDispatch::Dispatched
+    }
+
     /// Apply the local (synchronous) side of a relay-budget change: persist
     /// the budget and toggle drift protocol state. Shared by the async FFI
     /// `set_relay_budget` and the internal non-blocking variant.
@@ -2166,6 +2490,158 @@ impl crate::CoreDelegate for MeshServiceCoreDelegate {
                 delegate.on_receipt_received(message_id, status);
             }
         }
+    }
+}
+
+/// Outcome of `dispatch_bridge_event`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BridgeDispatch {
+    /// Dispatched over a detached-notify window.
+    Dispatched,
+    /// No bridge installed (steady state): nothing to notify.
+    NoBridge,
+    /// A notify window is open; the caller should stash and replay later.
+    WindowOpen,
+}
+
+/// Coalesced lifecycle notification (R11-4): the latest event wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingLifecycle {
+    Background,
+    Foreground,
+}
+
+/// R17-F1: a stashed lifecycle event plus the thread that stashed it. The
+/// owner closes the R17 lost-state cell: a same-thread echo may overwrite
+/// (one thread's own transition sequence is a real latest-wins chain); a
+/// cross-thread echo never may -- the stash is newer external state, the
+/// echo re-derives the already-in-flight delivery.
+#[derive(Debug, Clone, Copy)]
+struct StashedLifecycle {
+    event: PendingLifecycle,
+    owner: std::thread::ThreadId,
+}
+
+/// Drain bounds: a pathological bridge that re-stashes events during its own
+/// notification is terminated after this many deliveries (R11-3).
+/// R12-F1/F5: the shared fixed-point round cap for `drain_to_fixed_point`.
+const DRAIN_ROUNDS_CAP: usize = 16;
+
+/// Restores a platform bridge swapped out for a notify-detached callback
+/// window, even if the callback panics. The restore fires only when the
+/// slot generation still matches the snapshot taken at detach: any
+/// explicit `set_platform_bridge` write (Some or None) during the window
+/// bumps the generation and wins over the restore (R10-F1).
+struct RestoreBridgeGuard {
+    slot: std::sync::Arc<Mutex<Option<Box<dyn PlatformBridge>>>>,
+    slot_generation: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    generation_at_detach: usize,
+    window_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    bridge: Option<Box<dyn PlatformBridge>>,
+}
+
+impl Drop for RestoreBridgeGuard {
+    fn drop(&mut self) {
+        // Single critical section (R11-2): the depth decrement and the
+        // restore are one atomic step, so `depth == 0` never coexists with
+        // an empty slot. The generation check lives under the same lock, so
+        // an explicit `set_platform_bridge` write (Some or None) during the
+        // window always wins over the restore (R11-1); only an actual Some
+        // restore bumps the generation.
+        let mut guard = self.slot.lock();
+        self.window_depth
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if self
+            .slot_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            == self.generation_at_detach
+            && guard.is_none()
+        {
+            if self.bridge.is_some() {
+                self.slot_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
+            *guard = self.bridge.take();
+        }
+    }
+}
+
+/// R15-F1/F2: one lifecycle notification in flight platform-wide, recorded
+/// as (event, dispatching thread). The dispatching thread IS the echo
+/// correlation: the only code that can observe the marker while it is held
+/// and re-enter with the SAME variant on the SAME thread is the platform
+/// callback invoked by that dispatch (synchronous re-entry), because the
+/// dispatch holds the detached-notify window open on that thread. Any
+/// other origin -- an external platform event on a different thread, the
+/// drain, another caller -- has a different thread id and is therefore
+/// STASHED via notify()'s WindowOpen path and delivered after the window
+/// closes: latest-wins is never violated (R15-F1 scenario fixed).
+///
+/// R16-F2 (dispatch contract): UniFFI synchronous callback re-entry
+/// executes ON the dispatching Rust thread (verified in the 2026-09-06 ANR
+/// stacks: the main thread deadlocked with itself through the synchronous
+/// up-call). If a future platform marshals callbacks to a different
+/// thread, the correlation degrades safely: echoes are no longer matched,
+/// so each re-entry is stashed and delivered once -- bounded extra
+/// deliveries, never a lost state.
+///
+/// R16-F3 (instance contract): exactly one MeshService is ACTIVE per
+/// process (production instantiates a single bridge service; the test
+/// suite serializes multi-instance access via BRIDGE_TEST_SERIAL). The
+/// process-wide marker is therefore unambiguous.
+///
+/// R17-F2 (drain-span contract): the marker is held across the ENTIRE
+/// take-and-dispatch of a drain delivery -- notify() sets it before the
+/// queue item is consumed by the callback and drops it only after the
+/// dispatch closure returns -- so no external caller can observe a marker
+/// gap between "stash taken" and "dispatch in flight". An external event
+/// arriving during a drain delivery therefore hits the held marker (not
+/// an empty state), fails the same-thread correlation, and is stashed for
+/// the next drain round; `pending == None` inside a dispatch callback is
+/// thus always the pure-echo case the suppression relies on.
+static NOTIFYING_LIFECYCLE: Mutex<Option<MarkerEntry>> = Mutex::new(None);
+
+/// In-flight lifecycle marker entry (R15-F1/F2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MarkerEntry {
+    event: PendingLifecycle,
+    dispatching_thread: std::thread::ThreadId,
+}
+
+/// RAII marker for `notify_lifecycle` (R12-F3/R14-F2): atomically checked
+/// and set under ONE lock acquisition in `notify_lifecycle`; restores the
+/// previous marker entry on drop (unwind-safe, no cross-owner erase).
+struct LifecycleNotifyGuard(Option<MarkerEntry>);
+
+/// RAII holder for the non-reentrant drain budget (R13-F1/R14-F1):
+/// acquisition is the CAS itself (0 -> 1) and only the acquired owner is
+/// constructed, so the release-on-drop can never clear another owner's
+/// budget and a panic inside a drained delivery cannot leak it.
+struct DrainBudgetGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl DrainBudgetGuard<'_> {
+    fn acquire(budget: &std::sync::atomic::AtomicUsize) -> Option<DrainBudgetGuard<'_>> {
+        budget
+            .compare_exchange(
+                0,
+                1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| DrainBudgetGuard(budget))
+    }
+}
+
+impl Drop for DrainBudgetGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl Drop for LifecycleNotifyGuard {
+    fn drop(&mut self) {
+        *NOTIFYING_LIFECYCLE.lock() = self.0.take();
     }
 }
 
@@ -2384,7 +2860,7 @@ impl WifiAwarePlatformBridge for PlatformWifiAwareBridge {
 // AUTO-ADJUST ENGINE
 // ============================================================================
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeviceProfile {
     pub battery_pct: u8,
     pub is_charging: bool,
@@ -2952,6 +3428,10 @@ impl HistoryManager {
     pub fn mark_delivered(&self, id: String) -> Result<(), crate::IronCoreError> {
         if let Some(mut record) = self.get(id.clone())? {
             record.delivered = true;
+            // RECEIPT-UI-001: UDL documents status monotone Queued→Delivered.
+            // Leaving status=Queued made MessageBubble stay Pending after any
+            // loadMessages() even when delivered=true.
+            record.status = MessageStatus::Delivered;
             self.add(record)?;
         }
         Ok(())
@@ -4519,6 +4999,844 @@ mod tests {
         ]
     }
 
+    /// The lifecycle single-flight marker is a process-wide global, and
+    /// cargo runs tests in parallel threads. Every test below that drives
+    /// pause/resume/update_device_state through an installed bridge holds
+    /// this lock for its duration so one test's in-flight window (the R15
+    /// blocking-echo test can hold it for seconds) cannot make another
+    /// test's delivery observe a foreign marker and stash-cap instead of
+    /// dispatch. Production code is unaffected: single-flight is exactly
+    /// the platform-wide contract being tested.
+    static BRIDGE_TEST_SERIAL: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    /// Regression (RCA 2026-09-06, Android ANR): a platform callback that
+    /// re-enters `MeshService` synchronously must not self-deadlock on the
+    /// non-reentrant `platform_bridge` mutex. The notify sites detach the
+    /// bridge for the callback window, so the echo observes no bridge and
+    /// returns; the bridge is restored afterwards.
+    #[test]
+    fn pause_reentrant_platform_callback_does_not_deadlock() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+
+        service.pause(); // self-deadlocked the caller before the fix
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "echo must observe the detached bridge exactly once"
+        );
+
+        service.pause(); // bridge restored: the notification fires again
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "bridge must be restored after the callback window"
+        );
+    }
+
+    /// R10-F1: an explicit `set_platform_bridge(None)` during the detached
+    /// window must WIN over the restore -- the bridge stays dropped.
+    #[test]
+    fn set_none_during_detached_window_wins() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+        bridge
+            .action
+            .set_none
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        service.pause();
+
+        // The callback set None explicitly; the guard must NOT resurrect
+        // the bridge, and a later notify must not fire.
+        assert!(service.platform_bridge.lock().is_none());
+        let before = bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst);
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "no notification may fire after an explicit None"
+        );
+    }
+
+    /// R10-F1 (nested-window shape): an explicit `set_platform_bridge(Some)`
+    /// during the window wins, and a second pause then notifies the NEW
+    /// bridge exactly once.
+    #[test]
+    fn set_some_during_detached_window_wins() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+        bridge
+            .action
+            .set_self
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        service.pause();
+
+        // The replacement bridge is in the slot; a later notify fires on it.
+        assert!(service.platform_bridge.lock().is_some());
+        let before = bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst);
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            before + 1,
+            "replacement bridge must receive subsequent notifications"
+        );
+    }
+
+    /// R12-F1: a bridge that re-enters update_device_state with a DISTINCT
+    /// profile during the replay of a drained one must not multiply the
+    /// delivery bound. Pre-fix the nested drain reset its round counter on
+    /// every recursion level; post-fix the nested drain_to_fixed_point is a
+    /// no-op (budget guard) and the outer loop delivers the follow-up.
+    #[test]
+    fn reentrant_restash_during_drain_is_bounded_and_delivered() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct RestashBridge {
+            service: std::sync::Weak<MeshService>,
+            callbacks: AtomicUsize,
+        }
+        impl PlatformBridge for RestashBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {
+                let n = self.callbacks.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // Distinct profile on re-entry -> cannot be ignored as
+                    // an echo; drives the recursion the cap must bound.
+                    if let Some(s) = self.service.upgrade() {
+                        s.update_device_state(DeviceProfile {
+                            battery_pct: 40,
+                            is_charging: false,
+                            has_wifi: true,
+                            motion_state: MotionState::Still,
+                            peer_id: None,
+                            device_id: None,
+                        });
+                    }
+                }
+            }
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {}
+            fn on_entering_foreground(&self) {}
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+
+        struct RestashHandle(std::sync::Arc<RestashBridge>);
+        impl PlatformBridge for RestashHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(RestashBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(RestashHandle(bridge.clone()))));
+
+        service.update_device_state(DeviceProfile {
+            battery_pct: 50,
+            is_charging: false,
+            has_wifi: true,
+            motion_state: MotionState::Still,
+            peer_id: None,
+            device_id: None,
+        });
+        // Both distinct profiles delivered exactly once (2 callbacks), with
+        // no runaway recursion and nothing left pending.
+        assert_eq!(bridge.callbacks.load(Ordering::SeqCst), 2);
+        assert!(service.pending_device_profile.lock().is_none());
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R15-F1: an external SAME-VARIANT lifecycle event arriving from a
+    /// DIFFERENT thread while that variant's delivery is in flight must be
+    /// STASHED and delivered (latest-wins), never suppressed by variant
+    /// equality. Pre-fix, `notify` matched the marker on event alone and
+    /// silently dropped it (obsolete state delivered).
+    #[test]
+    fn external_same_variant_event_from_another_thread_is_not_lost() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::mpsc;
+        use std::sync::Arc as StdArc;
+        struct BlockingEchoBridge {
+            service: std::sync::Weak<MeshService>,
+            callbacks: std::sync::atomic::AtomicUsize,
+            in_flight_tx: parking_lot::Mutex<mpsc::Sender<()>>,
+            release_rx: parking_lot::Mutex<Option<mpsc::Receiver<()>>>,
+        }
+        impl PlatformBridge for BlockingEchoBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self
+                    .callbacks
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // Hold the window open; the test drives an external
+                    // pause() from another thread meanwhile.
+                    self.in_flight_tx.lock().send(()).expect("test channel");
+                    // R16-F4: receiver TAKEN out so no lock is held across
+                    // the blocking wait.
+                    let release_rx = self
+                        .release_rx
+                        .lock()
+                        .take()
+                        .expect("release receiver available once");
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("test released the in-flight callback");
+                }
+                // Synchronous same-thread echo (suppressed, must not loop).
+                if let Some(s) = self.service.upgrade() {
+                    s.pause();
+                }
+            }
+            fn on_entering_foreground(&self) {}
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct BlockingEchoHandle(StdArc<BlockingEchoBridge>);
+        impl PlatformBridge for BlockingEchoHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = StdArc::new(MeshService::new(test_mesh_service_config()));
+        let (in_tx, in_rx) = mpsc::channel();
+        let (rel_tx, rel_rx) = mpsc::channel();
+        let bridge = StdArc::new(BlockingEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            in_flight_tx: parking_lot::Mutex::new(in_tx),
+            release_rx: parking_lot::Mutex::new(Some(rel_rx)),
+        });
+        service.set_platform_bridge(Some(Box::new(BlockingEchoHandle(bridge.clone()))));
+
+        // Main thread: pause() -> dispatch -> callback blocks in-flight.
+        let main = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        in_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("callback signalled in-flight");
+
+        // External SAME-VARIANT (Background) event from ANOTHER thread while
+        // the main thread's Background delivery is in flight. Pre-R15 fix:
+        // suppressed by variant equality and lost. Post-fix: stashed.
+        let ext = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        ext.join().expect("external pause joins");
+        rel_tx.send(()).expect("release the in-flight callback");
+        main.join().expect("main pause joins");
+
+        // The stashed external Background is delivered exactly once more by
+        // the closing thread's drain tail (2 total); nothing left pending.
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "external same-variant event must be delivered, not dropped"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R16-F1: a same-thread callback that performs resume() then pause()
+    /// between the outer pause()'s dispatch is NOT a pure echo: the final
+    /// pause is a LATER real transition and must overwrite the stashed
+    /// Foreground (latest-wins). Pre-fix the final pause matched the marker
+    /// on (event, thread) alone, was dropped, and the drain delivered the
+    /// obsolete Foreground.
+    #[test]
+    fn same_thread_echo_after_intervening_stash_keeps_latest_state() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct ChainBridge {
+            service: std::sync::Weak<MeshService>,
+            background_callbacks: AtomicUsize,
+        }
+        impl PlatformBridge for ChainBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self.background_callbacks.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // Same-thread re-entry chain: resume() stashes a distinct
+                    // Foreground; pause() then matches the marker (same
+                    // variant, same thread) and -- post-fix -- OVERWRITES the
+                    // stash instead of being dropped.
+                    if let Some(s) = self.service.upgrade() {
+                        s.resume();
+                        s.pause();
+                    }
+                }
+            }
+            fn on_entering_foreground(&self) {}
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct ChainHandle(std::sync::Arc<ChainBridge>);
+        impl PlatformBridge for ChainHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ChainBridge {
+            service: std::sync::Arc::downgrade(&service),
+            background_callbacks: AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(ChainHandle(bridge.clone()))));
+
+        service.pause();
+
+        // Background delivered twice (outer + the chain's final pause as the
+        // newest state); the interim Foreground stash was overwritten, so it
+        // is never delivered. Latest-wins holds.
+        assert_eq!(
+            bridge.background_callbacks.load(Ordering::SeqCst),
+            2,
+            "final same-variant transition must overwrite the stale stash"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R17-F1/F3: a stash made by ANOTHER thread (external event) must NOT
+    /// be overwritten by the dispatching thread's same-variant echo.
+    /// Sequence: T1's Background delivery is in flight (callback blocked);
+    /// T2 externally resumes (stashes Foreground, owned by T2); T1's
+    /// callback then echoes pause() -- pre-fix that echo overwrote T2's
+    /// newer stash (Foreground lost, obsolete Background delivered).
+    #[test]
+    fn cross_thread_stash_survives_same_thread_echo() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        use std::sync::Arc as StdArc;
+        struct CrossThreadEchoBridge {
+            service: std::sync::Weak<MeshService>,
+            background_callbacks: AtomicUsize,
+            foreground_callbacks: AtomicUsize,
+            in_flight_tx: parking_lot::Mutex<mpsc::Sender<()>>,
+            release_rx: parking_lot::Mutex<Option<mpsc::Receiver<()>>>,
+        }
+        impl PlatformBridge for CrossThreadEchoBridge {
+            fn on_battery_changed(&self, _b: u8, _c: bool) {}
+            fn on_network_changed(&self, _w: bool, _cell: bool) {}
+            fn on_motion_changed(&self, _m: MotionState) {}
+            fn on_ble_data_received(&self, _p: String, _d: Vec<u8>) {}
+            fn on_entering_background(&self) {
+                let n = self.background_callbacks.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // Hold the window open; the test stashes an external
+                    // Foreground from another thread meanwhile.
+                    self.in_flight_tx.lock().send(()).expect("test channel");
+                    let release_rx = self
+                        .release_rx
+                        .lock()
+                        .take()
+                        .expect("release receiver available once");
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("test released the in-flight callback");
+                    // Same-thread echo of the in-flight variant AFTER the
+                    // cross-thread stash exists. Pre-R17: overwrote it.
+                    if let Some(s) = self.service.upgrade() {
+                        s.pause();
+                    }
+                }
+            }
+            fn on_entering_foreground(&self) {
+                self.foreground_callbacks.fetch_add(1, Ordering::SeqCst);
+            }
+            fn send_ble_packet(&self, _p: String, _d: Vec<u8>) {}
+            fn on_proximity_data_received(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn send_proximity_packet(&self, _p: String, _t: ProximityTransport, _d: Vec<u8>) {}
+            fn wifi_aware_publish(&self, _s: String, _i: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_subscribe(&self, _s: String) -> bool {
+                false
+            }
+            fn wifi_aware_create_data_path(&self, _p: String, _k: Vec<u8>) -> bool {
+                false
+            }
+            fn wifi_aware_stop(&self) {}
+            fn wifi_direct_discover_peers(&self) -> bool {
+                false
+            }
+            fn wifi_direct_stop_discovery(&self) {}
+            fn wifi_direct_connect(&self, _a: String) -> bool {
+                false
+            }
+            fn wifi_direct_create_group(&self, _g: String) -> bool {
+                false
+            }
+            fn wifi_direct_remove_group(&self) {}
+        }
+        struct CrossThreadEchoHandle(StdArc<CrossThreadEchoBridge>);
+        impl PlatformBridge for CrossThreadEchoHandle {
+            fn on_battery_changed(&self, b: u8, c: bool) {
+                self.0.on_battery_changed(b, c)
+            }
+            fn on_network_changed(&self, w: bool, cell: bool) {
+                self.0.on_network_changed(w, cell)
+            }
+            fn on_motion_changed(&self, m: MotionState) {
+                self.0.on_motion_changed(m)
+            }
+            fn on_ble_data_received(&self, p: String, d: Vec<u8>) {
+                self.0.on_ble_data_received(p, d)
+            }
+            fn on_entering_background(&self) {
+                self.0.on_entering_background()
+            }
+            fn on_entering_foreground(&self) {
+                self.0.on_entering_foreground()
+            }
+            fn send_ble_packet(&self, p: String, d: Vec<u8>) {
+                self.0.send_ble_packet(p, d)
+            }
+            fn on_proximity_data_received(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.on_proximity_data_received(p, t, d)
+            }
+            fn send_proximity_packet(&self, p: String, t: ProximityTransport, d: Vec<u8>) {
+                self.0.send_proximity_packet(p, t, d)
+            }
+            fn wifi_aware_publish(&self, s: String, i: Vec<u8>) -> bool {
+                self.0.wifi_aware_publish(s, i)
+            }
+            fn wifi_aware_subscribe(&self, s: String) -> bool {
+                self.0.wifi_aware_subscribe(s)
+            }
+            fn wifi_aware_create_data_path(&self, p: String, k: Vec<u8>) -> bool {
+                self.0.wifi_aware_create_data_path(p, k)
+            }
+            fn wifi_aware_stop(&self) {
+                self.0.wifi_aware_stop()
+            }
+            fn wifi_direct_discover_peers(&self) -> bool {
+                self.0.wifi_direct_discover_peers()
+            }
+            fn wifi_direct_stop_discovery(&self) {
+                self.0.wifi_direct_stop_discovery()
+            }
+            fn wifi_direct_connect(&self, a: String) -> bool {
+                self.0.wifi_direct_connect(a)
+            }
+            fn wifi_direct_create_group(&self, g: String) -> bool {
+                self.0.wifi_direct_create_group(g)
+            }
+            fn wifi_direct_remove_group(&self) {
+                self.0.wifi_direct_remove_group()
+            }
+        }
+
+        let service = StdArc::new(MeshService::new(test_mesh_service_config()));
+        let (in_tx, in_rx) = mpsc::channel();
+        let (rel_tx, rel_rx) = mpsc::channel();
+        let bridge = StdArc::new(CrossThreadEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            background_callbacks: AtomicUsize::new(0),
+            foreground_callbacks: AtomicUsize::new(0),
+            in_flight_tx: parking_lot::Mutex::new(in_tx),
+            release_rx: parking_lot::Mutex::new(Some(rel_rx)),
+        });
+        service.set_platform_bridge(Some(Box::new(CrossThreadEchoHandle(bridge.clone()))));
+
+        // T1: pause() -> dispatch -> callback blocks in-flight.
+        let main = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.pause();
+            })
+        };
+        in_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("callback signalled in-flight");
+
+        // T2: external Foreground (resume) while T1's Background is in
+        // flight -> stashed, owned by T2.
+        let ext = {
+            let service = service.clone();
+            std::thread::spawn(move || {
+                service.resume();
+            })
+        };
+        ext.join().expect("external resume joins");
+
+        // Release T1's callback: it echoes pause() on the dispatching
+        // thread. Pre-fix this overwrote T2's Foreground stash.
+        rel_tx.send(()).expect("release the in-flight callback");
+        main.join().expect("main pause joins");
+
+        // Exactly one Background (T1's original; the echo suppressed) and
+        // exactly one Foreground (T2's stash, delivered by the drain) --
+        // nothing lost, nothing duplicated.
+        assert_eq!(
+            bridge.background_callbacks.load(Ordering::SeqCst),
+            1,
+            "the dispatching thread's echo must not add a delivery"
+        );
+        assert_eq!(
+            bridge.foreground_callbacks.load(Ordering::SeqCst),
+            1,
+            "the cross-thread stash must survive the same-thread echo"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R10-F5: an echoed profile identical to the one just applied must be
+    /// ignored, not stashed-and-replayed forever.
+    #[test]
+    fn echoed_profile_during_window_is_ignored() {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let profile = DeviceProfile {
+            battery_pct: 80,
+            is_charging: false,
+            has_wifi: true,
+            motion_state: MotionState::Still,
+            peer_id: None,
+            device_id: None,
+        };
+
+        service.update_device_state(profile.clone());
+
+        // Simulate the echo arriving while a window is open: replay_pending
+        // would loop if the echo were stashed.
+        service
+            .notify_window_depth
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        service.update_device_state(profile); // identical -> ignored
+        service
+            .notify_window_depth
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(service.pending_device_profile.lock().is_none());
+    }
+
+    /// R11-4 (same-event arm): a lifecycle ECHO of the event already being
+    /// delivered (pause's callback calling pause again) with the window
+    /// still open must be SUPPRESSED -- it carries no new information, and
+    /// re-delivering it is the R10-F5 recursion hazard.
+    #[test]
+    fn nested_same_event_echo_is_suppressed_not_redelivered() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction::default(),
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+
+        // pause() dispatches background; the bridge's echo calls pause()
+        // again with the window still open. Same-event echoes are pure
+        // re-derivations: suppressed, not stashed, not redelivered.
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "same-event echo must be suppressed: background delivered exactly once"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
+    /// R11-4 (distinct arm): a DIFFERENT lifecycle event raised inside a
+    /// notify window (foreground echo while background dispatch is in
+    /// flight) must be COALESCED and delivered exactly once after the
+    /// window closes -- neither dropped nor recursed into.
+    #[test]
+    fn distinct_lifecycle_event_during_window_is_coalesced() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let bridge = std::sync::Arc::new(ReentrantEchoBridge {
+            service: std::sync::Arc::downgrade(&service),
+            callbacks: std::sync::atomic::AtomicUsize::new(0),
+            action: WindowAction {
+                echo_resume: std::sync::atomic::AtomicBool::new(true),
+                ..Default::default()
+            },
+            handle: parking_lot::Mutex::new(None),
+        });
+        *bridge.handle.lock() = Some(std::sync::Arc::downgrade(&bridge));
+        service.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(bridge.clone()))));
+
+        // pause() dispatches background (1); the background callback's echo
+        // is resume() -- a DISTINCT event raised inside the window -- which
+        // the coalescer stashes (not drops) and delivers exactly once after
+        // the window closes (2). The mock's foreground callback does not
+        // echo, so the chain ends: no recursion hazard, no dropped event.
+        service.pause();
+        assert_eq!(
+            bridge.callbacks.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "distinct coalesced event delivered exactly once after window close"
+        );
+        assert!(service.pending_lifecycle.lock().is_none());
+    }
+
     /// Oversize payloads must be rejected (dropped, not silently truncated,
     /// not panicking) for every `ProximityTransport` variant, matching each
     /// transport's `max_payload_size`.
@@ -4626,6 +5944,116 @@ mod tests {
         assert_eq!(sent[2].0, "peer-ble-legacy");
         assert_eq!(sent[2].1, ProximityTransport::Ble);
         assert_eq!(sent[2].2, b"legacy-ble".to_vec());
+    }
+
+    /// Mock whose `on_entering_background` echoes back into
+    /// `MeshService::pause`, reproducing the AndroidPlatformBridge re-entry
+    /// that self-deadlocked before the detached-notify fix.
+    /// Action a test wants the callback to perform while the notify
+    /// window is open (R10-F1/F2 coverage).
+    #[derive(Default)]
+    struct WindowAction {
+        set_none: std::sync::atomic::AtomicBool,
+        set_self: std::sync::atomic::AtomicBool,
+        echo_resume: std::sync::atomic::AtomicBool,
+    }
+
+    struct ReentrantEchoBridge {
+        service: std::sync::Weak<MeshService>,
+        callbacks: std::sync::atomic::AtomicUsize,
+        action: WindowAction,
+        handle: parking_lot::Mutex<Option<std::sync::Weak<ReentrantEchoBridge>>>,
+    }
+
+    struct ReentrantEchoHandle(std::sync::Arc<ReentrantEchoBridge>);
+
+    impl PlatformBridge for ReentrantEchoHandle {
+        fn on_battery_changed(&self, _battery_pct: u8, _is_charging: bool) {}
+        fn on_network_changed(&self, _has_wifi: bool, _has_cellular: bool) {}
+        fn on_motion_changed(&self, _motion: MotionState) {}
+        fn on_ble_data_received(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_entering_background(&self) {
+            self.0
+                .callbacks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let service = self.0.service.upgrade();
+            if self
+                .0
+                .action
+                .set_none
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(s) = service.as_ref() {
+                    s.set_platform_bridge(None);
+                }
+            } else if self
+                .0
+                .action
+                .set_self
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(s) = service.as_ref() {
+                    if let Some(weak) = self.0.handle.lock().clone() {
+                        if let Some(arc) = weak.upgrade() {
+                            s.set_platform_bridge(Some(Box::new(ReentrantEchoHandle(arc))));
+                        }
+                    }
+                }
+            }
+            if self
+                .0
+                .action
+                .echo_resume
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(service) = service {
+                    service.resume();
+                }
+            } else if let Some(service) = service {
+                service.pause();
+            }
+        }
+        fn on_entering_foreground(&self) {
+            self.0
+                .callbacks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn send_ble_packet(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_proximity_data_received(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn send_proximity_packet(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn wifi_aware_publish(&self, _service_name: String, _service_info: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_subscribe(&self, _service_name: String) -> bool {
+            false
+        }
+        fn wifi_aware_create_data_path(&self, _peer_id: String, _pmk: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_stop(&self) {}
+        fn wifi_direct_discover_peers(&self) -> bool {
+            false
+        }
+        fn wifi_direct_stop_discovery(&self) {}
+        fn wifi_direct_connect(&self, _device_address: String) -> bool {
+            false
+        }
+        fn wifi_direct_create_group(&self, _group_name: String) -> bool {
+            false
+        }
+        fn wifi_direct_remove_group(&self) {}
     }
 
     /// Thin wrapper for the mock: `PlatformBridge` requires `Box<dyn

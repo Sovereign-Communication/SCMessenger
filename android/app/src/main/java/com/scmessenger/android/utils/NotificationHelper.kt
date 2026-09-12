@@ -62,11 +62,13 @@ object NotificationHelper {
     private const val NOTIFICATION_ID_MESH_STATUS = 3000
     private const val NOTIFICATION_ID_PEER_EVENT = 4000
 
-    // Actions
-    const val ACTION_REPLY = "com.scmessenger.ACTION_REPLY"
-    const val ACTION_MARK_READ = "com.scmessenger.ACTION_MARK_READ"
-    const val ACTION_MUTE = "com.scmessenger.ACTION_MUTE"
-    const val ACTION_OPEN_REQUESTS = "com.scmessenger.ACTION_OPEN_REQUESTS"
+    // Actions — package-qualified with the applicationId so notification
+    // actions share one app identity (was com.scmessenger.*, which looked
+    // like a foreign app next to com.scmessenger.android).
+    const val ACTION_REPLY = "com.scmessenger.android.ACTION_REPLY"
+    const val ACTION_MARK_READ = "com.scmessenger.android.ACTION_MARK_READ"
+    const val ACTION_MUTE = "com.scmessenger.android.ACTION_MUTE"
+    const val ACTION_OPEN_REQUESTS = "com.scmessenger.android.ACTION_OPEN_REQUESTS"
     const val EXTRA_PEER_ID = "peer_id"
     const val EXTRA_MESSAGE_ID = "message_id"
     const val EXTRA_IS_REQUEST = "is_request"
@@ -503,6 +505,12 @@ object NotificationHelper {
         peerId: String,
         transport: String
     ) {
+        // Gate: honor the global notifications toggle (was DND-only).
+        if (!notificationsEnabled) {
+            trackNotificationEvent("suppressed_settings")
+            Timber.d("Notifications disabled globally, skipping peer-discovered for peerId=$peerId")
+            return
+        }
         if (isDndEnabled(context)) return
 
         val notification = NotificationCompat.Builder(context, CHANNEL_PEER_EVENTS)
@@ -524,33 +532,6 @@ object NotificationHelper {
             )
         } catch (e: SecurityException) {
             Timber.e(e, "Security exception while posting peer discovered notification")
-        }
-    }
-
-    /**
-     * Show mesh status notification (connection issues, etc).
-     */
-    fun showMeshStatusNotification(
-        context: Context,
-        title: String,
-        message: String
-    ) {
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESH_STATUS)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-        if (!hasNotificationPermission(context)) {
-            Timber.w("POST_NOTIFICATIONS permission missing; skipping mesh status notification")
-            return
-        }
-        try {
-            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID_MESH_STATUS, notification)
-        } catch (e: SecurityException) {
-            Timber.e(e, "Security exception while posting mesh status notification")
         }
     }
 

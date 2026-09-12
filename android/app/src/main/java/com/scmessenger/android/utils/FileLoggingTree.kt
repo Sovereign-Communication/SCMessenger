@@ -7,10 +7,16 @@ import java.io.FileWriter
 import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A Timber Tree that logs to a file in the app's internal storage.
- * Useful for diagnosing issues on devices without a debugger connected.
+ *
+ * HANG-MAIN-001: log() must never do FFI or disk I/O on the caller thread
+ * (including main). Lines are enqueued to a single writer thread; on overflow
+ * the oldest line is dropped rather than blocking the UI.
  */
 class FileLoggingTree(context: Context) : Timber.Tree() {
     private val MAX_LOG_LINES = 10000
@@ -21,6 +27,33 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
     @Volatile
     private var ironCore: uniffi.api.IronCore? = null
 
+    private data class LogEntry(val line: String, val throwable: Throwable?)
+
+    private val writeQueue = LinkedBlockingQueue<LogEntry>(512)
+    private val writerRunning = AtomicBoolean(true)
+    private val writerThread = Thread({
+        while (writerRunning.get()) {
+            try {
+                val entry = writeQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                writeEntry(entry)
+            } catch (_: InterruptedException) {
+                break
+            } catch (e: Exception) {
+                android.util.Log.e("FileLoggingTree", "Writer thread error", e)
+            }
+        }
+        // Drain remaining lines on shutdown
+        var leftover = writeQueue.poll()
+        while (leftover != null) {
+            try { writeEntry(leftover) } catch (_: Exception) {}
+            leftover = writeQueue.poll()
+        }
+    }, "FileLoggingTree-writer").also {
+        it.isDaemon = true
+        it.priority = Thread.MIN_PRIORITY
+        it.start()
+    }
+
     fun setIronCore(core: uniffi.api.IronCore?) {
         synchronized(this) { this.ironCore = core }
     }
@@ -30,7 +63,6 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
 
         try {
             isLogging.set(true)
-
             val timestamp = dateFormat.format(Date())
             val priorityStr = when (priority) {
                 android.util.Log.VERBOSE -> "V"
@@ -41,35 +73,36 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 android.util.Log.ASSERT -> "A"
                 else -> "U"
             }
-
             val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
-
-            // WS12.41: Send to IronCore for summarized storage
-            synchronized(this) {
-                runCatching { ironCore?.recordLog(logLine) ?: false }
-                    .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
-
-                // Fallback/Legacy: Still append to file but with smaller limit
-                // The user wants "instead of saving all the log files, we only save the log once"
-                // but for debugging it's useful to have some raw tail.
-                FileWriter(logFile, true).use { writer ->
-                    writer.write(logLine)
-                    t?.let {
-                        val pw = PrintWriter(writer)
-                        it.printStackTrace(pw)
-                        pw.flush()
-                    }
-                }
-
-                // Limit file size to ~100KB (much smaller now that we have summarizer)
-                if (logFile.length() > 100 * 1024) {
-                    truncateLogFile()
-                }
+            // Drop oldest rather than block the caller (main) on a full queue.
+            if (!writeQueue.offer(LogEntry(logLine, t))) {
+                writeQueue.poll()
+                writeQueue.offer(LogEntry(logLine, t))
             }
         } catch (e: Exception) {
-            android.util.Log.e("FileLoggingTree", "Error writing to log file", e)
+            android.util.Log.e("FileLoggingTree", "Error enqueueing log", e)
         } finally {
             isLogging.set(false)
+        }
+    }
+
+    private fun writeEntry(entry: LogEntry) {
+        synchronized(this) {
+            runCatching { ironCore?.recordLog(entry.line) ?: false }
+                .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
+
+            FileWriter(logFile, true).use { writer ->
+                writer.write(entry.line)
+                entry.throwable?.let {
+                    val pw = PrintWriter(writer)
+                    it.printStackTrace(pw)
+                    pw.flush()
+                }
+            }
+
+            if (logFile.length() > 100 * 1024) {
+                truncateLogFile()
+            }
         }
     }
 
