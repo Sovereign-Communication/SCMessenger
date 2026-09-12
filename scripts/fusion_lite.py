@@ -67,7 +67,7 @@ BYOK_DENYLIST_PREFIXES = (
 # Operator-set 2026-07-19: 2c default per call.
 DEFAULT_MAX_COST = 0.02
 HARD_MAX_COST = 0.10  # raised 0.05 -> 0.10 with explicit operator approval 2026-07-29 (Tier-B premium panels)
-DEFAULT_MAX_TOKENS = 300
+DEFAULT_MAX_TOKENS = 4096
 
 
 def eprint(*a, **kw):

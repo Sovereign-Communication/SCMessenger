@@ -82,6 +82,10 @@ class AndroidPlatformBridge @Inject constructor(
     @Volatile private var hasWifi: Boolean = false
     @Volatile private var hasCellular: Boolean = false
     @Volatile private var currentMotionState: uniffi.api.MotionState = uniffi.api.MotionState.UNKNOWN
+    @Volatile private var lastScanIntervalMs: UInt? = null
+    @Volatile private var lastAdvertiseIntervalMs: UInt? = null
+    @Volatile private var lastTxPowerDbm: Byte? = null
+    @Volatile private var lastRelayMaxPerHour: UInt? = null
 
     /**
      * Initialize system monitoring.
@@ -195,9 +199,6 @@ class AndroidPlatformBridge @Inject constructor(
                       status == BatteryManager.BATTERY_STATUS_FULL
 
         if (batteryPct != currentBatteryPct || charging != isCharging) {
-            currentBatteryPct = batteryPct
-            isCharging = charging
-
             Timber.d("Battery changed: $batteryPct%, charging=$charging")
             onBatteryChanged(batteryPct, charging)
         }
@@ -249,9 +250,6 @@ class AndroidPlatformBridge @Inject constructor(
         val cellular = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ?: false
 
         if (wifi != hasWifi || cellular != hasCellular) {
-            hasWifi = wifi
-            hasCellular = cellular
-
             Timber.d("Network changed: wifi=$wifi, cellular=$cellular")
             onNetworkChanged(wifi, cellular)
         }
@@ -277,15 +275,13 @@ class AndroidPlatformBridge @Inject constructor(
                 // long enough to trip SCREEN_ON/OFF broadcast ANRs (10s) and
                 // input-dispatch ANRs. All device-state FFI work is dispatched
                 // to the IO scope; only the cheap volatile state set stays here.
-                when (intent.action) {
-                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                        currentMotionState = uniffi.api.MotionState.WALKING
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
-                    Intent.ACTION_SCREEN_OFF -> {
-                        currentMotionState = uniffi.api.MotionState.STILL
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
+                val targetState = when (intent.action) {
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> uniffi.api.MotionState.WALKING
+                    Intent.ACTION_SCREEN_OFF -> uniffi.api.MotionState.STILL
+                    else -> null
+                }
+                if (targetState != null && targetState != currentMotionState) {
+                    onMotionChanged(targetState)
                 }
             }
         }
@@ -299,6 +295,37 @@ class AndroidPlatformBridge @Inject constructor(
     // ========================================================================
 
     override fun onBatteryChanged(batteryPct: UByte, isCharging: Boolean) {
+        if (batteryPct == currentBatteryPct && isCharging == this.isCharging) {
+            return
+        }
+        currentBatteryPct = batteryPct
+        this.isCharging = isCharging
+        dispatchDeviceStateUpdate()
+    }
+
+    override fun onNetworkChanged(hasWifi: Boolean, hasCellular: Boolean) {
+        if (hasWifi == this.hasWifi && hasCellular == this.hasCellular) {
+            return
+        }
+        val previousWifi = this.hasWifi
+        this.hasWifi = hasWifi
+        this.hasCellular = hasCellular
+        dispatchDeviceStateUpdate()
+        if (hasWifi && !previousWifi) {
+            Timber.i("WiFi recovered — triggering immediate outbox flush")
+            meshRepository.notifyNetworkRecovered()
+        }
+    }
+
+    override fun onMotionChanged(motion: uniffi.api.MotionState) {
+        if (motion == currentMotionState) {
+            return
+        }
+        currentMotionState = motion
+        dispatchDeviceStateUpdate()
+    }
+
+    private fun dispatchDeviceStateUpdate() {
         // HANG-MAIN-001: Rust may invoke PlatformBridge overrides on the main
         // thread. updateDeviceState is a blocking FFI — always hop to IO.
         scope.launch {
@@ -306,29 +333,6 @@ class AndroidPlatformBridge @Inject constructor(
                 val deviceProfile = uniffi.api.DeviceProfile(
                     peerId = null,
                     deviceId = null,
-                    batteryPct = batteryPct,
-                    isCharging = isCharging,
-                    hasWifi = hasWifi,
-                    motionState = currentMotionState
-                )
-                meshRepository.updateDeviceState(deviceProfile)
-                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-                applyAdjustments(bleAdjustment, relayAdjustment)
-                Timber.d("Adjustment profile: $profile for battery $batteryPct%, charging=$isCharging")
-            }
-        }
-    }
-
-    override fun onNetworkChanged(hasWifi: Boolean, hasCellular: Boolean) {
-        // HANG-MAIN-001: same as onBatteryChanged — never FFI on the callback thread.
-        scope.launch {
-            deviceStateMutex.withLock {
-                val previousWifi = this@AndroidPlatformBridge.hasWifi
-                val deviceProfile = uniffi.api.DeviceProfile(
-                    peerId = null,
-                    deviceId = null,
                     batteryPct = currentBatteryPct,
                     isCharging = isCharging,
                     hasWifi = hasWifi,
@@ -339,34 +343,7 @@ class AndroidPlatformBridge @Inject constructor(
                 val bleAdjustment = meshRepository.computeBleAdjustment(profile)
                 val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
                 applyAdjustments(bleAdjustment, relayAdjustment)
-                if (hasWifi && !previousWifi) {
-                    Timber.i("WiFi recovered — triggering immediate outbox flush")
-                    meshRepository.notifyNetworkRecovered()
-                }
-            }
-        }
-    }
-
-    override fun onMotionChanged(motion: uniffi.api.MotionState) {
-        currentMotionState = motion
-        // HANG-MAIN-001: motion callback can arrive on main from Rust or from
-        // the screen on/off receiver path — hop before updateDeviceState.
-        scope.launch {
-            deviceStateMutex.withLock {
-                val deviceProfile = uniffi.api.DeviceProfile(
-                    peerId = null,
-                    deviceId = null,
-                    batteryPct = currentBatteryPct,
-                    isCharging = isCharging,
-                    hasWifi = hasWifi,
-                    motionState = motion
-                )
-                meshRepository.updateDeviceState(deviceProfile)
-                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-                applyAdjustments(bleAdjustment, relayAdjustment)
-                Timber.d("Motion changed: $motion, profile: $profile")
+                Timber.d("Adjustment profile: $profile for battery $currentBatteryPct%, charging=$isCharging, wifi=$hasWifi, motion=$currentMotionState")
             }
         }
     }
@@ -582,15 +559,22 @@ class AndroidPlatformBridge @Inject constructor(
         bleAdjustment: uniffi.api.BleAdjustment,
         relayAdjustment: uniffi.api.RelayAdjustment
     ) {
-        // Apply BLE scan/advertise intervals
-        Timber.d("Applying BLE adjustments: scan=${bleAdjustment.scanIntervalMs}ms, advertise=${bleAdjustment.advertiseIntervalMs}ms, txPower=${bleAdjustment.txPowerDbm}dBm")
+        if (relayAdjustment.maxPerHour != lastRelayMaxPerHour) {
+            lastRelayMaxPerHour = relayAdjustment.maxPerHour
+            Timber.d("Applying relay adjustments: maxPerHour=${relayAdjustment.maxPerHour}, priority=${relayAdjustment.priorityThreshold}, maxPayload=${relayAdjustment.maxPayloadBytes}")
+            meshRepository.setRelayBudget(relayAdjustment.maxPerHour)
+        }
 
-        // Apply relay budget adjustments
-        Timber.d("Applying relay adjustments: maxPerHour=${relayAdjustment.maxPerHour}, priority=${relayAdjustment.priorityThreshold}, maxPayload=${relayAdjustment.maxPayloadBytes}")
-        meshRepository.setRelayBudget(relayAdjustment.maxPerHour)
-
-        // Apply BLE settings to scanner and advertiser
-        applyBleSettings(bleAdjustment)
+        if (bleAdjustment.scanIntervalMs != lastScanIntervalMs ||
+            bleAdjustment.advertiseIntervalMs != lastAdvertiseIntervalMs ||
+            bleAdjustment.txPowerDbm != lastTxPowerDbm
+        ) {
+            lastScanIntervalMs = bleAdjustment.scanIntervalMs
+            lastAdvertiseIntervalMs = bleAdjustment.advertiseIntervalMs
+            lastTxPowerDbm = bleAdjustment.txPowerDbm
+            Timber.d("Applying BLE adjustments: scan=${bleAdjustment.scanIntervalMs}ms, advertise=${bleAdjustment.advertiseIntervalMs}ms, txPower=${bleAdjustment.txPowerDbm}dBm")
+            applyBleSettings(bleAdjustment)
+        }
     }
 
     /**
