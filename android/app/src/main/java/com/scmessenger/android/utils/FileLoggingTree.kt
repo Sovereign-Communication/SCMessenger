@@ -5,7 +5,9 @@ import timber.log.Timber
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -21,11 +23,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 class FileLoggingTree(context: Context) : Timber.Tree() {
     private val MAX_LOG_LINES = 10000
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    // Thread-safe immutable date formatter (minSdk 26)
+    private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+        .withZone(ZoneId.systemDefault())
     // Guard against recursion (Timber -> FileLoggingTree -> Timber -> ...)
     private val isLogging = ThreadLocal.withInitial { false }
     @Volatile
     private var ironCore: uniffi.api.IronCore? = null
+    private var estimatedFileBytes: Long = -1L
 
     private data class LogEntry(val line: String, val throwable: Throwable?)
 
@@ -38,14 +43,16 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 writeEntry(entry)
             } catch (_: InterruptedException) {
                 break
-            } catch (e: Exception) {
-                android.util.Log.e("FileLoggingTree", "Writer thread error", e)
+            } catch (t: Throwable) {
+                try {
+                    android.util.Log.e("FileLoggingTree", "Writer thread error: ${t.javaClass.simpleName}: ${t.message}")
+                } catch (_: Throwable) {}
             }
         }
         // Drain remaining lines on shutdown
         var leftover = writeQueue.poll()
         while (leftover != null) {
-            try { writeEntry(leftover) } catch (_: Exception) {}
+            try { writeEntry(leftover) } catch (_: Throwable) {}
             leftover = writeQueue.poll()
         }
     }, "FileLoggingTree-writer").also {
@@ -63,7 +70,7 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
 
         try {
             isLogging.set(true)
-            val timestamp = dateFormat.format(Date())
+            val timestamp = timestampFormatter.format(Instant.now())
             val priorityStr = when (priority) {
                 android.util.Log.VERBOSE -> "V"
                 android.util.Log.DEBUG -> "D"
@@ -79,8 +86,11 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 writeQueue.poll()
                 writeQueue.offer(LogEntry(logLine, t))
             }
-        } catch (e: Exception) {
-            android.util.Log.e("FileLoggingTree", "Error enqueueing log", e)
+        } catch (t: Throwable) {
+            // Guard against OutOfMemoryError and native runtime faults to prevent crashing caller threads
+            try {
+                android.util.Log.e("FileLoggingTree", "Error enqueueing log: ${t.javaClass.simpleName}: ${t.message}")
+            } catch (_: Throwable) {}
         } finally {
             isLogging.set(false)
         }
@@ -88,20 +98,32 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
 
     private fun writeEntry(entry: LogEntry) {
         synchronized(this) {
-            runCatching { ironCore?.recordLog(entry.line) ?: false }
-                .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
+            try {
+                runCatching { ironCore?.recordLog(entry.line) ?: false }
+                    .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
 
-            FileWriter(logFile, true).use { writer ->
-                writer.write(entry.line)
-                entry.throwable?.let {
-                    val pw = PrintWriter(writer)
-                    it.printStackTrace(pw)
-                    pw.flush()
+                if (estimatedFileBytes < 0L) {
+                    estimatedFileBytes = if (logFile.exists()) logFile.length() else 0L
                 }
-            }
 
-            if (logFile.length() > 100 * 1024) {
-                truncateLogFile()
+                FileWriter(logFile, true).use { writer ->
+                    writer.write(entry.line)
+                    estimatedFileBytes += entry.line.length
+                    entry.throwable?.let { thr ->
+                        val pw = PrintWriter(writer)
+                        thr.printStackTrace(pw)
+                        pw.flush()
+                    }
+                }
+
+                if (estimatedFileBytes > 100 * 1024) {
+                    truncateLogFile()
+                    estimatedFileBytes = 0L
+                }
+            } catch (t: Throwable) {
+                try {
+                    android.util.Log.e("FileLoggingTree", "Error writing log entry: ${t.javaClass.simpleName}: ${t.message}")
+                } catch (_: Throwable) {}
             }
         }
     }

@@ -277,15 +277,13 @@ class AndroidPlatformBridge @Inject constructor(
                 // long enough to trip SCREEN_ON/OFF broadcast ANRs (10s) and
                 // input-dispatch ANRs. All device-state FFI work is dispatched
                 // to the IO scope; only the cheap volatile state set stays here.
-                when (intent.action) {
-                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                        currentMotionState = uniffi.api.MotionState.WALKING
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
-                    Intent.ACTION_SCREEN_OFF -> {
-                        currentMotionState = uniffi.api.MotionState.STILL
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
+                val targetState = when (intent.action) {
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> uniffi.api.MotionState.WALKING
+                    Intent.ACTION_SCREEN_OFF -> uniffi.api.MotionState.STILL
+                    else -> null
+                }
+                if (targetState != null && targetState != currentMotionState) {
+                    scope.launch { onMotionChanged(targetState) }
                 }
             }
         }
@@ -348,6 +346,10 @@ class AndroidPlatformBridge @Inject constructor(
     }
 
     override fun onMotionChanged(motion: uniffi.api.MotionState) {
+        val previousMotion = currentMotionState
+        if (motion == previousMotion && motion != uniffi.api.MotionState.UNKNOWN) {
+            return
+        }
         currentMotionState = motion
         // HANG-MAIN-001: motion callback can arrive on main from Rust or from
         // the screen on/off receiver path — hop before updateDeviceState.
