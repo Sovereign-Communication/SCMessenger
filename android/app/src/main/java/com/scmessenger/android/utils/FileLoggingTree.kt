@@ -120,11 +120,13 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                     truncateLogFile()
                     estimatedFileBytes = 0L
                 }
+                Unit
             } catch (t: Throwable) {
                 try {
                     android.util.Log.e("FileLoggingTree", "Error writing log entry: ${t.javaClass.simpleName}: ${t.message}")
                 } catch (_: Throwable) {}
             }
+            Unit
         }
     }
 
