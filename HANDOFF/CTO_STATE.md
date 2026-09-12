@@ -1,227 +1,100 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-11T2250Z (HANG-LOCK-001 holistic UI-hang RCA landed on unified/v040-3node-parity; PR #281)
+Last updated: 2026-09-10 (Freebuff sandbox burn-down session; #272 FFI fix pushed, #277 merged, #280 ticket hygiene)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-11 HANG CLASS) =====
+# ===== RESUME HERE (2026-09-10) =====
 
-## Live banner (Section 0)
+## Session record 2026-09-10 — Freebuff sandbox (Linux; no Windows toolchain, no AWS creds)
 
-- **HANG-LOCK-001 / HANG-MAIN-001 / HANG-ANR-001** — holistic UI-hang fix
-  compiled + unit-tested + APK `A74594C6…` installed on emulator-5554.
-  RCA: `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T224500Z_HANG_HOLISTIC_RCA.md`.
-  Live Pixel dropbox proved main inside `meshservice_pause` /
-  `update_device_state` (older APK). Class closed by: lifecycle vs outbox
-  lock split, all pause/resume/updateDeviceState off caller thread,
-  PlatformBridge overrides IO+mutex, FileLoggingTree async, ViewModel IO
-  sweep, ShareReceiver goAsync, AnrWatchdog no longer restarts during hang.
-- **Live ship line is PR #281** `unified/v040-3node-parity` in
-  `MiMoSCMessengerFresh` — NOT PR #279 / `cto/t2-disk-ruling`.
-- Pixel cell tests STAND-DOWN (operator). Emulator is the Android iteration lane.
-- Cellular 001d still UNVERIFIED on real cellular (emulator cannot test cell).
+All facts below were verified by command this session. Environment: Freebuff
+Linux sandbox — container builds are advisory-only per AGENTS.md; none were
+run and none were needed (everything landed was docs/CI-snapshot surface).
 
-# ===== SUPERSEDED 2026-09-10 RESUME BLOCK (kept for history) =====
+### Verified state of the burn-down (each item: command that proved it)
 
-All state below verified from fresh commands 2026-09-10T02:45-02:50Z.
+- **`main` green at `c5b7c530`** — push lanes CI/Lint/Cross/Docker Publish/
+  Docker Integration Suite/Repository Hygiene all `success` on the #267 merge;
+  `gh run list --branch main`. Failures on main are schedule-lanes only
+  (Docker Integration Suite schedule, Security Scan schedule) — not push gates.
+- **Custody split-brain: ALREADY FIXED on main.** The 2026-08-29 charter item
+  is stale. `core/src/transport/swarm.rs:3040-3055` now publishes the swarm's
+  live `RelayCustodyStore` back into `IronCore`
+  (`*core.relay_custody_store.write() = relay_custody_store.clone()`), with a
+  comment citing the v0.4.0 gate. Landed in the recent #267-#278 wave. No work
+  remains. Do not re-implement.
+- **`docs_sync_check.sh` PASSES on main** — run verbatim this session. Charter
+  L4-4 (and Freebuff T5) are DONE. The broken residual-risk-register link was
+  fixed upstream; every agent's finalize gate is unblocked again.
+- **`routing_peer_seen` is WIRED (D6 code blocker cleared).** Production call
+  sites at `core/src/transport/swarm.rs:5641` and `:8067`, fed from the F-DHT
+  locally-verified gate (PR #267); confidence tests at `iron_core.rs:5079`.
+  Remaining: field re-measure of non-zero routing confidence on the Tier A rig
+  (T4's acceptance, not a code task).
+- **Dual-bind: fixed in code, verified** — `multiport.rs:75-99` emits exactly
+  one transport per port with `seen_ports` dedup. The L0-4 operator decision
+  is moot; ticket moved to `done/` (this session, via PR #280).
+- **L1-1 (release alias preflight) is on main** — `release.yml:209` fails fast
+  with `[FAIL] SCMESSENGER_KEY_ALIAS is not present in the decoded keystore`.
+- **Three resolved tickets moved to `done/` with evidence headers** (routing,
+  dual-bind, deeplink) and **`SUPPORT.md` version line corrected** v0.3.5 ->
+  v0.4.0 — open as **PR #280**.
+- **PR #277 (beach-join audit docs) MERGED** `c5b7c530` — all 17 checks green,
+  HANDOFF-only files verified before merge.
 
-## Live rig (verified)
+### PR #272 (v0.4.0 candidate) — fix pushed, merge still gated
 
-- Windows node: running, tree `5c7caa1d` (docs commit atop D10 `7ff317f0`; exe
-  sha256 `660BE35D…` built 00:54Z), T14 pin live
-  (`external_addrs=["147.81.41.188:9001","192.168.0.222:9001"]`), identity
-  `12D3KooWD6vZ…` preserved. Relauncher: `tmp/cto/reroll_windows_d10.cmd`
-  (+ `tmp/cto/d10_restore_pin.ps1`, `d10_strip_bom.ps1`); bootstrap env
-  `SC_BOOTSTRAP_NODES=/ip4/127.0.0.1/tcp/19001,/ip4/18.234.62.247/tcp/9001`.
-- AWS node: `7ff317f0` (image sha-7ff317f via docker-publish run 34421758994),
-  identity preserved, peers=[Windows], `/data` mount verified.
-- Pixel: adb reachable (serial `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp`),
-  D10 APK sha256 `d0143c65…` installed (HEAD `8c74a6a2`), PID 7140, data preserved.
-- config.json: T14 pin INTACT, sha `88755db2…` (guard backup
-  `tmp/cto/RWRITE_HUNT/config_guard_backup.json`).
-- Branch `cto/t2-disk-ruling-2026-08-31` = PR #279 head `2bdc3c86`, pushed.
+- Root cause of its only red check, from run `34111832444` log: the branch's
+  `mobile_bridge.rs` adds one UniFFI export
+  `set_swarm_peer_connection(publicKeyHex, connected)` but never updated the
+  checked-in FFI snapshots. CI printed the exact missing lines (addition-only
+  hunks: Kotlin `317a318`, Swift `225a226`).
+- Fix: fast-forwarded the PR branch `85cb4c67..5fe7d664` with those two lines
+  inserted verbatim into `scripts/ffi-snapshots/{kotlin,swift}-symbols.txt`.
+  The check regenerates bindings and diffs, so the snapshot cannot lie — CI is
+  the verifier. FFI check `pending` at session end; confirm before anything else.
+- **BLOCKER THAT REMAINS: no Rule-8 adversarial review on file for #272.** It
+  touches `core/src/transport/` + `core/src/routing/` (+1,434 lines in
+  mobile_bridge). Verified: zero PR reviews/comments on GitHub and no review
+  doc in `docs/security/` or `HANDOFF/` referencing #272. Do NOT merge on green
+  CI alone. Dispatch a fresh reviewer (different model family from the author)
+  and file the verdict before merging.
 
-## What landed this campaign (all pushed to PR #279)
+### Other open PRs (30 open at session end; full list from `gh pr list`)
 
-| Commit | What |
-|---|---|
-| `c6f7ce2f` | ANR root fix: PlatformBridge lifecycle/motion/device-state FFI moved off main (uniffi re-entrant deadlock, 19 ANRs RCA'd from dropbox) |
-| `7ff317f0` | D10: relay-reservation base validation (kills nested/self-circuit poison listeners that overflowed mDNS and killed LAN discovery); 8 regression tests; rule-8 packet `HANDOFF/review/V040_D10_RESERVATION_BASE_REVIEW_PACKET_2026-09-10.md` (verdict PENDING) |
-| `a8694585` | T14 rewrite-source KILLED: cli config test was writing the REAL %APPDATA% config (proven before/after via sha flip 88755db2->1b7a7872); now hermetic via SCMESSENGER_CONFIG tempdir + CONFIG_ENV_LOCK mutex |
-| `1ba13ac9` | CEO session, ANR-recurrence-control: diagnostics-share crash contained (new DiagnosticsShareController, never-throws) + Settings info-counts FFI moved off main into InfoCounts StateFlow; 5 new tests |
+- **#279 (transport unification wave) is CONFLICTING** with main — it predates
+  the #267-#278 run. Rebase or merge-main is the owner's call; a rebase needs a
+  force-push, which is banned on shared branches, so leave it to its author or
+  get explicit operator direction.
+- Charter L3 lane: dependabot/docs PRs #214/#212/#211/#141 (merge after rebase),
+  close-superseded #223/#224/#225/#205/#206, DIRTY-but-green #227/#209 rebase —
+  all still open, none started this session.
 
-## Transport verdicts (evidence: tmp/cto/)
+### Tier A — cloud node: NOT verified, likely DOWN at the recorded address
 
-- REJOIN PASS — D10 proven end-to-end: phone detected Windows via LAN, dialed
-  `192.168.0.222:9001`, full identify; Windows peers=[Pixel,AWS]; 2-peer list
-  sent to phone (ledger re-seed live). Evidence `tmp/cto/D10_REJOIN_20260910T015627Z/`.
-- DELIVERY PASS — 5 msgs phone->Windows ~1/min, `transport_ack=true`, Windows
-  outbox 8->0 (`tmp/cto/PASSIVE_FINAL_20260910T020553Z/`).
-- Ledger persistence PASS — phone bootstraps its 1 PROVEN relay (Windows) every ~64s.
-- ANR fix holds on D10 APK — zero steady-state signatures across 4 windows.
-- PHONE->AWS: NOT OBSERVED on WiFi (by-design: dial policy needs PROVEN
-  candidates; AWS known-but-unproven to phone). Cell-only drop test exercises it.
-- BLE: Bluetooth OFF at OS level on the phone this pass (Scanner/Advertiser
-  "not available"). Operator's BLE test exercises it.
-- WARN cleanup items: stale pre-D10 double-circuit addresses in the phone's
-  dial set fail periodically (harmless); D10 reservation-base ordering picked
-  a link-local IPv6 from AWS's identify set once (validity unaffected).
+- `curl http://54.226.67.101:9876/health` returned `000` (unreachable) from the
+  sandbox. The Freebuff README itself warns the public IP changes on every
+  instance replacement, so the recorded address may simply be stale — but the
+  down-or-stale state is UNRESOLVED.
+- This sandbox has neither `~/.ssh/scm-node-key.pem` nor the EC2 discovery
+  config, so `scripts/aws_deploy.sh` cannot run here. **Operator/Windows-host
+  action:** run `scripts/aws_deploy.sh` (no arg — it discovers the IP) to
+  redeploy `testbotz/scmessenger:latest` at `main@c5b7c530`-equivalent image
+  (Docker Publish was green on the #267 merge), with the `/opt/scm-relay-data`
+  mount, then paste `/health` + deployed-SHA evidence. That re-arms L0-2/L0-3
+  (custody + connection-assistance scoring), which remain the v0.4.0 gate.
 
-## Working in tandem with the CEO (2026-09-10)
+### Operator actions still outstanding (unchanged by this session)
 
-CEO checkpoint `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260910T021100Z_ANR_RECURRENCE_CONTROL.md`
-(READ — committed 1ba13ac9): two more main-thread paths in the ANR class
-found+fixed (diagnostics-share FileProvider crash; Settings FFI-in-composition).
-Residues flagged there that this seat owns tracking for:
+1. **Keystore alias check** (charter 1.1, ~2 min) — preflight will now fail
+   fast in CI, so the wrong alias costs seconds instead of 24 minutes.
+2. **External audit commissioning** (charter 1.2) — board decision, money.
+3. **D4/D6/D7 field scoring** (charter 1.4) — released APK, second handset,
+   cross-network. D7 (offline proximity) is still NOT STARTED and is the next
+   unclaimed gate item after the cloud node is proven.
 
-1. `ConversationsViewModel.getMessageCount()` dead wrapper (android/, owner
-   lane — do not edit from the CTO seat; queue for the Android agent).
-2. Rust-side `meshService.pause/resume` blocking behavior — rule-8-gated
-   ticket, still OPEN.
-3. Orchestrator (this seat) should run full `assembleDebug` gate before any
-   merge to main (the CEO session ran compile+targeted tests only).
-
-## Work-ahead executed 2026-09-10T03:35Z (while awaiting CEO/operator)
-
-- CI: **Analyze (rust) PASS on 3533e5b8** (12m50s) — full-green carries on
-  the newest head; every push in this campaign has landed green.
-- Lint lane: assessed and SKIPPED with rationale — no `lint{}` block in
-  `android/app/build.gradle.kts`, no CI lane runs `lintDebug`; running it
-  now would open a non-gated findings front mid-merge without being a merge
-  requirement. Revisit as its own pass if the operator wants it.
-- Rule-8 dispatch-ready: `HANDOFF/review/V040_D10_REVIEWER_DISPATCH_PACKET_2026-09-10.md`
-  — assignment, eligibility (non-author, different model family, shell-capable
-  per standing rules), procedure, consequence tree, author disclosures.
-  Dispatch needs only an operator/MAC-lane pickup.
-- Ticket filed: `HANDOFF/todo/ANDROID_FFI_IN_COMPOSITION_BUILD_KILLER_2026-09-10.md`
-  (the CEO-agreed class-killer: build-failing check for FFI-in-@Composable).
-- Ticket filed: `HANDOFF/todo/CORE_DIAL_CANDIDATE_DOUBLE_CIRCUIT_PRUNE_2026-09-10.md`
-  (rule-8 gated; evidence + scope; scheduled AFTER the D10 verdict lands —
-  one gated change at a time on this perimeter).
-- Pixel merge-candidate install staged: APK `3d4bac3f…` ready for
-  replace-install at operator go (makes the phone merge-candidate-identical
-  before the manual drop test).
-
-## Open to the 0.4.0 tag decision (in order)
-
-1. PR #279 `Analyze (rust)` check still pending (re-triggers per push); CodeQL
-   skipping. Full-green needed.
-2. Independent rule-8 adversarial APPROVEs: D10 packet PENDING
-   (`HANDOFF/review/V040_D10_...`); T14 packet precedent; reviewer = operator
-   choice (MAC lane or other non-authoring model).
-3. PR #279 merge to main (only after 1+2).
-4. Operator manual 3-node drop test: BLE + WiFi-drop + cell-only (AWS custody
-   leg). Scoring rules: fingerprint tripwires (`swarm_event_loop_died`,
-   `Clearing stale swarm handle`) invalidate a pass.
-5. Tag decision + release (draft rule: rc tags are drafts; a public release
-   needs the standing release-gate rulings).
-
-## Evidence index (this campaign, all under tmp/cto/)
-
-`D10_GATE_20260909T234503Z` (gates) · `D10_CLIPPY_20260909T142328Z` (CI-exact
-clippy) · `D10_APK_20260910T012139Z` (APK build+sha) · `D10_GOLIVE_20260909T145402Z`
-(AWS deploy) · `D10_REROLL_20260909T145417Z` (Windows rebuild+relaunch; node-out
-+ BOM incident) · `D10_REJOIN_20260910T015627Z` (rejoin windows) ·
-`PASSIVE_FINAL_20260910T020553Z` (3-window passive table) · `RWRITE_HUNT`
-(rewrite-source before/after proof + VERDICT.md) · `TRANSPORT_20260909T213941Z`
-+ `...T214437Z` (earlier passive snapshots).
-
-# ===== PREVIOUS RESUME POINT (2026-09-09) =====
-
-The next `/cto` session's whole brief is `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md`
-(with `HANDOFF/V040_3NODE_RCA_2026-09-09.md` as its issue index and the
-2026-09-08 controller package unchanged for checkpoint schema/stages).
-
-State at this update, all verified from fresh commands 2026-09-09T02:07-02:35Z:
-
-- LIVE: Windows node PID 23508, binary `target/release/scmessenger-cli.exe`
-  (829efe2c, /version ba474a7a), T14 primacy proven (`external_addrs ==
-  ["147.81.41.188:9001", "192.168.0.222:9001"]`, configured first), identity
-  stable, custody 5073, AWS peer connected via config bootstrap (E6 proven,
-  no env var needed).
-- GATES: E2 CLOSED (core 41 binaries 1653/0/24 + android BLE 10/10 at
-  `1173d691`); E6 CLOSED (config bootstrap + no-env restart proof);
-  E7 CLOSED (rollback staged outside target/); E1 packet ready, reviewer
-  selection = operator. OPEN: E3+E4 (AWS redeploy at run tree + binary hash),
-  E5 (Pixel BLE-01 APK install - operator only).
-- Parity NOT yet achieved: AWS runs 85cb4c67, Pixel runs pre-BLE-01 APK.
-- Do not score X2 (regression suite) from the old
-  `tmp/cto/REGRESSION_20260909T002337Z/` logs - superseded disk-full run.
-
-# ===== PREVIOUS RESUME POINT (2026-09-01, historical) =====
-
-## Read these three, in this order
-
-1. `SHIP_PLAN.md` **section 6** -- the corrected D1-D7 scoreboard, the sprint to
-   the tag, and **section 7, the 30-row discovered-issue ledger**. Section 6.3
-   lists claims this repo makes about itself that are false; do not trust an
-   older section over it.
-2. `docs/rules/CONTINUOUS_EXECUTION.md` -- node availability tiers and the
-   never-idle ladder. "Blocked on hardware" is not a terminal state.
-3. `HANDOFF/freebuff/README.md` -- the implementation lane, its queue, and the
-   rules in `docs/rules/FREEBUFF.md`.
-
-## One-line state (2026-09-01)
-
-**The two defects that made the mesh unable to heal itself are fixed and on
-`main`. Three things stand between here and a public v0.4.0: one operator
-command, one wire-format change, and an afternoon with the Pixel.**
-
-## What merged this session
-
-| PR | What |
-|---|---|
-| #259 | v0.4.0 endgame plan, Freebuff lane, continuous-execution policy, keystore correction |
-| #260 | docs-sync gate repaired -- it had been red on clean `main`, so every agent's finalize gate failed |
-| #261 | Rule-8 verdicts, Qwen quota ledger, canonical-doc corrections |
-| #262 | **Peer-store unification.** Two stores became one; `peers.json` retired; `locally_verified` disclosure rule enforced on all four egress paths. Rule-8 APPROVE |
-| #263 | **D6 unblocked.** `routing_peer_seen` had zero callers since it was written; now fed from `ConnectionEstablished`, with relayed circuits recorded distinctly from direct TCP. Rule-8 APPROVE |
-
-In flight: **#266** (T1 boot seed dial -- the last piece of automatic rejoin),
-**#264** (T12 CI concurrency, 27/27 green, `BEHIND`).
-
-## The three remaining blockers
-
-1. **Keystore (operator, ~15 min).** Generate per `docs/ANDROID_RELEASE_SIGNING.md`
-   (now corrected to `-storetype PKCS12`; the old JKS guidance caused the
-   case-sensitivity failure), verify with `scripts/verify_release_keystore.sh`
-   BEFORE setting secrets. **D2 also needs a final `v0.4.0` tag** -- an `rc` tag
-   produces a draft release, which is not a public download.
-   It does **not** gate D4/D6/D7: a throwaway key builds a real
-   release-configured APK (ledger I-25).
-2. **F7 Option B -- a wire-format change that must land BEFORE the tag** (I-30).
-   Widening the routing hint to `[u8; 8]` changes `NeighborhoodSummary`, which
-   is gossiped. Cheap only while there is no installed base; the moment v0.4.0
-   reaches a stranger it becomes a compatibility matrix.
-3. **The demo.** Test fleet is **Windows CLI + Android handset**, with the AWS
-   node as the third node carrying store-and-forward relay. **There is no second
-   phone** -- earlier plan wording said otherwise and was wrong.
-
-## Live rig
-
-| Node | Address | Identity |
-|---|---|---|
-| AWS (Amazon Linux, Docker) | discovered by `scripts/aws_deploy.sh`; do not hardcode | `640a5dc8...` / pubkey `014b8105...` |
-| Windows CLI | `127.0.0.1:9876` | `985a25f9...` / pubkey `30d0fa67...` |
-
-Both `DirectPreferred` with custody climbing, but **both run pre-#262 code** --
-redeploy at current `main` before scoring anything. `scripts/aws_deploy.sh` now
-discovers the IP from the EC2 API and **fails if the `/data` mount is missing**;
-that mount's absence silently destroyed node identity on every redeploy until
-this session.
-
-## Traps this session cost real time on
-
-- **A gate that cannot fail.** `ffi_surface.sh` exits 0 when bindings are absent
-  (I-21, T10). The same shape appeared twice more: a docs-only PR that verified
-  nothing, and four separate monitor bugs in this seat's own tooling.
-- **`FETCH_HEAD` is not stable.** It is overwritten by the next fetch of any ref.
-  Name `origin/<branch>`.
-- **The orchestrator-to-lane channel is `main`, not the working tree** (I-29).
-  Rulings left on an unmerged branch are undelivered, and the failure is
-  asymmetric: the lane's replies keep arriving, so the channel looks healthy.
-
-# ===== ARCHIVE: 2026-08-30 and earlier =====
+# ===== RESUME HERE (2026-08-30) =====
 
 ## MESH HANDOFF 2026-08-30 — Android agent authorization scope (canonical)
 

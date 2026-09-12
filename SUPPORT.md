@@ -3,7 +3,9 @@
 Status: Active
 Last updated: 2026-07-24
 
-SCMessenger's current public development line is **v0.3.5 alpha**, working
+SCMessenger's current public development line is **v0.4.0** (`Cargo.toml:9`; the
+working tree is ahead of the last tagged release, `v0.4.0-rc.1`, and no GitHub
+Release object exists for it yet), working
 toward **v1.0.0**. Sequencing for the v1.0.0 work is tracked in
 `HANDOFF/V1_0_0_EXECUTION_PLAN.md`.
 
@@ -25,7 +27,7 @@ Use the GitHub documentation template for stale, missing, or unclear docs.
 ### Request a feature or propose future work
 
 Use the feature-request template. If the request is v1.0.0 scope rather than a
-fix against the current v0.3.5 line, say so explicitly.
+fix against the current v0.4.0 line, say so explicitly.
 
 ### Ask a general question
 
