@@ -5391,6 +5391,25 @@ open class MeshRepository(
     }
 
     /**
+     * NICKNAME-OWNERSHIP-001 load-time sanitize: for every contact with a real
+     * localNickname (or exclusive federated nick), reclaim that name so no other
+     * peer keeps a federated copy. Clears pre-fix multi-peer paint (device RCA
+     * 2026-09-11: androidulaator on emulator + Windows).
+     */
+    private fun sanitizeExclusiveNicknames() {
+        try {
+            val contacts = contactManager?.list().orEmpty().filter { !it.isTombstone }
+            contacts.forEach { c ->
+                val exclusive = normalizeNickname(c.localNickname ?: c.nickname)
+                    ?.takeUnless { isSyntheticFallbackNickname(it) } ?: return@forEach
+                reclaimExclusiveFederatedNickname(c.peerId, exclusive)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "sanitizeExclusiveNicknames failed")
+        }
+    }
+
+    /**
      * NICKNAME-OWNERSHIP-001: a non-synthetic display name belongs to exactly one
      * identity. If peerId now claims nick, strip that federated nick from every
      * other discovered peer (never touch localNickname — user-defined).
@@ -6872,8 +6891,21 @@ open class MeshRepository(
             // so seeded PeerDiscoveryInfo already carries "Claude-Windows-Driver" not "peer-30d0fa67".
             // Idempotent; also called explicitly from initializeManagers().
             repairSyntheticContactNicknames()
+            // NICKNAME-OWNERSHIP-001: clear pre-fix ledger/contact poison where one
+            // exclusive real name was painted onto multiple peer_ids (device RCA:
+            // emulator "androidulaator" on Windows 30d0fa67).
+            sanitizeExclusiveNicknames()
             val now = System.currentTimeMillis().toULong() / 1000u
             val seeded = linkedMapOf<String, PeerDiscoveryInfo>()
+            // Map of exclusive real localNickname -> owner peerId (for ledger nick masking)
+            val exclusiveOwnerByNick = contactManager?.list().orEmpty()
+                .filter { !it.isTombstone }
+                .mapNotNull { c ->
+                    val nick = normalizeNickname(c.localNickname ?: c.nickname)
+                        ?.takeUnless { isSyntheticFallbackNickname(it) }
+                    if (nick == null) null else nick.lowercase() to c.peerId.trim()
+                }
+                .toMap()
 
             contactManager?.list().orEmpty()
                 .filter { !it.isTombstone }
@@ -6910,12 +6942,23 @@ open class MeshRepository(
             allLedgerForSeeding.forEach { entry ->
                 val rawPeerId = entry.peerId?.trim().takeIf { !it.isNullOrEmpty() } ?: return@forEach
                 val transports = parseTransportsFromMultiaddrs(listOf(entry.multiaddr))
+                // NICKNAME-OWNERSHIP-001: never seed a ledger nick that another
+                // peer already owns as an exclusive real name.
+                val ledgerNick = normalizeNickname(entry.nickname)?.let { n ->
+                    val owner = exclusiveOwnerByNick[n.lowercase()]
+                    if (owner != null && owner != rawPeerId) {
+                        Timber.w(
+                            "NICKNAME-OWNERSHIP-001: masking ledger nick=$n on $rawPeerId (owned by $owner)"
+                        )
+                        null
+                    } else n
+                }
                 val existing = seeded[rawPeerId]
                 if (existing != null) {
-                    val authoritativeNick = selectAuthoritativeNickname(existing.nickname, entry.nickname)
-                        ?: selectAuthoritativeNickname(entry.nickname, existing.nickname)
+                    val authoritativeNick = selectAuthoritativeNickname(existing.nickname, ledgerNick)
+                        ?: selectAuthoritativeNickname(ledgerNick, existing.nickname)
                         ?: existing.nickname
-                        ?: entry.nickname
+                        ?: ledgerNick
                     // Prefer authoritative nickname (non-synthetic) and keep live transport union.
                     seeded[rawPeerId] = existing.copy(
                         nickname = selectAuthoritativeNickname(authoritativeNick, existing.nickname) ?: authoritativeNick,
@@ -6927,7 +6970,7 @@ open class MeshRepository(
                     seeded[rawPeerId] = PeerDiscoveryInfo(
                         peerId = rawPeerId,
                         publicKey = entry.publicKey?.trim()?.takeIf { it.isNotEmpty() },
-                        nickname = entry.nickname,
+                        nickname = ledgerNick,
                         libp2pPeerId = rawPeerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) },
                         transport = if (transports.contains(TRANSPORT_TCP_LAN))
                             com.scmessenger.android.service.TransportType.TCP_MDNS
