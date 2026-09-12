@@ -164,15 +164,28 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   - `nvidia/nemotron-3-super-120b-a12b:free`: **APPROVE** (Score: 0.96) - _The proposal adjusts an internal reputation heuristic to improve liveness while keeping all nodes as equal relays and preserving all doctrinal invariants._
   - `google/gemma-4-31b-it:free`: **REJECT** (Score: 0.60) - _The proposal introduces logic explicitly referencing 'relay nodes' and 'relay reputation' within the codebase, violating the foundational doctrine that NO standalone relays exist and that relaying is a behavior of NODES, not a role._
 - **Judge Model**: `google/gemma-4-31b-it:free` (Agreed: False)
+
+### Resolution bod-8ee21463 [DEFERRED]
+- **Timestamp**: 2026-09-12T23:16:16.541298+00:00
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.000000 (Ceiling: $0.10)
+- **Summary**: Only 5/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (3/5 APPROVE):
+  - `openrouter/free`: **UNKNOWN** (Score: 0.00) - _Malformed response (Rule 15 fail-closed)_
+  - `google/gemma-4-26b-a4b-it:free`: **APPROVE** (Score: 1.00) - _The proposal addresses a liveness issue by preventing premature node burnout during transient network shifts without compromising cryptographic integrity or introducing centralized roles. It maintains the 'Nodes, Not Relays' philosophy by treating reliability as a behavioral observation rather than a structural role change._
+  - `cohere/north-mini-code:free`: **APPROVE** (Score: 0.95) - _Adds a probationary grace period for relays, improving resilience without breaking cryptographic or centralization rules._
+  - `nvidia/nemotron-3-super-120b-a12b:free`: **APPROVE** (Score: 0.96) - _The proposal adjusts an internal reputation heuristic to improve liveness while keeping all nodes as equal relays and preserving all doctrinal invariants._
+  - `google/gemma-4-31b-it:free`: **REJECT** (Score: 0.60) - _The proposal introduces logic explicitly referencing 'relay nodes' and 'relay reputation' within the codebase, violating the foundational doctrine that NO standalone relays exist and that relaying is a behavior of NODES, not a role._
+- **Judge Model**: `google/gemma-4-31b-it:free` (Agreed: False)
 - **Proposal Text**:
   > # Proposal: Relay Reputation Probationary Grace Period in mesh_routing.rs
-  > 
+  >
   > ## 1. Summary & Motivation
   > In `core/src/transport/mesh_routing.rs`, relay nodes are scored and marked as reliable or unreliable via `RelayReputation::calculate_score()`.
   > Previously, any candidate relay was marked reliable only if `self.score >= 50.0`.
   > Because `calculate_score` assigns 0 score when `messages_relayed == 0` or when delivery fails initially without prior success, a single transient transport failure (e.g. during a mobile Wi-Fi drop or cellular transition) immediately sets `is_reliable = false`.
   > This causes rapid burnout of valid circuit relays (including the AWS Cloud Node), preventing off-Wi-Fi fallback delivery.
-  > 
+  >
   > ## 2. Technical Delta
   > In `core/src/transport/mesh_routing.rs`:
   > ```rust
@@ -181,7 +194,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >     || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
   > ```
   > During a relay's initial probationary window (before it has achieved its first successful delivery), it is granted up to 3 relay attempts before being declared unreliable. Once it has 3 consecutive failures with zero successes, `is_reliable` becomes `false`. Once it delivers successfully, its score reflects true operational history.
-  > 
+  >
   > ## 3. Security & Invariant Analysis
   > - Rule 8 Perimeter: `core/src/transport/mesh_routing.rs` is an internal routing heuristic.
   > - Cryptography: No crypto, signature, key exchange, or cipher changes.
@@ -203,18 +216,18 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
 - **Proposal Text**:
   > # Proposal: Node Store-and-Forward Custody Grace Period in mesh_routing.rs
-  > 
+  >
   > ## 1. Architecture Doctrine Alignment
   > In accordance with SCMessenger architecture doctrine:
   > - There are NO standalone relays; every peer is a full NODE, and store-and-forward custody is a behavior all nodes perform.
   > - The AWS instance (`scm-always-on-node`) is a CLOUD NODE, possessing full node parity with CLI, Android, and iOS nodes.
   > - `RelayReputation` and `is_reliable` in `core/src/transport/mesh_routing.rs` are internal code identifiers evaluating the historical success of peer nodes performing store-and-forward custody.
-  > 
+  >
   > ## 2. Problem Statement
   > In `core/src/transport/mesh_routing.rs`, `RelayReputation::calculate_score()` marks a node's relaying behavior reliable only if `self.score >= 50.0`.
   > Before a node has achieved its first confirmed message delivery, or when a mobile node transitions from Wi-Fi to cellular during an in-flight handoff, a single transient dial failure resets the delivery score to 0.0.
   > This immediately flips `is_reliable = false`, permanently blackballing valid peer nodes (including the Cloud Node) from performing custody forwarding on the first transient network transition.
-  > 
+  >
   > ## 3. Technical Remediations
   > In `core/src/transport/mesh_routing.rs`:
   > ```rust
@@ -226,7 +239,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >     || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
   > ```
   > During a peer node's initial probationary evaluation window, it is granted up to 3 custody forwarding attempts before being classified as unreliable. Once 3 consecutive failures occur with zero successes, `is_reliable` becomes `false`. Once a custody forwarding attempt succeeds, the score is driven by verified delivery metrics.
-  > 
+  >
   > ## 4. Invariant & Adversarial Security Proof
   > - Rule 8 Perimeter: `core/src/transport/mesh_routing.rs` (local routing heuristic).
   > - Cryptographic Sovereignty: Zero modifications to cryptographic primitives (`Ed25519`, `X25519`, `ChaCha20Poly1305`, `Blake3`).

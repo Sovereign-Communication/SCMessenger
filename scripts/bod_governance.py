@@ -405,7 +405,9 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
 
     entry.append(f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}` (Agreed: {resolution.get('judge_agreed')})")
     entry.append("- **Proposal Text**:")
-    entry.append(f"  > {resolution['proposal'].replace(chr(10), chr(10) + '  > ')}")
+    proposal_lines = resolution["proposal"].splitlines()
+    formatted_proposal = "\n".join(f"  > {line}".rstrip() for line in proposal_lines)
+    entry.append(formatted_proposal)
     entry.append("")
 
     with open(state_file, "a", encoding="utf-8") as f:

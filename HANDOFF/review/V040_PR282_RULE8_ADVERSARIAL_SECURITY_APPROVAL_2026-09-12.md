@@ -1,11 +1,11 @@
 # V040 PR #282 — Rule-8 Adversarial Security Review APPROVE
 
-**Date:** 2026-09-12  
-**PR:** #282 (`fix/harness-bod-and-android-stability`)  
-**Head Commit:** `ad0cb0f235540a92d4ee78e3881e1be6f196be0f`  
-**Security Perimeter:** `core/src/transport/mesh_routing.rs` (Rule-8 gated)  
-**Adjudication Mechanism:** Board of Directors 5-Judge Governance Panel (`bod-4df59504`)  
-**Resolution Cost:** $0.001084 (Ceiling: $0.10)  
+**Date:** 2026-09-12
+**PR:** #282 (`fix/harness-bod-and-android-stability`)
+**Head Commit:** `b65bc4d7`
+**Security Perimeter:** `core/src/transport/mesh_routing.rs` (Rule-8 gated)
+**Adjudication Mechanism:** Board of Directors 5-Judge Governance Panel (`bod-4df59504`)
+**Resolution Cost:** $0.001084 (Ceiling: $0.10)
 
 ---
 
