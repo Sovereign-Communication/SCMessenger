@@ -24,6 +24,7 @@ import javax.inject.Inject
 class ChatViewModel @Inject constructor(
     private val meshRepository: MeshRepository
 ) : ViewModel() {
+    internal var ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO
     private val initialConversationLimit: UInt = 200u
     private val paginationStep: UInt = 100u
 
@@ -97,7 +98,7 @@ class ChatViewModel @Inject constructor(
             Timber.d("ChatViewModel loadMessages skipped — ViewModelScope not active")
             return
         }
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(ioDispatcher) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
