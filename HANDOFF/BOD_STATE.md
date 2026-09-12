@@ -84,19 +84,19 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
 - **Proposal Text**:
   > --- UNIFIED INTEGRATION & LANDING PLAN FOR V0.4.0 PARITY ---
-  > 
+  >
   > 1. Canonical Architectural Doctrine & Node Role:
   >    - There are NO standalone relays in SCMessenger. Only NODES exist, and EVERY node relays.
   >    - Store-and-forward custody is a behavior performed equally by all nodes, not a distinct role.
   >    - The always-on cloud node (scm-always-on-node) is a full node executing identical protocol contracts.
   >    - Discovery is ledger sharing between nodes; no centralized coordinator, tracker, or anonymous forwarder exists.
-  > 
+  >
   > 2. Cryptographic Sovereignty & Storage Integrity:
   >    - The Rust core (core/src/) is the single source of truth and sole cryptographic authority.
   >    - Platform adapters (Android Kotlin, iOS Swift, WASM) are strictly dumb byte pipes and must never duplicate cryptographic primitives. Specifically, Kotlin-level BigInteger Ed25519 curve decompression and Legendre symbol arithmetic are rejected in favor of IronCore identity resolution via UniFFI.
   >    - State and message storage access is strictly mediated through IronCore (core/src/store/). Direct sled database access is forbidden.
   >    - Nickname authority and collision disambiguation are enforced via normalized peer identity binding rather than UI-layer heuristics.
-  > 
+  >
   > 3. Integration Sequence & Git Hygiene:
   >    - PR #280 (cto/ticket-hygiene-2026-09-10) is merged into origin/main upon completion of green CI checks.
   >    - The paused Xiaomi MiMo session (ses_ffe5f71785a9bffe1gawQ5KJ6F in MiMoSCMessengerFresh) is preserved in place without disruption, and its working tree diff is captured to a durable repository snapshot.
@@ -119,7 +119,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
 - **Proposal Text**:
   > PROPOSAL: Rule-8 Adversarial Security Review Approval for PR #281 (unified/v040-3node-parity)
-  > 
+  >
   > Scope:
   > Evaluate the security perimeter modifications across the 7 gated files in core/src/{transport,routing}/:
   > 1. core/src/transport/swarm.rs:
@@ -138,16 +138,16 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >    - Routing engine optimizations with peer liveness integration.
   > 7. core/src/routing/resume_prefetch.rs:
   >    - Prefetch cache management for resumed peer connections.
-  > 
+  >
   > Security Perimeter Invariants:
   > - Zero changes to core/src/crypto/ or cryptographic algorithms (Ed25519, X25519 ECDH, Blake3, XChaCha20-Poly1305).
   > - Zero changes to core/src/privacy/.
   > - IronCore remains the single sovereign entry point for storage and cryptographic authority.
   > - Store-and-forward custody doctrine: all nodes relay; no anonymous packet forwarders.
-  > 
+  >
   > Checklist:
   > 1. Does is_valid_reservation_base() and is_poison_circuit_listener() introduce any listener leaks, denial-of-service, or multiaddr parsing vulnerabilities?
   > 2. Does the unified transport manager and dial policy adhere strictly to sovereign mesh architecture without central dependencies or security bypasses?
   > 3. Are all cryptographic invariants preserved without regression?
-  > 
+  >
   > Recommendation: APPROVE PR #281 security perimeter changes under Rule-8 governance.
