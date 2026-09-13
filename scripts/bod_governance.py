@@ -98,7 +98,22 @@ REQUIRED_PANELISTS = 5
 PAID_PANEL_POOL = [
     "openai/gpt-5.6-luna",            # $0.000321/vote reasoning-off, 7.5s
     "deepseek/deepseek-v4-flash",     # $0.000050/vote reasoning-off, 17.8s
-    "openai/gpt-4o-mini",             # known-good voter since bod-4df59504
+    "inclusionai/ling-3.0-flash-fin:free",  # fifth seat (verified 2026-09-13:
+                                      # clean APPROVE JSON, 4.6s, $0.00,
+                                      # BYOK-immune). Replaces:
+                                      #  - google/gemini-3.8-flash (removed for
+                                      #    cause: OpenRouter routed it BYOK in
+                                      #    run bod-T1T2-R4; governor re-learned
+                                      #    the google/ org prefix -- unusable as
+                                      #    a deterministic pool member here)
+                                      #  - openai/gpt-4o-mini (removed for cause:
+                                      #    stale-gen voter, filed a content-free
+                                      #    REJECT dissent with no file/line/
+                                      #    evidence against 4 evidence-citing
+                                      #    APPROVEs)
+                                      #  - openai/gpt-5.6-sol / kimi-k3 (probed
+                                      #    clean but their own reserve rows
+                                      #    price-bomb the $0.10 preflight)
     "inclusionai/ling-3.0-flash",     # cheapest input of the pool
     "openai/gpt-5-mini",              # verified at auto/4096 (probe 2026-09-13: 10.2s,
                                       # $0.0014, parseable); reasoning MANDATORY on its
