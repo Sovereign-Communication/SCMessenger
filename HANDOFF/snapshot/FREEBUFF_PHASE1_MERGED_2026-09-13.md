@@ -146,3 +146,23 @@ not regression. Ticket filed: HANDOFF/todo/P2_ANDROID_VIEWMODEL_TEST_ORDER_DEPEN
 - Next per plan: Phase 4 -- keystore/D2 verify (operator-gated items), then
   operator gate scoring and the v0.4.0 tag package. T4 field re-measure (C1)
   remains the one open acceptance item on the device rig.
+
+---
+
+# F6 CLOSED (2026-09-13 late, PR #286)
+
+- F6 doc correction merged: main at ccce98cf (PR #286, squash, identity
+  guard 4de8a6c0, all checks CLEAN after two flake reruns). The last open
+  follow-up from the Opus #262/#263 rule-8 verdict is closed; F1/F2/F6/F7/
+  F-DHT are all resolved on the record.
+- Governance bug found and fixed in the same PR: the BoD reconciliation
+  scanned consensus.verdict (a key the dict never carries), so the judge's
+  APPROVE wording was invisible; first F6 gate run produced a false
+  REJECTED_JUDGE_DIVERGENCE. Fixed to scan the synthesis text; re-run
+  APPROVED (bod-3b8d3ffe). Both runs recorded in BOD_STATE.
+- Android JVM flake on #286: 2-of-3 fail (same SHA) -- evidence appended to
+  P2_ANDROID_VIEWMODEL_TEST_ORDER_DEPENDENCE.md; its MockK/ordering fix is
+  now the highest-value CI-reliability item.
+- Shared-cargo-store hazard documented: UniFFI build-script output from two
+  divergent lineages collides (E0063 in generated bindings); one lineage at
+  a time, or cargo clean -p scmessenger-core on lineage switch.
