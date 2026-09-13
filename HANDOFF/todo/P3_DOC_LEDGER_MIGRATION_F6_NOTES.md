@@ -6,7 +6,12 @@
   (PR #262/#263 adversarial review); surfaced while verifying closure of every
   follow-up from that verdict (see
   `HANDOFF/audit/T1_T2_CENSUS_DISPOSITION_2026-09-13.md`, ADDENDUM item 2).
-- **Status:** OPEN
+- **Status:** RESOLVED 2026-09-13 -- fix on `fix/f6-ledger-migration-doc-20260913`,
+  gate `bod-3b8d3ffe` APPROVED + Blind B
+  (`HANDOFF/review/V040_F6_BLIND_B_ADVERSARIAL_VERDICT_2026-09-13.md`);
+  closes on merge. Verified by two lanes: the assist-lane audit
+  (`HANDOFF/audit/BACKUP_BRANCH_MERGE_MAP_2026-09-13.md`) drafted the same
+  diff independently.
 
 ## Defect (code-verified on main `5f1cf702`, 2026-09-13)
 
