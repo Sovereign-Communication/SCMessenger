@@ -58,6 +58,23 @@ except ImportError as err:
 MAX_BOD_COST_CEILING = 0.10
 REQUIRED_PANELISTS = 5
 
+# ---- Heavy tier (operator directive 2026-09-13: "use even bigger/better
+# models when work is hard and warrants it") ----
+# Ids catalog-validated 2026-09-13 via `harness models --all` (445 live ids);
+# stale ids hard-fatal at fetch_pricing, so re-validate before editing.
+# anthropic/* excluded: BYOK_DENYLIST_PREFIXES hard-gates it in the harness.
+# The canonical $0.10 BoD cost ceiling (BoD canonical rule 4) is KEPT: at
+# review-scale prompts the heavy tier fits inside it. A higher ceiling is a
+# BoD rule change and requires an explicit recorded operator ruling.
+HEAVY_PANEL_POOL = [
+    "openai/gpt-5",
+    "openai/gpt-4.1",
+    "deepseek/deepseek-v3.2",
+    "deepseek/deepseek-chat",
+    "google/gemini-2.5-pro",
+]
+HEAVY_JUDGE = "openai/gpt-5"
+
 REPO_PHILOSOPHY_RUBRIC = """
 --- SCMESSENGER REPO PHILOSOPHY & CANONICAL DOCTRINE ---
 1. NODES, NOT RELAYS:
@@ -181,6 +198,7 @@ def evaluate_board_proposal(
     dry_run: bool = False,
     task_id: str = None,
     use_paid: bool = False,
+    use_heavy: bool = False,
 ) -> dict:
     """Run the 5-judge panel and judge synthesis over a proposal."""
     cost_ceiling = min(float(max_cost), MAX_BOD_COST_CEILING)
@@ -212,9 +230,12 @@ def evaluate_board_proposal(
     overrides = {
         "max_panelists": REQUIRED_PANELISTS,
         "max_cost": cost_ceiling,
-        "use_free": not use_paid,
+        "use_free": not (use_paid or use_heavy),
     }
-    if use_paid:
+    if use_heavy:
+        overrides["panel_pool"] = ",".join(HEAVY_PANEL_POOL)
+        overrides["judge"] = HEAVY_JUDGE
+    elif use_paid:
         overrides["panel_pool"] = (
             "inclusionai/ling-3.0-flash,"
             "meta-llama/llama-3.1-8b-instruct,"
@@ -360,6 +381,7 @@ def evaluate_board_proposal(
     resolution = {
         "resolution_id": task_id,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "tier": "heavy" if use_heavy else ("paid" if use_paid else "free"),
         "status": status,
         "proposal": proposal,
         "verdict": final_verdict,
@@ -391,6 +413,7 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
     entry = [
         f"\n### Resolution {resolution['resolution_id']} [{resolution['status']}]",
         f"- **Timestamp**: {resolution['timestamp']}",
+        f"- **Tier**: {resolution.get('tier', 'free')}",
         f"- **Verdict**: `{resolution['verdict']}`",
         f"- **Cost**: ${resolution['cost']:.6f} (Ceiling: ${resolution['cost_ceiling']:.2f})",
         f"- **Summary**: {resolution['summary']}",
@@ -447,6 +470,15 @@ def main():
         help="Dispatch through paid model pool (bounded by $0.10 ceiling)",
     )
     parser.add_argument(
+        "--heavy",
+        action="store_true",
+        help=(
+            "Dispatch through the heavy-model panel (gpt-5 / gpt-4.1 / "
+            "deepseek-v3.2 / gemini-2.5-pro; operator directive 2026-09-13 "
+            "for hard work; canonical $0.10 ceiling unchanged)"
+        ),
+    )
+    parser.add_argument(
         "--record",
         action="store_true",
         help="Append resolution to HANDOFF/BOD_STATE.md",
@@ -487,6 +519,7 @@ def main():
             reasoning_effort=args.reasoning_effort,
             dry_run=args.dry_run,
             use_paid=args.paid,
+            use_heavy=args.heavy,
         )
     except HarnessError as e:
         print(f"[FAIL] Sovereign-harness error: {e}", file=sys.stderr)

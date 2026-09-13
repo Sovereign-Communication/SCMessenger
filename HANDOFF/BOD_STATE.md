@@ -229,3 +229,81 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > (3) reject PR #282 entirely.
   > 
   > VOTE on the WHOLE PR #282 merge (deltas 1+2 together) under the doctrine.
+
+### Resolution bod-2522bb06 [DEFERRED]
+- **Timestamp**: 2026-09-13T15:57:16.046998+00:00
+- **Tier**: heavy
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.030791 (Ceiling: $0.10)
+- **Summary**: Only 4/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (2/5 APPROVE):
+  - `openai/gpt-4.1`: **APPROVE** (Score: 0.97) - _Delta 1 is strictly within doctrine and fixes a liveness/performance edge case without introducing centralization or privacy risk. Delta 2 expands a pre-existing doctrine debt but does not worsen sovereignty risk, with remediation planned before the v0.4.0 tag. The proposal aligns with core principles and advances the project with strong compliance._
+  - `deepseek/deepseek-v3.2`: **REJECT** (Score: 0.30) - _While Delta 1 supports doctrine principles of eventual delivery and node parity, Delta 2's expansion of Kotlin BigInteger curve operations violates the requirement that Rust core is the sole cryptographic authority, creating unacceptable sovereignty risk even as pre-existing technical debt._
+  - `google/gemini-2.5-pro`: **UNKNOWN** (Score: 0.00) - _Truncated by max-tokens (Rule 15 fail-closed)_
+  - `deepseek/deepseek-chat`: **APPROVE** (Score: 0.95) - _The proposal upholds core doctrine while tolerating minor pre-existing technical debt, with DELTA 1 improving mesh reliability and DELTA 2 maintaining existing validation patterns until full UniFFI migration._
+- **Judge Model**: `openai/gpt-5` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW (operator ruling 2026-09-13): PR #282 merge gate re-adjudication.
+  > 
+  > PRIOR ART: resolution bod-4df59504 APPROVED the mesh_routing.rs probationary
+  > window from a summary-level proposal. This re-review supplies the actual delta
+  > and one additional change the prior proposal did not mention.
+  > 
+  > DELTA 1 (rule-8 gated file, core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > 
+  > Semantics verified against the full file: record_relay_attempt() increments
+  > messages_relayed on EVERY relay attempt (success or failure), and
+  > successful_deliveries only on success. Therefore the probation clause is
+  > true only while a relay has fewer than 3 total attempts and zero successes;
+  > after the 3rd failed attempt the clause is false forever and the peer is
+  > disqualified exactly as before. A probationary relay still appears in
+  > ranked_routes() only via the is_reliable filter, ranked below any
+  > recipient-recency signal; direct paths are unaffected. No crypto, no
+  > privacy, no storage-surface change. New unit test
+  > test_reputation_probationary_period covers both the transient-tolerance and
+  > 3-strike-disqualification sides.
+  > 
+  > ADVERSARIAL QUESTIONS FOR DELTA 1:
+  > (a) Does any path keep a dead relay permanently reliable? (Answer expected:
+  > no - the 3-attempt clause is computed from counters that only grow.)
+  > (b) Does probation let an unverified peer bypass any doctrine bound
+  > (nodes-not-relays, no anonymous forwarders, IronCore authority)?
+  > (c) Is the liveness motivation (mobile handoffs must not permanently
+  > blackball a relay after one failure) consistent with the doctrine's
+  > eventual-delivery and node-parity pillars?
+  > 
+  > DELTA 2 (android only, NOT rule-8 perimeter, but inside the Board's doctrine
+  > boundary - commit d35d3883): android PeerIdValidator.kt gains
+  > isValidEd25519Point(): a Kotlin BigInteger implementation of Ed25519 curve
+  > point decompression and Legendre symbol arithmetic, used by
+  > normalizePublicKeyHex() to reject 64-hex strings that are not real keys.
+  > 
+  > PRIOR BOARD RULING bod-dd336324 states: "Kotlin adapters must not perform
+  > BigInteger curve operations and must consume PeerIdValidator from core via
+  > UniFFI." However, the equivalent Kotlin BigInteger math ALREADY EXISTS on
+  > origin/main today (PeerIdValidator.kt, 105 lines, 7 BigInteger references,
+  > shipped in the #281 parity merge); d35d3883 expands the existing file from
+  > 105 to 139 lines. The Rust core already exposes is_valid_public_key() in
+  > core/src/identity/keys.rs and the UniFFI bridge exists.
+  > 
+  > QUESTIONS FOR DELTA 2 (answer explicitly):
+  > (d) Is EXPANDING an existing Kotlin BigInteger curve-implementation a NEW
+  > doctrine violation requiring remediation before merge, or is it a
+  > pre-existing debt that d35d3883 merely extends, acceptable to merge with a
+  > recorded remediation ticket to move the check behind UniFFI?
+  > (e) Does the expansion weaken cryptographic sovereignty in a way that
+  > blocks the v0.4.0 tag, given Rust remains the sole signer/decryptor and the
+  > Kotlin check is advisory validation of a public hex string (reject/accept
+  > only, no key material handling, no signature verification, no ECDH)?
+  > 
+  > REMEDY OPTIONS IF (d) IS A VIOLATION: (1) strip isValidEd25519Point from
+  > d35d3883 before merge and keep the rest of PR #282; (2) merge and file a
+  > P1 remediation ticket to relocate the check to UniFFI before the tag;
+  > (3) reject PR #282 entirely.
+  > 
+  > VOTE on the WHOLE PR #282 merge (deltas 1+2 together) under the doctrine.
