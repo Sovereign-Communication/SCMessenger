@@ -81,8 +81,9 @@ data class NearbyPeer(
     val isOnline: Boolean = true,
     val transport: com.scmessenger.android.service.TransportType? = null
 ) {
-    val displayName: String get() = nickname?.takeIf { it.isNotBlank() } ?: peerId.take(16)
-    val hasFullIdentity: Boolean get() = publicKey != null
+    val displayName: String get() = nickname?.takeIf { it.isNotBlank() }
+        ?: (if (PeerIdValidator.isTransportPeerId(peerId)) (publicKey?.take(16) ?: peerId.take(16)) else peerId.take(16))
+    val hasFullIdentity: Boolean get() = !publicKey.isNullOrBlank() && !PeerIdValidator.isTransportPeerId(peerId)
 }
 
 /**
@@ -210,25 +211,25 @@ class ContactsViewModel @Inject constructor(
         return runCatching { java.util.UUID.fromString(normalized) }.isSuccess
     }
 
-    private fun selectStablePeerId(incomingPeerId: String, existingPeerId: String?): String {
-        val incoming = incomingPeerId.trim()
+    private fun selectStablePeerId(incomingPeerId: String?, existingPeerId: String?): String? {
+        val incoming = incomingPeerId?.trim().orEmpty()
         val existing = existingPeerId?.trim().orEmpty()
-        if (existing.isEmpty() || existing == incoming) return incoming
 
-        val incomingIsLibp2p = PeerIdValidator.isLibp2pPeerId(incoming)
-        val existingIsLibp2p = PeerIdValidator.isLibp2pPeerId(existing)
-        val incomingIsIdentity = PeerIdValidator.isIdentityId(incoming)
-        val existingIsIdentity = PeerIdValidator.isIdentityId(existing)
-        val incomingIsBle = isBlePeerId(incoming)
-        val existingIsBle = isBlePeerId(existing)
-
-        return when {
-            existingIsIdentity && incomingIsLibp2p -> existing
-            incomingIsIdentity && existingIsLibp2p -> incoming
-            existingIsBle && !incomingIsBle -> incoming
-            !existingIsBle && incomingIsBle -> existing
-            else -> incoming
+        val incomingIsTransport = PeerIdValidator.isTransportPeerId(incoming)
+        val existingIsTransport = PeerIdValidator.isTransportPeerId(existing)
+        if (existing.isNotEmpty() && !existingIsTransport && incomingIsTransport) {
+            return existing
         }
+        if (incoming.isNotEmpty() && !incomingIsTransport && existingIsTransport) {
+            return incoming
+        }
+        if (incoming.isNotEmpty() && !incomingIsTransport) {
+            return incoming
+        }
+        if (existing.isNotEmpty() && !existingIsTransport) {
+            return existing
+        }
+        return null
     }
 
     /**
@@ -384,7 +385,18 @@ class ContactsViewModel @Inject constructor(
                         }
                         cancelPendingNearbyRemoval(existing?.peerId)
 
-                        val resolvedPeerId = selectStablePeerId(event.peerId, existing?.peerId)
+                        // Sovereign identity resolution: ensure peerId is NEVER a libp2p Peer ID or transport string.
+                        val sovereignId = meshRepository.resolveToIdentityId(event.publicKey)
+                            ?: meshRepository.resolveToIdentityId(event.peerId)
+                            ?: event.publicKey.lowercase().takeIf { PeerIdValidator.isIdentityHash(it) || PeerIdValidator.isPublicKeyHex(it) }
+                            ?: event.peerId.takeIf { PeerIdValidator.isIdentityHash(it) }
+
+                        val resolvedPeerId = selectStablePeerId(sovereignId, existing?.peerId)
+                        if (resolvedPeerId.isNullOrBlank() || PeerIdValidator.isTransportPeerId(resolvedPeerId)) {
+                            // Transport Peer IDs must NEVER become nearby peers
+                            return@collect
+                        }
+
                         val resolvedLibp2pPeerId = event.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }
                             ?: existing?.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }
                             ?: event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
@@ -458,18 +470,11 @@ class ContactsViewModel @Inject constructor(
                                     ?: event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
                             )
                             _nearbyPeers.value = current
-                        } else if (!alreadyContact && !isDismissed(event.peerId)) {
-                            val extractedPk = PeerIdValidator.normalizePublicKeyHex(
-                                PeerKeyUtils.extractPublicKeyFromPeerId(event.peerId)
-                            )
-                            _nearbyPeers.value = current + NearbyPeer(
-                                peerId = extractedPk ?: event.peerId,
-                                publicKey = extractedPk,
-                                libp2pPeerId = event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) },
-                                isOnline = true,
-                                transport = event.transport
-                            )
                         }
+                        // Note: PeerEvent.Discovered is a raw transport socket connection event.
+                        // It does NOT carry an identity announcement or verified public key.
+                        // We do not add new NearbyPeer items here to prevent transport Peer IDs
+                        // from appearing in the nearby contacts list.
                     }
                     is PeerEvent.Disconnected -> {
                         val current = _nearbyPeers.value.toMutableList()
@@ -928,8 +933,13 @@ class ContactsViewModel @Inject constructor(
             Timber.w("promoteNearbyPeerToContact rejected: missing public key for ${peer.peerId}")
             return false
         }
+        val sovereignPeerId = if (PeerIdValidator.isTransportPeerId(peer.peerId)) {
+            meshRepository.resolveToIdentityId(peer.publicKey) ?: peer.publicKey.lowercase()
+        } else {
+            peer.peerId
+        }
         addContact(
-            peerId = peer.peerId,
+            peerId = sovereignPeerId,
             publicKey = peer.publicKey,
             nickname = peer.nickname,
             libp2pPeerId = peer.libp2pPeerId,

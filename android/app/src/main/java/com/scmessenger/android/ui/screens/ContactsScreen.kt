@@ -40,6 +40,7 @@ import com.scmessenger.android.R
 import com.scmessenger.android.ui.viewmodels.ContactsViewModel
 import com.scmessenger.android.ui.viewmodels.NearbyPeer
 import com.scmessenger.android.utils.ContactImportParseResult
+import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.displayName
 import com.scmessenger.android.utils.displayNames
 import com.scmessenger.android.utils.parseContactImportPayload
@@ -209,15 +210,20 @@ fun ContactsScreen(
                                         } else {
                                             val bleRoute = peer.blePeerId?.takeIf { it.isNotBlank() }
                                             val notes = bleRoute?.let { "ble_peer_id:$it" }
+                                            val sovereignId = if (PeerIdValidator.isTransportPeerId(peer.peerId)) {
+                                                publicKey.lowercase()
+                                            } else {
+                                                peer.peerId
+                                            }
                                             viewModel.addContact(
-                                                peerId = peer.peerId,
+                                                peerId = sovereignId,
                                                 publicKey = publicKey,
                                                 nickname = peer.nickname,
                                                 libp2pPeerId = peer.libp2pPeerId,
                                                 listeners = peer.listeners,
                                                 notes = notes
                                             )
-                                            onNavigateToChat(peer.peerId)
+                                            onNavigateToChat(sovereignId)
                                         }
                                     }
                                 )

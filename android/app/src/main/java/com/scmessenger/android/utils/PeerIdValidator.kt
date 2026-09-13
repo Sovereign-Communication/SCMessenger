@@ -1,5 +1,17 @@
 package com.scmessenger.android.utils
 
+/**
+ * Sovereign Identity Triad validator and normalizer.
+ *
+ * SCMessenger enforces a strict distinction between the three identity hashes/identifiers:
+ * 1. Identity Hash (identity_id): Blake3(ed25519_pubkey) (64 hex characters, lowercase).
+ *    - The sovereign identifier for contacts, chats, outbox/inbox routing, and UI presentation.
+ * 2. Public Key (public_key): Raw Ed25519 signing key (64 hex characters, valid Edwards curve point).
+ *    - For cryptographic signatures and X25519 ECDH key agreement only. Never a transport address.
+ * 3. Peer ID (libp2p_peer_id / ble_peer_id): Libp2p multi-hash (Base58 string starting with 12D3Koo
+ *    or Qm) or BLE UUID.
+ *    - Ephemeral socket transport routing ONLY. Never a contact, and never in nearby contacts list.
+ */
 object PeerIdValidator {
     private val IDENTITY_ID_REGEX = Regex("^[a-fA-F0-9]{64}$")
 
@@ -34,8 +46,30 @@ object PeerIdValidator {
         )
     }
 
+    fun isBlePeerId(id: String?): Boolean {
+        val trimmed = id?.trim().orEmpty()
+        if (trimmed.isEmpty()) return false
+        return runCatching { java.util.UUID.fromString(trimmed) }.isSuccess
+    }
+
+    /**
+     * Returns true if the identifier is a transport-only address (libp2p Peer ID or BLE UUID).
+     * Transport addresses must NEVER be used as sovereign contact identifiers.
+     */
+    fun isTransportPeerId(id: String?): Boolean {
+        val trimmed = id?.trim().orEmpty()
+        if (trimmed.isEmpty()) return false
+        return isLibp2pPeerId(trimmed) || isBlePeerId(trimmed)
+    }
+
     fun isIdentityId(id: String): Boolean =
         id.matches(IDENTITY_ID_REGEX)
+
+    fun isIdentityHash(id: String?): Boolean =
+        id?.trim()?.matches(IDENTITY_ID_REGEX) == true
+
+    fun isPublicKeyHex(id: String?): Boolean =
+        normalizePublicKeyHex(id) != null
 
     fun isSame(id1: String, id2: String): Boolean =
         normalize(id1) == normalize(id2)
