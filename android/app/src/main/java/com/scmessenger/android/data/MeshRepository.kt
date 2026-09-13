@@ -4528,6 +4528,22 @@ open class MeshRepository(
     // Public for ViewModel dedup — canonical public_key_hex for any id (hex, libp2p, identity_id)
     internal fun canonicalContactIdPublic(id: String): String = canonicalContactId(id)
 
+    /**
+     * Resolve any identifier format (public_key_hex, libp2p_peer_id, or identity_id)
+     * to the authoritative 64-hex lowercase Blake3 identity_id.
+     * Backed by IronCore's resolve_to_identity_id().
+     */
+    open fun resolveToIdentityId(anyId: String?): String? {
+        val trimmed = anyId?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        return try {
+            ironCore?.resolveToIdentityId(trimmed)?.let { PeerIdValidator.normalize(it) }
+        } catch (e: Exception) {
+            Timber.d("resolveToIdentityId could not resolve '$trimmed': ${e.message}")
+            null
+        }
+    }
+
     private fun canonicalContactId(id: String): String {
         val trimmed = id.trim()
         if (trimmed.isEmpty()) return trimmed
@@ -7398,14 +7414,28 @@ open class MeshRepository(
         listeners: List<String>,
         blePeerId: String? = null
     ) {
-        val canonicalPeerId = PeerIdValidator.normalize(peerId)
+        val inputPeerId = PeerIdValidator.normalize(peerId)
         val normalizedKey = normalizePublicKey(publicKey)
-        if (canonicalPeerId.isEmpty() || normalizedKey.isNullOrBlank()) {
+        if (inputPeerId.isEmpty() || normalizedKey.isNullOrBlank()) {
             return
         }
 
-        val normalizedRoute = libp2pPeerId?.let { PeerIdValidator.normalize(it) }?.takeIf { it.isNotEmpty() }
-        val normalizedBle = blePeerId?.trim()?.takeIf { it.isNotEmpty() }
+        // Ensure canonicalPeerId is NEVER a transport Peer ID.
+        // If peerId was a transport ID, resolve the sovereign identity (Blake3 identity_id or public_key_hex)
+        // and preserve the transport ID in normalizedRoute.
+        val isTransport = PeerIdValidator.isTransportPeerId(inputPeerId)
+        val canonicalPeerId = if (isTransport) {
+            resolveToIdentityId(normalizedKey) ?: resolveToIdentityId(inputPeerId) ?: normalizedKey
+        } else {
+            inputPeerId
+        }
+
+        val normalizedRoute = (libp2pPeerId ?: inputPeerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) })
+            ?.let { PeerIdValidator.normalize(it) }
+            ?.takeIf { it.isNotEmpty() }
+        val normalizedBle = (blePeerId ?: inputPeerId.takeIf { PeerIdValidator.isBlePeerId(it) })
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
         val normalizedNickname = normalizeNickname(nickname)
         val normalizedListeners = listeners
             .asSequence()

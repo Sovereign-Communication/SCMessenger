@@ -188,7 +188,11 @@ impl RelayReputation {
         };
 
         self.score = success_score + latency_score + recency_score;
-        self.is_reliable = self.score >= 50.0;
+        // Require at least 3 failed delivery attempts with zero successes before declaring
+        // a relay unreliable. In mobile/cellular networks and transient handoffs, an initial
+        // connection failure must not permanently blackball a candidate relay.
+        self.is_reliable = self.score >= 50.0
+            || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
     }
 }
 
@@ -907,6 +911,37 @@ mod tests {
             "High success rate should yield high score"
         );
         assert!(rep.is_reliable, "Should be marked as reliable");
+    }
+
+    #[test]
+    fn test_reputation_probationary_period() {
+        let mut rep = RelayReputation {
+            peer_id: PeerId::random(),
+            stats: RelayStats {
+                messages_relayed: 1,
+                successful_deliveries: 0,
+                failed_deliveries: 1,
+                avg_latency_ms: 50,
+                ..Default::default()
+            },
+            score: 0.0,
+            is_reliable: false,
+        };
+
+        rep.calculate_score();
+        assert!(
+            rep.is_reliable,
+            "A single transient failure must not mark a relay unreliable during probation"
+        );
+
+        // After 3 consecutive failures with 0 successes, it should be marked unreliable
+        rep.stats.messages_relayed = 3;
+        rep.stats.failed_deliveries = 3;
+        rep.calculate_score();
+        assert!(
+            !rep.is_reliable,
+            "Three consecutive failures with zero successes must mark a relay unreliable"
+        );
     }
 
     #[test]
