@@ -1,6 +1,17 @@
 # P1 -- Routing engine never learns connected peers; every decision is StoreAndCarry at confidence 0.0
 
 Status: Active
+**UPDATE 2026-09-13 (recovery session):** analysis-first deliverable complete
+-- see `HANDOFF/audit/T4_ROUTING_FEED_ANALYSIS_2026-09-13.md`. The feed this
+ticket demands is ALREADY LANDED on merged main (b5a70bd5): both swarm loops
+(native swarm.rs:6449-6459 and wasm :9148-9158) feed `routing_peer_seen` on
+every ConnectionEstablished, trust-gated by fail-closed `peer_is_blocked`
+(swarm.rs:66-75), with both D6 acceptance tests passing (verified live this
+session: `cargo test -p scmessenger-core --lib routing_peer_seen` -> 2 passed
+/ 0 failed). Only acceptance criterion 5 (field re-measure on the device rig)
+remains open. (Note: an editing-tool fault briefly truncated this file during
+the update attempt at 08:05Z; content was restored in full from the verified
+read taken earlier this session, plus this update block.)
 Severity: P1 (adaptive routing is inert fleet-wide; not Android-specific)
 Filed: 2026-08-10
 Gate mapping: G2 transport coverage, PF-10 candidate ordering
@@ -49,6 +60,12 @@ and always falls through to `:211` / `:220`, both `confidence: 0.0`.
 Note `record_message_activity` IS reached from `core/src/transport/swarm.rs:3698`
 on pending delivery, so the engine sees *message* activity but never *peer
 presence*. That asymmetry is the defect.
+
+**(2026-09-13 note: the code citations above describe the anchor-`68fcc3f1`
+state and are preserved verbatim as the original ticket record. On merged
+main b5a70bd5 the root cause no longer holds -- see the UPDATE block and
+`HANDOFF/audit/T4_ROUTING_FEED_ANALYSIS_2026-09-13.md` for the current
+file:line evidence. The line numbers there supersede these.)**
 
 ## Required investigation before implementation
 

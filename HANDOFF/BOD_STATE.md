@@ -702,3 +702,78 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > (b) Do the Android changes (triad helper validators, transport-id filtering,
   >     UniFFI type alignment) uphold or weaken doctrine?
   > (c) Should the PR merge to main?
+
+### Resolution bod-0ad63e5f [APPROVED]
+- **Timestamp**: 2026-09-13T18:10:12.877460+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003840 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _All code-level acceptance criteria (1-4) are verified as landed on main with no doctrine violations; the field re-measure (Q5) is correctly kept open as a device-level task; the disposition upholds every pillar of the SCMessenger Repo Philosophy and Canonical Doctrine._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.98) - _The presented evidence supports that code-level acceptance criteria 1-4 are already implemented and tested on main without weakening any doctrine pillar or introducing a security exception. Closing only the code-level work while retaining the field re-measure open is appropriate, with reopening required if field evidence contradicts the implementation._
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposal strictly adheres to the SCMessenger doctrine, with code-level criteria successfully verified and no violations or security holes identified._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _All code-level acceptance criteria for T4 are verified as landed and passing tests, with no doctrine violations; field re-measure remains the only open task._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The reviewed evidence shows the code-level fixes are merged, tests pass, and all doctrine pillars (nodes-only relay behavior, sovereign discovery, Rust-core crypto authority, fail-closed trust, and custody fallback) remain intact; leaving the field re-measure open is appropriate to validate real-world behavior._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Close the code-level portion of T4 (P1_ROUTING_ENGINE_NEVER_LEARNS_PEERS_2026-08-10)
+  > as ALREADY-LANDED, keeping only the field re-measure open.
+  > 
+  > VERIFIED FACTS (all file:line read this session from origin/main b5a70bd5):
+  > 
+  > 1. The ticket's root cause ("routing_peer_seen has no callers") is NOT TRUE
+  >    on merged main. Two live call sites feed it:
+  >    - core/src/transport/swarm.rs:6449-6459 (native loop) and :9148-9158 (wasm
+  >      loop): on every libp2p ConnectionEstablished event, if
+  >      !peer_is_blocked(&core_handle, peer_id), call
+  >      core_arc.routing_peer_seen(peer_id.to_string(),
+  >      endpoint_transport_string(&remote_addr).to_string()).
+  >    - endpoint_transport_string (swarm.rs:431-452) classifies the remote
+  >      multiaddr: whole-address scan; P2pCircuit => "relay" (even when riding
+  >      ws/quic); then quic, ws, else "tcp". Direct-vs-helper distinction kept.
+  >    - IronCore::routing_peer_seen (iron_core.rs:2714-2720) parses transport and
+  >      peer id (parse_peer_id_32, iron_core.rs:136-162: hex prefixes or libp2p
+  >      PeerId with embedded Ed25519 key extraction bytes[len-32..]) then calls
+  >      engine.peer_seen.
+  >    - Landing history: git log -S shows "V040-T4: feed routing engine on
+  >      ConnectionEstablished (D6) (#263)" squash bb253eaf is an ancestor of
+  >      origin/main (merge-base verified this session).
+  > 
+  > 2. Both D6 acceptance tests exist on main and PASS (run this session, cold
+  >    build 7m01s): routing_peer_seen_raises_confidence_after_connection_established
+  >    (StoreAndCarry/confidence 0.0 before -> Local/>=0.5 Direct-TCP after) and
+  >    routing_peer_seen_distinguishes_circuit_from_direct_tcp. Result: 2 passed,
+  >    0 failed, 1447 filtered out.
+  > 
+  > 3. Trust gate (ticket Q3): peer_is_blocked (swarm.rs:66-75) is fail-closed in
+  >    BOTH arms -- missing core handle OR is_peer_blocked error => treated as
+  >    blocked, no feed. Hostile-peer ceiling: a connected peer can only inflate
+  >    its own direct-path reliability, capped at 0.98 (routing/engine.rs:164);
+  >    it cannot fabricate third-party routes (peer_seen records presence, not
+  >    routes; routes come from ledger exchange, itself block-gated and deduped).
+  > 
+  > 4. Custody accounting (ticket Q4): routing confidence changes next-hop
+  >    SELECTION only. send_to_peer still returns Queued and delivery
+  >    confirmation still requires an application-level receipt (manager.rs doc);
+  >    StoreAndCarry remains the confidence-0.0 fallback (engine.rs:211-222).
+  > 
+  > 5. LocalCell invariant (ticket Q2): announcements still cannot create peers
+  >    (routing_update_peer_hints unchanged); the presence feed is first-hand
+  >    LOCAL observation via the node's own swarm connections, a different seam.
+  > 
+  > 6. Mobile-bridge path (ticket Q1): deliberately does NOT feed routing
+  >    (no routing_peer_seen reference in mobile_bridge.rs); the swarm handlers
+  >    are the single feed, per the in-code comment ("keeps the transport
+  >    derivation and the engine's parser in lockstep").
+  > 
+  > 7. Ticket Q5 (field re-measure: routing_decision events with non-zero
+  >    confidence on a connected Pixel rig) REMAINS OPEN -- operator/device task,
+  >    not executable from this lane.
+  > 
+  > VOTE: Does the evidence justify closing T4's code-level acceptance criteria
+  > (1-4) as ALREADY-LANDED on main, with only criterion 5 (field re-measure)
+  > open and the ticket re-opening with fresh evidence if the field re-measure
+  > shows 216/216 StoreAndCarry again? Is any doctrine pillar (nodes-not-relays,
+  > sovereignty, Rust-sole-crypto, parity, no-silent-truncation) violated by this
+  > disposition, or any security hole left unaddressed?
