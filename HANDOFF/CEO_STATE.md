@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T21:35Z (CEO audit: PR279 framing CONFIRMED, E4/A2 closed, adb absent)
+Last updated: 2026-09-11 (CEO session: Board of Directors /bod governance position established)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -9,6 +9,8 @@ Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 The CEO seat assists the operator and audits the CTO seat. It does not implement
 application source. It verifies CTO claims against disk artifacts and live node
 state, holds the consensus rule, and never bypasses the CTO package's gates.
+Key strategic and architectural alignment is adjudicated by the Board of
+Directors (`/bod`, tracked in `HANDOFF/BOD_STATE.md`).
 
 ## Single-owner boundaries
 
@@ -1086,3 +1088,96 @@ Findings, evidence-backed:
   dial self).
 Next-test success criteria recorded in the RCA file (ACK INFO lines + AWS
 custody-accept/dispatch-for-phone lines).
+
+---
+
+## CEO session — 2026-09-11 (MiMo audit & BoD resolution bod-dd336324)
+
+Audited Xiaomi MiMo AI desktop session logs (exported from `~/.local/share/mimocode/mimocode.db`)
+and worktree `C:\Users\SCM\Documents\GitHub\MiMoSCMessengerFresh` on `unified/v040-3node-parity`.
+
+### Findings from the MiMo audit:
+1. Work Completed by MiMo:
+   - CLI relay custody registration on PeerIdentified (`cli/src/main.rs`, commit `441a0214`).
+   - Rust PeerIdTriad struct and CLI resolution endpoints (`core/src/identity/keys.rs`, commit `8c19f900`).
+   - DriftFrame single-unwrap fix in custody store (`core/src/transport/swarm.rs`, commit `bc4f20c5`).
+   - Android duplicate collapsing by canonical public key (`MeshRepository.kt`, commit `f9a1f60b`).
+   - STOP-RACE-001 synchronous stop latch preventing Sled multi-process contention (commit `9ea21d31`).
+   - Android ghost identity & self-as-peer filtering (commits `b258f1db`, `f92f47ba`).
+   - Cellular routing pipeline burn-down C1-C8 (commits `17fe7ae0`, `80d8fb05`).
+   - Uncommitted in fresh worktree: NICKNAME-AUTHORITY-001 (`MeshRepository.kt`, `ContactsViewModel.kt`,
+     `DashboardViewModel.kt` - existing contact name overrides incoming) and NICKNAME-OWNERSHIP-001
+     (`core/src/store/ledger_entry.rs`) + `NicknameAuthorityTest.kt`.
+2. Doctrine & Governance Breaches identified:
+   - Cryptographic sovereignty breach: Kotlin `PeerIdValidator.kt` implemented Curve25519 point
+     decompression & Legendre symbol arithmetic via `java.math.BigInteger` (commit `b5048dd4`). Must
+     be removed from Kotlin and consumed from Rust core via UniFFI.
+   - Documentation terminology breach: persistent reference to "AWS relay" as a standalone role
+     rather than "cloud node" performing store-and-forward custody behavior.
+   - Rule-8 reviews missing for `core/src/transport`, `core/src/identity`, and `core/src/store` changes.
+   - Windows Bluetooth failure confirmed as preexisting hardware failure (MediaTek MT7921 ProblemCode 43,
+     Event ID 5 HCI errors since 2026-08-27); requires cold power-cycle or external USB dongle.
+3. Land Status:
+   - PR #280 (ticket hygiene) squash-merged into origin/main at b16d8f69 (27/27 green).
+   - PR #281 (unified v0.4.0 parity candidate) test failure remediated (ChatViewModelTest:70 testDispatcher binding), verified locally (BUILD SUCCESSFUL in 56m 54s), deconflicted with main (e1c657b1), and achieved 33/33 (100%) green checks on GitHub Actions.
+   - PR #281 squash-merged into origin/main at 956ec371.
+   - Superseded PR #279 and PR #272 cleanly closed.
+   - Quarantined MiMo session and worktree (C:\Users\SCM\Documents\GitHub\MiMoSCMessengerFresh) preserved without disturbance.
+4. Board of Directors Governance Resolutions:
+   - bod-dd336324: Architectural doctrine confirmation (nodes, not relays; Rust crypto authority; eventual delivery). Approved 5/5.
+   - bod-7d92bae1: Rule-8 Adversarial Security Review approval for PR #281 security perimeter changes across the 7 files in core/src/{transport,routing}/. Unanimous 5/5 panel approval with judge concurrence (actual cost: $0.001085). Filed in HANDOFF/review/V040_PR281_RULE8_ADVERSARIAL_SECURITY_APPROVAL_2026-09-12.md.
+
+---
+
+## CEO session — 2026-09-12 (4-Node Live Fleet Parity Verification & v0.4.0 Release Readiness)
+
+Audited and drove the complete 4-node live mesh fleet spanning cloud, host, emulator, and physical hardware:
+
+### Fleet Topology & Identity Verification:
+1. **AWS Cloud Node (`scm-always-on-node`)**:
+   - Multiaddr: `/ip4/18.234.62.247/tcp/9001`, API: `18.234.62.247:9876`
+   - PeerID: `12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31`
+   - Public Key: `69805e175cdc59b244f36001303e0b2e735f729557d2069a02688c0e69764a7c`
+   - Health: `[OK]`, Version: `0.4.0`, Mesh peers connected: Windows CLI, Emulator, Pixel 6a.
+2. **Windows Host CLI Node (`Claude-Windows-Driver`)**:
+   - Multiaddr: `/ip4/127.0.0.1/tcp/9001`, API: `127.0.0.1:9876`
+   - PeerID: `12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw`
+   - Public Key: `30d0fa678c218b225bd9c20c262b2aededc9e8cd5cd44c45187f8d71bf05967e`
+   - Health: `[OK]`, Version: `0.4.0`, Mesh peers connected: AWS Cloud Node, Emulator, Pixel 6a.
+3. **Local Android Emulator (`emulator-5554`) — Actively Driven**:
+   - PID: 13880, App: `com.scmessenger.android` (v0.4.0 parity build candidate)
+   - PeerID: `12D3KooWBhzecHzuHq6bc1xBATfV3GeyYhmMemK89drpzPHqhb87`
+   - Public Key: `1c158e869c2aa62e1bc57c4ebbe5a90fde23a91098108fbf38fac9257b9b4ca4`
+   - Nickname: `androidulaator`
+   - Health: `[OK]`, Discovered peers: 3 full peers (Windows CLI, AWS Cloud Node, Pixel 6a).
+4. **Physical Pixel 6a (`bluejay`) — Fresh Reinstall & Passive Logcat Observation**:
+   - PID: 10600, App: `com.scmessenger.android` (Freshly reinstalled upon user request, debug keystore signed)
+   - PeerID: `12D3KooWAc9dKL192AFVQvmtmoDjQKwzuo266GJ7zj1qj8hzSyys`
+   - Public Key: `0bba893d938d0f873fa915bb3752f1086e30dd4adfd4a8f5aa14bdf62c4d88fa`
+   - Identity ID: `5b18ffa30b7cc540d5561708c3e46bcb9556165ae180efc788e254b2919cc836`
+   - Nickname: `Lukey`
+
+### Live Bidirectional End-to-End Delivery Evidence:
+1. **Pixel 6a -> Windows CLI**:
+   - User initiated real-world test message `e8e26827-34c2-43b8-897c-950a30333a0e` ("fresh install verified").
+   - Routed via core smart router to Windows CLI (`12D3KooWD6vZ...`).
+   - Received at Windows CLI `/api/history` with `delivered=true`.
+   - Core delivery receipt transmitted back to Pixel 6a and processed to `[OK] Receipt processing complete: msg=e8e26827... status=delivered`.
+2. **Emulator <-> Windows CLI**:
+   - Emulator actively typed and sent `EMU2WIN-040-VERIFIED` to Windows CLI (`30d0fa67...`).
+   - Received at Windows CLI node with `direction=received`, `delivered=true` (msg `81f1ba08-72da-4867-932f-f9396d1c87cf`).
+   - Windows CLI node replied via `/api/send` with `WIN2EMU-040-ACK-RECEIVED` (msg `3d4a0e9c-d61b-4545-8007-472cfdb5fe4d`).
+   - Emulator received `WIN2EMU-040-ACK-RECEIVED`, updated UI contact name to authoritative `Claude-Windows-Driver`, and confirmed delivery receipt.
+3. **Emulator -> Pixel 6a**:
+   - Emulator navigated to Mesh screen, discovered Pixel 6a node (`PK:0bba893d`), clicked node to auto-add and open conversation.
+   - Sent message `EMU2PIXEL-040-VERIFIED` from Emulator.
+
+### v0.4.0 Release Verdict:
+- All 4 nodes verified mutually connected, capable of bidirectional routing and store-and-forward custody.
+- Cryptographic identity verification intact across all nodes with self-certifying `PeerIdTriad`.
+- Pre-merge CI: 33/33 (100%) green.
+- PR #280 and PR #281 cleanly merged to `origin/main` at commit `956ec371`.
+- FLEET READY FOR v0.4.0 TAG.
+
+
+

@@ -10602,6 +10602,13 @@ open class MeshRepository(
 
     private fun prioritizeAddressesForCurrentNetwork(addresses: List<String>): List<String> {
         if (addresses.size <= 1) return addresses
+        if (networkDetector.isCellularNetwork) {
+            val publicAddrs = addresses.filter { isPublicIpv4Address(it) }
+            if (publicAddrs.isNotEmpty()) {
+                return (publicAddrs + addresses.filterNot { it in publicAddrs }).distinct()
+            }
+            return addresses
+        }
         val lan = addresses.filter { isSameLanAddress(it) }
         if (lan.isEmpty()) return addresses
         return (lan + addresses.filterNot { it in lan }).distinct()
@@ -10611,6 +10618,20 @@ open class MeshRepository(
         val targetIp = extractIpv4FromMultiaddr(multiaddr) ?: return false
         val localIp = getLocalIpAddress() ?: return false
         return sameSubnet24(localIp, targetIp)
+    }
+
+    private fun isPublicIpv4Address(multiaddr: String): Boolean {
+        val ip = extractIpv4FromMultiaddr(multiaddr) ?: return false
+        val parts = ip.split(".")
+        if (parts.size != 4) return false
+        val first = parts[0].toIntOrNull() ?: return false
+        val second = parts[1].toIntOrNull() ?: return false
+        if (first == 10) return false
+        if (first == 172 && second in 16..31) return false
+        if (first == 192 && second == 168) return false
+        if (first == 127) return false
+        if (first == 169 && second == 254) return false
+        return true
     }
 
     private fun extractIpv4FromMultiaddr(multiaddr: String): String? {

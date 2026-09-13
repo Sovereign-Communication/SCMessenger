@@ -126,34 +126,21 @@ class AnrWatchdog(
 
     /**
      * Reduce system load to give the main thread breathing room.
-     * Stops non-critical background operations.
+     * Stops non-critical background operations without queuing service intents to the main thread.
      */
     private fun reduceSystemLoad() {
-        try {
-            // Notify service to reduce activity
-            val intent = Intent(context, MeshForegroundService::class.java).apply {
-                action = MeshForegroundService.ACTION_PAUSE
-            }
-            context.startService(intent)
-            Timber.d("Reduced system load via service pause")
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to reduce system load")
-        }
+        // Do NOT call context.startService() here.
+        // Android services execute lifecycle callbacks on the main thread. If the main thread is
+        // blocked or dead, calling startService() forces ActivityManagerService to wait 20s for the
+        // main thread to respond, triggering a fatal framework Service ANR.
+        Timber.w("System load reduction requested due to slow main thread")
     }
 
     /**
      * Show busy indicator to user when ANR is detected.
-     * Posts a toast on the main thread since this runs on the watchdog thread.
      */
     private fun showBusyIndicator(message: String = "App not responding") {
-        handler.post {
-            try {
-                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to show busy indicator toast")
-            }
-        }
-        Timber.w("User notification: $message")
+        Timber.w("User notification: %s", message)
     }
 
     /**
@@ -183,14 +170,12 @@ class AnrWatchdog(
             Timber.e(e, "Failed to write ANR diagnostics")
         }
 
-        // Request service restart via intent (safe from background thread)
-        try {
-            val restartIntent = Intent(context, MeshForegroundService::class.java).apply {
-                action = MeshForegroundService.ACTION_START
-            }
-            context.startService(restartIntent)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to trigger ANR recovery restart")
+        // If the main thread is dead, terminate the zombie process cleanly so the OS can restart.
+        val mainThread = Looper.getMainLooper().thread
+        if (!mainThread.isAlive) {
+            Timber.e("Main thread is DEAD. Terminating zombie process for OS clean restart.")
+            android.os.Process.killProcess(android.os.Process.myPid())
+            kotlin.system.exitProcess(10)
         }
     }
 
@@ -204,8 +189,18 @@ class AnrWatchdog(
         sb.append("Android Version: ").append(Build.VERSION.SDK_INT).append("\n")
         sb.append("Device: ").append(Build.BRAND).append(" / ").append(Build.MODEL).append("\n")
 
-        // Check for main thread stack info (if we could get it)
+        // Capture main thread state and stack trace
+        val mainThread = Looper.getMainLooper().thread
         sb.append("Main Thread Responsive: ").append(isMainThreadResponsive()).append("\n")
+        sb.append("Main Thread Alive: ").append(mainThread.isAlive).append("\n")
+        sb.append("Main Thread State: ").append(mainThread.state).append("\n")
+        sb.append("Main Thread StackTrace:\n")
+        try {
+            val trace = mainThread.stackTrace
+            for (element in trace) {
+                sb.append("    at ").append(element.toString()).append("\n")
+            }
+        } catch (_: Throwable) {}
 
         // Memory info
         try {

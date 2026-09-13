@@ -153,19 +153,6 @@ class MeshApplication : Application() {
                 // Never let the crash handler itself crash.
             }
 
-            if (isComposeCrash) {
-                // For the known Compose prefetch race we attempt to keep the process alive:
-                // log the crash, do NOT stop the foreground service, and do NOT chain to the
-                // system handler (which would kill the process). The Compose runtime will
-                // recover on next recomposition; the user can navigate away and back.
-                // If the crash recurs, it will be logged again; after 3 rapid recurrences
-                // the system will still kill the process via the next non-compose crash path.
-                try {
-                    Timber.w("COMPOSE_PREFETCH_CRASH swallowed — process kept alive for recovery")
-                } catch (_: Throwable) {}
-                return@setDefaultUncaughtExceptionHandler
-            }
-
             // Best-effort: stop the foreground service so the OS does not
             // restart it in a half-broken state.
             try {
@@ -174,8 +161,17 @@ class MeshApplication : Application() {
                 // ignore — we are already crashing
             }
 
-            // Chain to the previous handler (default = kills the process).
-            previousHandler?.uncaughtException(thread, throwable)
+            // Uncaught exceptions must NEVER be swallowed on the main thread.
+            // Swallowing an uncaught exception on the main thread terminates Looper.loop()
+            // while background threads keep the Linux process alive, leaving the UI permanently
+            // frozen and triggering an Android OS framework 20-second Service ANR.
+            // Always chain to the previous handler or kill the process cleanly.
+            if (previousHandler != null) {
+                previousHandler.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
         }
     }
 

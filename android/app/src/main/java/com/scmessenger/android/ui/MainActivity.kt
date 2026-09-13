@@ -371,13 +371,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        // Stop ANR watchdog when activity is destroyed
+        // Stop ANR watchdog before activity destruction begins
         try {
             anrWatchdog.stop()
             Timber.d("ANR watchdog stopped")
         } catch (e: Exception) {
             Timber.w(e, "Failed to stop ANR watchdog")
         }
+        super.onDestroy()
     }
 }

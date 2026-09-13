@@ -3576,7 +3576,7 @@ async fn cmd_relay(
 
     // Contacts + History (for relay message handling)
     let contacts = core.contacts_store_manager();
-    let _history = core.history_store_manager();
+    let history = core.history_store_manager();
 
     // Outbox
     let outbox = Outbox::open_default(&data_dir).map_err(|e| anyhow::anyhow!(e))?;
@@ -3720,6 +3720,7 @@ async fn cmd_relay(
 
     // ── Main event loop (headless — no stdin) ───────────────────────────
     let contacts_rx = contacts.clone();
+    let history_rx = history.clone();
     let ledger_rx = ledger.clone();
     let outbox_rx = outbox.clone();
     let scheduler_rx = Arc::clone(&relay_scheduler);
@@ -3868,29 +3869,106 @@ async fn cmd_relay(
                         }
                     }
                     SwarmEvent::MessageReceived { peer_id, envelope_data } => {
-                        // In relay mode, we automatically peel and forward onion layers
+                        let sender_public_key_hex = decode_envelope(&envelope_data)
+                            .ok()
+                            .map(|env| hex::encode(&env.sender_public_key));
+
                         if let Ok(msg) = core_arc.receive_message(envelope_data.clone()) {
-                            if msg.message_type == scmessenger_core::MessageType::OnionRelay {
-                                let next_hop_hex = msg.recipient_id.clone();
-                                let payload = msg.payload.clone();
+                            match msg.message_type {
+                                MessageType::OnionRelay => {
+                                    let next_hop_hex = msg.recipient_id.clone();
+                                    let payload = msg.payload.clone();
 
-                                if let Ok(next_hop_bytes) = hex::decode(&next_hop_hex) {
-                                    if let Ok(libp2p_kp) = libp2p::identity::ed25519::Keypair::try_from_bytes(&mut next_hop_bytes[..32].to_vec()) {
-                                        let next_peer_id = libp2p::PeerId::from_public_key(&libp2p::identity::PublicKey::from(libp2p_kp.public()));
+                                    if let Ok(next_hop_bytes) = hex::decode(&next_hop_hex) {
+                                        if let Ok(libp2p_kp) = libp2p::identity::ed25519::Keypair::try_from_bytes(&mut next_hop_bytes[..32].to_vec()) {
+                                            let next_peer_id = libp2p::PeerId::from_public_key(&libp2p::identity::PublicKey::from(libp2p_kp.public()));
 
-                                        tracing::info!("Relay node: forwarding onion packet to {}", next_peer_id);
-                                        let swarm_clone = swarm_handle.clone();
-                                        tokio::spawn(async move {
-                                            let _ = swarm_clone.send_message(next_peer_id, payload, None, None).await;
-                                        });
+                                            tracing::info!("Relay node: forwarding onion packet to {}", next_peer_id);
+                                            let swarm_clone = swarm_handle.clone();
+                                            tokio::spawn(async move {
+                                                let _ = swarm_clone.send_message(next_peer_id, payload, None, None).await;
+                                            });
+                                        }
+                                    }
+                                }
+                                MessageType::Text => {
+                                    let raw_text =
+                                        msg.text_content().unwrap_or_else(|| "<binary>".into());
+                                    let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                    if let Some(decoded) = decoded_envelope.as_ref() {
+                                        learn_sender_identity_from_envelope(
+                                            &contacts_rx,
+                                            &peer_id.to_string(),
+                                            decoded,
+                                        );
+                                    }
+                                    let text = decoded_envelope
+                                        .as_ref()
+                                        .map(|d| d.text.clone())
+                                        .unwrap_or(raw_text);
+
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageReceived {
+                                        from: peer_id.to_string(),
+                                        content: text.clone(),
+                                        timestamp: ts,
+                                        message_id: msg.id.clone(),
+                                    }));
+                                    let mn = notif_message_received(MessageReceivedParams {
+                                        from: peer_id.to_string(),
+                                        content: text,
+                                        timestamp: ts,
+                                        message_id: msg.id.clone(),
+                                    });
+                                    if let Ok(v) = serde_json::to_value(&mn) {
+                                        let _ = ui_broadcast.send(server::UiOutbound::JsonRpc(v));
+                                    }
+
+                                    let is_identity_metadata = decoded_envelope
+                                        .as_ref()
+                                        .map(|d| d.kind.as_str() != "text")
+                                        .unwrap_or(false);
+                                    let local_pk = core_arc.get_identity_info().public_key_hex;
+                                    let is_self_loop = local_pk
+                                        .as_deref()
+                                        .map(|pk| sender_public_key_hex.as_deref() == Some(pk))
+                                        .unwrap_or(false);
+                                    if !is_identity_metadata && !is_self_loop {
+                                        if let Some(ref pk_hex) = sender_public_key_hex {
+                                            match core_arc.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
+                                                Ok(ack_bytes) => {
+                                                    tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
+                                                    let swarm_clone = swarm_handle.clone();
+                                                    let msg_id = msg.id.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = swarm_clone.send_message(peer_id, ack_bytes, None, None).await {
+                                                            tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, peer_id, e);
+                                                        }
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                MessageType::Receipt => {
+                                    if let Ok(receipt) = scmessenger_core::decode_receipt(msg.payload.clone()) {
+                                        tracing::info!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
+                                        if let Err(e) = history_rx.mark_delivered(receipt.message_id.clone()) {
+                                            tracing::warn!("Failed to mark message {} as delivered: {}", receipt.message_id, e);
+                                        }
                                     }
                                 }
                             }
                         }
 
                         // Also log standard envelopes for debugging
-                        if let Ok(env) = decode_envelope(&envelope_data) {
-                            let sender_key = hex::encode(&env.sender_public_key);
+                        if let Some(ref sender_key) = sender_public_key_hex {
                             tracing::debug!(
                                 "Relayed envelope from {} sender={} bytes={}",
                                 peer_id,

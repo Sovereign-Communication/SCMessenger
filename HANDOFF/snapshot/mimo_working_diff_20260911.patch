@@ -1,0 +1,75 @@
+diff --git a/HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T200027Z_CELL_27S.md b/HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T200027Z_CELL_27S.md
+index 17d20049..ac206edd 100644
+--- a/HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T200027Z_CELL_27S.md
++++ b/HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260911T200027Z_CELL_27S.md
+@@ -53,7 +53,7 @@ loop did not reach AWS before WiFi return).
+ 
+ ## Next operator test
+ 
+-1. WiFi OFF  
+-2. **Immediately** send 1 message to Windows and 1 to AWS  
+-3. Stay off WiFi **≥90 seconds**  
++1. WiFi OFF
++2. **Immediately** send 1 message to Windows and 1 to AWS
++3. Stay off WiFi **≥90 seconds**
+ 4. Seat pulls logs; pass bar = delivered timestamp **inside** cellular window
+diff --git a/HANDOFF/audit/ROUND5_HARNESS_AUDIT_2026-09-10.md b/HANDOFF/audit/ROUND5_HARNESS_AUDIT_2026-09-10.md
+index 8ee3762e..f4e14b12 100644
+--- a/HANDOFF/audit/ROUND5_HARNESS_AUDIT_2026-09-10.md
++++ b/HANDOFF/audit/ROUND5_HARNESS_AUDIT_2026-09-10.md
+@@ -1,7 +1,7 @@
+ ﻿# SCMessenger Round-5 Harness Audit + Handoff Addendum
+ 
+-**Date:** 2026-09-10  
+-**Harness baseline:** main @ PR #4 + PR #5 + PR #6 merged (`95bfee8`)  
++**Date:** 2026-09-10
++**Harness baseline:** main @ PR #4 + PR #5 + PR #6 merged (`95bfee8`)
+ **Method:** `harness verify --claims-file --source-file --converge` on the 19
+ recently-edited functions in `scmessenger_audit/` (read-only). Absolute `--out`
+ paths. Free tier $0.00 for the batch; one paid-tier confirmation pass.
+@@ -213,18 +213,18 @@ within ceiling, no silent write failures. Not a predetermined pass/fail.
+ 
+ Cost $0.00134. Panel (ling + granite + llama-8b):
+ 
+-- **C1:** 2 real / 1 not_real  
+-- **C2:** 2 real / 1 not_real (granite+llama say real; ling says not)  
+-- **C3 (reassurance):** mixed  
++- **C1:** 2 real / 1 not_real
++- **C2:** 2 real / 1 not_real (granite+llama say real; ling says not)
++- **C3 (reassurance):** mixed
+ 
+ **Harness learning (not product):** the printed tally said `C1=real (3/3); C2=real (3/3)` while panel JSON is 2R/1NR — the `(N/3)` suffix is **participation**, not unanimity. Specialist prose still inverted some claims. Deterministic majority still leans **C2 real** on paid vs **C2 not_real** on free majority — this is a **product-policy** claim (stopRotation vs failed stopAdvertising), not a harness flake.
+ 
+ ### Exercise outcome
+ 
+-- **3/3 free runs persisted**, EXIT 0, $0.00  
+-- Shortfall/defer reported honestly (01 2/3)  
+-- One natural paid confirm, under ceiling  
+-- Ledger still clean (`chain_broken_on_load: false`)  
++- **3/3 free runs persisted**, EXIT 0, $0.00
++- Shortfall/defer reported honestly (01 2/3)
++- One natural paid confirm, under ceiling
++- Ledger still clean (`chain_broken_on_load: false`)
+ - **No forced convergence.** Remaining work is SCMessenger product rulings + D6/D2 ship gates — not more panels.
+ 
+ ---
+diff --git a/android/app/src/test/java/com/scmessenger/android/utils/NotificationGateTest.kt b/android/app/src/test/java/com/scmessenger/android/utils/NotificationGateTest.kt
+index 861917c1..e1255e8c 100644
+Binary files a/android/app/src/test/java/com/scmessenger/android/utils/NotificationGateTest.kt and b/android/app/src/test/java/com/scmessenger/android/utils/NotificationGateTest.kt differ
+diff --git a/core/src/store/ledger_entry.rs b/core/src/store/ledger_entry.rs
+index 95d0d41f..3aa9b5fc 100644
+--- a/core/src/store/ledger_entry.rs
++++ b/core/src/store/ledger_entry.rs
+@@ -659,7 +659,11 @@ fn annotate_identity_locked(
+         // nick "androidulaator" landed on Windows ledger rows via multiaddr
+         // fan-out + last-writer-wins.
+         if normalized_nickname.is_some()
+-            && entry.peer_id.as_deref().map(|p| p == peer_id).unwrap_or(true)
++            && entry
++                .peer_id
++                .as_deref()
++                .map(|p| p == peer_id)
++                .unwrap_or(true)
+         {
+             entry.nickname = normalized_nickname;
+         }

@@ -355,11 +355,12 @@ class SubnetProbe(
             Timber.w(t, "SubnetProbe: failed to enumerate candidate subnets")
         }
 
-        // Always probe a few common defaults in case the device's own
-        // interface is misreported (e.g. mobile hotspot on a different /24
-        // than the host that runs the daemon).
-        for (fallback in FALLBACK_SUBNETS) {
-            out += fallback
+        // Probe fallback subnets only if no candidate subnets were discovered from active interfaces
+        // to avoid flooding thousands of TCP sockets across unroutable subnets every 30s.
+        if (out.isEmpty()) {
+            for (fallback in FALLBACK_SUBNETS) {
+                out += fallback
+            }
         }
         return out.toList()
     }

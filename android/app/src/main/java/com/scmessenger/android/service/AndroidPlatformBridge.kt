@@ -82,6 +82,10 @@ class AndroidPlatformBridge @Inject constructor(
     @Volatile private var hasWifi: Boolean = false
     @Volatile private var hasCellular: Boolean = false
     @Volatile private var currentMotionState: uniffi.api.MotionState = uniffi.api.MotionState.UNKNOWN
+    @Volatile private var lastScanIntervalMs: UInt? = null
+    @Volatile private var lastAdvertiseIntervalMs: UInt? = null
+    @Volatile private var lastTxPowerDbm: Byte? = null
+    @Volatile private var lastRelayMaxPerHour: UInt? = null
 
     /**
      * Initialize system monitoring.
@@ -195,9 +199,6 @@ class AndroidPlatformBridge @Inject constructor(
                       status == BatteryManager.BATTERY_STATUS_FULL
 
         if (batteryPct != currentBatteryPct || charging != isCharging) {
-            currentBatteryPct = batteryPct
-            isCharging = charging
-
             Timber.d("Battery changed: $batteryPct%, charging=$charging")
             onBatteryChanged(batteryPct, charging)
         }
@@ -249,9 +250,6 @@ class AndroidPlatformBridge @Inject constructor(
         val cellular = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ?: false
 
         if (wifi != hasWifi || cellular != hasCellular) {
-            hasWifi = wifi
-            hasCellular = cellular
-
             Timber.d("Network changed: wifi=$wifi, cellular=$cellular")
             onNetworkChanged(wifi, cellular)
         }
@@ -277,15 +275,13 @@ class AndroidPlatformBridge @Inject constructor(
                 // long enough to trip SCREEN_ON/OFF broadcast ANRs (10s) and
                 // input-dispatch ANRs. All device-state FFI work is dispatched
                 // to the IO scope; only the cheap volatile state set stays here.
-                when (intent.action) {
-                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                        currentMotionState = uniffi.api.MotionState.WALKING
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
-                    Intent.ACTION_SCREEN_OFF -> {
-                        currentMotionState = uniffi.api.MotionState.STILL
-                        scope.launch { onMotionChanged(currentMotionState) }
-                    }
+                val targetState = when (intent.action) {
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> uniffi.api.MotionState.WALKING
+                    Intent.ACTION_SCREEN_OFF -> uniffi.api.MotionState.STILL
+                    else -> null
+                }
+                if (targetState != null && targetState != currentMotionState) {
+                    onMotionChanged(targetState)
                 }
             }
         }
@@ -299,54 +295,22 @@ class AndroidPlatformBridge @Inject constructor(
     // ========================================================================
 
     override fun onBatteryChanged(batteryPct: UByte, isCharging: Boolean) {
-        // Compute and apply adjustment profile
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = batteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = currentMotionState
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Local adjustment calculation
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-
-        // 3. Apply adjustments to mesh service
-        applyAdjustments(bleAdjustment, relayAdjustment)
-
-        Timber.d("Adjustment profile: $profile for battery $batteryPct%, charging=$isCharging")
+        if (batteryPct == currentBatteryPct && isCharging == this.isCharging) {
+            return
+        }
+        currentBatteryPct = batteryPct
+        this.isCharging = isCharging
+        dispatchDeviceStateUpdate()
     }
 
     override fun onNetworkChanged(hasWifi: Boolean, hasCellular: Boolean) {
+        if (hasWifi == this.hasWifi && hasCellular == this.hasCellular) {
+            return
+        }
         val previousWifi = this.hasWifi
-
-        // Recompute and apply adjustment
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = currentBatteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = currentMotionState
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Recompute profile
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-
-        applyAdjustments(bleAdjustment, relayAdjustment)
-
-        // 3. When WiFi comes back, immediately flush pending messages
+        this.hasWifi = hasWifi
+        this.hasCellular = hasCellular
+        dispatchDeviceStateUpdate()
         if (hasWifi && !previousWifi) {
             Timber.i("WiFi recovered — triggering immediate outbox flush")
             meshRepository.notifyNetworkRecovered()
@@ -354,27 +318,34 @@ class AndroidPlatformBridge @Inject constructor(
     }
 
     override fun onMotionChanged(motion: uniffi.api.MotionState) {
+        if (motion == currentMotionState) {
+            return
+        }
         currentMotionState = motion
+        dispatchDeviceStateUpdate()
+    }
 
-        // Recompute adjustment based on motion
-        val deviceProfile = uniffi.api.DeviceProfile(
-            peerId = null,
-            deviceId = null,
-            batteryPct = currentBatteryPct,
-            isCharging = isCharging,
-            hasWifi = hasWifi,
-            motionState = motion
-        )
-
-        // 1. Report to Rust core
-        meshRepository.updateDeviceState(deviceProfile)
-
-        // 2. Recompute
-        val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
-        val bleAdjustment = meshRepository.computeBleAdjustment(profile)
-        val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
-        applyAdjustments(bleAdjustment, relayAdjustment)
-        Timber.d("Motion changed: $motion, profile: $profile")
+    private fun dispatchDeviceStateUpdate() {
+        // HANG-MAIN-001: Rust may invoke PlatformBridge overrides on the main
+        // thread. updateDeviceState is a blocking FFI — always hop to IO.
+        scope.launch {
+            deviceStateMutex.withLock {
+                val deviceProfile = uniffi.api.DeviceProfile(
+                    peerId = null,
+                    deviceId = null,
+                    batteryPct = currentBatteryPct,
+                    isCharging = isCharging,
+                    hasWifi = hasWifi,
+                    motionState = currentMotionState
+                )
+                meshRepository.updateDeviceState(deviceProfile)
+                val profile = meshRepository.computeAdjustmentProfile(deviceProfile)
+                val bleAdjustment = meshRepository.computeBleAdjustment(profile)
+                val relayAdjustment = meshRepository.computeRelayAdjustment(profile)
+                applyAdjustments(bleAdjustment, relayAdjustment)
+                Timber.d("Adjustment profile: $profile for battery $currentBatteryPct%, charging=$isCharging, wifi=$hasWifi, motion=$currentMotionState")
+            }
+        }
     }
 
     override fun onBleDataReceived(peerId: String, data: ByteArray) {
@@ -423,42 +394,20 @@ class AndroidPlatformBridge @Inject constructor(
     }
 
     override fun onEnteringBackground() {
-        Timber.i("App entering background")
-
-        // BACKGROUND-PAUSE REMOVAL (2026-09-10, operator ruling): this override
-        // previously called meshRepository.pauseMeshService() every time the
-        // activity backgrounded, tearing the mesh down to zero transports while
-        // the foreground service stayed alive. Live evidence: peersDiscovered
-        // pinned at 0 and outbox retries failing with transports=0 for the
-        // entire backgrounded window — the end user had to manually re-toggle
-        // mesh to restore connectivity. SCMessenger is store-and-forward: a
-        // backgrounded node MUST keep custody, relay, and discovery alive, or
-        // the product's core delivery guarantee is void. Battery and resource
-        // adaptation remains the job of the duty-cycle system
-        // (on_battery_changed / on_motion_changed / behavior adjustments), and
-        // the user can still pause explicitly via the notification action —
-        // only the automatic lifecycle-driven pause is removed.
-        //
-        // ANR-2026-09-09 fix note kept for provenance: any FFI work triggered
-        // from this path must stay off the main thread (this override is
-        // invoked on MAIN from MainActivity.onPause and from the Rust core
-        // callback). The removed call was the only work launched here.
+        // Unified 2026-09-10: CTO operator ruling + v040 R10-F3.
+        // (1) Do NOT pause the mesh on lifecycle backgrounding — store-and-forward
+        //     custody/relay/discovery must stay alive (CTO, operator 2026-09-10).
+        // (2) Do NOT echo back into the FFI — MeshService::pause already applied
+        //     on the core side; re-entering pause() deadlocked main (R10-F3).
+        // Battery adaptation stays with the duty-cycle system; explicit pause
+        // remains available via the notification action.
+        Timber.i("App entering background (no automatic pause, no FFI echo)")
     }
 
     override fun onEnteringForeground() {
-        Timber.i("App entering foreground")
-
-        // ANR-2026-09-09 fix: same main-thread re-entrancy as
-        // onEnteringBackground — resume() FFI blocked main for >10s in 10
-        // captured ANR stacks (meshservice_resume), including the 12:00:56Z
-        // system ANR fired from the Rust-driven uniffi callback itself.
-        scope.launch {
-            try {
-                meshRepository.resumeMeshService()
-            } catch (e: Exception) {
-                Timber.w(e, "resumeMeshService failed")
-            }
-        }
+        // Unified 2026-09-10: no FFI echo (R10-F3). Resume is core-owned; any
+        // future app-driven resume must stay off the main thread (ANR 2026-09-09).
+        Timber.i("App entering foreground (no FFI echo)")
     }
 
     // ========================================================================
@@ -610,15 +559,22 @@ class AndroidPlatformBridge @Inject constructor(
         bleAdjustment: uniffi.api.BleAdjustment,
         relayAdjustment: uniffi.api.RelayAdjustment
     ) {
-        // Apply BLE scan/advertise intervals
-        Timber.d("Applying BLE adjustments: scan=${bleAdjustment.scanIntervalMs}ms, advertise=${bleAdjustment.advertiseIntervalMs}ms, txPower=${bleAdjustment.txPowerDbm}dBm")
+        if (relayAdjustment.maxPerHour != lastRelayMaxPerHour) {
+            lastRelayMaxPerHour = relayAdjustment.maxPerHour
+            Timber.d("Applying relay adjustments: maxPerHour=${relayAdjustment.maxPerHour}, priority=${relayAdjustment.priorityThreshold}, maxPayload=${relayAdjustment.maxPayloadBytes}")
+            meshRepository.setRelayBudget(relayAdjustment.maxPerHour)
+        }
 
-        // Apply relay budget adjustments
-        Timber.d("Applying relay adjustments: maxPerHour=${relayAdjustment.maxPerHour}, priority=${relayAdjustment.priorityThreshold}, maxPayload=${relayAdjustment.maxPayloadBytes}")
-        meshRepository.setRelayBudget(relayAdjustment.maxPerHour)
-
-        // Apply BLE settings to scanner and advertiser
-        applyBleSettings(bleAdjustment)
+        if (bleAdjustment.scanIntervalMs != lastScanIntervalMs ||
+            bleAdjustment.advertiseIntervalMs != lastAdvertiseIntervalMs ||
+            bleAdjustment.txPowerDbm != lastTxPowerDbm
+        ) {
+            lastScanIntervalMs = bleAdjustment.scanIntervalMs
+            lastAdvertiseIntervalMs = bleAdjustment.advertiseIntervalMs
+            lastTxPowerDbm = bleAdjustment.txPowerDbm
+            Timber.d("Applying BLE adjustments: scan=${bleAdjustment.scanIntervalMs}ms, advertise=${bleAdjustment.advertiseIntervalMs}ms, txPower=${bleAdjustment.txPowerDbm}dBm")
+            applyBleSettings(bleAdjustment)
+        }
     }
 
     /**
