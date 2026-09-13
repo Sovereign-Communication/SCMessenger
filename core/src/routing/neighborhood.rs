@@ -53,6 +53,11 @@ impl EnergyClass {
     }
 }
 
+/// A gateway must be at least this old (seconds) before eviction will
+/// consider it: freshly-learned gateways carry current routing info and
+/// must not be churned by a gossip burst that exceeds max_gateways.
+const MIN_GATEWAY_AGE_BEFORE_EVICT_SECS: u64 = 30;
+
 /// Information about a gateway peer that connects to other cells
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GatewayInfo {
@@ -375,18 +380,28 @@ impl NeighborhoodTable {
     }
 
     /// Evict the gateway with the stalest timestamp
-    fn evict_stalest_gateway(&mut self, _now: u64) {
+    fn evict_stalest_gateway(&mut self, now: u64) {
         if self.gateways.is_empty() {
             return;
         }
 
-        // Evict the gateway with the oldest last_updated timestamp
+        // Evict the gateway with the oldest last_updated timestamp, but only
+        // when it is actually stale: a burst of fresh gossip that pushes the
+        // table over max_gateways must not churn current routing information
+        // (cleanup() removes entries older than max_staleness every tick,
+        // which resolves the over-capacity table as entries age).
         let gateway_to_evict = *self
             .gateways
             .values()
             .min_by_key(|g| g.last_updated)
             .map(|g| &g.gateway_id)
             .expect("checked gateways non-empty above");
+
+        if now.saturating_sub(self.gateways[&gateway_to_evict].last_updated)
+            < MIN_GATEWAY_AGE_BEFORE_EVICT_SECS
+        {
+            return;
+        }
 
         self.gateways.remove(&gateway_to_evict);
     }
@@ -743,6 +758,92 @@ mod tests {
             .all_gateways()
             .iter()
             .any(|g| g.gateway_id == gateway4));
+    }
+
+    #[test]
+    fn test_evict_stalest_skips_fresh_burst() {
+        let mut table = NeighborhoodTable::new();
+        table.max_gateways = 3;
+
+        let g1 = make_peer_id(1);
+        let g2 = make_peer_id(2);
+        let g3 = make_peer_id(3);
+        let g4 = make_peer_id(4);
+
+        table.update_gateway(
+            g1,
+            make_cell_summary(vec![make_hint(1)]),
+            1,
+            TransportType::TCP,
+        );
+        // Backdate g1 past the minimum eviction age so it is genuinely stale
+        if let Some(g) = table.gateways.get_mut(&g1) {
+            g.last_updated -= MIN_GATEWAY_AGE_BEFORE_EVICT_SECS + 10;
+        }
+        table.update_gateway(
+            g2,
+            make_cell_summary(vec![make_hint(2)]),
+            1,
+            TransportType::TCP,
+        );
+        table.update_gateway(
+            g3,
+            make_cell_summary(vec![make_hint(3)]),
+            1,
+            TransportType::TCP,
+        );
+        assert_eq!(table.gateway_count(), 3);
+
+        // Adding a 4th evicts g1 -- it is genuinely stale
+        table.update_gateway(
+            g4,
+            make_cell_summary(vec![make_hint(4)]),
+            1,
+            TransportType::TCP,
+        );
+        assert_eq!(table.gateway_count(), 3);
+        assert!(!table.all_gateways().iter().any(|g| g.gateway_id == g1));
+    }
+
+    #[test]
+    fn test_evict_stalest_defers_fresh_burst() {
+        let mut table = NeighborhoodTable::new();
+        table.max_gateways = 3;
+
+        let g1 = make_peer_id(1);
+        let g2 = make_peer_id(2);
+        let g3 = make_peer_id(3);
+        let g4 = make_peer_id(4);
+
+        table.update_gateway(
+            g1,
+            make_cell_summary(vec![make_hint(1)]),
+            1,
+            TransportType::TCP,
+        );
+        table.update_gateway(
+            g2,
+            make_cell_summary(vec![make_hint(2)]),
+            1,
+            TransportType::TCP,
+        );
+        table.update_gateway(
+            g3,
+            make_cell_summary(vec![make_hint(3)]),
+            1,
+            TransportType::TCP,
+        );
+        assert_eq!(table.gateway_count(), 3);
+
+        // All gateways are fresh (recently learned): adding a 4th defers
+        // eviction rather than churning current routing information.
+        table.update_gateway(
+            g4,
+            make_cell_summary(vec![make_hint(4)]),
+            1,
+            TransportType::TCP,
+        );
+        assert_eq!(table.gateway_count(), 4);
     }
 
     #[test]

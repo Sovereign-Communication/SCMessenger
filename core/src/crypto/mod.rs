@@ -1,5 +1,17 @@
 // Cryptography module — message encryption and key exchange
 
+// CI hardening (see docs/rules/SECURITY_PROTOCOL.md): a truly-unused,
+// non-underscore-prefixed parameter here is now a hard compile error, not
+// just a CI-only `-D warnings` clippy failure. This is deliberately narrow
+// (module-scoped, not workspace-wide) and only covers half the threat model
+// -- rustc's own escape hatch means a parameter renamed `_foo` is exempt
+// from `unused_variables` by design, at any deny level. The other half
+// (underscore-prefixed ignored parameters, the actual shape of the historical
+// sender-impersonation bug in RatchetSession) is enforced separately by
+// scripts/check_perimeter_underscore_params.py in CI, which this attribute
+// cannot replace.
+#![deny(unused_variables)]
+
 pub mod backup;
 pub mod encrypt;
 pub mod negotiation;
