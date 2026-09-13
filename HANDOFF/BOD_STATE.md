@@ -995,3 +995,111 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > seed_dial or the migration on main; a follow-up from the Opus verdict still
   > open that I mislabeled closed; or a disclosure-path property that the Opus
   > verdict approved but that no longer holds on 5f1cf702.
+
+### Resolution bod-d66acc67 [REJECTED]
+- **Timestamp**: 2026-09-13T21:05:35.471530+00:00
+- **Tier**: paid
+- **Verdict**: `REJECTED_JUDGE_DIVERGENCE`
+- **Cost**: $0.002963 (Ceiling: $0.10)
+- **Summary**: Panel achieved unanimity, but the judge model failed to confirm concurrence.
+- **Panel Voting** (5/5 APPROVE):
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal corrects a stale doc comment to accurately reflect the archive-on-success migration behavior, touching no code paths or disclosure mechanisms, and is verified against an independent audit draft._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 1.00) - _The proposed three-line documentation-only correction accurately matches the stated CLI behavior and does not alter protocol, storage, cryptographic, relay, or platform behavior. The evidence indicates no remaining contradictory documentation site, so applying the fix and closing the ticket is consistent with the doctrine._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 1.00) - _This is a pure documentation correction to a stale doc-comment in core/src/store/ that misstated legacy peers.json migration behavior. It introduces no code, protocol, cryptographic, or architectural changes, is verified against independent audit work, accurately describes the observed archive-on-success behavior, and discloses the environmental cargo-check issue transparently. Fully compliant with all five doctrine pillars._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal is a pure documentation fix that aligns actual behavior (archive-on-success) with core-side doc comments, violating no doctrine principles and improving accuracy and safety._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 1.00) - _The proposal is a documentation-only correction that accurately reflects existing CLI behavior, involves no code or protocol changes, passed cargo check, and therefore fully complies with the SCMessenger doctrine._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Apply the F6 one-line doc correction (P3_DOC_LEDGER_MIGRATION_F6_NOTES.md)
+  > to core/src/store/ledger_entry.rs and close the ticket.
+  >
+  > DEFECT (Opus rule-8 review finding F6, [INFO]): the doc comment on
+  > `import_legacy_cli_entries` (ledger_entry.rs:2240 on main 6e726402) says
+  > "`peers.json` is left in place; the caller simply stops writing it." The
+  > actual caller behavior is rename-on-success: cli/src/ledger.rs archives the
+  > file as `peers.json.migrated-<ts>` (function archive_legacy_peers_json), and
+  > leaves it in place ONLY on the error path (unreadable/invalid legacy JSON).
+  > The stale half is the core-side doc; the CLI-side module doc (lines 1-16)
+  > already matches behavior.
+  >
+  > FIX: three-line doc-comment replacement, code untouched, diff verified to
+  > match the fix drafted independently by the assist-lane audit
+  > (HANDOFF/audit/BACKUP_BRANCH_MERGE_MAP_2026-09-13.md).
+  >
+  > EVIDENCE (this session, worktree on fix/f6-ledger-migration-doc-20260913
+  > branched from origin/main 6e726402):
+  > 1. Pre-edit grep: exactly one occurrence of the stale sentence.
+  > 2. Post-edit grep acceptance (per ticket): the only remaining "left in
+  >    place" phrasing is the corrected sentence itself ("left in place only
+  >    when unreadable or invalid legacy JSON").
+  > 3. `cargo check -p scmessenger-core --lib`: clean (39.76s after regenerating
+  >    stale shared-store UniFFI bindings -- an environmental issue unrelated to
+  >    this diff, disclosed below).
+  > 4. Doc-comment-only change: no code path, storage path, or disclosure path
+  >    is touched; core/src/store is outside the rule-8 merge-blocked set
+  >    {crypto, transport, routing, privacy}.
+  >
+  > DISCLOSURE: the first cargo check failed E0063 in UniFFI-generated bindings
+  > (api.uniffi.rs) because the shared cargo store held build-script output from
+  > a divergent lineage (backup-branch LedgerEntry without the T2 fields).
+  > Resolved by `cargo clean -p scmessenger-core` + rebuild (no builds were
+  > running; regeneration verified clean). This is a shared-store
+  > one-lineage-at-a-time hazard to document, not a defect in this diff.
+  >
+  > ASK: APPROVE applying the F6 correction and closing the ticket. REJECT if
+  > the corrected sentence misstates the migration behavior or if you find
+  > another doc site still contradicting archive-on-success.
+
+### Resolution bod-3b8d3ffe [APPROVED]
+- **Timestamp**: 2026-09-13T21:08:41.326465+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.001946 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 1.00) - _This is a pure documentation correction that fixes a factual inaccuracy in a doc comment within the sanctioned core/src/store/ module, with no code, crypto, network, or protocol changes. It was verified against the actual caller behavior and independently drafted fix, fully aligning with all SCMessenger doctrine principles._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 1.00) - _The proposed change is a documentation-only correction that aligns the core-side comment with the verified CLI behavior: peers.json is archived after successful migration and retained only on unreadable or invalid legacy JSON. No doctrine-controlled implementation or protocol behavior is changed._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal is a pure doc correction aligning the core-side comment with the verified CLI archive-on-success behavior, touching no code or disclosure paths and fully consistent with all SCMessenger doctrine principles._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _Proposal is a doc-only fix that corrects a stale comment to match actual behavior, adheres strictly to all doctrine principles, and introduces no violations or centralized dependencies._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 1.00) - _This is a documentation-only correction that makes core docs match existing CLI behavior; it touches no code paths, cryptography, storage access, or network design and therefore fully complies with the Repo Philosophy and Canonical Doctrine._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Apply the F6 one-line doc correction (P3_DOC_LEDGER_MIGRATION_F6_NOTES.md)
+  > to core/src/store/ledger_entry.rs and close the ticket.
+  >
+  > DEFECT (Opus rule-8 review finding F6, [INFO]): the doc comment on
+  > `import_legacy_cli_entries` (ledger_entry.rs:2240 on main 6e726402) says
+  > "`peers.json` is left in place; the caller simply stops writing it." The
+  > actual caller behavior is rename-on-success: cli/src/ledger.rs archives the
+  > file as `peers.json.migrated-<ts>` (function archive_legacy_peers_json), and
+  > leaves it in place ONLY on the error path (unreadable/invalid legacy JSON).
+  > The stale half is the core-side doc; the CLI-side module doc (lines 1-16)
+  > already matches behavior.
+  >
+  > FIX: three-line doc-comment replacement, code untouched, diff verified to
+  > match the fix drafted independently by the assist-lane audit
+  > (HANDOFF/audit/BACKUP_BRANCH_MERGE_MAP_2026-09-13.md).
+  >
+  > EVIDENCE (this session, worktree on fix/f6-ledger-migration-doc-20260913
+  > branched from origin/main 6e726402):
+  > 1. Pre-edit grep: exactly one occurrence of the stale sentence.
+  > 2. Post-edit grep acceptance (per ticket): the only remaining "left in
+  >    place" phrasing is the corrected sentence itself ("left in place only
+  >    when unreadable or invalid legacy JSON").
+  > 3. `cargo check -p scmessenger-core --lib`: clean (39.76s after regenerating
+  >    stale shared-store UniFFI bindings -- an environmental issue unrelated to
+  >    this diff, disclosed below).
+  > 4. Doc-comment-only change: no code path, storage path, or disclosure path
+  >    is touched; core/src/store is outside the rule-8 merge-blocked set
+  >    {crypto, transport, routing, privacy}.
+  >
+  > DISCLOSURE: the first cargo check failed E0063 in UniFFI-generated bindings
+  > (api.uniffi.rs) because the shared cargo store held build-script output from
+  > a divergent lineage (backup-branch LedgerEntry without the T2 fields).
+  > Resolved by `cargo clean -p scmessenger-core` + rebuild (no builds were
+  > running; regeneration verified clean). This is a shared-store
+  > one-lineage-at-a-time hazard to document, not a defect in this diff.
+  >
+  > ASK: APPROVE applying the F6 correction and closing the ticket. REJECT if
+  > the corrected sentence misstates the migration behavior or if you find
+  > another doc site still contradicting archive-on-success.

@@ -2237,7 +2237,9 @@ impl LedgerManager {
     /// advertised listen address as verified, so only `is_bootstrap`
     /// (operator-configured by fiat) survives as verified; everything else
     /// imports as hearsay and is re-proven by the first live dial.
-    /// `peers.json` is left in place; the caller simply stops writing it.
+    /// `peers.json` is archived by the caller on successful migration
+    /// (renamed to `peers.json.migrated-<ts>`, cli/src/ledger.rs); it is
+    /// left in place only when unreadable or invalid legacy JSON.
     pub fn import_legacy_cli_entries(
         &self,
         entries: Vec<LedgerMigrationEntry>,
