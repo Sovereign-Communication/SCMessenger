@@ -4,6 +4,17 @@
 - **Filed:** 2026-09-13, Buffy (Freebuff recovery session)
 - **Status:** OPEN
 
+## Additional evidence 2026-09-13 evening (PR #286, Android-content-identical branch)
+
+The flake is worse than the original single-failure signature: on PR #286
+(the diff is one doc comment in core + governance docs -- no Android file
+touches the test surface), Android JVM Unit Tests failed
+`SettingsViewModelTest.infoCounts` (expected:<7> but was:<0>) on attempt 1
+and attempt 2, passed on attempt 3 (Mobile run 34782991756, same SHA, same
+content, 2-of-3 fail). The MockK/ordering fix is now the highest-value
+CI-reliability item: two consecutive failures on unrelated PRs cost ~40
+minutes of disambiguation cycles each time.
+
 ## Evidence (this session)
 
 `Docker Integration Suite` / Android Unit Tests (`:app:testReleaseUnitTest`)
