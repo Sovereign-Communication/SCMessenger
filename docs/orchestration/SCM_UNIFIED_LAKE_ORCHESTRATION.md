@@ -5,7 +5,7 @@
 > Companion to the master protocol `docs/ORCHESTRATION.md` (the canonical loop, dispatch ladder, security gates, and the Section 0 Operating Contract) and launched by the one command `/orchestrate`. THIS file is the lake registry, routing table, setup checklist, and portable role-prompt. Where the two overlap, `docs/ORCHESTRATION.md` is authoritative.
 
 **Existing infrastructure this builds on** (already in repo, verified readable):
-- `scripts/delegate_task.py` — multi-provider dispatch: **qwen** (DashScope), **openrouter**, **ollama**, **groq** (OpenAI-compatible endpoints, env-file key loading from `~/.config/scmorc/<provider>.env`)
+- `scripts/delegate_task.py` — multi-provider dispatch: **qwen** (DashScope), **openrouter**, **ollama**, **groq**, **gemini**, **nvidia**, **cerebras** (OpenAI-compatible endpoints, env-file key loading from `~/.config/scmorc/<provider>.env`)
 - `.claude/archive/commands/scmqwen.md` (archived) — the proven orchestrator contract this builds on: tier roster, round-robin state, build serialization, escalation ladder. Now the Qwen `lanes` backend of the unified `/orchestrate`; `docs/ORCHESTRATION.md` governs.
 - `HANDOFF/MORPH_LITE_HANDOFF.md` — Morph V3 Fast lane via OpenRouter ($0.001/call ceiling) for single-file <500-line edits
 - `ORCHESTRATOR_DIRECTIVE.md` — gatekeeper protocol + agent pool
@@ -51,10 +51,38 @@ Quota numbers are **runtime-learned state, not hardcoded truth** — free tiers 
       "quota_seed": "free tier, per-model daily + per-minute caps; learn exact values from 429 headers at runtime",
       "tiers": {
         "FLASH": ["llama-3.1-8b-instant"],
-        "CODER": ["qwen/qwen3-32b", "llama-3.3-70b-versatile"],
-        "THINK": ["deepseek-r1-distill-llama-70b"]
+        "CODER": ["qwen/qwen3.6-27b", "llama-3.3-70b-versatile"],
+        "THINK": ["llama-3.3-70b-versatile"]
       },
-      "notes": "Fastest inference in the farm. Ideal for FLASH/CODER micro-task throughput during its daily window; resets every 24h so it is the default first-lane each morning. delegate_task.py already sets a browser UA (Cloudflare 403 workaround)."
+      "notes": "Fastest inference in the farm. Ideal for FLASH/CODER micro-task throughput during its daily window; resets every 24h so it is the default first-lane each morning. delegate_task.py already sets a browser UA (Cloudflare 403 workaround). Updated CODER model to qwen/qwen3.6-27b."
+    },
+    "nvidia": {
+      "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_env": ["NVIDIA_API_KEY"],
+      "key_file": "~/.config/scmorc/nvidia.env",
+      "quota_type": "signup_credits_and_model_rate_limits",
+      "quota_seed": "signup-credit balance and model-specific limits; confirm in NVIDIA console",
+      "tiers": {
+        "FLASH": ["deepseek-ai/deepseek-v4-flash-0731"],
+        "CODER": ["deepseek-ai/deepseek-v4-flash-0731"],
+        "THINK": ["deepseek-ai/deepseek-v4-flash-0731"]
+      },
+      "enabled": true,
+      "notes": "OpenAI-compatible NVIDIA NIM endpoint; deepseek-ai/deepseek-v4-flash-0731 returned exact LANE_OK on 2026-08-15. Do not infer quota from model-list access."
+    },
+    "cerebras": {
+      "endpoint": "https://api.cerebras.ai/v1/chat/completions",
+      "key_env": ["CEREBRAS_API_KEY"],
+      "key_file": "~/.config/scmorc/cerebras.env",
+      "quota_type": "fixed_trial_credit_and_per_model_rate_limits",
+      "quota_seed": "operator-confirmed fixed USD 5 trial; 5 RPM, 2400 RPD, 30000 TPM, 1000000 TPD per model",
+      "tiers": {
+        "FLASH": ["zai-glm-4.7", "gemma-4-31b"],
+        "CODER": ["zai-glm-4.7", "gemma-4-31b"],
+        "THINK": ["zai-glm-4.7"]
+      },
+      "enabled": false,
+      "notes": "Metered backup only, excluded from automatic routing. A minimal zai-glm-4.7 inference returned HTTP 200 after trial activation on 2026-08-15. gpt-oss-120b is available but is never an automatic default."
     },
     "openrouter": {
       "endpoint": "https://openrouter.ai/api/v1/chat/completions",
@@ -84,16 +112,15 @@ Quota numbers are **runtime-learned state, not hardcoded truth** — free tiers 
     },
     "gemini": {
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      "key_env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      "key_file": "~/.config/scmorc/gemini.env",
+      "key_env": ["AISTUDIO_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      "key_file": "~/.config/scmorc/AIstudio.env",
       "quota_type": "daily_requests_per_model",
       "quota_seed": "AI Studio free tier, per-model daily request caps; learn from 429s",
       "tiers": {
-        "FLASH": ["gemini-2.0-flash-lite"],
-        "CODER": ["gemini-2.5-flash"],
-        "THINK": ["gemini-2.5-pro"]
+        "FLASH": ["gemini-3.7-flash"],
+        "CODER": ["gemini-3.7-flash"]
       },
-      "notes": "Large context windows make it the review/audit lake (whole-file diffs + packet in one shot). Add provider to delegate_task.py per §6.2."
+      "notes": "Direct Google AI Studio slot: approved key file ~/.config/scmorc/AIstudio.env with AISTUDIO_API_KEY (legacy aliases: GEMINI_API_KEY, GOOGLE_API_KEY, ~/.config/scmorc/gemini.env). Direct gemini-3.7-flash verified operational on 2026-08-15 (HTTP 200, finish_reason=stop with adequate completion ceiling; gemini-2.5-flash returned 404 for new users; gemini-3.1-pro-preview returned 429 zero free-tier quota, omitted from THINK). Secret values are never printed, logged, or committed."
     },
     "ollama": {
       "endpoint": "http://localhost:11434/api/chat",
@@ -115,11 +142,12 @@ Quota numbers are **runtime-learned state, not hardcoded truth** — free tiers 
       "notes": "Existing MiMo-code lane; keep as configured, register here so the router can count it."
     }
   },
-  "optional_lakes": ["mistral", "mistral-codestral", "nvidia-nim", "sambanova", "modelscope", "cerebras", "scaleway", "github-models", "deepseek (paid)"],
+  "optional_lakes": ["mistral", "mistral-codestral", "sambanova", "modelscope", "scaleway", "github-models", "deepseek (paid)"],
   "optional_lakes_detail": "see section 8 for verified 2026-07-20 free tiers, endpoints, and add-order; section 9 for paid tokens/$",
   "rules": [
     "Register every key in ~/.config/scmorc/<lake>.env — never in the repo.",
     "A lake with no key file is skipped silently by the router.",
+    "A lake with enabled: false in registry is skipped before routing.",
     "New lakes join by adding one JSON block; no router code changes (OpenAI-compatible endpoints only)."
   ]
 }
@@ -172,24 +200,26 @@ HARD RULES:
 
 ## 3. Routing: quota-aware rotation + failover
 
-**Tier → lake preference ladder** (first lake with remaining quota wins):
+**Tier -> lake preference ladder** (first enabled lake with remaining quota wins):
+
+`agy/gemini-3.7-flash-low` is the verified pre-router lane for small and medium tasks. It is invoked through `agy`, not `delegate_task.py`, so it does not appear in `lake_route.py` output. Use the API-key ladder below only after the bounded Gemini-first attempt or when the task requires a different model profile.
 
 | Tier | Ladder |
 |---|---|
-| FLASH | groq → qwen → openrouter → openrouter_direct → gemini → ollama |
-| CODER | qwenpaid → qwen → groq → openrouter → openrouter_direct → gemini → ollama |
-| THINK | qwen → gemini → openrouter (deepseek-r1:free) → groq |
-| MAX | qwen (qwen3-max) → gemini (2.5-pro) → openrouter paid ceiling-guarded |
+| FLASH | groq → qwen → nvidia → cerebras → openrouter → openrouter_direct → gemini → ollama |
+| CODER | qwenpaid → qwen → nvidia → groq → cerebras → openrouter → openrouter_direct → gemini → ollama |
+| THINK | qwenpaid → qwen → nvidia → gemini → cerebras → openrouter → groq |
+| MAX | qwenpaid → qwen → nvidia → gemini → cerebras → openrouter |
 | MORPH (apply/verify single-file) | openrouter morph-v3-fast only, $0.001 cap |
 
 **Within a lake:** per-tier round-robin over the model list (state in `tmp/lakes/round_robin_state.json`, same mechanic as the proven scmqwen rotation). On 429/timeout: mark model `cooldown_until`, advance rotation, never retry the same model twice in one dispatch.
 
-**Daily rhythm:** groq + gemini daily windows reset every 24 h → front-load FLASH/CODER micro-tasks there each morning; qwen's 90-day trial budget is the strategic reserve for CODER/THINK; ollama absorbs overflow at zero marginal cost; MAX dispatches are rare by design (E-01b, deadlocks, final verdicts).
+**Daily rhythm:** front-load bounded small/medium work through the verified `agy` Gemini Flash 3.7 lane, then use NVIDIA NIM and Groq according to model fit and observed limits. Direct AI Studio joins for FLASH/CODER after verified `gemini-3.7-flash` probe (HTTP 200, 2026-08-15; THINK omitted due to 429 zero-quota on 3.1 pro). Cerebras is a fixed-credit metered backup and remains `enabled: false` for automatic routing. Qwen and protected high-reasoning pools are reserves; MAX dispatches remain rare by design.
 
 **Quota ledger** (`tmp/lakes/ledger.jsonl`, append-only — extends `API_EFFICIENCY_LEDGER.md`):
 ```json
 {"ts":"2026-07-17T08:00Z","lake":"groq","model":"llama-3.3-70b-versatile","task":"A-01","in_tokens":6120,"out_tokens":1480,"result":"ok"}
-{"ts":"2026-07-17T08:11Z","lake":"groq","model":"qwen/qwen3-32b","task":"A-03","error":"429","cooldown_until":"2026-07-18T00:00Z"}
+{"ts":"2026-07-17T08:11Z","lake":"groq","model":"qwen/qwen3.6-27b","task":"A-03","error":"429","cooldown_until":"2026-07-18T00:00Z"}
 ```
 Router reads the ledger before every dispatch; `cooldown_until` and daily-window math come from observed 429s, so the farm self-calibrates as tiers change.
 
@@ -231,17 +261,21 @@ mkdir -p ~/.config/scmorc
 echo "DASHSCOPE_API_KEY=sk-..."   > ~/.config/scmorc/dashscope.env   # qwen trial
 echo "GROQ_API_KEY=gsk_..."      > ~/.config/scmorc/groq.env        # daily free
 echo "OPENROUTER_API_KEY=sk-or-v1-..." > ~/.config/scmorc/openrouter.env
-echo "GEMINI_API_KEY=AIza..."    > ~/.config/scmorc/gemini.env
+echo "AISTUDIO_API_KEY=AIza..."   > ~/.config/scmorc/AIstudio.env    # direct AI Studio (legacy alias: gemini.env / GEMINI_API_KEY)
+echo "NVIDIA_API_KEY=nvapi-..."  > ~/.config/scmorc/nvidia.env
+echo "CEREBRAS_API_KEY=csk-..."  > ~/.config/scmorc/cerebras.env
 chmod 600 ~/.config/scmorc/*.env
 ```
 
-### 6.2 Add gemini provider to `scripts/delegate_task.py` (~15 LoC)
+### 6.2 Add gemini, nvidia, and cerebras providers to `scripts/delegate_task.py`
 - `GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"`
-- key resolution mirroring the groq branch (`gemini.env`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`)
-- add `"gemini"` to `--provider` choices and the `req_url` map. No other changes — the script is already provider-generic.
+- `NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"`
+- `CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"`
+- key resolution with approved slot `~/.config/scmorc/AIstudio.env` (`AISTUDIO_API_KEY`) and legacy aliases (`gemini.env`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`). Secret values are never printed, logged, or committed.
+- add providers to `--provider` choices and request maps.
 
-### 6.3 Lake router wrapper (`scripts/lake_route.py`, ~150 LoC)
-Reads `lakes.json` (§1) + `tmp/lakes/ledger.jsonl` + `tmp/lakes/round_robin_state.json`; given `--tier`, prints `provider model` for the first non-cooled-down candidate; on worker exit, appends the ledger record and sets cooldowns from 429s. Keeps `delegate_task.py` as the transport; this is routing policy only.
+### 6.3 Lake router wrapper (`scripts/lake_route.py`)
+Reads `tmp/lakes/registry.json` (§1) + `tmp/lakes/ledger.jsonl` + `tmp/lakes/round_robin_state.json`; given `--tier`, prints `provider model` for the first non-cooled-down candidate; on worker exit, appends the ledger record and sets cooldowns from 429s. Skips lakes with `enabled: false` or missing keys. Keeps `delegate_task.py` as the transport; this is routing policy only.
 
 ### 6.4 Smoke test per lake (one packet each)
 Dispatch Z-01-class mechanical packet to every registered lake; confirm ledger rows + correct file-block extraction. Farm is live when every keyed lake has one `ok` row.
@@ -264,24 +298,19 @@ Dispatch Z-01-class mechanical packet to every registered lake; confirm ledger r
 
 ---
 
-## 8. Candidate lakes (DOCUMENTED ONLY -- researched, not yet wired) [verified 2026-07-20]
+## 8. Candidate lakes (verified 2026-08-15)
 
-These expand the `optional_lakes` list in section 1. They are researched and ready
-to register but are NOT in `delegate_task.py`'s `--provider` choices yet; each
-joins by adding one lake block (section 1 rules) plus a
-`~/.config/scmorc/<lake>.env` key. All are OpenAI-compatible unless noted. Ranked
-for this codebase (Rust/Kotlin, large files -> context window and TPM matter).
-Numbers confirmed against the sources in section 11; free tiers move, so
-re-confirm in each console before a sprint.
+Ranked for this codebase (Rust/Kotlin, large files -> context window and TPM matter).
+Numbers confirmed against console sources; free and fixed-trial capacity changes, so re-confirm in each console before a sprint.
 
-| Lake | Free tier | Base URL | Best coding models | Add friction |
-|------|-----------|----------|--------------------|--------------|
+| Lake | Quota / credit | Base URL | Best coding models | Status / Notes |
+|------|-----------|----------|--------------------|----------------|
+| nvidia | Signup-credit balance; model-specific limits | https://integrate.api.nvidia.com/v1 | deepseek-ai/deepseek-v4-flash-0731 | Inference live-verified 2026-08-15; enabled |
+| cerebras | Fixed USD 5 trial; 5 RPM, 2400 RPD, 30000 TPM, 1000000 TPD per model | https://api.cerebras.ai/v1 | zai-glm-4.7, gemma-4-31b; gpt-oss-120b available but protected | Inference activated 2026-08-15; disabled from automatic routing; explicit metered backup only |
 | mistral | 1 rps, 500K TPM, 1B tokens/month per model | https://api.mistral.ai/v1 | Codestral, Mistral Large/Medium 3.5 | phone + data-opt-in |
 | mistral-codestral | 30 rpm, 2,000 req/day (separate quota) | https://codestral.mistral.ai/v1 | Codestral | phone |
-| nvidia-nim | ~40 rpm, ~1,000 signup credits, no CC | https://integrate.api.nvidia.com/v1 | qwen3-coder, DeepSeek V4 Pro, GLM-4 | phone; context-limited |
 | sambanova | ~20M tokens/day (confirm) + $5/3mo credit | https://api.sambanova.ai/v1 | DeepSeek V3.2/V3.1, Llama 4 Maverick | signup |
 | modelscope | 2,000 calls/day (500/model), no CC | https://api-inference.modelscope.cn/v1 [verify] | Qwen (incl. coder), DeepSeek | signup |
-| cerebras | 1M tokens/day, 14,400 req/day, no CC | https://api.cerebras.ai/v1 | gpt-oss-120b (8K ctx -> mechanical only) | none |
 | scaleway | 1M free tokens (one-time), EU | https://api.scaleway.ai/v1 [verify] | qwen3-coder-30b, devstral | signup |
 | github-models | Copilot-tier gated, very restrictive tokens | (OpenAI-compatible) | GPT-5, DeepSeek-R1/V3, Grok 3 | GitHub/Copilot |
 
