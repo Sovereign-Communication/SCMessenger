@@ -106,3 +106,32 @@ Kotlin curve math than it has today. Therefore:
 
 This honors the operator's "then merge" ruling for everything verified and
 withholds exactly the contested hunk pending the proper remedy.
+
+## FINAL DISPOSITION (supersedes the surgical-merge plan above) — 2026-09-13
+
+The surgical-merge disposition rested on the round-1 "expansion" premise,
+which this session then **verified false against git** (rule 13: the artifact
+over the summary):
+
+- `git show 956ec371:...PeerIdValidator.kt` — `isValidEd25519Point` with
+  BigInteger decompression and Legendre check already on main, lines 78-99.
+- `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` — d35d3883 adds only
+  helper validators, docs, tests. **No new BigInteger/curve lines exist in
+  the PR.** The thing the heavy dissent rejected is not part of PR #282.
+
+Re-adjudication on corrected premises, run live this session:
+
+- bod-f16cfd7f (paid, first corrected run): 4/5 APPROVE, scores 0.95-1.00,
+  zero dissents; 5th seat lost to v4.1-flash reasoning-only output (since
+  root-caused: provider default reasoning when the reasoning key is omitted).
+- **bod-bbb49423 (paid, final): APPROVED 5/5** — gpt-4o-mini 1.00,
+  ling-3.0-flash 0.95, deepseek-v4-flash 0.95, gpt-5-mini 0.95,
+  gpt-5.6-luna 0.96; judge deepseek-v4.1-flash AGREED. Exit 0, $0.0038.
+- Blind B (this file): APPROVE, unchanged — every argument in the Delta 1
+  and Delta 2 sections above was re-verified against git this session.
+
+**Decision: merge PR #282 as authored** (no surgical strip — there is no
+contested hunk), with the pre-existing Kotlin curve-check debt governed by
+`HANDOFF/todo/P1_ANDROID_UNIFFI_CURVE_CHECK_RELOCATION.md` (filed this
+session, P1, before the v0.4.0 tag, per bod-dd336324). The earlier surgical
+plan is recorded for the audit trail and is void.

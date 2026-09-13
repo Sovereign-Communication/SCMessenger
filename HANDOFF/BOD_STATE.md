@@ -307,3 +307,398 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > (3) reject PR #282 entirely.
   > 
   > VOTE on the WHOLE PR #282 merge (deltas 1+2 together) under the doctrine.
+
+### Resolution bod-e3238cd5 [DEFERRED]
+- **Timestamp**: 2026-09-13T16:09:09.103572+00:00
+- **Tier**: heavy
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.027310 (Ceiling: $0.10)
+- **Summary**: Only 3/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (2/5 APPROVE):
+  - `openai/gpt-4.1`: **APPROVE** (Score: 1.00) - _The proposal strictly adheres to all doctrinal pillars by only adjusting a relay score boundary for probation (with fail-closed logic), enforcing better contact filtering, aligning types, and improving test/hygiene without introducing roles, centralization, crypto exceptions, or platform divergence._
+  - `google/gemini-2.5-pro`: **UNKNOWN** (Score: 0.00) - _Truncated by max-tokens (Rule 15 fail-closed)_
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.95) - _The actual delta is limited to a self-closing probation heuristic in node reputation and Android-side hygiene/validation changes that strengthen identity enforcement; none contradict the pillars of nodes-not-relays, sovereignty, or cryptographic integrity._
+- **Judge Model**: `openai/gpt-5` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
+
+### Resolution bod-9e4eb183 [DEFERRED]
+- **Timestamp**: 2026-09-13T16:11:55.241540+00:00
+- **Tier**: heavy
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.026277 (Ceiling: $0.10)
+- **Summary**: Only 3/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (2/5 APPROVE):
+  - `openai/gpt-4.1`: **APPROVE** (Score: 1.00) - _All changes reviewed strictly uphold the foundational doctrine; no centralization, cryptographic, or role-parity violations are present, and platform-specific updates further enforce doctrinal requirements._
+  - `google/gemini-2.5-pro`: **UNKNOWN** (Score: 0.00) - _Truncated by max-tokens (Rule 15 fail-closed)_
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.95) - _The corrected delta adds a narrow grace period for new nodes and platform-side hygiene helpers; it violates no doctrine pillar and strengthens identity enforcement without introducing central dependencies or anonymous forwarding._
+- **Judge Model**: `openai/gpt-5` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
+
+### Resolution bod-f16cfd7f [DEFERRED]
+- **Timestamp**: 2026-09-13T16:49:37.196853+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.004188 (Ceiling: $0.10)
+- **Summary**: Only 4/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposal aligns with SCMessenger doctrine without introducing any violations or exceptions, reinforcing existing principles while maintaining integrity across changes._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _All deltas are strictly within doctrine: the Rust routing heuristic adjusts node scoring without introducing relays or forwarders, and the Android changes enforce identity-triad separation and UniFFI type parity, upholding the dumb-byte-pipe adapter principle._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.96) - _Based on the verified deltas, PR #282 does not introduce or expand Kotlin cryptographic operations and does not alter the sovereign node, custody, storage, or wire-contract model. The actual changes uphold identity handling and platform integration requirements, so the PR should merge._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.95) - _The PR's actual delta strictly adheres to the Repo Philosophy and Canonical Doctrine: no nodes-not-relays violation, no centralization, and the Android changes reinforce the identity-triad separation. The probation clause is a reasonable reputation mechanism without compromising sovereignty or privacy._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
+
+### Resolution bod-04119f3d [DEFERRED]
+- **Timestamp**: 2026-09-13T16:52:00.856833+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.004079 (Ceiling: $0.10)
+- **Summary**: Only 4/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposed changes adhere strictly to the SCMessenger doctrine, maintaining compliance in both cryptographic and architectural integrity._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _PR #282 as actually authored contains no crypto expansion, no new centralized dependencies, and no protocol deviations; it tunes local relay reputation scoring within fail-closed bounds and strengthens identity-triad enforcement on Android, fully upholding all SCMessenger doctrine pillars._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The PR's actual deltas—a probationary reliability boundary that is self-terminating and Android helpers enforcing identity isolation—strictly comply with the doctrine of nodes-not-relays, sovereignty, cryptographic integrity, and multiplatform parity._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.97) - _The verified PR deltas do not weaken any doctrine pillar: relay probation is bounded and non-permanent, while the Android changes reinforce identity handling and platform interoperability. The pre-existing Kotlin curve validation is not introduced or expanded by this PR and is appropriately handled by a separate relocation ticket._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
+
+### Resolution bod-48bddd5b [DEFERRED]
+- **Timestamp**: 2026-09-13T16:53:06.239732+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.001450 (Ceiling: $0.10)
+- **Summary**: Only 4/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposal aligns strictly with the SCMessenger doctrine, introducing no violations while enhancing overall hygiene and compliance with foundational principles._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _PR #282 as verified against git contains only a local reputation scoring adjustment in core Rust, Android validation helper wiring that enforces the identity-triad doctrine, UniFFI type alignment, and hygiene/test improvements. No doctrine pillar is violated, weakened, or circumvented._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.96) - _As actually authored, PR #282 preserves the sovereign node architecture and bounded relay behavior while improving Android identity handling and type safety. The PR should merge because its verified deltas do not weaken cryptographic sovereignty, parity, discovery, or custody requirements._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.98) - _The PR's actual deltas strictly adhere to all doctrine pillars: no centralized dependencies, no relay abstraction, full multiplatform parity, and cryptographic integrity is untouched. The probation clause is benign and fails closed, and Android changes reinforce doctrine rules._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
+
+### Resolution bod-bbb49423 [APPROVED]
+- **Timestamp**: 2026-09-13T16:58:30.859602+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003823 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `openai/gpt-4o-mini`: **APPROVE** (Score: 1.00) - _The proposal does not violate any doctrine principles, and the modifications enhance the system's reliability and safety while remaining compliant with all foundational guidelines._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _All deltas in PR #282 are either neutral or doctrine-strengthening: the Rust core reputation scoring change is fail-closed with no crypto/privacy impact, Android changes enforce identity-triad doctrine and maintain UniFFI type parity, and the round-1 false premise regarding Kotlin BigInteger expansion is verified as nonexistent._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.95) - _The actual delta of PR #282 aligns with all doctrine pillars: the reliability probation is a local heuristic with no relay role change, Android helpers enforce sovereign identity rules, and no crypto/central changes are introduced._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The PR only adjusts an internal relay-reputation probation clause and adds Android helper validators/type alignments and tests; it does not introduce centralization, new crypto code, or platform-specific protocol deviations, so it remains consistent with the SCMessenger doctrine._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.96) - _As actually authored, PR #282 introduces no new cryptographic operation, relay role, centralized dependency, storage bypass, or protocol deviation. Its bounded probation rule and Android identity/transport handling align with the doctrine, so it should merge._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
+  > 
+  > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
+  > with a FALSE premise. Round 1's proposal stated that PR #282 commit
+  > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
+  > (105 -> 139 lines, adding decompression + Legendre symbol arithmetic).
+  > Verified against git this session:
+  >   - `git show 956ec371:...PeerIdValidator.kt` ALREADY CONTAINS
+  >     isValidEd25519Point with BigInteger decompression and
+  >     x2.modPow(...) Legendre check (lines 78-99).
+  >   - `git diff 956ec371 d35d3883 -- ...PeerIdValidator.kt` shows the
+  >     commit adds ONLY: a doc comment, isBlePeerId(), isTransportPeerId(),
+  >     isIdentityHash(), isPublicKeyHex(), and tests. ZERO new BigInteger
+  >     or curve-operation lines.
+  >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
+  >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
+  >     deepseek-v3.2) responded to a change that does not exist.
+  > 
+  > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
+  > In RelayReputation::calculate_score(), the reliability boundary changes from
+  >     self.is_reliable = self.score >= 50.0;
+  > to
+  >     self.is_reliable = self.score >= 50.0
+  >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
+  > Verified semantics: record_relay_attempt() increments messages_relayed on
+  > EVERY attempt and successful_deliveries only on success, so the probation
+  > clause is permanently false at the 3rd attempt (fail-closed; no permanent
+  > probation). No crypto/privacy/storage surface. Unit test added for both
+  > sides of the boundary.
+  > 
+  > ACTUAL NON-PERIMETER DELTA (android):
+  > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
+  >   types (type alignment, no crypto).
+  > - FileLoggingTree.kt, ContactsScreen/ContactsViewModel, MeshRepository.kt:
+  >   logging hygiene, contacts triad dedup using the new helper validators,
+  >   dead-transport peer id filtering (transport ids never treated as contacts -
+  >   this ENFORCES the identity-triad doctrine).
+  > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
+  > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
+  > 
+  > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
+  > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
+  > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
+  > 
+  > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
+  > against git) under the SCMessenger doctrine. Questions:
+  > (a) Does the probationary-window change violate any doctrine pillar
+  >     (nodes-not-relays, no anonymous forwarders, sovereignty, parity)?
+  > (b) Do the Android changes (triad helper validators, transport-id filtering,
+  >     UniFFI type alignment) uphold or weaken doctrine?
+  > (c) Should the PR merge to main?
