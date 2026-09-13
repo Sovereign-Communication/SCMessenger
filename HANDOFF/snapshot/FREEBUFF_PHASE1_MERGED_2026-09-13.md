@@ -93,3 +93,56 @@ not regression. Ticket filed: HANDOFF/todo/P2_ANDROID_VIEWMODEL_TEST_ORDER_DEPEN
 - Phase 4: keystore/D2 verification at build time.
 - Harness-repo handoff still uncommitted there (shared checkout on another
   lane's branch); chat.py effort:none patch is the first Harness action.
+
+---
+
+# PHASE 3 COMPLETE (2026-09-13, appended after #285 merge)
+
+**Result:** T1 + T2 closed as ALREADY-LANDED; main advanced 5f1cf702 -> 6e726402
+(PR #285, squash, head-identity guard passed a5fe0724, all checks CLEAN).
+
+## Disposition of record
+
+- `HANDOFF/audit/T1_T2_CENSUS_DISPOSITION_2026-09-13.md` (+ ADDENDUM): both
+  Phase 3 premises falsified on current main. T1 = PR #266
+  (cli/src/seed_dial.rs, wired at main.rs:2260-2271). T2 = PR #262
+  (legacy migration into core LedgerManager, peers.json archived).
+  Live proof: `cargo test -p scmessenger-cli --lib` 84 passed / 0 failed.
+- The suspected rule-8 breach is FALSIFIED: independent Opus verdict
+  (`HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md`, 2026-08-31,
+  pre-merge) APPROVED both PRs under a combined filename the charter did not
+  predict. `RULE8_REVIEW_PR262_LEDGER_UNIFICATION.md` CLOSED with the
+  filename-mismatch process lesson. F1/F2/F7/F-DHT follow-ups re-verified
+  closed on 6e726402's ancestor 5f1cf702; F6 doc residual ticketed
+  (HANDOFF/todo/P3_DOC_LEDGER_MIGRATION_F6_NOTES.md).
+- Governance: Blind A bod-70b2c5aa 5/5 APPROVE (judge agrees, 0.96,
+  $0.0035); Blind B
+  `HANDOFF/review/V040_T1T2_BLIND_B_ADVERSARIAL_VERDICT_2026-09-13.md`
+  APPROVE with C1 (field re-measure stands) and C2 (pool config shipped --
+  satisfied by #285 including scripts/bod_governance.py).
+
+## Governance-config changes shipped in #285 (for-cause, evidence on record)
+
+- gpt-4o-mini REMOVED from paid pool: stale-generation voter; filed a
+  content-free REJECT dissent (no file/line/evidence) against 4
+  evidence-citing APPROVEs (run bod-T1T2 R1, tmp/review/T1T2_PAID_result.json).
+- gemini-3.8-flash REMOVED: OpenRouter routed it BYOK mid-run (R4); the
+  governor re-learned the google/ prefix -- nondeterministic seat.
+- ling-3.0-flash-fin:free ADDED as fifth seat: probed under dispatch
+  conditions (clean APPROVE JSON, 4.6s, $0.00, BYOK-immune; also nemotron-3
+  verified as backup). gpt-5.6-sol / kimi-k3 probed clean but price-bomb the
+  $0.10 preflight as pool members -- documented in pool comments.
+
+## Operator-visible notes
+
+- Preflight estimator now understood and documented: ~4 reservation slots per
+  reasoning-capable seat x completion-token price dominates worst-case.
+  Vote pools must be priced as a SET against the $0.10 ceiling, not per seat.
+- The `--dry-run` flag does NOT exercise the preflight estimator (verified);
+  use --max-tokens tuning + one real preflight to validate pool arithmetic.
+- Harness chat.py effort:none patch remains UNPATCHED upstream (handoff at
+  Harness/docs/MODEL_SELECTION_HANDOFF_2026-09-13.md); pools are configured
+  to work correctly without it (v4.1-flash as judge only).
+- Next per plan: Phase 4 -- keystore/D2 verify (operator-gated items), then
+  operator gate scoring and the v0.4.0 tag package. T4 field re-measure (C1)
+  remains the one open acceptance item on the device rig.
