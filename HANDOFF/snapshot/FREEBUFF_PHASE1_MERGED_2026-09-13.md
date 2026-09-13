@@ -49,3 +49,47 @@ Written by Buffy (Freebuff lane). All claims cite commands run this session.
 - Harness repo handoff file is UNCOMMITTED there (checkout is shared and on
   someone else's branch `fix/reasoning-model-hints-and-bom` with unrelated
   dirty files; left untouched per shared-checkout rules).
+
+---
+
+# PHASE 2 ADDENDUM (same session, 2026-09-13)
+
+## T4 outcome: DISPOSITION, not implementation
+
+The T4 routing feed was found **already landed on merged main** (the "zero
+callers" census premise was true only on the stale branch tip):
+- Feed: swarm.rs native 6449-6459 / wasm 9148-9158 -> IronCore::routing_peer_seen,
+  trust-gated by fail-closed peer_is_blocked (66-75); endpoint_transport_string
+  (431-452) classifies tcp/ws/quic/relay.
+- D6 acceptance tests on main PASS (verified live: 2 passed / 0 failed).
+- Dual-approve: bod-0ad63e5f (paid panel 5/5) + Blind B verdict (C1/C2).
+- Heavy-tier BoD attempt refused by preflight ($0.78 vs $0.10 ceiling) --
+  BoD-rule finding for the operator, not bypassed.
+- Artifacts: HANDOFF/audit/T4_ROUTING_FEED_ANALYSIS_2026-09-13.md,
+  HANDOFF/review/V040_T4_BLIND_B_ADVERSARIAL_VERDICT_2026-09-13.md,
+  HANDOFF/todo/P2_NON_SWARM_TRANSPORT_ROUTING_FEED.md (C2),
+  HANDOFF/todo/P1_ROUTING_ENGINE...md updated (criterion 5 field re-measure
+  open). Editing-tool fault briefly truncated that ticket mid-update;
+  restored in full from the verified read (disclosed in-file).
+
+## Merges this session (all identity-guarded, dual-approve)
+
+1. PR #282 (code) -> b5a70bd5 (Phase 1).
+2. PR #284 (T4 docs disposition) -> 5f1cf702 (Phase 2). 19/19 checks green.
+
+## main CI on b5a70bd5: GREEN (after one flake)
+
+Docker Integration Suite failed once (3 Android ViewModel tests:
+SettingsViewModelTest.infoCounts, ConversationsViewModelTest x2;
+MockK stubbing leakage), `rerun --failed` on the same SHA PASSED -> flake,
+not regression. Ticket filed: HANDOFF/todo/P2_ANDROID_VIEWMODEL_TEST_ORDER_DEPENDENCE.md.
+
+## Next phases (unchanged plan)
+
+- Phase 3: T1 CLI boot seed-dial (half-wired: only mobile_bridge.rs:862 calls
+  connect_to_seed_peers on the pre-#282 tree -- re-census on 5f1cf702 first;
+  a freebuff/v040-t1-boot-seed-dial worktree already exists) + T2 peer-store
+  unification (rule-8 gated, double-blind).
+- Phase 4: keystore/D2 verification at build time.
+- Harness-repo handoff still uncommitted there (shared checkout on another
+  lane's branch); chat.py effort:none patch is the first Harness action.
