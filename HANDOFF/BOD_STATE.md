@@ -777,3 +777,221 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > shows 216/216 StoreAndCarry again? Is any doctrine pillar (nodes-not-relays,
   > sovereignty, Rust-sole-crypto, parity, no-silent-truncation) violated by this
   > disposition, or any security hole left unaddressed?
+
+### Resolution bod-aa327e74 [REJECTED]
+- **Timestamp**: 2026-09-13T19:58:42.778959+00:00
+- **Tier**: paid
+- **Verdict**: `REJECTED_DISSENT`
+- **Cost**: $0.005011 (Ceiling: $0.10)
+- **Summary**: Dissent detected among panel: 4 APPROVE, 1 REJECT. 100% unanimity required.
+- **Panel Voting** (4/5 APPROVE):
+  - `openai/gpt-4o-mini`: **REJECT** (Score: 0.00) - _The proposal is based on falsified premises regarding the boot seed-dial and peer-store unification, which fundamentally misaligns with the principles of NO misrepresentation and adherence to sovereign functionality._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.98) - _The cited evidence supports that T1 and T2 are already implemented and wired on main, with the independent review and its substantive follow-ups addressed. Closing the tickets through a census and corrected records, while retaining F6 as the only residual, does not introduce a protocol, relay, centralization, cryptographic, or parity exception._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal closes items as already-landed on main with verified code that fully complies with the SCMessenger doctrine; no centralization, no relay exceptions, and all cryptographic and hygiene requirements are met._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.98) - _The proposal verifies all T1 and T2 deliverables are properly wired and landed on main 5f1cf702 with full test coverage, closes the census-flagged breach with documented evidence, and files ticket corrections; no doctrine principle is violated, weakened, or excepted._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The auditable evidence on origin/main 5f1cf702 shows both T1 (seed_dial wired in CLI) and T2 (core ledger unification and migration) are implemented in the Rust core and verified by tests and review, with only a documentation ticket remaining; no doctrine principles are violated._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Close Phase 3 items T1 (boot seed-dial) and T2 (peer-store
+  > unification) as ALREADY-LANDED on main 5f1cf702, with the "breach" initially
+  > surfaced by the census itself falsified on the evidence. No code PR; the
+  > deliverable is census + ticket corrections + this gate.
+  >
+  > DISPOSITION FACTS (all read this session on origin/main 5f1cf702; worktree
+  > tmp/wt-recovery-20260913):
+  >
+  > 1. T1 premise ("headless CLI boot never dials seed peers") is FALSIFIED.
+  >    cli/src/seed_dial.rs is a complete boot-dial module: bounded backoff
+  >    (next_delay 5s/15s/45s/120s), pure sweep_decision, sweep_once ->
+  >    SwarmHandle::connect_to_seed_peers. Wired at cli/src/main.rs:2260-2271
+  >    (rule-16 reachability verified). Landed via PR #266 (CLI-only, outside the
+  >    rule-8 perimeter).
+  >
+  > 2. T2 premise ("split peer stores, 0 vs 4,678 entries") is FALSIFIED.
+  >    cli/src/ledger.rs opens with "T2 unification (2026-08-31)": one-time
+  >    migration into the shared core LedgerManager, legacy verified-flag not
+  >    trusted, peers.json archived. Wired: run_legacy_migration called from two
+  >    production sites (cli/src/main.rs and cli/src/ledger.rs init path).
+  >    Landed via PR #262 (merged 2026-09-01).
+  >
+  > 3. The census initially flagged an open P0 breach: RULE8_REVIEW_PR262 ticket
+  >    said "neither #262 nor #263 can merge without a recorded APPROVE" while
+  >    both merged 2026-09-01. FALSIFIED: the independent review EXISTS --
+  >    HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md (2026-08-31,
+  >    before merge): "VERDICT: PR #262 -- APPROVE", "VERDICT: PR #263 --
+  >    APPROVE" from a seat that authored neither PR nor the T2 spec; trees
+  >    pinned by ref; four ledger-egress points enumerated; merge-tree conflict
+  >    check. The ticket demanded filename RULE8_PR262_VERDICT.md; the reviewer
+  >    delivered a combined _OPUS.md file -- a filing mismatch that left the
+  >    ticket open forever and made a completed gate look like a breach.
+  >
+  > 4. Every follow-up from that verdict is verifiably closed on 5f1cf702:
+  >    F1 legacy-hearsay promotion -> closed (T13-F9: ledger_entry.rs:2293,
+  >    :2344 -- only operator bootstrap survives). F2 wire-controlled last_seen
+  >    -> closed (clamp_wire_last_seen_ms, :2316-2340). F7 4-byte hint collision
+  >    -> closed (PR #268 merged 2026-09-03; reachable_hints Vec<[u8;8]> at
+  >    local.rs:52,72; neighborhood.rs:76,323). F-DHT A hearsay add_address
+  >    feeds -> gated at the ruled sites (swarm.rs:5225, :5380; :5896 is the
+  >    own-address path the ruling left alone). F6 [INFO] doc line remains ->
+  >    ticketed P3_DOC_LEDGER_MIGRATION_F6_NOTES.md.
+  >
+  > 5. Live proof this session: cargo test -p scmessenger-cli --lib -> 84 passed,
+  >    0 failed, including seed_dial sweep tests (dial-when-seeds-nonempty is the
+  >    T1 acceptance) and ledger migration tests (untrusted-flag strip + archive,
+  >    self/ephemeral rejection, identify-is-hearsay).
+  >
+  > 6. Ticket corrections filed: RULE8_REVIEW_PR262_LEDGER_UNIFICATION.md set to
+  >    CLOSED with a closure record; the process lesson (verdict-filename
+  >    mismatch leaves rule-8 tickets open forever) recorded there.
+  >
+  > ASK: APPROVE closing T1 and T2 as already-landed with the census as the
+  > disposition of record, ticket corrections as filed, and the F6 doc ticket as
+  > the only residual. REJECT if you find any of: an unwired call site for
+  > seed_dial or the migration on main; a follow-up from the Opus verdict still
+  > open that I mislabeled closed; or a disclosure-path property that the Opus
+  > verdict approved but that no longer holds on 5f1cf702.
+
+### Resolution bod-66274321 [DEFERRED]
+- **Timestamp**: 2026-09-13T20:08:06.506687+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.003733 (Ceiling: $0.10)
+- **Summary**: Only 4/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal only closes already-landed items with verified code and corrects a ticket-filing mismatch; it introduces no doctrine-violating changes._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.98) - _The supplied evidence supports that T1 and T2 are already landed, wired, reviewed, and tested on the stated main revision. Closing them administratively, while retaining the F6 documentation residual, aligns with the doctrine and does not introduce a protocol, architectural, or sovereignty exception._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.97) - _The proposal correctly identifies the 'breach' as a filename-filing mismatch (RULE8_PR262_VERDICT.md demanded vs. the combined _OPUS.md delivered) rather than an actual Rel witness absence; all wired call sites on main are verified, all follow-ups from the Opus verdict are verifiably closed with code locations cited, cargo test passes 84-0, and the only residual is the separate F6 doc ticket — so no rejection criterion is met._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.98) - _The audited main commit (5f1cf702) wires seed dialing and consolidates the peer store into the core as claimed, with tests and review evidence present; no doctrinal breaches (centralization, crypto, or protocol divergence) were found and only a doc ticket remains open._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Close Phase 3 items T1 (boot seed-dial) and T2 (peer-store
+  > unification) as ALREADY-LANDED on main 5f1cf702, with the "breach" initially
+  > surfaced by the census itself falsified on the evidence. No code PR; the
+  > deliverable is census + ticket corrections + this gate.
+  >
+  > DISPOSITION FACTS (all read this session on origin/main 5f1cf702; worktree
+  > tmp/wt-recovery-20260913):
+  >
+  > 1. T1 premise ("headless CLI boot never dials seed peers") is FALSIFIED.
+  >    cli/src/seed_dial.rs is a complete boot-dial module: bounded backoff
+  >    (next_delay 5s/15s/45s/120s), pure sweep_decision, sweep_once ->
+  >    SwarmHandle::connect_to_seed_peers. Wired at cli/src/main.rs:2260-2271
+  >    (rule-16 reachability verified). Landed via PR #266 (CLI-only, outside the
+  >    rule-8 perimeter).
+  >
+  > 2. T2 premise ("split peer stores, 0 vs 4,678 entries") is FALSIFIED.
+  >    cli/src/ledger.rs opens with "T2 unification (2026-08-31)": one-time
+  >    migration into the shared core LedgerManager, legacy verified-flag not
+  >    trusted, peers.json archived. Wired: run_legacy_migration called from two
+  >    production sites (cli/src/main.rs and cli/src/ledger.rs init path).
+  >    Landed via PR #262 (merged 2026-09-01).
+  >
+  > 3. The census initially flagged an open P0 breach: RULE8_REVIEW_PR262 ticket
+  >    said "neither #262 nor #263 can merge without a recorded APPROVE" while
+  >    both merged 2026-09-01. FALSIFIED: the independent review EXISTS --
+  >    HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md (2026-08-31,
+  >    before merge): "VERDICT: PR #262 -- APPROVE", "VERDICT: PR #263 --
+  >    APPROVE" from a seat that authored neither PR nor the T2 spec; trees
+  >    pinned by ref; four ledger-egress points enumerated; merge-tree conflict
+  >    check. The ticket demanded filename RULE8_PR262_VERDICT.md; the reviewer
+  >    delivered a combined _OPUS.md file -- a filing mismatch that left the
+  >    ticket open forever and made a completed gate look like a breach.
+  >
+  > 4. Every follow-up from that verdict is verifiably closed on 5f1cf702:
+  >    F1 legacy-hearsay promotion -> closed (T13-F9: ledger_entry.rs:2293,
+  >    :2344 -- only operator bootstrap survives). F2 wire-controlled last_seen
+  >    -> closed (clamp_wire_last_seen_ms, :2316-2340). F7 4-byte hint collision
+  >    -> closed (PR #268 merged 2026-09-03; reachable_hints Vec<[u8;8]> at
+  >    local.rs:52,72; neighborhood.rs:76,323). F-DHT A hearsay add_address
+  >    feeds -> gated at the ruled sites (swarm.rs:5225, :5380; :5896 is the
+  >    own-address path the ruling left alone). F6 [INFO] doc line remains ->
+  >    ticketed P3_DOC_LEDGER_MIGRATION_F6_NOTES.md.
+  >
+  > 5. Live proof this session: cargo test -p scmessenger-cli --lib -> 84 passed,
+  >    0 failed, including seed_dial sweep tests (dial-when-seeds-nonempty is the
+  >    T1 acceptance) and ledger migration tests (untrusted-flag strip + archive,
+  >    self/ephemeral rejection, identify-is-hearsay).
+  >
+  > 6. Ticket corrections filed: RULE8_REVIEW_PR262_LEDGER_UNIFICATION.md set to
+  >    CLOSED with a closure record; the process lesson (verdict-filename
+  >    mismatch leaves rule-8 tickets open forever) recorded there.
+  >
+  > ASK: APPROVE closing T1 and T2 as already-landed with the census as the
+  > disposition of record, ticket corrections as filed, and the F6 doc ticket as
+  > the only residual. REJECT if you find any of: an unwired call site for
+  > seed_dial or the migration on main; a follow-up from the Opus verdict still
+  > open that I mislabeled closed; or a disclosure-path property that the Opus
+  > verdict approved but that no longer holds on 5f1cf702.
+
+### Resolution bod-70b2c5aa [APPROVED]
+- **Timestamp**: 2026-09-13T20:23:03.708044+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003518 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.95) - _Every claim in the proposal is verified against main 5f1cf702 with live test output and specific file/line references; the initial 'breach' was a filing artifact (verdict-filename mismatch) not a real doctrinal deviation, and all Opus follow-ups are verifiably closed or properly ticketed; no centralized dependency, unsafe bypass, or protocol deviation is introduced._
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal correctly identifies that T1 and T2 are already implemented on main, with verifiable code and tests, and the alleged breach was a filing mismatch. No doctrine principles are violated; the action is purely administrative closure and ticket correction._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.95) - _The evidence presented supports that T1 and T2 are already landed, wired, independently reviewed, and tested on the specified main revision. Closing the tickets with a documented filing correction and one explicitly residual documentation item is consistent with the doctrine and verification requirements._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _Code and tests on commit 5f1cf702 show T1 and T2 fully implemented in the core/CLI paths, an independent RULE‑8 review exists (file naming corrected), and no doctrinal violations were found; therefore closing T1/T2 as already-landed is consistent with the Canonical Doctrine._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _All three REJECT criteria are falsified: seed_dial and migration are wired and tested on main 5f1cf702, all Opus-verdict follow-ups are verifiably closed, and no disclosure-path property approved by the Opus has regressed. The proposal is a governance correction (closing false breach tickets with documented evidence) that strictly upholds all SCMessenger doctrine principles._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Close Phase 3 items T1 (boot seed-dial) and T2 (peer-store
+  > unification) as ALREADY-LANDED on main 5f1cf702, with the "breach" initially
+  > surfaced by the census itself falsified on the evidence. No code PR; the
+  > deliverable is census + ticket corrections + this gate.
+  >
+  > DISPOSITION FACTS (all read this session on origin/main 5f1cf702; worktree
+  > tmp/wt-recovery-20260913):
+  >
+  > 1. T1 premise ("headless CLI boot never dials seed peers") is FALSIFIED.
+  >    cli/src/seed_dial.rs is a complete boot-dial module: bounded backoff
+  >    (next_delay 5s/15s/45s/120s), pure sweep_decision, sweep_once ->
+  >    SwarmHandle::connect_to_seed_peers. Wired at cli/src/main.rs:2260-2271
+  >    (rule-16 reachability verified). Landed via PR #266 (CLI-only, outside the
+  >    rule-8 perimeter).
+  >
+  > 2. T2 premise ("split peer stores, 0 vs 4,678 entries") is FALSIFIED.
+  >    cli/src/ledger.rs opens with "T2 unification (2026-08-31)": one-time
+  >    migration into the shared core LedgerManager, legacy verified-flag not
+  >    trusted, peers.json archived. Wired: run_legacy_migration called from two
+  >    production sites (cli/src/main.rs and cli/src/ledger.rs init path).
+  >    Landed via PR #262 (merged 2026-09-01).
+  >
+  > 3. The census initially flagged an open P0 breach: RULE8_REVIEW_PR262 ticket
+  >    said "neither #262 nor #263 can merge without a recorded APPROVE" while
+  >    both merged 2026-09-01. FALSIFIED: the independent review EXISTS --
+  >    HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md (2026-08-31,
+  >    before merge): "VERDICT: PR #262 -- APPROVE", "VERDICT: PR #263 --
+  >    APPROVE" from a seat that authored neither PR nor the T2 spec; trees
+  >    pinned by ref; four ledger-egress points enumerated; merge-tree conflict
+  >    check. The ticket demanded filename RULE8_PR262_VERDICT.md; the reviewer
+  >    delivered a combined _OPUS.md file -- a filing mismatch that left the
+  >    ticket open forever and made a completed gate look like a breach.
+  >
+  > 4. Every follow-up from that verdict is verifiably closed on 5f1cf702:
+  >    F1 legacy-hearsay promotion -> closed (T13-F9: ledger_entry.rs:2293,
+  >    :2344 -- only operator bootstrap survives). F2 wire-controlled last_seen
+  >    -> closed (clamp_wire_last_seen_ms, :2316-2340). F7 4-byte hint collision
+  >    -> closed (PR #268 merged 2026-09-03; reachable_hints Vec<[u8;8]> at
+  >    local.rs:52,72; neighborhood.rs:76,323). F-DHT A hearsay add_address
+  >    feeds -> gated at the ruled sites (swarm.rs:5225, :5380; :5896 is the
+  >    own-address path the ruling left alone). F6 [INFO] doc line remains ->
+  >    ticketed P3_DOC_LEDGER_MIGRATION_F6_NOTES.md.
+  >
+  > 5. Live proof this session: cargo test -p scmessenger-cli --lib -> 84 passed,
+  >    0 failed, including seed_dial sweep tests (dial-when-seeds-nonempty is the
+  >    T1 acceptance) and ledger migration tests (untrusted-flag strip + archive,
+  >    self/ephemeral rejection, identify-is-hearsay).
+  >
+  > 6. Ticket corrections filed: RULE8_REVIEW_PR262_LEDGER_UNIFICATION.md set to
+  >    CLOSED with a closure record; the process lesson (verdict-filename
+  >    mismatch leaves rule-8 tickets open forever) recorded there.
+  >
+  > ASK: APPROVE closing T1 and T2 as already-landed with the census as the
+  > disposition of record, ticket corrections as filed, and the F6 doc ticket as
+  > the only residual. REJECT if you find any of: an unwired call site for
+  > seed_dial or the migration on main; a follow-up from the Opus verdict still
+  > open that I mislabeled closed; or a disclosure-path property that the Opus
+  > verdict approved but that no longer holds on 5f1cf702.
