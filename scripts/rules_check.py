@@ -15,13 +15,23 @@ Checks (mirrors AGENTS.md hard rules 1, 3, 4):
   3. No .py files in the repo root (scripts/ only).
   4. No lowercase ios/ top-level path (CI enforces uppercase iOS/).
   5. No private-key blocks (----BEGIN ... PRIVATE KEY----).
+  6. Disk-space governor (staged mode only): fail below DISK_MIN_FREE_GB free,
+     warn below DISK_WARN_FREE_GB. Low disk on this host manifests as rustc
+     STATUS_STACK_BUFFER_OVERRUN / "can't find crate" -- failures that read
+     like source corruption hours later in someone else's session (see
+     scripts/reap_worktrees.sh for the 2026-08-15 incident; 2026-09-13 ended
+     at 1.5 GB free with ~38 GB of regenerable junk).
 
 Exit 0 = clean, exit 1 = violations printed as [FAIL] lines.
 Exempt: docs/historical/, tmp/, binary files (decode failures are skipped).
 """
 import re
+import shutil
 import subprocess
 import sys
+
+DISK_MIN_FREE_GB = 5.0
+DISK_WARN_FREE_GB = 10.0
 
 PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 ARTIFACT_SUFFIXES = (".log", ".pid", ".logcat")
@@ -124,22 +134,54 @@ def check(path: str, skip_content: bool = False) -> list:
     return fails
 
 
+def disk_space_check() -> tuple:
+    """Return (fails, warnings) for free space on the volume holding the repo.
+
+    Fails open on measurement error, but says so -- a silent skip here would be
+    a visibility hole (AGENTS.md rule 15).
+    """
+    fails, warns = [], []
+    try:
+        free_gb = shutil.disk_usage(".").free / (1024**3)
+    except OSError as exc:
+        warns.append(f"[WARNING] disk: could not measure free space ({exc}) -- not blocking")
+        return fails, warns
+    if free_gb < DISK_MIN_FREE_GB:
+        fails.append(
+            f"[FAIL] disk: {free_gb:.1f} GB free, below the {DISK_MIN_FREE_GB:.0f} GB minimum "
+            f"-- reclaim space first (scripts/reap_worktrees.sh --remove, "
+            f"scripts/clean_target.sh --deps); low disk manifests as rustc crashes that "
+            f"read like source corruption"
+        )
+    elif free_gb < DISK_WARN_FREE_GB:
+        warns.append(
+            f"[WARNING] disk: {free_gb:.1f} GB free, below the {DISK_WARN_FREE_GB:.0f} GB "
+            f"warn threshold -- consider scripts/reap_worktrees.sh"
+        )
+    return fails, warns
+
+
 def main() -> int:
     args = sys.argv[1:]
     staged_mode = args == ["--staged"]
+    all_fails, all_warns = disk_space_check() if staged_mode else ([], [])
     files = staged_files() if staged_mode else args
     if not files:
-        return 0
+        # Nothing staged (e.g. empty commit attempt): still surface the disk verdict.
+        for line in all_warns + all_fails:
+            print(line, file=sys.stderr)
+        return 1 if all_fails else 0
     # Only meaningful against the index; an explicit file list is scanned fully.
     ws_only = whitespace_only_staged() if staged_mode else set()
-    all_fails = []
     for f in files:
         all_fails.extend(check(f, skip_content=f in ws_only))
     if all_fails:
         print("rules_check: FAILED -- commit blocked (see AGENTS.md / CLAUDE.md)", file=sys.stderr)
-        for line in all_fails:
+        for line in all_warns + all_fails:
             print(line, file=sys.stderr)
         return 1
+    for line in all_warns:
+        print(line, file=sys.stderr)
     return 0
 
 

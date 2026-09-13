@@ -4,3 +4,9 @@ linker = "x86_64-linux-android21-clang"
 
 [build]
 rustflags = ["-C", "opt-level=s"]
+
+# Same shared store as the workspace root config. Resolves relative to core/,
+# i.e. the repo root's parent -- the identical directory. Kept in sync on
+# purpose: cargo picks the nearest config, and a divergent value here would
+# silently fork the store. CARGO_TARGET_DIR still overrides.
+target-dir = "../../.scm-shared-target"

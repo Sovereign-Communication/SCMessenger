@@ -196,6 +196,38 @@ the same relay behavior.
     reachability question, never a cosmetic one. `scripts/check_wiring.py` is
     the executable form — run it, do not re-derive it by eye.
 
+## Host hygiene (disk governor)
+
+2026-09-13: this host hit 1.5 GB free. Reclaimed ~40 GB: an 11 GB AI-tool VM
+image, a 13 GB abandoned worktree, a 13 GB sibling clone's target/, and
+stale caches. Nothing here is a worktree-count cap -- it is a set of
+governors so full-disk never happens silently again.
+
+1. ONE cargo artifact store per host. `GitHub/.scm-shared-target` is the
+   store; this repo's `target/` is a junction to it (`.cargo/config.toml`
+   and `core/.cargo/config.toml` both pin `target-dir`). Never set
+   `CARGO_TARGET_DIR` on this host (CI and gradle own that override), never
+   build with two cargo invocations at once, never delete the store while a
+   build runs. A new worktree or clone must NOT grow its own multi-GB
+   target -- if it does, the wiring is broken; fix the wiring, not the disk.
+2. Worktrees are claimed or they are litter. The moment you create one under
+   `tmp/`, append a line to `tmp/_wt_claims.txt`:
+   `2026-09-13 <owner> tmp/wt-<name>` (ISO date, owner, repo-relative path).
+   Claims protect the tree from reaping for 14 days, then expire. Before you
+   finish a session, run `scripts/reap_worktrees.sh` and remove what it
+   judges SAFE (`--remove`).
+3. `tmp/` is ephemeral. Evidence worth keeping gets a non-empty `.keep` file
+   (`owner: reason`) or moves into `HANDOFF/`; everything else is swept after
+   14 days by `scripts/reap_worktrees.sh --tmp [--remove]`.
+4. AI-agent tool data is cache-class: Claude/Codex/opencode package caches,
+   `vm_bundles`, `opencode.db`, `ms-playwright`, npm/pip caches. Never
+   treated as work product. Verify no git repos inside, then sweep without
+   asking. Work product lives in git repos, or it does not exist.
+5. Disk floor is mechanical: commits fail below 5 GB free and warn below 10
+   (rules_check.py). Low disk here manifests as rustc crashes that read like
+   source corruption -- treat the 10 GB warning as the action trigger, not
+   the 5 GB failure.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)

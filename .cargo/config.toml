@@ -3,6 +3,20 @@
 # and paging file errors during integration test builds.
 incremental = false
 
+# Shared build artifact store (2026-09-13 disk recovery: 1.5 GB free). Every
+# worktree on this host compiles into ONE target dir instead of forking a
+# private multi-GB copy per tree. The repo's target/ is a junction to the
+# store, so relative target/ paths keep working. CARGO_TARGET_DIR, when set,
+# still wins -- CI, gradle, and the gen binaries rely on that.
+# PATH NOTE: cargo resolves target-dir RELATIVE TO THIS FILE's directory,
+# not the workspace root -- hence one level up, landing in GitHub/.
+# core/.cargo/config.toml (used when building from core/) must resolve to
+# the SAME directory: it needs ../../ from core/. Keep them in sync.
+# NOTE: builds are serialized by policy (the orchestrator is the single
+# build writer); concurrent cargo from two worktrees into the shared store
+# can corrupt each other's artifacts just like concurrent runs in one tree.
+target-dir = "../.scm-shared-target"
+
 # MSVC Build Tools v143 (14.50.35717) are installed on this machine.
 # Default host target is x86_64-pc-windows-msvc (via rustup default).
 # The explicit MSVC linker path below immunizes against Git Bash /usr/bin/link
