@@ -84,19 +84,19 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
 - **Proposal Text**:
   > --- UNIFIED INTEGRATION & LANDING PLAN FOR V0.4.0 PARITY ---
-  > 
+  >
   > 1. Canonical Architectural Doctrine & Node Role:
   >    - There are NO standalone relays in SCMessenger. Only NODES exist, and EVERY node relays.
   >    - Store-and-forward custody is a behavior performed equally by all nodes, not a distinct role.
   >    - The always-on cloud node (scm-always-on-node) is a full node executing identical protocol contracts.
   >    - Discovery is ledger sharing between nodes; no centralized coordinator, tracker, or anonymous forwarder exists.
-  > 
+  >
   > 2. Cryptographic Sovereignty & Storage Integrity:
   >    - The Rust core (core/src/) is the single source of truth and sole cryptographic authority.
   >    - Platform adapters (Android Kotlin, iOS Swift, WASM) are strictly dumb byte pipes and must never duplicate cryptographic primitives. Specifically, Kotlin-level BigInteger Ed25519 curve decompression and Legendre symbol arithmetic are rejected in favor of IronCore identity resolution via UniFFI.
   >    - State and message storage access is strictly mediated through IronCore (core/src/store/). Direct sled database access is forbidden.
   >    - Nickname authority and collision disambiguation are enforced via normalized peer identity binding rather than UI-layer heuristics.
-  > 
+  >
   > 3. Integration Sequence & Git Hygiene:
   >    - PR #280 (cto/ticket-hygiene-2026-09-10) is merged into origin/main upon completion of green CI checks.
   >    - The paused Xiaomi MiMo session (ses_ffe5f71785a9bffe1gawQ5KJ6F in MiMoSCMessengerFresh) is preserved in place without disruption, and its working tree diff is captured to a durable repository snapshot.
@@ -119,7 +119,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: True)
 - **Proposal Text**:
   > PROPOSAL: Rule-8 Adversarial Security Review Approval for PR #281 (unified/v040-3node-parity)
-  > 
+  >
   > Scope:
   > Evaluate the security perimeter modifications across the 7 gated files in core/src/{transport,routing}/:
   > 1. core/src/transport/swarm.rs:
@@ -138,18 +138,18 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >    - Routing engine optimizations with peer liveness integration.
   > 7. core/src/routing/resume_prefetch.rs:
   >    - Prefetch cache management for resumed peer connections.
-  > 
+  >
   > Security Perimeter Invariants:
   > - Zero changes to core/src/crypto/ or cryptographic algorithms (Ed25519, X25519 ECDH, Blake3, XChaCha20-Poly1305).
   > - Zero changes to core/src/privacy/.
   > - IronCore remains the single sovereign entry point for storage and cryptographic authority.
   > - Store-and-forward custody doctrine: all nodes relay; no anonymous packet forwarders.
-  > 
+  >
   > Checklist:
   > 1. Does is_valid_reservation_base() and is_poison_circuit_listener() introduce any listener leaks, denial-of-service, or multiaddr parsing vulnerabilities?
   > 2. Does the unified transport manager and dial policy adhere strictly to sovereign mesh architecture without central dependencies or security bypasses?
   > 3. Are all cryptographic invariants preserved without regression?
-  > 
+  >
   > Recommendation: APPROVE PR #281 security perimeter changes under Rule-8 governance.
 
 ### Resolution bod-40a0e31f [REJECTED]
@@ -166,18 +166,18 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-4o-mini` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW (operator ruling 2026-09-13): PR #282 merge gate re-adjudication.
-  > 
+  >
   > PRIOR ART: resolution bod-4df59504 APPROVED the mesh_routing.rs probationary
   > window from a summary-level proposal. This re-review supplies the actual delta
   > and one additional change the prior proposal did not mention.
-  > 
+  >
   > DELTA 1 (rule-8 gated file, core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
   > to
   >     self.is_reliable = self.score >= 50.0
   >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
-  > 
+  >
   > Semantics verified against the full file: record_relay_attempt() increments
   > messages_relayed on EVERY relay attempt (success or failure), and
   > successful_deliveries only on success. Therefore the probation clause is
@@ -189,7 +189,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > privacy, no storage-surface change. New unit test
   > test_reputation_probationary_period covers both the transient-tolerance and
   > 3-strike-disqualification sides.
-  > 
+  >
   > ADVERSARIAL QUESTIONS FOR DELTA 1:
   > (a) Does any path keep a dead relay permanently reliable? (Answer expected:
   > no - the 3-attempt clause is computed from counters that only grow.)
@@ -198,13 +198,13 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > (c) Is the liveness motivation (mobile handoffs must not permanently
   > blackball a relay after one failure) consistent with the doctrine's
   > eventual-delivery and node-parity pillars?
-  > 
+  >
   > DELTA 2 (android only, NOT rule-8 perimeter, but inside the Board's doctrine
   > boundary - commit d35d3883): android PeerIdValidator.kt gains
   > isValidEd25519Point(): a Kotlin BigInteger implementation of Ed25519 curve
   > point decompression and Legendre symbol arithmetic, used by
   > normalizePublicKeyHex() to reject 64-hex strings that are not real keys.
-  > 
+  >
   > PRIOR BOARD RULING bod-dd336324 states: "Kotlin adapters must not perform
   > BigInteger curve operations and must consume PeerIdValidator from core via
   > UniFFI." However, the equivalent Kotlin BigInteger math ALREADY EXISTS on
@@ -212,7 +212,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > shipped in the #281 parity merge); d35d3883 expands the existing file from
   > 105 to 139 lines. The Rust core already exposes is_valid_public_key() in
   > core/src/identity/keys.rs and the UniFFI bridge exists.
-  > 
+  >
   > QUESTIONS FOR DELTA 2 (answer explicitly):
   > (d) Is EXPANDING an existing Kotlin BigInteger curve-implementation a NEW
   > doctrine violation requiring remediation before merge, or is it a
@@ -222,12 +222,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > blocks the v0.4.0 tag, given Rust remains the sole signer/decryptor and the
   > Kotlin check is advisory validation of a public hex string (reject/accept
   > only, no key material handling, no signature verification, no ECDH)?
-  > 
+  >
   > REMEDY OPTIONS IF (d) IS A VIOLATION: (1) strip isValidEd25519Point from
   > d35d3883 before merge and keep the rest of PR #282; (2) merge and file a
   > P1 remediation ticket to relocate the check to UniFFI before the tag;
   > (3) reject PR #282 entirely.
-  > 
+  >
   > VOTE on the WHOLE PR #282 merge (deltas 1+2 together) under the doctrine.
 
 ### Resolution bod-2522bb06 [DEFERRED]
@@ -244,18 +244,18 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-5` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW (operator ruling 2026-09-13): PR #282 merge gate re-adjudication.
-  > 
+  >
   > PRIOR ART: resolution bod-4df59504 APPROVED the mesh_routing.rs probationary
   > window from a summary-level proposal. This re-review supplies the actual delta
   > and one additional change the prior proposal did not mention.
-  > 
+  >
   > DELTA 1 (rule-8 gated file, core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
   > to
   >     self.is_reliable = self.score >= 50.0
   >         || (self.stats.successful_deliveries == 0 && self.stats.messages_relayed < 3);
-  > 
+  >
   > Semantics verified against the full file: record_relay_attempt() increments
   > messages_relayed on EVERY relay attempt (success or failure), and
   > successful_deliveries only on success. Therefore the probation clause is
@@ -267,7 +267,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > privacy, no storage-surface change. New unit test
   > test_reputation_probationary_period covers both the transient-tolerance and
   > 3-strike-disqualification sides.
-  > 
+  >
   > ADVERSARIAL QUESTIONS FOR DELTA 1:
   > (a) Does any path keep a dead relay permanently reliable? (Answer expected:
   > no - the 3-attempt clause is computed from counters that only grow.)
@@ -276,13 +276,13 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > (c) Is the liveness motivation (mobile handoffs must not permanently
   > blackball a relay after one failure) consistent with the doctrine's
   > eventual-delivery and node-parity pillars?
-  > 
+  >
   > DELTA 2 (android only, NOT rule-8 perimeter, but inside the Board's doctrine
   > boundary - commit d35d3883): android PeerIdValidator.kt gains
   > isValidEd25519Point(): a Kotlin BigInteger implementation of Ed25519 curve
   > point decompression and Legendre symbol arithmetic, used by
   > normalizePublicKeyHex() to reject 64-hex strings that are not real keys.
-  > 
+  >
   > PRIOR BOARD RULING bod-dd336324 states: "Kotlin adapters must not perform
   > BigInteger curve operations and must consume PeerIdValidator from core via
   > UniFFI." However, the equivalent Kotlin BigInteger math ALREADY EXISTS on
@@ -290,7 +290,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > shipped in the #281 parity merge); d35d3883 expands the existing file from
   > 105 to 139 lines. The Rust core already exposes is_valid_public_key() in
   > core/src/identity/keys.rs and the UniFFI bridge exists.
-  > 
+  >
   > QUESTIONS FOR DELTA 2 (answer explicitly):
   > (d) Is EXPANDING an existing Kotlin BigInteger curve-implementation a NEW
   > doctrine violation requiring remediation before merge, or is it a
@@ -300,12 +300,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > blocks the v0.4.0 tag, given Rust remains the sole signer/decryptor and the
   > Kotlin check is advisory validation of a public hex string (reject/accept
   > only, no key material handling, no signature verification, no ECDH)?
-  > 
+  >
   > REMEDY OPTIONS IF (d) IS A VIOLATION: (1) strip isValidEd25519Point from
   > d35d3883 before merge and keep the rest of PR #282; (2) merge and file a
   > P1 remediation ticket to relocate the check to UniFFI before the tag;
   > (3) reject PR #282 entirely.
-  > 
+  >
   > VOTE on the WHOLE PR #282 merge (deltas 1+2 together) under the doctrine.
 
 ### Resolution bod-e3238cd5 [DEFERRED]
@@ -321,7 +321,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-5` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -337,7 +337,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -349,7 +349,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -359,12 +359,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -386,7 +386,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `openai/gpt-5` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -402,7 +402,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -414,7 +414,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -424,12 +424,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -452,7 +452,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -468,7 +468,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -480,7 +480,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -490,12 +490,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -518,7 +518,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -534,7 +534,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -546,7 +546,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -556,12 +556,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -584,7 +584,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -600,7 +600,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -612,7 +612,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -622,12 +622,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -651,7 +651,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
 - **Proposal Text**:
   > DOUBLE-BLIND RULE-8 RE-REVIEW, ROUND 2 (corrected premises): PR #282 merge gate.
-  > 
+  >
   > CORRECTION NOTICE: Round 1 (bod-40a0e31f paid; bod-2522bb06 heavy) was run
   > with a FALSE premise. Round 1's proposal stated that PR #282 commit
   > d35d3883 "expands" Kotlin BigInteger curve math in PeerIdValidator.kt
@@ -667,7 +667,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   - Therefore PR #282 does not add, expand, or worsen ANY Kotlin
   >     cryptographic operation. The round-1 dissent votes (gpt-4o-mini,
   >     deepseek-v3.2) responded to a change that does not exist.
-  > 
+  >
   > ACTUAL RULE-8 DELTA (core/src/transport/mesh_routing.rs, commit b65bc4d7):
   > In RelayReputation::calculate_score(), the reliability boundary changes from
   >     self.is_reliable = self.score >= 50.0;
@@ -679,7 +679,7 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > clause is permanently false at the 3rd attempt (fail-closed; no permanent
   > probation). No crypto/privacy/storage surface. Unit test added for both
   > sides of the boundary.
-  > 
+  >
   > ACTUAL NON-PERIMETER DELTA (android):
   > - AndroidPlatformBridge.kt: UInt?/Byte? cache types matching UniFFI generated
   >   types (type alignment, no crypto).
@@ -689,12 +689,12 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >   this ENFORCES the identity-triad doctrine).
   > - PeerIdValidator.kt: helper validators + docs listed above + unit tests.
   > - scripts/fusion_lite.py: DEFAULT_MAX_TOKENS 300 -> 4096 (tooling).
-  > 
+  >
   > PRE-EXISTING DEBT (context only, unchanged by this PR): main carries
   > isValidEd25519Point (Kotlin BigInteger curve check) which Board resolution
   > bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
   > separately (P1, before the v0.4.0 tag) and is OUT OF SCOPE for this vote.
-  > 
+  >
   > VOTE on PR #282 AS ACTUALLY AUTHORED (the deltas listed above, verified
   > against git) under the SCMessenger doctrine. Questions:
   > (a) Does the probationary-window change violate any doctrine pillar
@@ -719,9 +719,9 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Proposal Text**:
   > PROPOSAL: Close the code-level portion of T4 (P1_ROUTING_ENGINE_NEVER_LEARNS_PEERS_2026-08-10)
   > as ALREADY-LANDED, keeping only the field re-measure open.
-  > 
+  >
   > VERIFIED FACTS (all file:line read this session from origin/main b5a70bd5):
-  > 
+  >
   > 1. The ticket's root cause ("routing_peer_seen has no callers") is NOT TRUE
   >    on merged main. Two live call sites feed it:
   >    - core/src/transport/swarm.rs:6449-6459 (native loop) and :9148-9158 (wasm
@@ -739,38 +739,38 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   >    - Landing history: git log -S shows "V040-T4: feed routing engine on
   >      ConnectionEstablished (D6) (#263)" squash bb253eaf is an ancestor of
   >      origin/main (merge-base verified this session).
-  > 
+  >
   > 2. Both D6 acceptance tests exist on main and PASS (run this session, cold
   >    build 7m01s): routing_peer_seen_raises_confidence_after_connection_established
   >    (StoreAndCarry/confidence 0.0 before -> Local/>=0.5 Direct-TCP after) and
   >    routing_peer_seen_distinguishes_circuit_from_direct_tcp. Result: 2 passed,
   >    0 failed, 1447 filtered out.
-  > 
+  >
   > 3. Trust gate (ticket Q3): peer_is_blocked (swarm.rs:66-75) is fail-closed in
   >    BOTH arms -- missing core handle OR is_peer_blocked error => treated as
   >    blocked, no feed. Hostile-peer ceiling: a connected peer can only inflate
   >    its own direct-path reliability, capped at 0.98 (routing/engine.rs:164);
   >    it cannot fabricate third-party routes (peer_seen records presence, not
   >    routes; routes come from ledger exchange, itself block-gated and deduped).
-  > 
+  >
   > 4. Custody accounting (ticket Q4): routing confidence changes next-hop
   >    SELECTION only. send_to_peer still returns Queued and delivery
   >    confirmation still requires an application-level receipt (manager.rs doc);
   >    StoreAndCarry remains the confidence-0.0 fallback (engine.rs:211-222).
-  > 
+  >
   > 5. LocalCell invariant (ticket Q2): announcements still cannot create peers
   >    (routing_update_peer_hints unchanged); the presence feed is first-hand
   >    LOCAL observation via the node's own swarm connections, a different seam.
-  > 
+  >
   > 6. Mobile-bridge path (ticket Q1): deliberately does NOT feed routing
   >    (no routing_peer_seen reference in mobile_bridge.rs); the swarm handlers
   >    are the single feed, per the in-code comment ("keeps the transport
   >    derivation and the engine's parser in lockstep").
-  > 
+  >
   > 7. Ticket Q5 (field re-measure: routing_decision events with non-zero
   >    confidence on a connected Pixel rig) REMAINS OPEN -- operator/device task,
   >    not executable from this lane.
-  > 
+  >
   > VOTE: Does the evidence justify closing T4's code-level acceptance criteria
   > (1-4) as ALREADY-LANDED on main, with only criterion 5 (field re-measure)
   > open and the ticket re-opening with fresh evidence if the field re-measure
