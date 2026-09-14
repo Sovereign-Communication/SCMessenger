@@ -3272,6 +3272,7 @@ fn resolve_sender_peer_id(
     decoded_envelope: Option<&scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope>,
 ) -> PeerId {
     sender_public_key_hex
+        .filter(|pk| pk.len() == 64 && pk.chars().all(|c| c.is_ascii_hexdigit()))
         .and_then(scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex)
         .and_then(|s| s.parse::<PeerId>().ok())
         .or_else(|| {

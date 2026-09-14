@@ -1477,10 +1477,20 @@ fn resolve_custody_metadata(
                 Err(CustodyError::NoRegistration) => {
                     // Cooperative mesh: recipient has not directly registered on this node,
                     // but node accepts custody for store-and-forward to the intended recipient.
+                    // Strictly validate recipient identity ID format (64-character hex Blake3 hash).
+                    if identity_id.len() != 64 || !identity_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Err(format!(
+                            "invalid recipient identity id format for cooperative custody: {}",
+                            identity_id
+                        ));
+                    }
+                    if device_id.is_empty() || device_id.len() > 128 {
+                        return Err("invalid device id format for cooperative custody".to_string());
+                    }
                     tracing::debug!(
                         identity_id,
                         device_id,
-                        "relay custody accepted for unregistered recipient in cooperative mesh"
+                        "node custody accepted for unregistered recipient in cooperative mesh"
                     );
                     Ok((Some(identity_id.to_string()), Some(device_id.to_string())))
                 }

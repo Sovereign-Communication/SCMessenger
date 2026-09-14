@@ -626,12 +626,33 @@ impl RelayCustodyStore {
                         let _ = to_device_id;
                     }
                     Err(CustodyError::NoRegistration) => {
-                        // Cooperative mesh: recipient has no direct registration on this relay,
-                        // accept custody for store-and-forward.
+                        // Cooperative mesh: recipient has no direct registration on this node,
+                        // accept custody for store-and-forward while strictly enforcing cryptographic
+                        // and payload invariants:
+                        // 1. Recipient identity must be a valid 64-character hex Blake3 hash.
+                        if identity_id.len() != 64 || !identity_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                            return Err(format!(
+                                "invalid recipient identity id format for cooperative custody: {}",
+                                identity_id
+                            ));
+                        }
+                        // 2. Intended device ID must be non-empty and bounded.
+                        if device_id.is_empty() || device_id.len() > 128 {
+                            return Err("invalid device id format for cooperative custody".to_string());
+                        }
+                        // 3. Envelope payload must be bounded (1..=65536 bytes).
+                        if envelope_data.is_empty() || envelope_data.len() > 65_536 {
+                            return Err("envelope data outside allowed bounds (1..=65536)".to_string());
+                        }
+                        // 4. Relay message ID must be bounded.
+                        if relay_message_id.is_empty() || relay_message_id.len() > 128 {
+                            return Err("invalid relay message id".to_string());
+                        }
+
                         tracing::debug!(
                             identity_id,
                             device_id,
-                            "relay custody accepted in cooperative mesh mode (unregistered identity)"
+                            "node custody accepted in cooperative mesh mode (unregistered identity)"
                         );
                     }
                     Err(error) => {
@@ -2867,6 +2888,57 @@ mod tests {
             Some(identity_id.as_str())
         );
         assert_eq!(msg.intended_device_id.as_deref(), Some(device_id.as_str()));
+    }
+
+    #[test]
+    fn accept_custody_rejects_invalid_unregistered_identity_or_payload() {
+        let store = RelayCustodyStore::in_memory();
+        let valid_identity_id = "a".repeat(64);
+        let valid_device_id = Uuid::new_v4().to_string();
+
+        // 1. Invalid identity ID format (short length)
+        let res_short = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-1".to_string(),
+            vec![1, 2, 3],
+            Some("short_id".to_string()),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_short.is_err(), "Short identity ID must be rejected");
+
+        // 2. Invalid identity ID format (non-hex chars)
+        let res_nonhex = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-2".to_string(),
+            vec![1, 2, 3],
+            Some("z".repeat(64)),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_nonhex.is_err(), "Non-hex identity ID must be rejected");
+
+        // 3. Empty envelope payload
+        let res_empty = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-3".to_string(),
+            vec![],
+            Some(valid_identity_id.clone()),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_empty.is_err(), "Empty payload must be rejected");
+
+        // 4. Oversized envelope payload (> 65536 bytes)
+        let res_oversized = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-4".to_string(),
+            vec![0u8; 65_537],
+            Some(valid_identity_id),
+            Some(valid_device_id),
+        );
+        assert!(res_oversized.is_err(), "Oversized payload must be rejected");
     }
 }
 

@@ -10286,11 +10286,15 @@ open class MeshRepository(
         }
     }
 
+    // DOCTRINE: Platform adapters are dumb byte pipes. Circuit address construction
+    // and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+    // This helper only collects existing circuit hints already recorded in the ledger
+    // or established through active dynamic peers.
     private fun relayCircuitAddressesForPeer(targetPeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(targetPeerId)) return emptyList()
         val circuits = mutableListOf<String>()
 
-        // 1. Direct circuit entries from ledger already targeting targetPeerId
+        // 1. Direct circuit entries already recorded in the ledger targeting targetPeerId
         val allEntries = getAllLedgerEntries()
         for (entry in allEntries) {
             val addr = entry.multiaddr
@@ -10301,51 +10305,15 @@ open class MeshRepository(
             }
         }
 
-        // 2. Discover known cloud / bootstrap relays from candidate addresses and ledger
-        val candidateRelays = mutableListOf<Pair<String, String>>()
-        for (bootstrap in getBootstrapCandidateAddresses()) {
-            val relayInfo = parseBootstrapRelay(bootstrap)
-            if (relayInfo != null) {
-                candidateRelays.add(relayInfo)
-            }
-        }
-        for (entry in allEntries) {
-            if (entry.multiaddr.contains("/p2p-circuit")) continue
-            val relayInfo = parseBootstrapRelay(entry.multiaddr)
-            if (relayInfo != null) {
-                candidateRelays.add(relayInfo)
-            } else {
-                val pid = entry.peerId?.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
-                    ?: entry.publicKey?.takeIf { it.length == 64 }?.let { PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(it) }
-                if (pid != null && PeerIdValidator.isLibp2pPeerId(pid)) {
-                    val baseAddr = entry.multiaddr.trimEnd('/')
-                    candidateRelays.add(baseAddr to pid)
-                }
-            }
-        }
-
-        candidateRelays.distinct().forEach { (relayTransportAddr, relayPeerId) ->
-            if (relayPeerId == targetPeerId) return@forEach
-            val bootstrap = "$relayTransportAddr/p2p/$relayPeerId"
-            // Only skip if the circuit breaker is explicitly open
-            if (relayCircuitBreaker.isCircuitOpen(bootstrap) || relayCircuitBreaker.isCircuitOpen(relayTransportAddr)) {
-                return@forEach
-            }
-            val circuit = "$relayTransportAddr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
-            if (!circuits.contains(circuit)) {
-                circuits.add(circuit)
-            }
-        }
-
-        // 3. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
+        // 2. Dynamic mesh peers — UNIFICATION_V2: all nodes perform custody behavior
         _discoveredPeers.value.entries.filter {
             it.key != targetPeerId && PeerIdValidator.isLibp2pPeerId(it.key)
         }.forEach { entry ->
-            val relayPeerId = entry.key
-            val directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            val nodePeerId = entry.key
+            val directAddrs = getDialHintsForRoutePeer(nodePeerId)
             directAddrs.forEach { addr ->
                 if (!addr.contains("/p2p-circuit")) {
-                    val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
+                    val circuit = "$addr/p2p/$nodePeerId/p2p-circuit/p2p/$targetPeerId"
                     if (!circuits.contains(circuit)) circuits.add(circuit)
                 }
             }
