@@ -40,6 +40,71 @@ The Board is executed as an automated 5-judge panel powered by
 
 Record of all formal resolutions adjudicated by the Board of Directors:
 
+### Resolution bod-9ee86618 [APPROVED]
+- **Timestamp**: 2026-09-14T19:29:30.035909+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003999 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly adheres to all doctrine principles: it eliminates relay terminology, keeps platform adapters as dumb byte pipes, and reinforces cryptographic custody validation without introducing centralized dependencies or weakening integrity._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.93) - _Based on the proposal, the iteration advances multi-transport eventual delivery while preserving node parity, Rust protocol authority, cryptographic validation, and sovereign cloud-node operation. No stated change introduces a standalone relay, centralized dependency, platform-specific protocol exception, or weakened custody boundary._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The changes preserve node-first store-and-forward behavior, central-lessness, Rust core authority, and cryptographic safeguards while removing platform-side relay logic; no doctrinal violations were identified in the proposal._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.95) - _The proposal strictly adheres to all five doctrine articles: nodes-not-relays terminology is enforced, sovereignty is preserved with the AWS instance functioning as a sovereign cloud node, cryptographic validations are strengthened with strict bounds checking and unit tests, platform parity is maintained with dumb byte pipe adapters, and verification practices are upheld with comprehensive negative test coverage._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly upholds all five doctrines: it eliminates relay-specific framing in favor of universal node custody behavior, correctly treats the AWS instance as a sovereign cloud node, strengthens cryptographic validation with format checks and unit tests, enforces Rust-core authority over wire contracts, and adds defensive test coverage._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commits cdb09e6d and 9f3fb9c1) into main.
+  > 
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  > 
+  > RESOLUTIONS TO BOD DISSENTS (bod-96e3eca5):
+  > 1. Multiplatform Parity & Dumb Byte Pipes (Addressing DeepSeek V4 finding):
+  >    - Stripped all manual bootstrap relay parsing and Kotlin-side circuit address string synthesis from android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt.
+  >    - Platform adapters remain strictly dumb byte pipes: circuit address composition and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+  > 2. Cryptographic Custody Integrity & Node Terminology (Addressing GPT-5.6-Luna finding):
+  >    - In core/src/store/relay_custody.rs and core/src/transport/swarm.rs, unregistered custody acceptance strictly validates that recipient_identity_id is a genuine 64-character hex Blake3 hash, validates device ID bounds, and rejects empty or oversized payloads (> 65536 bytes). Added negative unit tests covering format rejections.
+  >    - In cli/src/main.rs: resolve_sender_peer_id strictly validates that sender_public_key_hex is a 64-char hex string matching the envelope author to prevent ACK misdirection.
+  >    - Full terminology alignment: purged standalone 'relay' framing in logs and comments, explicitly affirming that custody store-and-forward is a universal node behavior and the AWS instance is a sovereign cloud node.
+  > 
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Unregistered custody operates as universal store-and-forward behavior with cryptographic bounds.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Ed25519 signatures, AAD bindings, and Blake3 identities verified; Rust core remains sole authority; platform adapters are dumb byte pipes.
+  > 
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
+
+### Resolution bod-96e3eca5 [REJECTED_DISSENT]
+- **Timestamp**: 2026-09-14T18:49:59.123456+00:00
+- **Tier**: paid
+- **Verdict**: `REJECTED_DISSENT`
+- **Cost**: $0.006428 (Ceiling: $0.10)
+- **Summary**: Dissent identified in 5-judge panel (3 APPROVE, 2 REJECT). Fail closed per canonical Rule 2.
+- **Panel Voting** (3 APPROVE, 2 REJECT):
+  - `deepseek/deepseek-v4-flash`: **REJECT** (Score: 0.60) - _While the proposal strengthens store-and-forward and multi-transport capabilities, the introduction of routing logic in Android Kotlin code contradicts the multiplatform parity doctrine, which mandates that platform adapters serve solely as dumb byte pipes and that all state machine logic remains in Rust core._
+  - `openai/gpt-5.6-luna`: **REJECT** (Score: 0.42) - _The transport and custody goals are directionally aligned, but the proposal's relay terminology and dependency on known cloud/bootstrap relays leave a direct conflict with the nodes-only and zero-central-dependency doctrines. The unregistered-custody path also requires proof that identity authentication and ledger-governed discovery are not bypassed._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.92) - _The changes extend cooperative store-and-forward, multi-transport handover, and peer-directed ACK routing without introducing standalone relays or centralized services and keep cryptographic/state authority in Rust core, so they adhere to the repository doctrine._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.88) - _The proposal implements cooperative multi-transport store-and-forward custody as a universal node behavior (not a standalone relay role), preserves all cryptographic primitives and sender authentication, maintains Rust-core sovereignty, and delivers the non-negotiable eventual delivery guarantee across disconnected network conditions — all strictly within the canonical doctrine._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _The proposal advances working multi-transport and store-and-forward cooperative mesh while strictly upholding all five doctrine pillars: all nodes relay custody universally, sovereignty and eventual delivery are preserved end-to-end, cryptographic integrity remains intact, Rust core retains authority across platforms, and changes are concrete and verifiable._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commit cdb09e6d) into main.
+  > 
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  > 
+  > CHANGES:
+  > 1. cli/src/main.rs: resolve_sender_peer_id resolves originating sender libp2p PeerId from authenticated envelope public key / metadata so delivery ACKs and auto-replies route back to the message author rather than terminating at the intermediary relay.
+  > 2. core/src/store/relay_custody.rs & core/src/transport/swarm.rs: accept custody for unregistered identities (CustodyError::NoRegistration) in cooperative mesh mode, enabling store-and-forward routing across communicating peers without requiring prior direct registration.
+  > 3. core/src/transport/behaviour.rs & swarm.rs: expand max_established_per_peer from 2 to 4 for mobile handover headroom (WiFi -> Cellular); actively close dead connections on ping failure.
+  > 4. android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt: dynamic circuit address discovery targeting destination peer via known cloud/bootstrap relays and ledger; auto-reset circuit breakers on complete candidate exhaustion during network switch.
+  > 
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Accepting custody for unregistered peers implements universal store-and-forward custody across all nodes.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Sender authentication and AAD bindings preserved; Rust core remains cryptographic authority; symmetrical node behavior across platforms.
+  > 
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
+
 ### Resolution bod-a7deb38b [APPROVED]
 - **Timestamp**: 2026-09-11T23:15:53.018144+00:00
 - **Verdict**: `APPROVED`

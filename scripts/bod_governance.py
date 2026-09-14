@@ -10,7 +10,8 @@ model. If any model dissents, times out, or if the judge disagrees with the
 unanimous panel, the resolution fails closed (REJECTED or DEFERRED).
 
 Cost Guarantee: Hard ceiling of $0.10 (10 cents) per run. Default routes to the
-free model pool ($0.00).
+PAID model pool (operator ruling 2026-09-14: "use paid, not free"); pass
+--free for the $0.00 free pool.
 
 Usage:
     python scripts/bod_governance.py --proposal "Proposal text..."
@@ -71,9 +72,16 @@ REQUIRED_PANELISTS = 5
 # Until that patch lands, run this lane with --reasoning-effort auto and
 # max_tokens >= 8192 (auto sends low effort to deepseek/kimi-hinted ids).
 # Prices $/Mtok in/out (live catalog 2026-09-13):
-#   deepseek-v4.1-flash 0.150/0.600 | deepseek-v4-flash 0.048/0.096
-#   gpt-5.6-luna 0.200/1.200 (rankings #1 by daily tokens) | gpt-4o-mini 0.150/0.600
-#   ling-3.0-flash 0.021/0.063
+#   deepseek-v4.1-flash 0.150/0.600 | deepseek-v4-flash 0.079/0.159
+#   gpt-5.6-luna 0.200/1.200 (rankings #1 by daily tokens) | gpt-5-mini 0.250/2.000
+#   deepseek-v4-pro 1.600/3.200 | glm-5.3-flash 0.150/0.500
+# Operator rulings 2026-09-14: "Ling models need to go" (both inclusionai seats
+# removed); "use paid, not free" (no :free ids in the paid pool; paid is now
+# the DEFAULT tier, --free opts out). Pool selected for best $/performance
+# among emitters probe-verified in this repo 2026-09-13; pool worst-case
+# preflight at 8192 tokens (5 panel + judge) = $0.0723 vs the $0.10 ceiling,
+# validated against the 447-model live catalog
+# (tmp/bod_pool_validate_20260914.py).
 # kimi-k3 (2.648/13.283) REMOVED: its output price price-bombs the panel
 # worst-case preflight (7 x 4096 x $13.28/M = $0.38 > $0.10 ceiling) while
 # offering no verified edge over the five below.
@@ -98,31 +106,31 @@ REQUIRED_PANELISTS = 5
 PAID_PANEL_POOL = [
     "openai/gpt-5.6-luna",            # $0.000321/vote reasoning-off, 7.5s
     "deepseek/deepseek-v4-flash",     # $0.000050/vote reasoning-off, 17.8s
-    "inclusionai/ling-3.0-flash-fin:free",  # fifth seat (verified 2026-09-13:
-                                      # clean APPROVE JSON, 4.6s, $0.00,
-                                      # BYOK-immune). Replaces:
-                                      #  - google/gemini-3.8-flash (removed for
-                                      #    cause: OpenRouter routed it BYOK in
-                                      #    run bod-T1T2-R4; governor re-learned
-                                      #    the google/ org prefix -- unusable as
-                                      #    a deterministic pool member here)
-                                      #  - openai/gpt-4o-mini (removed for cause:
-                                      #    stale-gen voter, filed a content-free
-                                      #    REJECT dissent with no file/line/
-                                      #    evidence against 4 evidence-citing
-                                      #    APPROVEs)
-                                      #  - openai/gpt-5.6-sol / kimi-k3 (probed
-                                      #    clean but their own reserve rows
-                                      #    price-bomb the $0.10 preflight)
-    "inclusionai/ling-3.0-flash",     # cheapest input of the pool
+    "deepseek/deepseek-v4-pro",       # dual-mode: effort:none -> clean vote
+                                      # (heavy-pool probe 2026-09-13); strongest
+                                      # member of the pool per output dollar
+    "z-ai/glm-5.3-flash",             # reasoning MANDATORY on its route (400 on
+                                      # effort:none); verified parseable under
+                                      # auto + >=2048 budget (heavy probe
+                                      # 2026-09-13) -- BoD runs auto/8192
     "openai/gpt-5-mini",              # verified at auto/4096 (probe 2026-09-13: 10.2s,
                                       # $0.0014, parseable); reasoning MANDATORY on its
                                       # route (400 on effort:none) so it needs budget,
-                                      # never a disable. NOTE: google/gemini-3.8-flash
-                                      # is also verified but sits behind the governor's
-                                      # learned-BYOK org filter (google/), which rotates
-                                      # it out non-deterministically.
+                                      # never a disable.
 ]
+# Removed from the paid pool (history -- do not silently re-add):
+#  - inclusionai/ling-3.0-flash + ling-3.0-flash-fin:free (operator ruling
+#    2026-09-14: "Ling models need to go"; the :free id also violated
+#    "use paid, not free")
+#  - google/gemini-3.8-flash (removed for cause: OpenRouter routed it BYOK in
+#    run bod-T1T2-R4; governor re-learned the google/ org prefix -- unusable
+#    as a deterministic pool member; its price also pushes the pool preflight
+#    to $0.0998, a 0.3% margin under the $0.10 ceiling)
+#  - openai/gpt-4o-mini (removed for cause: stale-gen voter, filed a
+#    content-free REJECT dissent with no file/line/evidence against 4
+#    evidence-citing APPROVEs)
+#  - openai/gpt-5.6-sol / kimi-k3 (probed clean but their own reserve rows
+#    price-bomb the $0.10 preflight)
 PAID_JUDGE = "deepseek/deepseek-v4.1-flash"   # $0.000055/vote at effort:none (probe);
                                                # as judge its synthesis parses reliably
 
@@ -330,7 +338,7 @@ def evaluate_board_proposal(
     )
 
     panel_pool = settings.panel_pool
-    judge_model = settings.judge or (FREE_JUDGE if not use_paid else "inclusionai/ling-3.0-flash")
+    judge_model = settings.judge or (FREE_JUDGE if not use_paid else PAID_JUDGE)
 
     result = panel_judge(
         transport=HttpTransport(),
@@ -549,21 +557,32 @@ def main():
         choices=["auto", "low", "medium", "high", "off"],
         help="Reasoning effort requested from reasoning models (default: auto)",
     )
-    parser.add_argument(
+    tier_group = parser.add_mutually_exclusive_group()
+    tier_group.add_argument(
         "--paid",
         action="store_true",
         help=(
-            "Dispatch through the paid pool (DeepSeek V4 generation per "
+            "Dispatch through the paid pool (DEFAULT since operator ruling "
+            "2026-09-14 'use paid, not free'; DeepSeek V4 generation per "
             "operator ruling 2026-09-13; bounded by $0.10 ceiling)"
+        ),
+    )
+    tier_group.add_argument(
+        "--free",
+        action="store_true",
+        help=(
+            "Opt OUT of the paid default and route through the free pool "
+            "($0.00). Operator ruling 2026-09-14 made paid the default tier."
         ),
     )
     parser.add_argument(
         "--heavy",
         action="store_true",
         help=(
-            "Dispatch through the heavy-model panel (gpt-5 / gpt-4.1 / "
-            "deepseek-v3.2 / gemini-2.5-pro; operator directive 2026-09-13 "
-            "for hard work; canonical $0.10 ceiling unchanged)"
+            "Dispatch through the heavy-model panel (glm-5.3-flash / "
+            "gpt-5-mini / deepseek-v4-pro / gpt-5.6-sol / gpt-4.1 / "
+            "gemini-3.8-flash; operator directive 2026-09-13 for hard work; "
+            "canonical $0.10 ceiling unchanged)"
         ),
     )
     parser.add_argument(
@@ -606,7 +625,7 @@ def main():
             max_tokens=args.max_tokens,
             reasoning_effort=args.reasoning_effort,
             dry_run=args.dry_run,
-            use_paid=args.paid,
+            use_paid=args.paid or not args.free,
             use_heavy=args.heavy,
         )
     except HarnessError as e:

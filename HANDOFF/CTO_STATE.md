@@ -1,10 +1,41 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-10 (Freebuff sandbox burn-down session; #272 FFI fix pushed, #277 merged, #280 ticket hygiene)
+Last updated: 2026-09-14T08:30Z (MAJOR BREAKTHROUGH: Multi-transport store-and-forward bidirectional delivery verified live between Windows CLI and Android Pixel on Cellular; cooperative mesh custody active)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-10) =====
+# ===== RESUME HERE (2026-09-14) =====
+
+## Major Breakthrough: Multi-Transport Store & Forward Live Verification
+
+[OK] VERIFIED LIVE BY OPERATOR: Bidirectional message delivery and delivery ACKs confirmed between Windows CLI (LAN/WiFi) and Android Pixel (Cellular WAN, WiFi disconnected) through the AWS cloud node.
+This is the first time multi-transport and off-WiFi operation have functioned simultaneously in SCMessenger. Eventual delivery via store-and-forward across disparate networks is proven end-to-end.
+
+### Technical Root Causes Solved in this Iteration
+
+1. **Originating Sender Identity Resolution (`cli/src/main.rs`)**:
+   - `resolve_sender_peer_id()` extracts the true author's libp2p `PeerId` from the authenticated envelope's public key hex or identity envelope metadata, falling back to direct socket peer ID.
+   - Fixed relayed delivery ACKs and auto-replies: previously, ACKs were misdirected to the intermediary relay node's PeerId instead of routing back to the originating sender.
+   - Applied across `cmd_start` and `cmd_relay` for message notifications, contact learning, and ACK dispatch.
+
+2. **Cooperative Mesh Relay Custody (`core/src/store/relay_custody.rs`, `core/src/transport/swarm.rs`)**:
+   - In `RelayCustodyStore::accept_custody()` and `resolve_custody_metadata()`, handled `CustodyError::NoRegistration` gracefully.
+   - Doctrine alignment ("Nodes, not relays"): in a cooperative mesh, nodes accept custody and store-and-forward for communicating peers even if the recipient has not directly registered with this node.
+   - Enforced strict recipient identity format (64-hex Blake3 hash), device ID bounds, and envelope payload bounds (1..=65536 bytes). Added unit tests covering acceptance and defensive rejection.
+
+3. **Mobile Interface Handover & Connection Headroom (`core/src/transport/behaviour.rs`, `core/src/transport/swarm.rs`)**:
+   - Increased `max_established_per_peer` from 2 to 4 to provide socket headroom during mobile network transitions (e.g., Wi-Fi drop to Cellular).
+   - In `swarm.rs`, handled `IronCoreBehaviourEvent::Ping(event)` failure by immediately calling `swarm.close_connection(event.connection)` to aggressively clean dead sockets during interface handover.
+
+4. **Android Relay Discovery & Circuit Breaker Reset (`MeshRepository.kt`)**:
+   - `relayCircuitAddressesForPeer()` collects ledger-recorded circuit addresses and active dynamic peers, strictly conforming to the dumb-byte-pipe doctrine per BoD ruling `bod-9ee86618`.
+   - `bootstrapToMeshWithResults()` auto-resets tripped circuit breakers if all candidate addresses are blocked during an interface handover, enabling immediate retry on new networks.
+   - `getDialHintsForRoutePeer()` matches ledger entries, `/p2p/$routePeerId`, and derives libp2p PeerId from 64-hex public key.
+
+5. **Board of Directors Governance**:
+   - Resolution `bod-9ee86618`: 5/5 UNANIMOUS APPROVAL + Judge concurrence.
+
+# ===== PREVIOUS RESUME POINT (2026-09-10) =====
 
 ## Session record 2026-09-10 — Freebuff sandbox (Linux; no Windows toolchain, no AWS creds)
 
