@@ -1159,3 +1159,34 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   2. *Cryptographic Sovereignty*: Originating sender resolution (`cli/src/main.rs:resolve_sender_peer_id`) guarantees that delivery ACKs and identity learning bind directly to the authenticated envelope author rather than intermediate transport connections.
   3. *Multiplatform Parity*: Preserves symmetric node and custody behavior across CLI, cloud, and mobile architectures without centralized coordinators.
 
+
+### Resolution bod-96e3eca5 [REJECTED]
+- **Timestamp**: 2026-09-14T19:09:07.816151+00:00
+- **Tier**: paid
+- **Verdict**: `REJECTED_DISSENT`
+- **Cost**: $0.006428 (Ceiling: $0.10)
+- **Summary**: Dissent detected among panel: 3 APPROVE, 2 REJECT. 100% unanimity required.
+- **Panel Voting** (3/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **REJECT** (Score: 0.60) - _While the proposal strengthens store-and-forward and multi-transport capabilities, the introduction of routing logic in Android Kotlin code contradicts the multiplatform parity doctrine, which mandates that platform adapters serve solely as dumb byte pipes and that all state machine logic remains in Rust core._
+  - `openai/gpt-5.6-luna`: **REJECT** (Score: 0.42) - _The transport and custody goals are directionally aligned, but the proposal's relay terminology and dependency on known cloud/bootstrap relays leave a direct conflict with the nodes-only and zero-central-dependency doctrines. The unregistered-custody path also requires proof that identity authentication and ledger-governed discovery are not bypassed._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.92) - _The changes extend cooperative store-and-forward, multi-transport handover, and peer-directed ACK routing without introducing standalone relays or centralized services and keep cryptographic/state authority in Rust core, so they adhere to the repository doctrine._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.88) - _The proposal implements cooperative multi-transport store-and-forward custody as a universal node behavior (not a standalone relay role), preserves all cryptographic primitives and sender authentication, maintains Rust-core sovereignty, and delivers the non-negotiable eventual delivery guarantee across disconnected network conditions — all strictly within the canonical doctrine. The AWS instance functions as a legitimate cloud node, not a centralized server, and bootstrap relays serve as ledger-sharing discovery peers rather than centralized coordinators._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _The proposal advances working multi-transport and store-and-forward cooperative mesh while strictly upholding all five doctrine pillars: all nodes relay custody universally, sovereignty and eventual delivery are preserved end-to-end, cryptographic integrity remains intact, Rust core retains authority across platforms, and changes are concrete and verifiable._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commit cdb09e6d) into main.
+  > 
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  > 
+  > CHANGES:
+  > 1. cli/src/main.rs: resolve_sender_peer_id resolves originating sender libp2p PeerId from authenticated envelope public key / metadata so delivery ACKs and auto-replies route back to the message author rather than terminating at the intermediary relay.
+  > 2. core/src/store/relay_custody.rs & core/src/transport/swarm.rs: accept custody for unregistered identities (CustodyError::NoRegistration) in cooperative mesh mode, enabling store-and-forward routing across communicating peers without requiring prior direct registration.
+  > 3. core/src/transport/behaviour.rs & swarm.rs: expand max_established_per_peer from 2 to 4 for mobile handover headroom (WiFi -> Cellular); actively close dead connections on ping failure.
+  > 4. android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt: dynamic circuit address discovery targeting destination peer via known cloud/bootstrap relays and ledger; auto-reset circuit breakers on complete candidate exhaustion during network switch.
+  > 
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Accepting custody for unregistered peers implements universal store-and-forward custody across all nodes.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Sender authentication and AAD bindings preserved; Rust core remains cryptographic authority; symmetrical node behavior across platforms.
+  > 
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
