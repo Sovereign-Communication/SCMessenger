@@ -3288,7 +3288,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
 fn resolve_sender_peer_id(
     peer_id: PeerId,
     sender_public_key_hex: Option<&str>,
-    decoded_envelope: Option<&scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope>,
+    decoded_envelope: Option<
+        &scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope,
+    >,
 ) -> PeerId {
     sender_public_key_hex
         .filter(|pk| pk.len() == 64 && pk.chars().all(|c| c.is_ascii_hexdigit()))

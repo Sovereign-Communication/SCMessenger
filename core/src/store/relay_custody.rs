@@ -651,7 +651,9 @@ impl RelayCustodyStore {
                         // accept custody for store-and-forward while strictly enforcing cryptographic
                         // and payload invariants:
                         // 1. Recipient identity must be a valid 64-character hex Blake3 hash.
-                        if identity_id.len() != 64 || !identity_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                        if identity_id.len() != 64
+                            || !identity_id.chars().all(|c| c.is_ascii_hexdigit())
+                        {
                             return Err(format!(
                                 "invalid recipient identity id format for cooperative custody: {}",
                                 identity_id
@@ -659,11 +661,15 @@ impl RelayCustodyStore {
                         }
                         // 2. Intended device ID must be non-empty and bounded.
                         if device_id.is_empty() || device_id.len() > 128 {
-                            return Err("invalid device id format for cooperative custody".to_string());
+                            return Err(
+                                "invalid device id format for cooperative custody".to_string()
+                            );
                         }
                         // 3. Envelope payload must be bounded (1..=65536 bytes).
                         if envelope_data.is_empty() || envelope_data.len() > 65_536 {
-                            return Err("envelope data outside allowed bounds (1..=65536)".to_string());
+                            return Err(
+                                "envelope data outside allowed bounds (1..=65536)".to_string()
+                            );
                         }
                         // 4. Relay message ID must be bounded.
                         if relay_message_id.is_empty() || relay_message_id.len() > 128 {
@@ -2962,4 +2968,3 @@ mod tests {
         assert!(res_oversized.is_err(), "Oversized payload must be rejected");
     }
 }
-

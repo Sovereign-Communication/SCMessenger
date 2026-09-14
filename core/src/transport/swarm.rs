@@ -1805,7 +1805,9 @@ fn resolve_custody_metadata(
                     // Cooperative mesh: recipient has not directly registered on this node,
                     // but node accepts custody for store-and-forward to the intended recipient.
                     // Strictly validate recipient identity ID format (64-character hex Blake3 hash).
-                    if identity_id.len() != 64 || !identity_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                    if identity_id.len() != 64
+                        || !identity_id.chars().all(|c| c.is_ascii_hexdigit())
+                    {
                         return Err(format!(
                             "invalid recipient identity id format for cooperative custody: {}",
                             identity_id
