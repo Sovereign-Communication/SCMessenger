@@ -53,7 +53,7 @@ loop did not reach AWS before WiFi return).
 
 ## Next operator test
 
-1. WiFi OFF  
-2. **Immediately** send 1 message to Windows and 1 to AWS  
-3. Stay off WiFi **≥90 seconds**  
+1. WiFi OFF
+2. **Immediately** send 1 message to Windows and 1 to AWS
+3. Stay off WiFi **≥90 seconds**
 4. Seat pulls logs; pass bar = delivered timestamp **inside** cellular window
