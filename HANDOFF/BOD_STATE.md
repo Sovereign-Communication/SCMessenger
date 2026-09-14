@@ -1103,3 +1103,46 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > ASK: APPROVE applying the F6 correction and closing the ticket. REJECT if
   > the corrected sentence misstates the migration behavior or if you find
   > another doc site still contradicting archive-on-success.
+
+### Resolution bod-1e6036e8 [APPROVED]
+- **Timestamp**: 2026-09-13T23:36:29.505060+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003059 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal merely increments platform build identifiers to enable a release pipeline verification step, without altering any node behavior, cryptographic integrity, platform parity, or introducing central dependencies, thus strictly adhering to the doctrine._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.99) - _The proposed bumps are minimal release metadata changes required to execute the real D2 verification path and do not weaken or alter any foundational doctrine. The provided evidence indicates the relevant version agreements and tagged-baseline checks pass, with no missed behavioral or protocol change identified._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 1.00) - _The proposal only increments platform build numbers to satisfy verifier preconditions without altering behavior, architecture, or cryptography, so it adheres to the repository philosophy and can be merged._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.95) - _The proposal is a minimal, verified mechanical increment of build numbers (not marketing versions) to satisfy a pre-existing pipeline guardrail, with no introduction of centralized dependencies, cryptographic changes, or platform deviations. It strictly adheres to all canonical doctrine principles and maintains full multiplatform parity._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal is a minimal, purely administrative version-number bump required to unblock the D2 verification pipeline; it introduces no doctrinal deviation, no centralized dependency, and no behavioral change._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Bump Android versionCode 14->15 and iOS CFBundleVersion/CURRENT_
+  > PROJECT_VERSION 9->10 on the D2 verification branch, so the release
+  > pipeline's candidate-artifacts mode can run the D2 keystore verification.
+  >
+  > WHY: workflow_dispatch(artifacts_only=true) refuses to run when build
+  > numbers do not exceed prior tagged baselines (scripts/verify_versions.sh,
+  > line 72-73). Current main: Android 14 == tagged 14; iOS 9 == tagged 9.
+  > Dispatch 34789843685 was refused exactly there ("[ERROR] Android versionCode
+  > 14 is not greater than prior tagged build 14"). D2 requires executing the
+  > real release path end-to-end; this one-line-per-platform bump is the minimal
+  > enabler. Marketing version remains 0.4.0 on every platform (Cargo, Android
+  > versionName, desktop, WASM, iOS) -- no version scheme change; the tag
+  > numbering question stays with the operator.
+  >
+  > EVIDENCE: local run of scripts/verify_versions.sh before: [ERROR] Android
+  > 14 not greater than 14 (then, after Android-only bump, iOS 9 not greater
+  > than 9). After both bumps: "[OK] Cargo/Android/Desktop/WASM agree at 0.4.0;
+  > iOS marketing version is 0.4.0" and "[OK] Independent build numbers exceed
+  > tagged baselines: Android 15>14, iOS 10>9". Diff is 3 files, 6 lines total;
+  > iOS plist and xcodeproj values changed in lockstep (the verifier enforces
+  > their agreement); no code paths touched; no behavioral change to any build
+  > output other than the bump itself. Consistency checks in the same script
+  > (all still passing) cover Cargo/Android/Desktop version agreement, WASM
+  > inheritance, and iOS project/plist agreement.
+  >
+  > ASK: APPROVE merging this bump so the D2 verification dispatch can run.
+  > REJECT if version bumps require operator pre-approval per repo doctrine
+  > despite the above, or if you find a release-manifest location I missed.
