@@ -11,6 +11,7 @@ mod ble_mesh;
 mod bootstrap;
 mod config;
 mod ledger;
+mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
@@ -2177,6 +2178,25 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
             ble_mesh::run_ble_peripheral_advertising(core_ble_adv, ui_ble_adv).await;
         });
     }
+
+    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // A node whose address changed can never rejoin: nobody can dial it at
+    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
+    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
+    // then every 120s) until at least one peer is connected; re-arm when the
+    // peer count drops back to zero. The candidate list comes from the core
+    // ledger (proven + seed tiers), which the T2 unification populated from
+    // peers.json. One long-lived task -- never one task per attempt.
+    let seed_dial_swarm = swarm_handle.clone();
+    let seed_dial_core = core.clone();
+    tokio::spawn(async move {
+        let mut sweep: u32 = 0;
+        loop {
+            sweep += 1;
+            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+    });
 
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
