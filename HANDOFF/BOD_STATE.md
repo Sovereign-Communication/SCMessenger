@@ -1190,3 +1190,37 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > - Doctrine 3 & 4 (Cryptographic integrity & parity): Sender authentication and AAD bindings preserved; Rust core remains cryptographic authority; symmetrical node behavior across platforms.
   > 
   > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
+
+### Resolution bod-9ee86618 [APPROVED]
+- **Timestamp**: 2026-09-14T19:29:30.035909+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003999 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly adheres to all doctrine principles: it eliminates relay terminology, keeps platform adapters as dumb byte pipes, and reinforces cryptographic custody validation without introducing centralized dependencies or weakening integrity._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.93) - _Based on the proposal, the iteration advances multi-transport eventual delivery while preserving node parity, Rust protocol authority, cryptographic validation, and sovereign cloud-node operation. No stated change introduces a standalone relay, centralized dependency, platform-specific protocol exception, or weakened custody boundary._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The changes preserve node-first store-and-forward behavior, central-lessness, Rust core authority, and cryptographic safeguards while removing platform-side relay logic; no doctrinal violations were identified in the proposal._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.95) - _The proposal strictly adheres to all five doctrine articles: nodes-not-relays terminology is enforced, sovereignty is preserved with the AWS instance functioning as a sovereign cloud node, cryptographic validations are strengthened with strict bounds checking and unit tests, platform parity is maintained with dumb byte pipe adapters, and verification practices are upheld with comprehensive negative test coverage._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly upholds all five doctrines: it eliminates relay-specific framing in favor of universal node custody behavior, correctly treats the AWS instance as a sovereign cloud node, strengthens cryptographic validation with format checks and unit tests, enforces Rust-core authority over wire contracts, and adds defensive test coverage._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commits cdb09e6d and 9f3fb9c1) into main.
+  > 
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  > 
+  > RESOLUTIONS TO BOD DISSENTS (bod-96e3eca5):
+  > 1. Multiplatform Parity & Dumb Byte Pipes (Addressing DeepSeek V4 finding):
+  >    - Stripped all manual bootstrap relay parsing and Kotlin-side circuit address string synthesis from android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt.
+  >    - Platform adapters remain strictly dumb byte pipes: circuit address composition and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+  > 2. Cryptographic Custody Integrity & Node Terminology (Addressing GPT-5.6-Luna finding):
+  >    - In core/src/store/relay_custody.rs and core/src/transport/swarm.rs, unregistered custody acceptance strictly validates that recipient_identity_id is a genuine 64-character hex Blake3 hash, validates device ID bounds, and rejects empty or oversized payloads (> 65536 bytes). Added negative unit tests covering format rejections.
+  >    - In cli/src/main.rs: resolve_sender_peer_id strictly validates that sender_public_key_hex is a 64-char hex string matching the envelope author to prevent ACK misdirection.
+  >    - Full terminology alignment: purged standalone 'relay' framing in logs and comments, explicitly affirming that custody store-and-forward is a universal node behavior and the AWS instance is a sovereign cloud node.
+  > 
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Unregistered custody operates as universal store-and-forward behavior with cryptographic bounds.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Ed25519 signatures, AAD bindings, and Blake3 identities verified; Rust core remains sole authority; platform adapters are dumb byte pipes.
+  > 
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
