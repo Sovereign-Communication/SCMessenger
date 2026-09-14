@@ -510,6 +510,46 @@ def evaluate_board_proposal(
     return resolution
 
 
+def _verify_ledger_append(state_file: str, resolution: dict, formatted_proposal: str) -> None:
+    """Rule 15 read-back verification of a ledger append; fails loud.
+
+    Checks the record exists exactly once and landed whole (timestamp,
+    judge line, proposal block including its final line present in the
+    record's tail). A truncated or interleaved write (observed 2026-09-14:
+    bod-a8ebe243 landed half-written with CRLF endings beside a complete LF
+    copy from a concurrent recorder) must FAIL LOUDLY, never print [OK].
+    """
+    with open(state_file, "r", encoding="utf-8") as f:
+        recorded = f.read()
+    marker = f"### Resolution {resolution['resolution_id']} [{resolution['status']}]"
+    occurrences = recorded.count(marker)
+    if occurrences > 1:
+        print(
+            f"[FAIL] Resolution {resolution['resolution_id']} appears "
+            f"{occurrences}x in the ledger (double-append); record integrity "
+            f"compromised -- inspect HANDOFF/BOD_STATE.md manually",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    start = recorded.find(marker)
+    tail = recorded[start:] if start >= 0 else ""
+    required_lines = [
+        f"- **Timestamp**: {resolution['timestamp']}",
+        f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}`",
+        "- **Proposal Text**:",
+        formatted_proposal.splitlines()[-1],
+    ]
+    missing = [r for r in required_lines if r not in tail]
+    if start < 0 or missing:
+        print(
+            f"[FAIL] Ledger append verification FAILED for "
+            f"{resolution['resolution_id']}: marker_found={start >= 0}, "
+            f"missing_lines={missing} -- inspect HANDOFF/BOD_STATE.md manually",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def record_resolution_to_handoff(resolution: dict, repo_root: str):
     """Record the resolution in HANDOFF/BOD_STATE.md."""
     state_file = os.path.join(repo_root, "HANDOFF", "BOD_STATE.md")
@@ -542,36 +582,24 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
     entry.append(formatted_proposal)
     entry.append("")
 
+    with open(state_file, "r", encoding="utf-8") as f:
+        existing = f.read()
+    marker = f"### Resolution {resolution['resolution_id']} [{resolution['status']}]"
+    if existing.count(marker) > 0:
+        print(
+            f"[FAIL] Resolution {resolution['resolution_id']} is ALREADY in the "
+            f"ledger -- refusing to double-append (idempotency guard, observed "
+            f"concurrent-recorder defect 2026-09-14)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     with open(state_file, "a", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(entry))
         f.flush()
         os.fsync(f.fileno())
 
-    # Rule 15: no silent truncation. Read the record back and verify the
-    # append landed whole before claiming success. A truncated or interleaved
-    # ledger write (observed 2026-09-14: bod-a8ebe243 landed half-written with
-    # CRLF endings beside a complete LF copy from a concurrent recorder)
-    # must FAIL LOUDLY, not print [OK].
-    with open(state_file, "r", encoding="utf-8") as f:
-        recorded = f.read()
-    marker = f"### Resolution {resolution['resolution_id']} [{resolution['status']}]"
-    start = recorded.rfind(marker)
-    tail = recorded[start:] if start >= 0 else ""
-    required_lines = [
-        f"- **Timestamp**: {resolution['timestamp']}",
-        f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}`",
-        "- **Proposal Text**:",
-        formatted_proposal.splitlines()[-1],
-    ]
-    missing = [r for r in required_lines if r not in tail]
-    if start < 0 or missing:
-        print(
-            f"[FAIL] Ledger append verification FAILED for "
-            f"{resolution['resolution_id']}: marker_found={start >= 0}, "
-            f"missing_lines={missing} -- inspect HANDOFF/BOD_STATE.md manually",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _verify_ledger_append(state_file, resolution, formatted_proposal)
 
     print(f"[OK] Resolution {resolution['resolution_id']} appended to HANDOFF/BOD_STATE.md (read-back verified)")
 
