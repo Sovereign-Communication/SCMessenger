@@ -625,6 +625,15 @@ impl RelayCustodyStore {
                         // resolve_custody_metadata; here we just allow it through.
                         let _ = to_device_id;
                     }
+                    Err(CustodyError::NoRegistration) => {
+                        // Cooperative mesh: recipient has no direct registration on this relay,
+                        // accept custody for store-and-forward.
+                        tracing::debug!(
+                            identity_id,
+                            device_id,
+                            "relay custody accepted in cooperative mesh mode (unregistered identity)"
+                        );
+                    }
                     Err(error) => {
                         return Err(error.to_string());
                     }
@@ -2829,4 +2838,35 @@ mod tests {
             pct
         );
     }
+
+    #[test]
+    fn accept_custody_accepts_unregistered_identity_in_cooperative_mesh() {
+        let store = RelayCustodyStore::in_memory();
+        let identity_id = "e".repeat(64);
+        let device_id = Uuid::new_v4().to_string();
+
+        // No prior registration exists for this identity.
+        // In a cooperative mesh, nodes relay custody for communicating peers
+        // even if the recipient has not directly registered with this node.
+        let result = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-cooperative-unregistered".to_string(),
+            vec![1, 2, 3],
+            Some(identity_id.clone()),
+            Some(device_id.clone()),
+        );
+
+        assert!(
+            result.is_ok(),
+            "Cooperative mesh must accept custody for unregistered recipients"
+        );
+        let msg = result.unwrap();
+        assert_eq!(
+            msg.recipient_identity_id.as_deref(),
+            Some(identity_id.as_str())
+        );
+        assert_eq!(msg.intended_device_id.as_deref(), Some(device_id.as_str()));
+    }
 }
+

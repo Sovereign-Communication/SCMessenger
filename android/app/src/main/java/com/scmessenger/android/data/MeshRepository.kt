@@ -8122,7 +8122,7 @@ open class MeshRepository(
                 rawAddresses = listeners + liveRouteHints,
                 includeRelayCircuits = true
             )
-            Timber.d("[ROUTE] Transport: route=$routePeerId dialCandidates=${dialCandidates.size} (${dialCandidates.joinToString { it.substringBefore("/") }})")
+            Timber.d("[ROUTE] Transport: route=$routePeerId dialCandidates=${dialCandidates.size} (${dialCandidates.joinToString()})")
             if (dialCandidates.isNotEmpty()) {
                 connectToPeer(routePeerId, dialCandidates)
                 val connected = awaitPeerConnection(routePeerId, timeoutMs = 2000L)
@@ -10072,8 +10072,20 @@ open class MeshRepository(
 
     fun getDialHintsForRoutePeer(routePeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(routePeerId)) return emptyList()
-        val fromLedger = (ledgerManager?.dialableAddresses() ?: emptyList())
-            .filter { it.peerId == routePeerId }
+        val dialable = ledgerManager?.dialableAddresses() ?: emptyList()
+        val allEntries = getAllLedgerEntries()
+        val combined = (dialable + allEntries).distinctBy { it.multiaddr }
+        val fromLedger = combined
+            .filter { entry ->
+                if (entry.peerId == routePeerId) return@filter true
+                if (entry.multiaddr.endsWith("/p2p/$routePeerId")) return@filter true
+                val key = entry.publicKey?.takeIf { it.isNotBlank() } ?: entry.peerId
+                if (key != null && key.length == 64) {
+                    val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(key)
+                    if (derived == routePeerId) return@filter true
+                }
+                false
+            }
             .map { it.multiaddr }
         return buildDialCandidatesForPeer(
             routePeerId = routePeerId,
@@ -10278,36 +10290,64 @@ open class MeshRepository(
         if (!PeerIdValidator.isLibp2pPeerId(targetPeerId)) return emptyList()
         val circuits = mutableListOf<String>()
 
-        // Use getHealthyRelays to pre-filter relays with closed (healthy) circuits
-        val healthyRelayAddrs = relayCircuitBreaker.getHealthyRelays().toSet()
-
-        // 1. Static Bootstrap Relays (prioritized by network type)
-        val prioritizedNodes = emptyList<String>()
-
-        prioritizedNodes.forEach { bootstrap ->
-            val relayInfo = parseBootstrapRelay(bootstrap)
-            if (relayInfo != null) {
-                val (relayTransportAddr, relayPeerId) = relayInfo
-                // Skip circuit addresses for relays with open circuit breakers
-                if (relayCircuitBreaker.isCircuitOpen(bootstrap)) return@forEach
-                // Prioritize relays confirmed healthy by circuit breaker
-                if (bootstrap !in healthyRelayAddrs && relayCircuitBreaker.getFailureCount(bootstrap) > 0) {
-                    Timber.d("Skipping unhealthy relay: $bootstrap")
-                    return@forEach
+        // 1. Direct circuit entries from ledger already targeting targetPeerId
+        val allEntries = getAllLedgerEntries()
+        for (entry in allEntries) {
+            val addr = entry.multiaddr
+            if (addr.contains("/p2p-circuit/p2p/$targetPeerId")) {
+                if (!circuits.contains(addr)) {
+                    circuits.add(addr)
                 }
-                circuits.add("$relayTransportAddr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId")
             }
         }
 
-        // 2. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
+        // 2. Discover known cloud / bootstrap relays from candidate addresses and ledger
+        val candidateRelays = mutableListOf<Pair<String, String>>()
+        for (bootstrap in getBootstrapCandidateAddresses()) {
+            val relayInfo = parseBootstrapRelay(bootstrap)
+            if (relayInfo != null) {
+                candidateRelays.add(relayInfo)
+            }
+        }
+        for (entry in allEntries) {
+            if (entry.multiaddr.contains("/p2p-circuit")) continue
+            val relayInfo = parseBootstrapRelay(entry.multiaddr)
+            if (relayInfo != null) {
+                candidateRelays.add(relayInfo)
+            } else {
+                val pid = entry.peerId?.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
+                    ?: entry.publicKey?.takeIf { it.length == 64 }?.let { PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(it) }
+                if (pid != null && PeerIdValidator.isLibp2pPeerId(pid)) {
+                    val baseAddr = entry.multiaddr.trimEnd('/')
+                    candidateRelays.add(baseAddr to pid)
+                }
+            }
+        }
+
+        candidateRelays.distinct().forEach { (relayTransportAddr, relayPeerId) ->
+            if (relayPeerId == targetPeerId) return@forEach
+            val bootstrap = "$relayTransportAddr/p2p/$relayPeerId"
+            // Only skip if the circuit breaker is explicitly open
+            if (relayCircuitBreaker.isCircuitOpen(bootstrap) || relayCircuitBreaker.isCircuitOpen(relayTransportAddr)) {
+                return@forEach
+            }
+            val circuit = "$relayTransportAddr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
+            if (!circuits.contains(circuit)) {
+                circuits.add(circuit)
+            }
+        }
+
+        // 3. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
         _discoveredPeers.value.entries.filter {
             it.key != targetPeerId && PeerIdValidator.isLibp2pPeerId(it.key)
         }.forEach { entry ->
             val relayPeerId = entry.key
             val directAddrs = getDialHintsForRoutePeer(relayPeerId)
             directAddrs.forEach { addr ->
-                val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
-                if (!circuits.contains(circuit)) circuits.add(circuit)
+                if (!addr.contains("/p2p-circuit")) {
+                    val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
+                    if (!circuits.contains(circuit)) circuits.add(circuit)
+                }
             }
         }
 
@@ -10694,9 +10734,19 @@ open class MeshRepository(
 
         // Filter out circuit-breaker-blocked and throttle-blocked addresses,
         // and deprioritize addresses whose host:port is confirmed blocked
-        val candidateAddresses = prioritizedAddresses.filter { addr ->
+        var candidateAddresses = prioritizedAddresses.filter { addr ->
             relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr)
-        }.sortedByDescending { addr ->
+        }
+        if (candidateAddresses.isEmpty() && prioritizedAddresses.isNotEmpty()) {
+            if (relayCircuitBreaker.getOpenCircuits().isNotEmpty()) {
+                Timber.i("All bootstrap candidates circuit-breaker-blocked; resetting circuit breakers to allow retry")
+                relayCircuitBreaker.resetAll()
+                candidateAddresses = prioritizedAddresses.filter { addr ->
+                    relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr)
+                }
+            }
+        }
+        val sortedCandidateAddresses = candidateAddresses.sortedByDescending { addr ->
             // Boost priority for addresses whose ports are confirmed reachable
             // Deprioritize addresses with ports likely blocked by current network (isPortLikelyBlocked)
             val port = extractPortFromMultiaddr(addr)
@@ -10709,7 +10759,7 @@ open class MeshRepository(
             portReachable && portNotBlocked
         }
 
-        if (candidateAddresses.isEmpty()) {
+        if (sortedCandidateAddresses.isEmpty()) {
             Timber.w("No candidate addresses available (all circuit-breaker-blocked or throttled)")
             return attemptMdnsFallback()
         }
@@ -10718,7 +10768,7 @@ open class MeshRepository(
         // (Individual dials may take longer; first success wins, others are cancelled)
         val result = kotlinx.coroutines.withTimeoutOrNull(3_000L) {
             kotlinx.coroutines.coroutineScope {
-                val deferreds = candidateAddresses.map { addr ->
+                val deferreds = sortedCandidateAddresses.map { addr ->
                     async(Dispatchers.IO) {
                         try {
                             val bridge = swarmBridge ?: return@async BootstrapAttempt.Failure(addr, "no bridge")
@@ -10909,10 +10959,8 @@ open class MeshRepository(
     private fun classifyBootstrapError(exception: Exception, nodeAddr: String? = null): String {
         val port = nodeAddr?.let { extractPortFromMultiaddr(it) }
 
-        // P1_ANDROID_013: Distinguish "device offline" from "server unreachable" from "timeout"
         val isDeviceOffline = networkDetector.networkType.value == com.scmessenger.android.transport.NetworkType.UNKNOWN
         val detail = when {
-            isDeviceOffline -> "Device offline — no active network"
             exception is java.net.UnknownHostException ->
                 "DNS resolution failed for ${exception.message ?: "unknown host"}"
             exception is java.net.ConnectException -> {
@@ -10934,6 +10982,7 @@ open class MeshRepository(
             exception is java.net.NoRouteToHostException -> "No route to host (network unreachable)"
             exception is java.net.SocketException -> "Socket error: ${exception.message}"
             exception is java.io.IOException -> "Network I/O error: ${exception.message}"
+            isDeviceOffline -> "Device offline — no active network"
             else -> "Unknown network error: ${exception.javaClass.simpleName}: ${exception.message}"
         }
         // Record failure metrics for diagnostics reporting

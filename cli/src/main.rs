@@ -791,6 +791,37 @@ mod dial_scheduler_tests {
         assert_eq!(stored.public_key.to_lowercase(), key_hex);
         assert_ne!(stored.public_key.to_lowercase(), peer_id);
     }
+
+    #[test]
+    fn resolve_sender_peer_id_derives_originating_peer_over_relay() {
+        let relay_peer_id: PeerId = "12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31"
+            .parse()
+            .unwrap();
+
+        let mut seed = [0u8; 32];
+        seed[..10].copy_from_slice(b"sender-key");
+        let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+        let kp = libp2p::identity::ed25519::Keypair::from(signing);
+        let key_hex = hex::encode(kp.public().to_bytes());
+        let expected_peer_id = libp2p::identity::PublicKey::from(kp.public()).to_peer_id();
+
+        // 1. Derives from authenticated sender_public_key_hex
+        let resolved = resolve_sender_peer_id(relay_peer_id, Some(&key_hex), None);
+        assert_eq!(resolved, expected_peer_id);
+        assert_ne!(resolved, relay_peer_id);
+
+        // 2. Derives from identity envelope libp2p_peer_id when pk hex absent
+        let env = scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope {
+            libp2p_peer_id: Some(expected_peer_id.to_string()),
+            ..Default::default()
+        };
+        let resolved_env = resolve_sender_peer_id(relay_peer_id, None, Some(&env));
+        assert_eq!(resolved_env, expected_peer_id);
+
+        // 3. Falls back to socket peer when no sender metadata present
+        let fallback = resolve_sender_peer_id(relay_peer_id, None, None);
+        assert_eq!(fallback, relay_peer_id);
+    }
 }
 
 #[tokio::main]
@@ -2679,10 +2710,15 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             let raw_text =
                                                 msg.text_content().unwrap_or_else(|| "<binary>".into());
                                             let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                            let sender_peer_id = resolve_sender_peer_id(
+                                                peer_id,
+                                                sender_public_key_hex.as_deref(),
+                                                decoded_envelope.as_ref(),
+                                            );
                                             if let Some(decoded) = decoded_envelope.as_ref() {
                                                 learn_sender_identity_from_envelope(
                                                     &contacts_rx,
-                                                    &peer_id.to_string(),
+                                                    &sender_peer_id.to_string(),
                                                     decoded,
                                                 );
                                             }
@@ -2690,10 +2726,10 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 .as_ref()
                                                 .map(|d| d.text.clone())
                                                 .unwrap_or(raw_text);
-                                            let sender_name = contacts_rx.get(peer_id.to_string())
+                                            let sender_name = contacts_rx.get(sender_peer_id.to_string())
                                                 .ok().flatten()
                                                 .map(|c| c.display_name().to_string())
-                                                .unwrap_or_else(|| peer_id.to_string());
+                                                .unwrap_or_else(|| sender_peer_id.to_string());
 
                                             println!("\n{} {}: {}", "←".bright_blue(), sender_name.bright_cyan(), text);
                                             print!("> ");
@@ -2705,13 +2741,13 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 .unwrap_or_default()
                                                 .as_secs();
                                             let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageReceived {
-                                                from: peer_id.to_string(),
+                                                from: sender_peer_id.to_string(),
                                                 content: text.clone(),
                                                 timestamp: ts,
                                                 message_id: msg.id.clone(),
                                             }));
                                             let mn = notif_message_received(MessageReceivedParams {
-                                                from: peer_id.to_string(),
+                                                from: sender_peer_id.to_string(),
                                                 content: text,
                                                 timestamp: ts,
                                                 message_id: msg.id.clone(),
@@ -2750,9 +2786,9 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                             // audits across nodes; at DEBUG it is invisible at
                                                             // the node's default INFO level and a lost ACK is
                                                             // indistinguishable from an unsent one.
-                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
-                                                            if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
-                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, peer_id, e);
+                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, sender_peer_id);
+                                                            if let Err(e) = swarm_handle.send_message(sender_peer_id, ack_bytes, None, None).await {
+                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, sender_peer_id, e);
                                                             }
                                                         }
                                                         Err(e) => {
@@ -2784,7 +2820,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                     tracing::debug!(
                                                         "auto_reply_suppressed_duplicate_or_machine_message in_reply_to={} from={}",
                                                         msg.id,
-                                                        peer_id
+                                                        sender_peer_id
                                                     );
                                                 } else if let Some(ref pk_hex) =
                                                     sender_public_key_hex
@@ -2797,18 +2833,18 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                     ) {
                                                         Ok(prep) => {
                                                             match swarm_handle
-                                                                .send_message(peer_id, prep.envelope_data, None, None)
+                                                                .send_message(sender_peer_id, prep.envelope_data, None, None)
                                                                 .await
                                                             {
                                                                 Ok(_) => tracing::info!(
                                                                     "auto_reply_ack_queued in_reply_to={} to={}",
                                                                     msg.id,
-                                                                    peer_id
+                                                                    sender_peer_id
                                                                 ),
                                                                 Err(e) => tracing::warn!(
                                                                     "auto_reply_ack_queue_failed in_reply_to={} to={}: {}",
                                                                     msg.id,
-                                                                    peer_id,
+                                                                    sender_peer_id,
                                                                     e
                                                                 ),
                                                             }
@@ -2819,7 +2855,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                         Err(e) => tracing::error!(
                                                             "auto_reply_ack_prepare_failed in_reply_to={} to={}: {}",
                                                             msg.id,
-                                                            peer_id,
+                                                            sender_peer_id,
                                                             e
                                                         ),
                                                     }
@@ -3224,6 +3260,26 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     }
 
     Ok(())
+}
+
+/// Resolve the originating sender's libp2p PeerId from the authenticated envelope
+/// public key or identity envelope metadata, falling back to the direct socket peer.
+/// This ensures delivery ACKs, auto-replies, and contact learning target the actual
+/// author rather than an intermediary relay node.
+fn resolve_sender_peer_id(
+    peer_id: PeerId,
+    sender_public_key_hex: Option<&str>,
+    decoded_envelope: Option<&scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope>,
+) -> PeerId {
+    sender_public_key_hex
+        .and_then(scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex)
+        .and_then(|s| s.parse::<PeerId>().ok())
+        .or_else(|| {
+            decoded_envelope
+                .and_then(|d| d.libp2p_peer_id.as_deref())
+                .and_then(|s| s.parse::<PeerId>().ok())
+        })
+        .unwrap_or(peer_id)
 }
 
 /// Learn sender identity from an inbound `scm.message.identity.v1` envelope:
@@ -3895,10 +3951,15 @@ async fn cmd_relay(
                                     let raw_text =
                                         msg.text_content().unwrap_or_else(|| "<binary>".into());
                                     let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                    let sender_peer_id = resolve_sender_peer_id(
+                                        peer_id,
+                                        sender_public_key_hex.as_deref(),
+                                        decoded_envelope.as_ref(),
+                                    );
                                     if let Some(decoded) = decoded_envelope.as_ref() {
                                         learn_sender_identity_from_envelope(
                                             &contacts_rx,
-                                            &peer_id.to_string(),
+                                            &sender_peer_id.to_string(),
                                             decoded,
                                         );
                                     }
@@ -3912,13 +3973,13 @@ async fn cmd_relay(
                                         .unwrap_or_default()
                                         .as_secs();
                                     let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageReceived {
-                                        from: peer_id.to_string(),
+                                        from: sender_peer_id.to_string(),
                                         content: text.clone(),
                                         timestamp: ts,
                                         message_id: msg.id.clone(),
                                     }));
                                     let mn = notif_message_received(MessageReceivedParams {
-                                        from: peer_id.to_string(),
+                                        from: sender_peer_id.to_string(),
                                         content: text,
                                         timestamp: ts,
                                         message_id: msg.id.clone(),
@@ -3940,12 +4001,12 @@ async fn cmd_relay(
                                         if let Some(ref pk_hex) = sender_public_key_hex {
                                             match core_arc.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
                                                 Ok(ack_bytes) => {
-                                                    tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
+                                                    tracing::info!("Sending delivery ACK for {} to {}", msg.id, sender_peer_id);
                                                     let swarm_clone = swarm_handle.clone();
                                                     let msg_id = msg.id.clone();
                                                     tokio::spawn(async move {
-                                                        if let Err(e) = swarm_clone.send_message(peer_id, ack_bytes, None, None).await {
-                                                            tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, peer_id, e);
+                                                        if let Err(e) = swarm_clone.send_message(sender_peer_id, ack_bytes, None, None).await {
+                                                            tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, sender_peer_id, e);
                                                         }
                                                     });
                                                 }

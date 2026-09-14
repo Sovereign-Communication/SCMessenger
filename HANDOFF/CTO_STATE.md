@@ -1,10 +1,49 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-10T02:50Z (D10 landed+deployed, mesh rejoined, ANR class closed twice, rewrite-source killed; PR #279 head 2bdc3c86)
+Last updated: 2026-09-14T08:30Z (MAJOR BREAKTHROUGH: Multi-transport store-and-forward bidirectional delivery verified live between Windows CLI and Android Pixel on Cellular; cooperative mesh custody active)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-10) =====
+# ===== RESUME HERE (2026-09-14) =====
+
+## Major Breakthrough: Multi-Transport Store & Forward Live Verification
+
+[OK] VERIFIED LIVE BY OPERATOR: Bidirectional message delivery and delivery ACKs confirmed between Windows CLI (LAN/WiFi) and Android Pixel (Cellular WAN, WiFi disconnected) through the AWS cloud node.
+This is the first time multi-transport and off-WiFi operation have functioned simultaneously in SCMessenger. Eventual delivery via store-and-forward across disparate networks is proven end-to-end.
+
+### Technical Root Causes Solved in this Iteration
+
+1. **Originating Sender Identity Resolution (`cli/src/main.rs`)**:
+   - `resolve_sender_peer_id()` extracts the true author's libp2p `PeerId` from the authenticated envelope's public key hex or identity envelope metadata, falling back to direct socket peer ID.
+   - Fixed relayed delivery ACKs and auto-replies: previously, ACKs were misdirected to the intermediary relay node's PeerId instead of routing back to the originating sender.
+   - Applied across `cmd_start` and `cmd_relay` for message notifications, contact learning, and ACK dispatch.
+
+2. **Cooperative Mesh Relay Custody (`core/src/store/relay_custody.rs`, `core/src/transport/swarm.rs`)**:
+   - In `RelayCustodyStore::accept_custody()` and `resolve_custody_metadata()`, handled `CustodyError::NoRegistration` gracefully.
+   - Doctrine alignment ("Nodes, not relays"): in a cooperative mesh, nodes accept custody and store-and-forward for communicating peers even if the recipient has not directly registered with this node.
+   - Added unit test `accept_custody_accepts_unregistered_identity_in_cooperative_mesh`.
+
+3. **Mobile Interface Handover & Connection Headroom (`core/src/transport/behaviour.rs`, `core/src/transport/swarm.rs`)**:
+   - Increased `max_established_per_peer` from 2 to 4 to provide socket headroom during mobile network transitions (e.g., Wi-Fi drop to Cellular).
+   - In `swarm.rs`, handled `IronCoreBehaviourEvent::Ping(event)` failure by immediately calling `swarm.close_connection(event.connection)` to aggressively clean dead sockets during interface handover.
+
+4. **Android Relay Discovery & Circuit Breaker Reset (`MeshRepository.kt`)**:
+   - `getCircuitAddressesForPeer()` dynamically discovers known cloud/bootstrap relays from candidate addresses and ledger entries, generating libp2p PeerIds if missing.
+   - `bootstrapToMeshWithResults()` auto-resets tripped circuit breakers if all candidate addresses are blocked during an interface handover, enabling immediate retry on new networks.
+   - `getDialCandidatesForPeer()` falls back to derived libp2p PeerId from public key.
+
+### Open Checklist for v0.4.0 Release Tag
+
+1. **Adversarial Security Review (Rule 8)**:
+   - Changes under `core/src/transport/` (`behaviour.rs`, `swarm.rs`) and `core/src/store/` (`relay_custody.rs`) require independent adversarial security review before final tag/merge.
+2. **Build Verification**:
+   - Authoritative Windows verifier must run `cargo check --workspace` and `./gradlew assembleDebug`.
+3. **BLE Drop Test**:
+   - Complete final Bluetooth LE probe and 3-node hardware drop test.
+4. **Tag & Release**:
+   - Proceed to v0.4.0 tag and release pipeline after review and build gates pass.
+
+# ===== PREVIOUS RESUME POINT (2026-09-10) =====
 
 All state below verified from fresh commands 2026-09-10T02:45-02:50Z.
 

@@ -388,8 +388,18 @@ def evaluate_board_proposal(
 
     if all_models_agreed:
         target_vote = "APPROVE" if unanimous_approved else "REJECT"
-        judge_verdict_str = str(consensus.get("verdict", "")).lower()
         judge_content_str = str(judge_content).lower()
+        # 2026-09-13 (bod-F6 run): the consensus dict carries agreement/
+        # confidence/defer/disagreements but NO verdict key -- the judge's
+        # actual verdict wording only exists in its raw synthesis content.
+        # Scanning consensus alone made every APPROVE verdict invisible to
+        # the token scan, so a single disagreement (even one the judge
+        # explicitly called non-blocking) fell through to
+        # REJECTED_JUDGE_DIVERGENCE despite a 5/5 panel and an APPROVE
+        # synthesis at 0.97 confidence. Scan both texts.
+        judge_verdict_str = (
+            str(consensus.get("verdict", "")) + " " + judge_content_str
+        ).strip().lower()
         judge_deferred = bool(consensus.get("defer", False))
         judge_agreement = str(consensus.get("agreement", "")).lower()
         disagreements = consensus.get("disagreements", []) or []

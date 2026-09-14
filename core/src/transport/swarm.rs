@@ -42,7 +42,9 @@ use super::routing::{
     smart_retry::{calculate_next_attempt, BackoffStrategy},
 };
 use crate::drift::{DriftFrame, SyncSession};
-use crate::store::relay_custody::{CustodyCompatMode, CustodyEnforcement, RelayCustodyStore};
+use crate::store::relay_custody::{
+    CustodyCompatMode, CustodyEnforcement, CustodyError, RelayCustodyStore,
+};
 use anyhow::Result;
 use bincode;
 #[cfg(target_arch = "wasm32")]
@@ -1472,6 +1474,16 @@ fn resolve_custody_metadata(
                     to_device_id,
                     ..
                 }) => Ok((Some(identity_id), Some(to_device_id))),
+                Err(CustodyError::NoRegistration) => {
+                    // Cooperative mesh: recipient has not directly registered on this node,
+                    // but node accepts custody for store-and-forward to the intended recipient.
+                    tracing::debug!(
+                        identity_id,
+                        device_id,
+                        "relay custody accepted for unregistered recipient in cooperative mesh"
+                    );
+                    Ok((Some(identity_id.to_string()), Some(device_id.to_string())))
+                }
                 Err(error) => Err(error.to_string()),
             }
         }
@@ -5150,7 +5162,25 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
-                                tracing::trace!("Ping event: {:?}", event);
+                                match event.result {
+                                    Ok(rtt) => {
+                                        tracing::trace!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            rtt = ?rtt,
+                                            "Ping success"
+                                        );
+                                    }
+                                    Err(ref failure) => {
+                                        tracing::warn!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            failure = ?failure,
+                                            "Ping failed; closing dead connection"
+                                        );
+                                        let _ = swarm.close_connection(event.connection);
+                                    }
+                                }
                             }
 
                             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
