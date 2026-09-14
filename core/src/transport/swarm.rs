@@ -3405,18 +3405,34 @@ pub async fn start_swarm_with_config(
                 .with_tokio()
                 .with_other_transport(
                     |id_keys| -> std::result::Result<_, Box<dyn std::error::Error + Send + Sync>> {
+                        fn google_resolver_config() -> hickory_resolver::config::ResolverConfig {
+                            use hickory_resolver::config::{ConnectionConfig, NameServerConfig};
+                            use std::net::IpAddr;
+                            hickory_resolver::config::ResolverConfig::from_name_servers(
+                                ["8.8.8.8", "8.8.4.4"]
+                                    .iter()
+                                    .map(|&ip| {
+                                        NameServerConfig::new(
+                                            ip.parse::<IpAddr>().expect("valid DNS IP literal"),
+                                            true,
+                                            vec![ConnectionConfig::udp(), ConnectionConfig::tcp()],
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        }
                         let tcp_transport1 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp1 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport1,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let tcp_transport2 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp2 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport2,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let ws_transport = libp2p::websocket::Config::new(dns_tcp2);
