@@ -19,7 +19,7 @@ futures = "0.3"
 # libp2p for peer-to-peer networking
 # Phase 0: TCP + QUIC for native, mDNS for LAN, Kademlia for WAN
 # websocket deferred to Phase 1 (browser interop)
-libp2p = { version = "0.56", features = [
+libp2p = { version = "0.57", features = [
   "noise",
   "yamux",
   "gossipsub",
@@ -32,7 +32,6 @@ libp2p = { version = "0.56", features = [
   "macros",
   "request-response",
   "cbor",
-  "wasm-bindgen",
   "websocket",
   "websocket-websys",
 ] }

@@ -5708,6 +5708,12 @@ pub async fn start_swarm_with_config(
                                             dst_peer_id
                                         );
                                     }
+                                    RelayServerEvent::StatusChanged { status } => {
+                                        tracing::debug!(
+                                            "Relay server status changed: {:?}",
+                                            status
+                                        );
+                                    }
                                     RelayServerEvent::ReservationReqDenied { .. } |
                                     RelayServerEvent::ReservationTimedOut { .. } |
                                     RelayServerEvent::ReservationClosed { .. } |
