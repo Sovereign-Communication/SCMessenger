@@ -1,10 +1,35 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-14T08:30Z (MAJOR BREAKTHROUGH: Multi-transport store-and-forward bidirectional delivery verified live between Windows CLI and Android Pixel on Cellular; cooperative mesh custody active)
+Last updated: 2026-09-15T04:45Z (MINOR: cellular-path triangulation complete — store-and-forward verified with zero loss; Windows node silent wedge found, remediated live, P1 filed; heartbeat watchdog pending)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-14) =====
+# ===== RESUME HERE (2026-09-15) =====
+
+## Cellular-path triangulation — VERDICT (full audit: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md)
+
+Operator question: were cellular messages stored/forwarded, or direct?
+Evidence from all 3 nodes (Pixel adb, AWS docker logs, Windows local logs):
+
+1. Direct Pixel<->Windows: NEVER achieved — double-NAT, DCUtR hole-punch
+   failed repeatedly, relay fallback engaged by design. Correct behavior.
+2. Store-and-forward: ZERO LOSS. 12 custody entries held on AWS for the
+   Windows destination while Windows was wedged; all 12 burst-delivered at
+   04:22:14Z within 1s of node recovery; phone outbox drained to [];
+   both stuck receipts converged at 04:22:24Z.
+3. DEFECT FOUND: Windows node silent wedge 01:32:50Z-04:21:30Z (~2h45m).
+   Process alive, logs frozen, API hung, 6x CLOSE_WAIT, no panic, existing
+   watchdog blind (event loop never died). Remediated live by restart.
+   Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md.
+   Tag disposition per ticket: acceptable as known P1 for 0.5.0 IF the
+   log-silence heartbeat watchdog lands pre-tag (bounded, observable failure).
+4. Node versions at audit time: AWS sha-31776b4, Windows f985b10,
+   Pixel b39bfd2d APK — unified 0.4.0 stack (identifier parity audit holds).
+
+Next: heartbeat watchdog implementation (cli/, not rule-8 gated), CI artifact
+redeploy of Windows node, then tag buy-in with G3-0/G4-1/T4 + P1 disposition.
+
+# ===== PREVIOUS RESUME POINT (2026-09-14) =====
 
 ## Major Breakthrough: Multi-Transport Store & Forward Live Verification
 
