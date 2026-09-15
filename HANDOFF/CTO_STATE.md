@@ -1,10 +1,37 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-15T04:45Z (MINOR: cellular-path triangulation complete — store-and-forward verified with zero loss; Windows node silent wedge found, remediated live, P1 filed; heartbeat watchdog pending)
+Last updated: 2026-09-15T17:00Z (MINOR: tag-readiness evidence package delivered for operator verification — NO tag action taken; Windows node redeployed on CI artifact with heartbeat watchdog live; release-pipeline rehearsal fixed and re-running; BoD disposition 4/5 APPROVE x2 runs awaiting operator ruling)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-15) =====
+# ===== RESUME HERE (2026-09-15, evening) =====
+
+## Tag-readiness delivered — awaiting operator verification + rulings
+
+Full evidence: HANDOFF/audit/TAG_READINESS_EVIDENCE_2026-09-15.md (commit
+6c87a7ee). State at handoff:
+
+1. All 3 nodes on unified 0.4.0 stack: AWS sha-31776b4 (16h uptime),
+   Windows CI artifact fb46f2a == d7b4f77d2 tree (provenance verified via
+   merge-base ancestry; identity preserved: local_peer_id=12D3KooWD6vZ...,
+   "Loaded existing identity"), Pixel b39bfd2d APK (operator mobile).
+2. Heartbeat watchdog LIVE on Windows node (commit d7b4f77d; 2 black-box
+   integration tests pass locally 6.32s; CI Test lane green).
+3. Release rehearsal: attempt 1 failed at deprecated 'tools' SDK package
+   (android-actions/setup-android@v3 infra drift, NOT code); fixed in
+   12bdf292 (packages: 'platform-tools', aligned with mobile.yml); re-run
+   34996353889 in progress. All 4 signing secrets verified present.
+4. BoD disposition (wedge P1): two paid-tier runs, 4/5 APPROVE both
+   (scores 0.88-0.98), zero REJECT; deepseek-v3.2 seat malformed twice ->
+   fail-closed DEFERRED. OPERATOR RULING REQUIRED to convert to APPROVED.
+5. OPERATOR DIRECTIVE: "Do not tag - gather all evidence... present it to
+   me for verification." No tag created; PR #288 merge stays with the
+   orchestrator per standing order.
+6. NEXT (after operator ruling): merge PR #288 -> tag v0.4.0 on merge
+   commit -> 0.5.0 planning (wedge root-cause priority; UniFFI relocation;
+   Kotlin P2 warning burndown; hickory advisory recheck).
+
+# ===== PREVIOUS RESUME POINT (2026-09-15, early) =====
 
 ## Cellular-path triangulation — VERDICT (full audit: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md)
 
