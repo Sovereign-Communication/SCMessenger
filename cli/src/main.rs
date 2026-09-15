@@ -2521,25 +2521,44 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         let poll = std::time::Duration::from_secs((heartbeat_timeout_secs / 10).max(5));
         let mut ticker = tokio::time::interval(poll);
         ticker.tick().await; // first tick is immediate
+                             // Two consecutive silence readings are required before exit. A
+                             // single bad measurement must never kill a healthy node -- observed
+                             // live 2026-09-15 when enumeration-cached metadata made the first
+                             // version read 659s of "silence" against logs written one second
+                             // earlier. Poll cadence is timeout/10, so this costs at most one
+                             // extra poll interval of detection latency (~60s at the default).
+        let mut consecutive_silence: u32 = 0;
         loop {
             ticker.tick().await;
             if let Some(age) = config::latest_log_age_secs(&heartbeat_log_dir) {
                 if age > heartbeat_timeout_secs {
-                    tracing::error!(
-                        "log_silence_watchdog: no log output for {}s (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
+                    consecutive_silence = consecutive_silence.saturating_add(1);
+                    if consecutive_silence >= 2 {
+                        tracing::error!(
+                            "log_silence_watchdog: no log output for {}s across {} consecutive readings (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
+                            age,
+                            consecutive_silence,
+                            heartbeat_timeout_secs
+                        );
+                        eprintln!(
+                            "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
+                            "[FAIL]".red(),
+                            age
+                        );
+                        std::process::exit(1);
+                    }
+                    tracing::warn!(
+                        "log_silence_watchdog: measured {}s without log output (threshold {}s); requiring a second consecutive reading before exit",
                         age,
                         heartbeat_timeout_secs
                     );
-                    eprintln!(
-                        "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
-                        "[FAIL]".red(),
-                        age
-                    );
-                    std::process::exit(1);
+                    continue;
                 }
             }
-            // A missing/empty log dir never triggers: startup writes log lines
-            // within seconds, so an absent heartbeat only exists pre-init.
+            // Fresh (or unreadable/missing) -- reset the streak. A missing
+            // log dir never triggers: startup writes log lines within
+            // seconds, so an absent heartbeat only exists pre-init.
+            consecutive_silence = 0;
         }
     });
 

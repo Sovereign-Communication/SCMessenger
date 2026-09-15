@@ -467,30 +467,69 @@ mod tests {
     }
 }
 
-/// Age in seconds of the most recently modified file in `log_dir`, or `None`
-/// when the directory is missing or contains no files.
+/// Detects whether `log_dir` shows recent write activity and returns the age
+/// in seconds of the last OBSERVED activity, or `None` when the directory is
+/// missing or contains no files.
 ///
-/// Lives here (lib-visible) rather than in main.rs so both the production
-/// heartbeat watchdog (main.rs) and the `heartbeat-probe` test binary share
-/// one implementation -- the integration test then exercises the REAL code
-/// path, not a copy.
+/// Two independent signals, OR-ed, so one metadata quirk cannot fake
+/// "silence" on a healthy, actively-written log:
+///
+/// 1. Direct per-file `fs::metadata` mtime. Deliberately NOT
+///    `read_dir`'s `entry.metadata()`: on Windows, directory enumeration
+///    can serve stale attribute data for a file being appended
+///    concurrently. Observed live 2026-09-15: the newest mtime seen by
+///    enumeration froze ~10 minutes behind real writes (custody audit
+///    lines were being written every 60s), and the watchdog misread that
+///    as 659s of silence and killed a healthy node.
+/// 2. Size growth against the largest size seen by this process: a growing
+///    log is activity by definition, even if every mtime in the directory
+///    were stale. The first call only establishes the baseline.
+///
+/// Fails open: unreadable entries are skipped, and if the internal baseline
+/// lock is poisoned the function reports no data rather than inventing
+/// silence. Lives here (lib-visible) so the production watchdog (main.rs)
+/// and the `heartbeat-probe` test binary share one implementation.
 /// Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
+static WATCHDOG_MAX_LOG_SIZE_SEEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
 pub fn latest_log_age_secs(log_dir: &std::path::Path) -> Option<u64> {
-    let mut latest: Option<std::time::SystemTime> = None;
     let entries = std::fs::read_dir(log_dir).ok()?;
+    let mut latest_mtime: Option<std::time::SystemTime> = None;
+    let mut max_len: u64 = 0;
     for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else {
+        // Direct stat: re-queries the live directory entry instead of
+        // trusting enumeration-cached attributes (see doc comment).
+        let Ok(meta) = std::fs::metadata(entry.path()) else {
             continue;
         };
         if !meta.is_file() {
             continue;
         }
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        if latest.is_none_or(|m| modified > m) {
-            latest = Some(modified);
+        if let Ok(modified) = meta.modified() {
+            if latest_mtime.is_none_or(|m| modified > m) {
+                latest_mtime = Some(modified);
+            }
         }
+        max_len = max_len.max(meta.len());
     }
-    latest.map(|m| m.elapsed().unwrap_or_default().as_secs())
+    let mtime_age = latest_mtime.map(|m| m.elapsed().unwrap_or_default().as_secs());
+
+    let growth_is_activity = (|| {
+        let mut baseline = WATCHDOG_MAX_LOG_SIZE_SEEN.lock().ok()?;
+        match *baseline {
+            Some(seen) if max_len > seen => {
+                *baseline = Some(max_len);
+                Some(true)
+            }
+            Some(_) => Some(false),
+            None => {
+                *baseline = Some(max_len);
+                Some(false) // baseline established; not activity
+            }
+        }
+    })();
+    if growth_is_activity == Some(true) {
+        return Some(0);
+    }
+    mtime_age
 }
