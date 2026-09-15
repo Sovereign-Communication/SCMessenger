@@ -90,3 +90,39 @@ converged). The wedge is a node-liveness defect, not a custody-correctness
 defect. Tag decision may proceed with this ticket explicitly accepted as a
 known P1 for 0.5.0 IF the heartbeat watchdog (item 3) lands pre-tag so the
 failure mode is bounded and observable in the field.
+
+## Update 2026-09-15T19:15Z: LIVE FALSE-POSITIVE INCIDENT + FIX LANDED
+
+The v1 watchdog killed a HEALTHY Windows node at 16:57:17Z: it measured
+659s of "silence" while the custody audit had written one second earlier
+(16:57:16.97). Cause: `read_dir().entry.metadata()` enumeration served a
+stale newest-mtime (~16:46:18) for the actively appended log on Windows.
+With no supervisor present the node stayed down ~75 minutes and AWS held
+custody undelivered - the operator's "pending/stored" symptom.
+
+Fix commit `8ec95702` (pushed; CI gating):
+- `latest_log_age_secs` direct-stats each file (`fs::metadata`) and ORs a
+  size-growth signal - a growing log is activity even if every mtime lies.
+- Watchdog exits only after TWO consecutive silence readings (poll =
+  timeout/10, so <=1 extra poll interval of latency); first reading logs a
+  warn.
+- Fails open: unreadable entries skipped, poisoned baseline lock reports
+  no data instead of inventing silence.
+- Black-box integration tests still pass (2/2, 6.41s); the
+  stale-enumeration failure mode is unreachable by construction (no
+  enumeration metadata trusted).
+- Fixed binary verified live on the Windows node since 18:46:47Z; zero
+  `log_silence` warnings in 17+ min of production custody-audit traffic
+  (the buggy build fired at ~11 min). Watchdog re-armed at the 600s default.
+
+Consequence disclosure: the "max 10 min bounded outage" property still
+assumes SOMEONE (or a supervisor task) restarts the node after a legitimate
+watchdog exit. Zero-loss custody behavior was re-confirmed in this incident
+(AWS custody burst-delivered at 18:12:01Z the instant the node returned).
+
+End-to-end receipt verification after recovery (19:00-19:02Z): stuck message
+1833a343 converged state=delivered on the phone within seconds of the app's
+outbox flush; Windows published the delivery ACKs (19:00:36Z) and received
+fresh inbound messages from the phone (inbox_receive 6b4a708f, 2691efb4);
+first DIRECT LAN connection established Windows<->Pixel
+(/ip4/192.168.0.134), previously relay-only.
