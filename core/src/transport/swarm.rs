@@ -42,7 +42,9 @@ use super::routing::{
     smart_retry::{calculate_next_attempt, BackoffStrategy},
 };
 use crate::drift::{DriftFrame, SyncSession};
-use crate::store::relay_custody::{CustodyCompatMode, CustodyEnforcement, RelayCustodyStore};
+use crate::store::relay_custody::{
+    CustodyCompatMode, CustodyEnforcement, CustodyError, RelayCustodyStore,
+};
 use anyhow::Result;
 use bincode;
 #[cfg(target_arch = "wasm32")]
@@ -1799,6 +1801,28 @@ fn resolve_custody_metadata(
                     to_device_id,
                     ..
                 }) => Ok((Some(identity_id), Some(to_device_id))),
+                Err(CustodyError::NoRegistration) => {
+                    // Cooperative mesh: recipient has not directly registered on this node,
+                    // but node accepts custody for store-and-forward to the intended recipient.
+                    // Strictly validate recipient identity ID format (64-character hex Blake3 hash).
+                    if identity_id.len() != 64
+                        || !identity_id.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        return Err(format!(
+                            "invalid recipient identity id format for cooperative custody: {}",
+                            identity_id
+                        ));
+                    }
+                    if device_id.is_empty() || device_id.len() > 128 {
+                        return Err("invalid device id format for cooperative custody".to_string());
+                    }
+                    tracing::debug!(
+                        identity_id,
+                        device_id,
+                        "node custody accepted for unregistered recipient in cooperative mesh"
+                    );
+                    Ok((Some(identity_id.to_string()), Some(device_id.to_string())))
+                }
                 Err(error) => Err(error.to_string()),
             }
         }
@@ -3381,18 +3405,34 @@ pub async fn start_swarm_with_config(
                 .with_tokio()
                 .with_other_transport(
                     |id_keys| -> std::result::Result<_, Box<dyn std::error::Error + Send + Sync>> {
+                        fn google_resolver_config() -> hickory_resolver::config::ResolverConfig {
+                            use hickory_resolver::config::{ConnectionConfig, NameServerConfig};
+                            use std::net::IpAddr;
+                            hickory_resolver::config::ResolverConfig::from_name_servers(
+                                ["8.8.8.8", "8.8.4.4"]
+                                    .iter()
+                                    .map(|&ip| {
+                                        NameServerConfig::new(
+                                            ip.parse::<IpAddr>().expect("valid DNS IP literal"),
+                                            true,
+                                            vec![ConnectionConfig::udp(), ConnectionConfig::tcp()],
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        }
                         let tcp_transport1 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp1 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport1,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let tcp_transport2 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp2 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport2,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let ws_transport = libp2p::websocket::Config::new(dns_tcp2);
@@ -5684,6 +5724,12 @@ pub async fn start_swarm_with_config(
                                             dst_peer_id
                                         );
                                     }
+                                    RelayServerEvent::StatusChanged { status } => {
+                                        tracing::debug!(
+                                            "Relay server status changed: {:?}",
+                                            status
+                                        );
+                                    }
                                     RelayServerEvent::ReservationReqDenied { .. } |
                                     RelayServerEvent::ReservationTimedOut { .. } |
                                     RelayServerEvent::ReservationClosed { .. } |
@@ -5699,7 +5745,25 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
-                                tracing::trace!("Ping event: {:?}", event);
+                                match event.result {
+                                    Ok(rtt) => {
+                                        tracing::trace!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            rtt = ?rtt,
+                                            "Ping success"
+                                        );
+                                    }
+                                    Err(ref failure) => {
+                                        tracing::warn!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            failure = ?failure,
+                                            "Ping failed; closing dead connection"
+                                        );
+                                        let _ = swarm.close_connection(event.connection);
+                                    }
+                                }
                             }
 
                             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]

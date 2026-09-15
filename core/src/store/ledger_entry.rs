@@ -4997,6 +4997,7 @@ mod tests {
         assert_eq!(dialable_old.len(), 1);
     }
 
+    #[test]
     fn dialable_candidates_include_operator_bootstraps_before_first_success() {
         let (_dir, mgr) = manager();
         mgr.add_bootstrap("/ip4/198.51.100.200/tcp/443", Some("Bootstrap 1"));
@@ -5017,6 +5018,7 @@ mod tests {
         assert_eq!(mobile[0].multiaddr, "/ip4/198.51.100.200/tcp/443");
     }
 
+    #[test]
     fn migration_imports_only_hygienic_survivors() {
         let (_dir, mgr) = manager();
         let my_addrs = vec!["/ip4/192.168.0.121/tcp/9001".to_string()];

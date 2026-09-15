@@ -1,5 +1,12 @@
 # Build stage
-FROM rust:latest AS builder
+# PINNED to the bookworm variant (glibc 2.36), NOT rust:latest (trixie,
+# glibc 2.41+): the runtime stage is debian:bookworm-slim and the built
+# binary's glibc symbol floor must not exceed the runtime base. rust:latest
+# drifted to trixie and shipped binaries requiring GLIBC_2.38 ->
+# `GLIBC_2.38 not found` crash loop on every bookworm deployment
+# (2026-09-14). Deps bumps that raise the glibc floor must re-evaluate this
+# pin deliberately.
+FROM rust:bookworm AS builder
 
 # Optional: Override bootstrap nodes at build time
 # Format: comma-separated multiaddrs

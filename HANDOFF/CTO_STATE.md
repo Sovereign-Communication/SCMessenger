@@ -1,10 +1,102 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-10 (Freebuff sandbox burn-down session; #272 FFI fix pushed, #277 merged, #280 ticket hygiene)
+Last updated: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
 Entry point: `/CTO`. This file is the whole context load.
 
-# ===== RESUME HERE (2026-09-10) =====
+# ===== RESUME HERE (2026-09-15, evening) =====
+
+## Tag-readiness delivered — awaiting operator verification + rulings
+
+Full evidence: HANDOFF/audit/TAG_READINESS_EVIDENCE_2026-09-15.md (commit
+6c87a7ee). State at handoff:
+
+1. All 3 nodes on unified 0.4.0 stack: AWS sha-31776b4 (16h uptime),
+   Windows CI artifact fb46f2a == d7b4f77d2 tree (provenance verified via
+   merge-base ancestry; identity preserved: local_peer_id=12D3KooWD6vZ...,
+   "Loaded existing identity"), Pixel b39bfd2d APK (operator mobile).
+2. Heartbeat watchdog LIVE on Windows node (commit d7b4f77d; 2 black-box
+   integration tests pass locally 6.32s; CI Test lane green).
+3. Release rehearsal 34996353889 FINAL: attempt-1 failure was the
+   deprecated 'tools' SDK package (infra drift) — fixed in 12bdf292 and
+   verified cleared by attempt 2 running ~52 min past it. Attempt-2 final:
+   6/7 build jobs green (all CLI platforms, WASM, version metadata);
+   Create Release correctly skipped (artifacts_only). Sole failure:
+   "SCMESSENGER_KEY_ALIAS is not present in the decoded keystore"
+   (17:32:36Z) — the secret VALUE does not match the keystore; workflow
+   wiring verified correct. Operator action: scripts/verify_release_keystore.sh,
+   then re-set the secret and re-dispatch the rehearsal. Until then the
+   pipeline can build every artifact EXCEPT the signed release AAB/APK.
+   Tip CI on 1aaf6d34: 7/7 workflows green (Mobile concluded 17:47:51Z).
+4. BoD disposition (wedge P1): two paid-tier runs, 4/5 APPROVE both
+   (scores 0.88-0.98), zero REJECT; deepseek-v3.2 seat malformed twice ->
+   fail-closed DEFERRED. OPERATOR RULING REQUIRED to convert to APPROVED.
+5. OPERATOR DIRECTIVE: "Do not tag - gather all evidence... present it to
+   me for verification." No tag created; PR #288 merge stays with the
+   orchestrator per standing order.
+6. NEXT (after operator rulings): (0) operator fixes SCMESSENGER_KEY_ALIAS
+   secret + re-dispatches rehearsal to green (signed-APK proof),
+   (1) merge PR #288 -> tag v0.4.0 on merge commit -> 0.5.0 planning
+   (wedge root-cause priority; UniFFI relocation; Kotlin P2 warning
+   burndown; hickory advisory recheck).
+
+# ===== PREVIOUS RESUME POINT (2026-09-15, early) =====
+
+## Cellular-path triangulation — VERDICT (full audit: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md)
+
+Operator question: were cellular messages stored/forwarded, or direct?
+Evidence from all 3 nodes (Pixel adb, AWS docker logs, Windows local logs):
+
+1. Direct Pixel<->Windows: NEVER achieved — double-NAT, DCUtR hole-punch
+   failed repeatedly, relay fallback engaged by design. Correct behavior.
+2. Store-and-forward: ZERO LOSS. 12 custody entries held on AWS for the
+   Windows destination while Windows was wedged; all 12 burst-delivered at
+   04:22:14Z within 1s of node recovery; phone outbox drained to [];
+   both stuck receipts converged at 04:22:24Z.
+3. DEFECT FOUND: Windows node silent wedge 01:32:50Z-04:21:30Z (~2h45m).
+   Process alive, logs frozen, API hung, 6x CLOSE_WAIT, no panic, existing
+   watchdog blind (event loop never died). Remediated live by restart.
+   Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md.
+   Tag disposition per ticket: acceptable as known P1 for 0.5.0 IF the
+   log-silence heartbeat watchdog lands pre-tag (bounded, observable failure).
+4. Node versions at audit time: AWS sha-31776b4, Windows f985b10,
+   Pixel b39bfd2d APK — unified 0.4.0 stack (identifier parity audit holds).
+
+Next: heartbeat watchdog implementation (cli/, not rule-8 gated), CI artifact
+redeploy of Windows node, then tag buy-in with G3-0/G4-1/T4 + P1 disposition.
+
+# ===== PREVIOUS RESUME POINT (2026-09-14) =====
+
+## Major Breakthrough: Multi-Transport Store & Forward Live Verification
+
+[OK] VERIFIED LIVE BY OPERATOR: Bidirectional message delivery and delivery ACKs confirmed between Windows CLI (LAN/WiFi) and Android Pixel (Cellular WAN, WiFi disconnected) through the AWS cloud node.
+This is the first time multi-transport and off-WiFi operation have functioned simultaneously in SCMessenger. Eventual delivery via store-and-forward across disparate networks is proven end-to-end.
+
+### Technical Root Causes Solved in this Iteration
+
+1. **Originating Sender Identity Resolution (`cli/src/main.rs`)**:
+   - `resolve_sender_peer_id()` extracts the true author's libp2p `PeerId` from the authenticated envelope's public key hex or identity envelope metadata, falling back to direct socket peer ID.
+   - Fixed relayed delivery ACKs and auto-replies: previously, ACKs were misdirected to the intermediary relay node's PeerId instead of routing back to the originating sender.
+   - Applied across `cmd_start` and `cmd_relay` for message notifications, contact learning, and ACK dispatch.
+
+2. **Cooperative Mesh Relay Custody (`core/src/store/relay_custody.rs`, `core/src/transport/swarm.rs`)**:
+   - In `RelayCustodyStore::accept_custody()` and `resolve_custody_metadata()`, handled `CustodyError::NoRegistration` gracefully.
+   - Doctrine alignment ("Nodes, not relays"): in a cooperative mesh, nodes accept custody and store-and-forward for communicating peers even if the recipient has not directly registered with this node.
+   - Enforced strict recipient identity format (64-hex Blake3 hash), device ID bounds, and envelope payload bounds (1..=65536 bytes). Added unit tests covering acceptance and defensive rejection.
+
+3. **Mobile Interface Handover & Connection Headroom (`core/src/transport/behaviour.rs`, `core/src/transport/swarm.rs`)**:
+   - Increased `max_established_per_peer` from 2 to 4 to provide socket headroom during mobile network transitions (e.g., Wi-Fi drop to Cellular).
+   - In `swarm.rs`, handled `IronCoreBehaviourEvent::Ping(event)` failure by immediately calling `swarm.close_connection(event.connection)` to aggressively clean dead sockets during interface handover.
+
+4. **Android Relay Discovery & Circuit Breaker Reset (`MeshRepository.kt`)**:
+   - `relayCircuitAddressesForPeer()` collects ledger-recorded circuit addresses and active dynamic peers, strictly conforming to the dumb-byte-pipe doctrine per BoD ruling `bod-9ee86618`.
+   - `bootstrapToMeshWithResults()` auto-resets tripped circuit breakers if all candidate addresses are blocked during an interface handover, enabling immediate retry on new networks.
+   - `getDialHintsForRoutePeer()` matches ledger entries, `/p2p/$routePeerId`, and derives libp2p PeerId from 64-hex public key.
+
+5. **Board of Directors Governance**:
+   - Resolution `bod-9ee86618`: 5/5 UNANIMOUS APPROVAL + Judge concurrence.
+
+# ===== PREVIOUS RESUME POINT (2026-09-10) =====
 
 ## Session record 2026-09-10 — Freebuff sandbox (Linux; no Windows toolchain, no AWS creds)
 
