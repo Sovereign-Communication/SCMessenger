@@ -1,7 +1,7 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-15T17:00Z (MINOR: tag-readiness evidence package delivered for operator verification — NO tag action taken; Windows node redeployed on CI artifact with heartbeat watchdog live; release-pipeline rehearsal fixed and re-running; BoD disposition 4/5 APPROVE x2 runs awaiting operator ruling)
+Last updated: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
 Entry point: `/CTO`. This file is the whole context load.
 
 # ===== RESUME HERE (2026-09-15, evening) =====
@@ -17,19 +17,28 @@ Full evidence: HANDOFF/audit/TAG_READINESS_EVIDENCE_2026-09-15.md (commit
    "Loaded existing identity"), Pixel b39bfd2d APK (operator mobile).
 2. Heartbeat watchdog LIVE on Windows node (commit d7b4f77d; 2 black-box
    integration tests pass locally 6.32s; CI Test lane green).
-3. Release rehearsal: attempt 1 failed at deprecated 'tools' SDK package
-   (android-actions/setup-android@v3 infra drift, NOT code); fixed in
-   12bdf292 (packages: 'platform-tools', aligned with mobile.yml); re-run
-   34996353889 in progress. All 4 signing secrets verified present.
+3. Release rehearsal 34996353889 FINAL: attempt-1 failure was the
+   deprecated 'tools' SDK package (infra drift) — fixed in 12bdf292 and
+   verified cleared by attempt 2 running ~52 min past it. Attempt-2 final:
+   6/7 build jobs green (all CLI platforms, WASM, version metadata);
+   Create Release correctly skipped (artifacts_only). Sole failure:
+   "SCMESSENGER_KEY_ALIAS is not present in the decoded keystore"
+   (17:32:36Z) — the secret VALUE does not match the keystore; workflow
+   wiring verified correct. Operator action: scripts/verify_release_keystore.sh,
+   then re-set the secret and re-dispatch the rehearsal. Until then the
+   pipeline can build every artifact EXCEPT the signed release AAB/APK.
+   Tip CI on 1aaf6d34: 7/7 workflows green (Mobile concluded 17:47:51Z).
 4. BoD disposition (wedge P1): two paid-tier runs, 4/5 APPROVE both
    (scores 0.88-0.98), zero REJECT; deepseek-v3.2 seat malformed twice ->
    fail-closed DEFERRED. OPERATOR RULING REQUIRED to convert to APPROVED.
 5. OPERATOR DIRECTIVE: "Do not tag - gather all evidence... present it to
    me for verification." No tag created; PR #288 merge stays with the
    orchestrator per standing order.
-6. NEXT (after operator ruling): merge PR #288 -> tag v0.4.0 on merge
-   commit -> 0.5.0 planning (wedge root-cause priority; UniFFI relocation;
-   Kotlin P2 warning burndown; hickory advisory recheck).
+6. NEXT (after operator rulings): (0) operator fixes SCMESSENGER_KEY_ALIAS
+   secret + re-dispatches rehearsal to green (signed-APK proof),
+   (1) merge PR #288 -> tag v0.4.0 on merge commit -> 0.5.0 planning
+   (wedge root-cause priority; UniFFI relocation; Kotlin P2 warning
+   burndown; hickory advisory recheck).
 
 # ===== PREVIOUS RESUME POINT (2026-09-15, early) =====
 

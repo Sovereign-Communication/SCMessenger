@@ -40,26 +40,46 @@ Identifier parity: `HANDOFF/audit/IDENTIFIER_PARITY_AUDIT_2026-09-15.md`
 (canonical identity = public_key_hex; peer_id/identity_id derived metadata;
 Kotlin mirror byte-exact; iOS derives nothing).
 
-## 3. CI / release-pipeline state
+## 3. CI / release-pipeline state — FINAL (sealed 2026-09-15T17:50Z)
 
-Verdict: **CONDITIONAL PASS** — all commit lanes green on the watchdog SHA;
-release rehearsal re-running after an infra fix (was not a code failure).
+Verdict: **PASS with one operator action item** — every commit lane green on
+the tip; rehearsal proves the pipeline end-to-end except the signing secret,
+whose value is operator-owned (not workflow drift, not code).
 
-- CI, Mobile, iOS Build & Test, Cross: **success** on `d7b4f77d2` (run
-  34932193671). Commits after it are docs/workflow-only (zero binary delta,
-  verified by `git diff --name-only d7b4f77d2..bac70105`).
-- Release rehearsal attempt 1 (run 34932614680, artifacts_only) failed at
-  "Build Android Release": `android-actions/setup-android@v3` attempted the
-  deprecated `tools` SDK package (`Failed to find package 'tools'`). Root
-  cause: infra drift in the action, NOT code. `mobile.yml` already carried the
-  fix; release.yml was aligned in commit `12bdf292`
-  (`packages: 'platform-tools'`).
-- Rehearsal attempt 2 (run 34996353889) in progress at time of writing; the
-  signed-APK job is the historic release blocker and all four signing secrets
-  are present (`gh secret list`: KEYSTORE_BASE64, KEYSTORE_PASSWORD,
-  KEY_ALIAS, KEY_PASSWORD).
-- Tip `bac70105`: CI/Lint/iOS/Mobile/Cross in flight; Repository Hygiene and
-  Auto Label already green.
+- **Tip CI on `1aaf6d34` (final): 7/7 workflows success** — CI, Mobile
+  (17:47:51Z), iOS Build & Test, Cross, Lint, Auto Label, Repository
+  Hygiene. `gh run list` at 17:48Z; no failures, no pending.
+- **Release rehearsal 34996353889** (artifacts_only=true, commit `12bdf292`,
+  dispatched 16:39Z, concluded failure 17:39Z):
+  - Attempt 1 (run 34932614680) failed at SDK setup:
+    `android-actions/setup-android@v3` requested the deprecated `tools`
+    package. Infra drift, fixed in `12bdf292` (`packages: 'platform-tools'`,
+    aligned with mobile.yml). Same-class infra fix, verified by attempt 2
+    getting ~52 minutes past that step (debug APK + native libs built).
+  - Attempt 2 FINAL: **6/7 build jobs success** — Verify release version
+    metadata, CLI windows-msvc / linux-gnu / x86_64-apple / aarch64-apple,
+    WASM. "Create GitHub Release" correctly skipped (artifacts_only).
+  - **Failing step (exact, from `gh run view --log-failed`)**:
+    "Verify SCMESSENGER_KEY_ALIAS present in keystore",
+    `##[error]SCMESSENGER_KEY_ALIAS is not present in the decoded keystore`
+    at 2026-09-15T17:32:36Z.
+  - **Root cause**: the `SCMESSENGER_KEY_ALIAS` secret VALUE does not match
+    any alias in the keystore encoded in `SCMESSENGER_KEYSTORE_BASE64`.
+    Workflow wiring verified correct end-to-end (decode path, keytool check,
+    gradle env-driven signing config in `android/app/build.gradle` all agree
+    on names and order). All 4 secrets present and untouched since
+    2026-08-15T17:07-17:08Z (`gh secret list -R ...`). PKCS12 case
+    sensitivity is the documented trap (`docs/ANDROID_RELEASE_SIGNING.md:66-74`).
+  - **Disposition — NOT fixed by this lane**: correcting a secret value is
+    operator-owned data, outside release-infra drift scope. The fail-fast
+    gate did its job: the mismatch surfaced at minute 1 of the signing step,
+    not ~24 minutes into packageRelease (the exact scenario the check was
+    built for after v0.4.0-rc.1, per `docs/ANDROID_RELEASE_SIGNING.md:42`).
+    **Operator action required before tag**: run
+    `scripts/verify_release_keystore.sh <keystore> <alias>` locally (it lists
+    the aliases actually present and prints fingerprints), then re-set
+    `SCMESSENGER_KEY_ALIAS` (and regenerate the keystore if the docs'
+    regenerate instruction applies), and re-dispatch the rehearsal.
 
 ## 4. Defect remediations this cycle
 
@@ -98,10 +118,13 @@ bod-b326b530) on the P1 wedge disposition:
 1. **Accept the P1 wedge disposition**: known issue for 0.4.0, blast radius
    bounded to 10 minutes by the watchdog, root-cause reproduction + fix
    tracked for 0.5.0 (ticket stays open). [Yes / No / More evidence]
-2. **Confirm tag plan**: once (a) rehearsal run 34996353889 is green,
-   (b) tip CI is green, and (c) PR #288 merges to main — tag `v0.4.0` on the
-   merge commit. Merge and tag remain operator/orchestrator actions per
-   standing order; this lane does not self-execute either.
+2. **Confirm tag plan**: the pre-tag sequence is now (a) operator fixes the
+   `SCMESSENGER_KEY_ALIAS` secret (verify with
+   `scripts/verify_release_keystore.sh` first), (b) re-dispatch the
+   artifacts_only rehearsal and confirm green (tag cannot produce a signed
+   release APK until then), (c) PR #288 merges to main — then tag `v0.4.0`
+   on the merge commit. Merge and tag remain operator/orchestrator actions
+   per standing order; this lane does not self-execute either.
 3. **0.5.0 kickoff backlog** (filed, not started): wedge root-cause
    reproduction (priority), UniFFI relocation closing the peer_<hex>
    fallback, Android Kotlin warning burndown (P2 ticket), hickory advisory
@@ -116,3 +139,7 @@ bod-b326b530) on the P1 wedge disposition:
   release pipeline produces signed artifacts for direct distribution.
 - Windows node wedge root cause unknown (no fingerprint in logs, no panic);
   watchdog converts recurrence into a bounded, observable outage.
+- The signing secret `SCMESSENGER_KEY_ALIAS` currently does not match the
+  uploaded keystore (section 3): until the operator corrects it, the release
+  pipeline can produce every artifact EXCEPT the signed release AAB/APK.
+  This is the single open action item blocking a fully green rehearsal.
