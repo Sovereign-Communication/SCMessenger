@@ -2494,6 +2494,55 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
         }
     });
 
+    // Log-silence heartbeat watchdog.
+    //
+    // Catches the failure class the event-loop watchdog above cannot see: the
+    // process and its event-loop task both stay alive, but the node stops
+    // making progress. Observed live 2026-09-15 on the Windows node: log
+    // output frozen for 2h45m, HTTP API unresponsive, CLOSE_WAIT sockets
+    // piling up, no panic, and `swarm_event_loop_died` never fired because the
+    // event loop never died. A healthy node always has pending work -- the
+    // relay-custody audit alone logs every 60s even when idle -- so sustained
+    // log silence means wedged. Same policy as the event-loop watchdog: exit
+    // loudly so a supervisor or user restarts a node that works, instead of a
+    // zombie that silently drops traffic. Tune only for tests via
+    // SCM_LOG_SILENCE_TIMEOUT_SECS.
+    // Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
+    let heartbeat_log_dir = config::Config::data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("logs");
+    let heartbeat_timeout_secs: u64 = std::env::var("SCM_LOG_SILENCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    tokio::spawn(async move {
+        // Poll at 1/10th of the timeout (min 5s) so detection latency stays
+        // proportional to the configured threshold.
+        let poll = std::time::Duration::from_secs((heartbeat_timeout_secs / 10).max(5));
+        let mut ticker = tokio::time::interval(poll);
+        ticker.tick().await; // first tick is immediate
+        loop {
+            ticker.tick().await;
+            if let Some(age) = config::latest_log_age_secs(&heartbeat_log_dir) {
+                if age > heartbeat_timeout_secs {
+                    tracing::error!(
+                        "log_silence_watchdog: no log output for {}s (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
+                        age,
+                        heartbeat_timeout_secs
+                    );
+                    eprintln!(
+                        "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
+                        "[FAIL]".red(),
+                        age
+                    );
+                    std::process::exit(1);
+                }
+            }
+            // A missing/empty log dir never triggers: startup writes log lines
+            // within seconds, so an absent heartbeat only exists pre-init.
+        }
+    });
+
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let mut stdin_lines = tokio::io::AsyncBufReadExt::lines(stdin);
 

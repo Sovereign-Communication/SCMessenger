@@ -132,6 +132,11 @@ impl Config {
             std::fs::create_dir_all(&path).context("Failed to create data directory")?;
             return Ok(path);
         }
+        if let Ok(env_path) = std::env::var("SCMESSENGER_DATA_DIR") {
+            let path = PathBuf::from(env_path);
+            std::fs::create_dir_all(&path).context("Failed to create data directory")?;
+            return Ok(path);
+        }
 
         let data_dir = dirs::data_local_dir()
             .context("Failed to determine data directory")?
@@ -460,4 +465,32 @@ mod tests {
 
         std::env::remove_var("SCMESSENGER_CONFIG");
     }
+}
+
+/// Age in seconds of the most recently modified file in `log_dir`, or `None`
+/// when the directory is missing or contains no files.
+///
+/// Lives here (lib-visible) rather than in main.rs so both the production
+/// heartbeat watchdog (main.rs) and the `heartbeat-probe` test binary share
+/// one implementation -- the integration test then exercises the REAL code
+/// path, not a copy.
+/// Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
+pub fn latest_log_age_secs(log_dir: &std::path::Path) -> Option<u64> {
+    let mut latest: Option<std::time::SystemTime> = None;
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if latest.is_none_or(|m| modified > m) {
+            latest = Some(modified);
+        }
+    }
+    latest.map(|m| m.elapsed().unwrap_or_default().as_secs())
 }

@@ -67,6 +67,21 @@ of each other), plus 6 CLOSE_WAIT sockets that had accumulated on 9002.
    just event-loop-alive) that force-restarts the node process on N minutes of
    silence while peers are connected. This converts the silent wedge into a
    visible, bounded outage regardless of root cause.
+   **[DONE 2026-09-15]** Implemented in cli/ (not rule-8 gated):
+   - `cli/src/config.rs`: `pub fn latest_log_age_secs()` (single source of
+     truth, lib-visible),
+   - `cli/src/main.rs`: `log_silence_watchdog` tokio task in `cmd_start` --
+     polls the newest mtime in the node's log dir every timeout/10, exits(1)
+     when silence exceeds `SCM_LOG_SILENCE_TIMEOUT_SECS` (default 600s).
+     Same fail-fast policy as the existing `swarm_event_loop_died` watchdog:
+     a node that exits gets restarted; a zombie silently drops traffic.
+   - Black-box proof: `cli/src/bin/heartbeat-probe.rs` (runs the same
+     detection loop via the lib path) +
+     `cli/tests/heartbeat_watchdog_integration.rs` (2 tests: exits-nonzero-on
+     -silence past threshold; stays-alive while log actively written).
+     Verified locally: `cargo test -p scmessenger-cli --test
+     heartbeat_watchdog_integration` -> `2 passed; 0 failed` in 6.32s
+     (2026-09-14 session, build `5m36s` cold). CI Test lane re-runs it.
 4. Re-run the 3-node cellular triangulation for 6h+ post-fix with zero wedges.
 
 Scoring impact on the v0.4.0 gate: the store-and-forward doctrine itself
