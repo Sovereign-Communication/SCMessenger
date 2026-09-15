@@ -112,3 +112,19 @@ Observed live, this session, at cloud-node boot (00:39:19Z logs):
 
 Windows redeploy to the tip CI artifact is the last parity step and was queued the
 moment the artifact appears (CI run for `f6eda77a` in flight at audit time).
+
+## COMPLETION (01:03Z, same session)
+
+- Windows node redeployed from CI artifact of run 34914308625 (provenance manifest
+  `0.4.0 (f985b10)`, run headSha `7ad7ad53d`, main verified ancestor -> merge-preview
+  content == branch content). Identity preserved (`Loaded existing identity`),
+  relaunched with the exact prior command (`start -p 9001`).
+- Runtime evidence of the doctrine EXECUTING: on boot the node logged
+  `ledger_canonical_hex_live` -- canonicalizing the Pixel's libp2p peer id
+  `12D3KooWKT1e1...` to public_key_hex `8f1c7580...` on ledger write -- followed by
+  `Inbound relay circuit established from 12D3KooWKT1e1...` (Pixel reached the
+  Windows node through relay on the cell path).
+- FINAL PARITY STATE: cloud `sha-31776b4`, Windows `f985b10`, Pixel `b39bfd2d` APK
+  -- three different SHAs, ZERO runtime-content delta between them (remaining
+  deltas are docs-only + wasm dep-scoping). All three peers visible to each other
+  across gossip + relay + custody paths.
