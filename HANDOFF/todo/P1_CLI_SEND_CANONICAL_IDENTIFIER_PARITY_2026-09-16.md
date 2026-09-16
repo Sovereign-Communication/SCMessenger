@@ -115,6 +115,52 @@ Verified end to end on hardware, 2026-09-16:
 | the phone received and receipted it | node: `[OK][OK] Delivered: eaa2698d`, `Processed application delivery receipt ... message_id=eaa2698d-...` (19:08:41Z) |
 | unit tests | `cargo test -p scmessenger-cli --bin scmessenger-cli auto_reply` -> 4 passed (2 new), 0 failed |
 
+### Fixed: gratuitous auto-replies to machine envelopes (operator report)
+
+Operator report 2026-09-16: "i got 6 auto replies despite me sending 0
+messages". Confirmed and fixed in `8f885780`.
+
+Evidence, all pulled this session:
+
+    # every ack today, mapped to the message that triggered it (13 distinct)
+    for f in "$LOCALAPPDATA/scmessenger/logs"/scm.log.2026-09-16-*; do
+      grep -ah "auto_reply_ack_queued" "$f"; done | sort -u
+
+    # the body of those triggering messages, straight from the node's store
+    scm stop && scm history | grep -A2 "\[2026-09-16 08:28:42\]"
+      <- f83ab163... [2026-09-16 08:28:42]
+         {"schema":"scm.message.identity.v1","kind":"history_sync",
+          "text":"","sender":{...}}
+
+    # received entries carrying any non-empty text today: 0
+    grep -a 'received' history | grep -c '"text":"[^"]'   -> 0
+
+Root cause: the phone broadcasts an identity envelope about once a minute and
+its `text` field is EMPTY. `should_send_auto_reply` only rejected bodies that
+already began with the `[auto-reply] ` marker, so a machine envelope with an
+empty body passed the guard and earned a courtesy reply - one per envelope,
+indefinitely, for an operator who had sent nothing.
+
+Fix: `is_answerable_text(incoming, envelope_kind)` gates the reply on the
+envelope kind being chat (absent or `"text"`), the trimmed body being
+non-empty, the marker still absent, and identity-envelope JSON rejected even
+when it arrives undecoded. Five unit cases added; `cargo test -p
+scmessenger-cli --bin scmessenger-cli auto_reply` -> 5 passed.
+
+Live differential (same phone, same command line, 6 minutes each):
+
+| build | inbound machine messages | acks |
+|---|---|---|
+| before the fix | 3 | **3** |
+| after the fix | 6 | **0** |
+
+with the banner still showing the armed custom body, so the suppression is the
+new guard and not a disarmed feature. Two process notes worth keeping: the
+first differential run was run against a stale `target/debug` binary
+(`cargo test --bin` does not refresh it) and produced 3 acks from 3 messages -
+the binary must be checked for the change (`grep -c
+"auto_reply_skipped_machine_message" <bin>`) before any run is credited.
+
 ### Auto-reply findings from the same window (report only)
 
 - Auto-reply messages are NOT written to local history: every delivery logs
@@ -125,9 +171,9 @@ Verified end to end on hardware, 2026-09-16:
   ... removed=false` on every receipt: the outbox entry is not removed by the
   receipt path. Consistent with the 159-message undelivered backlog; worth a
   separate look, not changed here.
-- Unauthorized use on the local node on 2026-09-16 (11 acks to the operator's
-  phone between 18:23Z and 18:55Z) was raised by the operator; the flag was
-  removed from the running node and the node was restarted without it. The AWS
-  node was never affected (`docker inspect`: `CMD=[scm start]`, no auto-reply
-  env). The flag now carries the operator's explicit authorization for testing
-  and for always-on nodes.
+- Unauthorized use on the local node on 2026-09-16 (13 acks to the operator's
+  phone across 18:23Z-19:08Z) was raised by the operator; the flag was removed
+  from the running node and the node was restarted without it. The AWS node was
+  never affected (`docker inspect`: `CMD=[scm start]`, no auto-reply env). The
+  flag now carries the operator's explicit authorization for testing and for
+  always-on nodes, and the node was left running unarmed.
