@@ -2507,6 +2507,12 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // loudly so a supervisor or user restarts a node that works, instead of a
     // zombie that silently drops traffic. Tune only for tests via
     // SCM_LOG_SILENCE_TIMEOUT_SECS.
+    //
+    // Diagnostics go to the watchdog's OWN log
+    // (config::append_watchdog_diagnostic -> logs/watchdog/watchdog.log), never
+    // through `tracing::*`. The appender writes into the directory this task
+    // measures, so a traced warning refreshed the newest mtime, the next poll
+    // read ~0s, the streak reset, and the node never exited (live 2026-09-16).
     // Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
     let heartbeat_log_dir = config::Config::data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -2547,11 +2553,30 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                         );
                         std::process::exit(1);
                     }
-                    tracing::warn!(
+                    // Recorded in the watchdog's own log, NOT through the
+                    // tracing appender: this task measures the directory that
+                    // appender writes to, so its own warning must never feed
+                    // its own liveness measurement.
+                    let diagnostic = format!(
                         "log_silence_watchdog: measured {}s without log output (threshold {}s); requiring a second consecutive reading before exit",
-                        age,
-                        heartbeat_timeout_secs
+                        age, heartbeat_timeout_secs
                     );
+                    // The console stays the operator's live channel (this is
+                    // what the traced warning used to provide); it is not part
+                    // of the measured stream.
+                    eprintln!("{} {}", "[WARNING]".yellow(), diagnostic);
+                    if let Err(e) = config::append_watchdog_diagnostic(
+                        &heartbeat_log_dir,
+                        "WARNING",
+                        &diagnostic,
+                    ) {
+                        eprintln!(
+                            "{} could not record the watchdog diagnostic at {}: {}",
+                            "[WARNING]".yellow(),
+                            config::watchdog_diagnostics_path(&heartbeat_log_dir).display(),
+                            e
+                        );
+                    }
                     continue;
                 }
             }

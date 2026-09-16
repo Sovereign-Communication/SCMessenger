@@ -489,19 +489,84 @@ mod tests {
 /// lock is poisoned the function reports no data rather than inventing
 /// silence. Lives here (lib-visible) so the production watchdog (main.rs)
 /// and the `heartbeat-probe` test binary share one implementation.
+///
+/// The watchdog's OWN output is excluded (see
+/// `WATCHDOG_DIAGNOSTICS_SUBDIR` / `WATCHDOG_DIAGNOSTICS_FILE`). Without that
+/// exclusion the measurement feeds on itself: the watchdog's diagnostic was
+/// written through `tracing::warn!`, the appender refreshed the newest mtime
+/// in this directory, the next poll read an age of ~0s, the silence streak
+/// reset to 0, and a genuinely wedged node could never reach the
+/// two-consecutive-readings exit. Proven live 2026-09-16 on the Windows node:
+/// warnings at 04:02:47Z, 04:13:47Z and 04:24:47Z each reported ~660s of
+/// "silence" -- the age of the watchdog's own previous warning -- and the
+/// process never exited.
 /// Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
 static WATCHDOG_MAX_LOG_SIZE_SEEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+/// Subdirectory, inside the monitored log directory, where the watchdog keeps
+/// its own diagnostics. One level down on purpose: the scan below only
+/// considers regular files directly inside `log_dir`, so anything the watchdog
+/// writes here is structurally invisible to its own liveness measurement while
+/// still sitting with the node's other logs for post-mortem.
+pub const WATCHDOG_DIAGNOSTICS_SUBDIR: &str = "watchdog";
+
+/// File name of the watchdog's own diagnostics log. Also skipped by name,
+/// so the invariant survives the file ever being written one level up.
+pub const WATCHDOG_DIAGNOSTICS_FILE: &str = "watchdog.log";
+
+/// Path of the watchdog's own diagnostics log for `log_dir`.
+pub fn watchdog_diagnostics_path(log_dir: &std::path::Path) -> PathBuf {
+    log_dir
+        .join(WATCHDOG_DIAGNOSTICS_SUBDIR)
+        .join(WATCHDOG_DIAGNOSTICS_FILE)
+}
+
+/// Appends one diagnostic line to the watchdog's OWN log.
+///
+/// Deliberately NOT `tracing::*`: the tracing appender writes into the very
+/// directory `latest_log_age_secs` measures, so a traced warning refreshed the
+/// newest mtime, the next poll read an age of ~0s, the silence streak reset,
+/// and a wedged node never exited (2026-09-16 live incident). Writing here
+/// keeps the operator's audit trail while staying structurally invisible to
+/// the measurement.
+///
+/// Best-effort by contract: the caller reports a failure to stderr but must
+/// never let it stop detection.
+pub fn append_watchdog_diagnostic(
+    log_dir: &std::path::Path,
+    level: &str,
+    message: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let path = watchdog_diagnostics_path(log_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let stamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    writeln!(file, "{}  {} {}", stamp, level, message)
+}
 
 pub fn latest_log_age_secs(log_dir: &std::path::Path) -> Option<u64> {
     let entries = std::fs::read_dir(log_dir).ok()?;
     let mut latest_mtime: Option<std::time::SystemTime> = None;
     let mut max_len: u64 = 0;
     for entry in entries.flatten() {
+        // The watchdog's own diagnostics are not node liveness. Excluded by
+        // name as well as by location (see the constants above).
+        if entry.file_name().to_str() == Some(WATCHDOG_DIAGNOSTICS_FILE) {
+            continue;
+        }
         // Direct stat: re-queries the live directory entry instead of
         // trusting enumeration-cached attributes (see doc comment).
         let Ok(meta) = std::fs::metadata(entry.path()) else {
             continue;
         };
+        // Non-files (including WATCHDOG_DIAGNOSTICS_SUBDIR) are not log lines.
         if !meta.is_file() {
             continue;
         }
@@ -532,4 +597,116 @@ pub fn latest_log_age_secs(log_dir: &std::path::Path) -> Option<u64> {
         return Some(0);
     }
     mtime_age
+}
+
+#[cfg(test)]
+mod heartbeat_watchdog_tests {
+    use super::*;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        // Rule 2: temp files stay in the repo-local tmp/, never the system
+        // temp dir. CARGO_MANIFEST_DIR is cli/, so ../tmp is the repo root's.
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tmp")
+            .join(format!(
+                "scm_hb_unit_{}_{}_{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// The regression pin for the 2026-09-16 fail-open: the watchdog's own
+    /// diagnostic must not read back as node activity, while a write to the
+    /// monitored log must.
+    #[test]
+    fn watchdog_own_diagnostics_do_not_count_as_activity() {
+        let dir = scratch_dir("selfreset");
+        let monitored = dir.join("scm.log.0");
+        // Padded so this file dominates the process-global size baseline, and
+        // a throwaway call establishes that baseline (it only ever grows, and
+        // other tests in this binary share it).
+        std::fs::write(&monitored, "x".repeat(4096)).expect("write stale log");
+        let _ = latest_log_age_secs(&dir);
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+
+        let silent_age = latest_log_age_secs(&dir).expect("age of stale log");
+        assert!(
+            silent_age > 2,
+            "expected >2s of silence on an untouched log, measured {silent_age}s"
+        );
+
+        append_watchdog_diagnostic(&dir, "WARNING", "measured silence")
+            .expect("append watchdog diagnostic");
+
+        let age_after_diagnostic =
+            latest_log_age_secs(&dir).expect("age after watchdog diagnostic");
+        assert!(
+            age_after_diagnostic > 2,
+            "the watchdog's own diagnostic reset the silence measurement to \
+             {age_after_diagnostic}s -- a wedged node could never exit"
+        );
+
+        assert!(
+            watchdog_diagnostics_path(&dir).is_file(),
+            "the diagnostic must still be recorded for the operator"
+        );
+
+        // Control: real node output in the monitored log IS activity. This is
+        // exactly what the traced warning used to do to the measurement.
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&monitored)
+                .expect("open monitored log");
+            writeln!(f, "node activity").expect("append activity");
+        }
+        let age_after_activity = latest_log_age_secs(&dir).expect("age after activity");
+        assert!(
+            age_after_activity <= 2,
+            "a fresh write to the monitored log must read as activity, got \
+             {age_after_activity}s"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A node that keeps logging must never be reported as silent, even with
+    /// the size-growth signal unavailable (untouched baseline).
+    #[test]
+    fn fresh_writes_keep_the_measurement_fresh() {
+        let dir = scratch_dir("fresh");
+        let monitored = dir.join("scm.log.0");
+        std::fs::write(&monitored, "x".repeat(4096)).expect("write log");
+        let _ = latest_log_age_secs(&dir);
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        assert!(latest_log_age_secs(&dir).expect("age") > 2);
+
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&monitored)
+                .expect("open log");
+            writeln!(f, "activity").expect("append");
+        }
+
+        let age = latest_log_age_secs(&dir).expect("age after write");
+        assert!(age <= 2, "expected activity, measured {age}s of silence");
+        assert!(
+            !watchdog_diagnostics_path(&dir).exists(),
+            "no silence diagnostic should exist for a node that keeps logging"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

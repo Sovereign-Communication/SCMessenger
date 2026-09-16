@@ -197,9 +197,47 @@ the operator 75 minutes on 2026-09-15. Options:
 The underlying stall is in the swarm/event loop (`core/src/transport/swarm`,
 rule-8 gated: needs an adversarial security review before it can land).
 
+### Update 2026-09-16: measurement half fixed (detection works again)
+
+The self-reset is gone; the recovery-policy ruling above is still open.
+Landed on `feat/v040-multi-transport-store-forward` (cli only, no core/ touch,
+so no rule-8 review gate):
+
+- `config::append_watchdog_diagnostic` writes the watchdog's own diagnostics to
+  `logs/watchdog/watchdog.log` - one level below the monitored directory, so the
+  scan (which only considers regular files directly inside `log_dir`) can never
+  read them back as liveness - and `latest_log_age_secs` additionally skips that
+  file BY NAME, so the invariant holds even if it is ever written one level up.
+- `main.rs` no longer emits the first-reading diagnostic through `tracing::*`;
+  the console still shows it (the operator's live channel) and the exit path is
+  unchanged. The two-consecutive-readings guard is untouched, so one bad
+  measurement still cannot kill a healthy node.
+- Probe and tests now reproduce production instead of a friendlier variant:
+  the probe requires two consecutive silence readings, writes its first-reading
+  diagnostic exactly where production does, and has a `SCM_PROBE_DEADLINE_SECS`
+  bound so a broken detection path exits 3 (fail fast) rather than hanging CI.
+  `SCM_PROBE_MODE=healthy` writes real node log lines to prove a logging node is
+  never killed. Temp dirs moved to the repo-local `tmp/` (rule 2).
+- Verified failing-then-passing: with the diagnostic temporarily routed into the
+  monitored file (the pre-fix behaviour), both silence tests fail with
+  `left: Some(3), right: Some(1)` and stderr `no verdict after 20s ... never
+  reached two consecutive silence readings` - the production symptom exactly.
+  Reverted, they pass. `cargo test -p scmessenger-cli`: 124 tests, 0 failed.
+  `cargo clippy -p scmessenger-cli --all-targets`: no findings in the touched
+  files. `cargo fmt --all -- --check`: clean.
+
+What this does NOT do: it does not make a wedged node recover by itself. The
+watchdog now genuinely exits 1 on a real wedge, which on this host means the
+node goes down until something restarts it - options (a)/(b)/(c) above are
+still the operator's call, and the underlying stall in the swarm/event loop is
+still unfixed and rule-8 gated.
+
 ### Status
 
+- Detection: FIXED and CI-gated (see update above).
+- Recovery policy: OPEN, operator ruling required (a/b/c above).
 - v0.4.0 tag: this ticket must NOT be closed. The "bounded and observable
-  failure mode" claim made at 19:15Z on 2026-09-15 no longer holds - the
-  failure mode is currently unbounded and silent.
+  failure mode" claim made at 19:15Z on 2026-09-15 does not hold yet: the
+  failure mode is now detectable but still silent in the field until a restart
+  policy exists.
 - Windows node requires a manual restart to serve the stuck Pixel message.
