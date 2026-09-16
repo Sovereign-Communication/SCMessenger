@@ -1,9 +1,9 @@
 ﻿# SCMessenger Adversarial Shadow Audit: Pre-v0.4.0 / v0.5.0 Architecture & Security Review
 
-**Date:** 2026-09-16  
-**Auditor Seat:** Shadow Adversarial Auditor (Impartial Orchestration)  
-**Target Repository:** `Sovereign-Communication/SCMessenger`  
-**Target Branch:** `feat/v040-multi-transport-store-forward` (PR #288)  
+**Date:** 2026-09-16
+**Auditor Seat:** Shadow Adversarial Auditor (Impartial Orchestration)
+**Target Repository:** `Sovereign-Communication/SCMessenger`
+**Target Branch:** `feat/v040-multi-transport-store-forward` (PR #288)
 **Evidence Baseline:** Commit `ddca1340` (and active remote PR stack #288, #289, #290, #291, #292, #293, #294, #295, #296, Issue #155 / PR #156)
 
 ---
@@ -76,43 +76,43 @@ gitGraph
    branch feat/v040-multi-transport-store-forward
    checkout feat/v040-multi-transport-store-forward
    commit id: "PR #288 Base Tip"
-   
+
    branch fix/core-identity-spoof-and-wasm-topic-parity
    checkout fix/core-identity-spoof-and-wasm-topic-parity
    commit id: "PR #296: CRYPTO-01 & TRN-03"
    checkout feat/v040-multi-transport-store-forward
    merge fix/core-identity-spoof-and-wasm-topic-parity
-   
+
    branch fix/cli-outbox-canonical-drain-and-sled-unification
    checkout fix/cli-outbox-canonical-drain-and-sled-unification
    commit id: "PR #297: CLI-03 & CORE-02 Outbox Unification"
    checkout feat/v040-multi-transport-store-forward
    merge fix/cli-outbox-canonical-drain-and-sled-unification
-   
+
    branch fix/swarm-channel-backpressure-deadlock
    checkout fix/swarm-channel-backpressure-deadlock
    commit id: "PR #292: TRN-01 Swarm/CLI Deadlock Decoupling"
    checkout feat/v040-multi-transport-store-forward
    merge fix/swarm-channel-backpressure-deadlock
-   
+
    branch fix/docker-control-api-security
    checkout fix/docker-control-api-security
    commit id: "PR #293: CLI-01 Docker API & User"
    checkout feat/v040-multi-transport-store-forward
    merge fix/docker-control-api-security
-   
+
    branch fix/release-signing-gate-fail-closed
    checkout fix/release-signing-gate-fail-closed
    commit id: "PR #294: SEC-01 Keystore Gate"
    checkout feat/v040-multi-transport-store-forward
    merge fix/release-signing-gate-fail-closed
-   
+
    branch fix/android-coldstart-and-scaffold-remediation
    checkout fix/android-coldstart-and-scaffold-remediation
    commit id: "PR #295: AND-01/02 Notifications & Scaffold"
    checkout feat/v040-multi-transport-store-forward
    merge fix/android-coldstart-and-scaffold-remediation
-   
+
    checkout main
    merge feat/v040-multi-transport-store-forward id: "v0.4.0 Tag Release"
 ```
