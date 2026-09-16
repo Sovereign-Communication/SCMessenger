@@ -77,6 +77,7 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
+        const val MAX_SEEDS_PER_IMPORT = 16
 
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
@@ -6596,9 +6597,12 @@ open class MeshRepository(
      */
     open fun importSeedAddresses(addresses: List<String>): Int {
         val seeds = addresses
+            .asSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+            .take(MAX_SEEDS_PER_IMPORT)
             .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
+            .toList()
         if (seeds.isEmpty()) {
             return 0
         }
@@ -6613,7 +6617,12 @@ open class MeshRepository(
     }
 
     protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
-        return ledgerManager?.importSeedEntries(seeds) ?: 0u
+        val manager = ledgerManager
+        if (manager == null) {
+            Timber.w("Ledger: cannot import seeds - ledgerManager not initialized")
+            return 0u
+        }
+        return manager.importSeedEntries(seeds)
     }
 
     /**

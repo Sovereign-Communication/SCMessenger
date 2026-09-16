@@ -29,6 +29,10 @@ private class HermeticSeedRepo(context: Context) : MeshRepository(context) {
     }
 }
 
+private class NullLedgerSeedRepo(context: Context) : MeshRepository(context) {
+    override fun initializeManagers() { /* native managers unavailable on JVM */ }
+}
+
 class MeshRepositorySeedImportTest {
 
     private val testRoot = File(System.getProperty("user.dir") ?: ".", "build/tmp/seed-import-tests")
@@ -81,5 +85,24 @@ class MeshRepositorySeedImportTest {
         assertEquals(1, repo.ledgerCalls)
         assertEquals("/ip4/10.0.0.1/tcp/9001", repo.captured[0].multiaddr)
         assertEquals("/ip4/10.0.0.2/tcp/9002", repo.captured[1].multiaddr)
+    }
+
+    @Test
+    fun `importing more than MAX_SEEDS_PER_IMPORT is bounded to 16`() {
+        val repo = freshRepo()
+        val addresses = (1..25).map { "/ip4/10.0.0.$it/tcp/9001" }
+        val count = repo.importSeedAddresses(addresses)
+        assertEquals(MeshRepository.MAX_SEEDS_PER_IMPORT, count)
+        assertEquals(MeshRepository.MAX_SEEDS_PER_IMPORT, repo.captured.size)
+        assertEquals("/ip4/10.0.0.1/tcp/9001", repo.captured.first().multiaddr)
+        assertEquals("/ip4/10.0.0.16/tcp/9001", repo.captured.last().multiaddr)
+    }
+
+    @Test
+    fun `uninitialized ledgerManager returns zero safely`() {
+        val dir = File(testRoot, "test-${System.nanoTime()}").apply { mkdirs() }
+        val repo = NullLedgerSeedRepo(fakeContext(dir))
+        val count = repo.importSeedAddresses(listOf("/ip4/10.0.0.1/tcp/9001"))
+        assertEquals(0, count)
     }
 }
