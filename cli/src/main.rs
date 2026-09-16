@@ -773,6 +773,25 @@ mod dial_scheduler_tests {
     }
 
     #[test]
+    fn auto_reply_ignores_machine_envelopes_and_empty_bodies() {
+        // The phone's periodic identity envelope: kind history_sync, empty text.
+        // Answering these is what produced the burst of courtesy replies for an
+        // operator who had sent nothing (2026-09-16).
+        let envelope =
+            "{\"schema\":\"scm.message.identity.v1\",\"kind\":\"history_sync\",\"text\":\"\"}";
+        assert!(!is_answerable_text("", Some("history_sync")));
+        assert!(!is_answerable_text(envelope, Some("history_sync")));
+        assert!(!is_answerable_text(envelope, None)); // envelope arrived undecoded
+        assert!(!is_answerable_text("   ", Some("text")));
+        assert!(!is_answerable_text("", None));
+        assert!(!is_answerable_text(AUTO_REPLY_ACK, None));
+
+        // A genuine chat body is answerable, wrapped or not.
+        assert!(is_answerable_text("are you there?", Some("text")));
+        assert!(is_answerable_text("are you there?", None));
+    }
+
+    #[test]
     fn auto_reply_body_defaults_to_generic_and_accepts_custom_text() {
         // Bare `--auto-reply` and `SCM_AUTO_REPLY=1` both arrive here as an
         // empty body, and must fall back to the generic acknowledgement.
@@ -1980,6 +1999,29 @@ const AUTO_REPLY_SEEN_CAPACITY: usize = 4096;
 /// what stops two responder nodes from answering each other forever, so it is
 /// applied even to operator-supplied text (and recognised rather than doubled if
 /// the operator included it).
+/// True when an incoming message carries a human chat body that a responder
+/// node may answer.
+///
+/// Machine traffic must never be answered. A phone broadcasts an identity
+/// envelope (`{"schema":"scm.message.identity.v1","kind":"history_sync",
+/// "text":""}`) about once a minute and its `text` field is EMPTY, so a guard
+/// that only rejects bodies already carrying the machine marker answered every
+/// envelope: the operator received a burst of courtesy replies having sent
+/// nothing (13 on 2026-09-16). The body must therefore be present, of a chat
+/// kind, and not the identity envelope itself.
+fn is_answerable_text(incoming: &str, envelope_kind: Option<&str>) -> bool {
+    if !matches!(envelope_kind, None | Some("text")) {
+        return false;
+    }
+    let body = incoming.trim();
+    if body.is_empty() || body.starts_with(AUTO_REPLY_PREFIX) {
+        return false;
+    }
+    // Belt and braces: an envelope that arrived without a decodable kind still
+    // carries its schema marker in the body text.
+    !(body.starts_with('{') && body.contains("scm.message.identity"))
+}
+
 fn resolve_auto_reply_body(custom: Option<&str>) -> String {
     match custom.map(str::trim) {
         None | Some("") => AUTO_REPLY_ACK.to_string(),
@@ -3007,14 +3049,28 @@ async fn cmd_start(
                                                     .unwrap_or_else(|| {
                                                         msg.text_content().unwrap_or_default()
                                                     });
-                                                if !should_send_auto_reply(
+                                                let envelope_kind = decoded_envelope
+                                                    .as_ref()
+                                                    .map(|d| d.kind.as_str());
+                                                if !is_answerable_text(
+                                                    &incoming,
+                                                    envelope_kind
+                                                ) {
+                                                    tracing::debug!(
+                                                        "auto_reply_skipped_machine_message in_reply_to={} from={} kind={:?} body_len={}",
+                                                        msg.id,
+                                                        sender_peer_id,
+                                                        envelope_kind,
+                                                        incoming.len()
+                                                    );
+                                                } else if !should_send_auto_reply(
                                                     &msg.id,
                                                     &incoming,
                                                     &mut auto_reply_seen_ids,
                                                     &mut auto_reply_seen_order,
                                                 ) {
                                                     tracing::debug!(
-                                                        "auto_reply_suppressed_duplicate_or_machine_message in_reply_to={} from={}",
+                                                        "auto_reply_suppressed_duplicate in_reply_to={} from={}",
                                                         msg.id,
                                                         sender_peer_id
                                                     );
