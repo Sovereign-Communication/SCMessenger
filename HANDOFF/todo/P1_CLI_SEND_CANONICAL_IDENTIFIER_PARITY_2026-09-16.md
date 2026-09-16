@@ -206,11 +206,31 @@ That test hit a node running a binary built BEFORE this change:
 - The node now runs PID 18124 on the binary built 11:19:39, which contains both
   the own-topic fix and the rate-limit fix (`grep -c` = 1 for each string).
 
-Live burst proof is still pending an inbound burst: the Pixel may not be driven
-for testing (see below), so it needs either the operator sending 2-3 messages in
-quick succession or a second node that can send. The check is: the node log must
-show ONE `auto_reply_ack_queued` followed by `auto_reply_suppressed_rate_limit`
-for every other human message inside the same minute.
+### Live proof (Windows node PID 18124, binary built 11:19:39, armed)
+
+Inbound chat was generated WITHOUT touching the Pixel, by sending through the
+cloud node's HTTP API (`POST http://18.234.62.247:9876/api/send`), which delivers
+to the Windows node as a real inbound chat message from peer `12D3KooWGvCWJN`.
+
+```
+21:28:03  auto_reply_ack_queued                 <- window consumed (one reply)
+21:28:04  auto_reply_suppressed_rate_limit
+21:28:08  auto_reply_suppressed_rate_limit
+21:28:10  auto_reply_suppressed_rate_limit
+21:28:12  auto_reply_suppressed_rate_limit
+21:28:25  auto_reply_suppressed_rate_limit      (cloud probe e6675d8d)
+21:28:33  auto_reply_suppressed_rate_limit      (burst probe 1)
+21:28:37  auto_reply_suppressed_rate_limit      (burst probe 2)
+21:28:41  auto_reply_suppressed_rate_limit      (burst probe 3)
+21:29:19  auto_reply_ack_queued                 <- window reopened (>60s)
+```
+
+Nine inbound human messages inside one minute produced exactly ONE reply; the
+window then reopened on its own at +76s, so the cap throttles without ever
+silencing the responder. Counts for the hour: 8 acks, 8 rate-limited, 0
+duplicates, 0 machine-skip lines attributed to this window (all 8 acks belong to
+the pre-restart uncapped run at 21:07-21:08, whose sibling `skipped` lines are in
+the previous hour's file).
 
 ## Device handling rule recorded (operator directive, 2026-09-16)
 
@@ -221,17 +241,28 @@ section 4 as a hard prohibition: no UI automation (`input text`/`input tap`), no
 interactions are exactly two: `adb install -r` of an APK, and passive log pulls
 (`adb logcat`, `run-as` reads of the app's own files).
 
-## Newly found defect, same canonical-identifier class: `/api/send` cannot send
+## Canonical-identifier exposure in the HTTP API send path (corrected)
 
-The local HTTP API has the identical bug this ticket fixed in the CLI
-(`cli/src/api_axum.rs:260-269`): it finds the contact, then does
-`contact.peer_id.parse::<libp2p::PeerId>()`. Contacts now store the canonical
-64-hex public key in `peer_id`, so the parse fails and the endpoint returns
-`400 Invalid peer ID` for every real contact - the API is the only programmatic
-send path for tests, so this is a real break, not cosmetic. Not fixed in this
-commit (not yet confirmed with a live request); it needs the same resolver the
-CLI now uses, and it is the reason a burst could not be injected from the cloud
-node for the rate-limit proof above.
+An earlier version of this note claimed `POST /api/send` returns `400 Invalid
+peer ID` for every real contact. **That claim was wrong and is withdrawn** - it
+was inferred from reading `cli/src/api_axum.rs:260-269` (find the contact, then
+`contact.peer_id.parse::<libp2p::PeerId>()`) plus the fact that some stores now
+hold the canonical 64-hex form. A live request settles it:
+
+```
+POST http://18.234.62.247:9876/api/send
+  {"recipient":"12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw","message":"..."}
+  -> {"success":true,"message_id":"e6675d8d-...","status":"accepted"}  HTTP 200
+```
+
+So the endpoint works when the contact's stored `peer_id` is the base58 form
+(this cloud node's contact for the Windows node is), and would fail for a
+contact stored as 64-hex (which `contact list` shows for at least the phone on
+the Windows node). The honest statement is therefore: **the API send path is
+form-dependent, not universally broken.** It is the same class as the CLI defect
+above and deserves the same resolver, but it has NOT been shown to fail, so it is
+not filed as a break. One test - send to a contact whose `peer_id` is hex - would
+settle it.
 
 ### Auto-reply findings from the same window (report only)
 
