@@ -111,15 +111,23 @@ COPY --from=builder /usr/src/scmessenger/target/release/stress-test /usr/local/b
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Create non-root user and data directories
+RUN groupadd -g 10001 scm && \
+    useradd -u 10001 -g scm -s /bin/bash -m scm && \
+    mkdir -p /home/scm/.config/scmessenger /data && \
+    chown -R scm:scm /home/scm /data
+
 # Environment variables
 ENV RUST_LOG=info
-ENV SCM_CONFIG_DIR=/root/.config/scmessenger
+ENV SCM_CONFIG_DIR=/home/scm/.config/scmessenger
 ENV SCM_DATA_DIR=/data
 ENV SCMESSENGER_DATA_DIR=/data
 ENV LISTEN_PORT=9000
 
 # Expose ports
 EXPOSE 9000 9001
+
+USER scm
 
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["scm", "start"]
