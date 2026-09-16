@@ -1,4 +1,4 @@
-﻿# SCMessenger Adversarial Shadow Audit: Pre-v0.4.0 / v0.5.0 Architecture & Security Review
+# SCMessenger Adversarial Shadow Audit: Pre-v0.4.0 / v0.5.0 Architecture & Security Review
 
 **Date:** 2026-09-16
 **Auditor Seat:** Shadow Adversarial Auditor (Impartial Orchestration)
@@ -117,13 +117,24 @@ gitGraph
    merge feat/v040-multi-transport-store-forward id: "v0.4.0 Tag Release"
 ```
 
-### Active Tracking PRs:
-- **[#297](https://github.com/Sovereign-Communication/SCMessenger/pull/297)**: `fix(cli): drain outbox by canonical hex and unify IronCore persistent outbox store (CLI-03, CORE-02)`
-- **[#296](https://github.com/Sovereign-Communication/SCMessenger/pull/296)**: `fix(core): verify sender pubkey in app delegate and subscribe WASM swarm to own topic (CRYPTO-01, TRN-03)`
-- **[#292](https://github.com/Sovereign-Communication/SCMessenger/pull/292)**: `fix(transport): decouple swarm event channel backpressure deadlock (TRN-01)`
-- **[#293](https://github.com/Sovereign-Communication/SCMessenger/pull/293)**: `fix(docker): restrict control API to localhost and drop root privileges (CLI-01)`
-- **[#294](https://github.com/Sovereign-Communication/SCMessenger/pull/294)**: `fix(ci): enforce fail-closed release signing gate on version tags (SEC-01)`
-- **[#295](https://github.com/Sovereign-Communication/SCMessenger/pull/295)**: `fix(android): buffer cold-start notifications and un-nest screen scaffolds (AND-01, AND-02)`
-- **[#291](https://github.com/Sovereign-Communication/SCMessenger/pull/291)**: `fix(android): cold-start notification gate — fail closed until hydrated`
-- **[#290](https://github.com/Sovereign-Communication/SCMessenger/pull/290)**: `fix(android): null-safe SubnetProbe hostAddress handling`
+### Active Tracking PRs & Implementation Status:
+- **[#297](https://github.com/Sovereign-Communication/SCMessenger/pull/297)** (`a9861f25`): `fix(cli): drain outbox by canonical hex and unify IronCore persistent outbox store (CLI-03, CORE-02)` — **Implemented & Pushed**
+- **[#296](https://github.com/Sovereign-Communication/SCMessenger/pull/296)** (`5f0bce67`): `fix(core): verify sender pubkey in app delegate and subscribe WASM swarm to own topic (CRYPTO-01, TRN-03)` — **Implemented & Pushed**
+- **[#295](https://github.com/Sovereign-Communication/SCMessenger/pull/295)** (`78d0a35a`): `fix(android): buffer cold-start notifications and un-nest screen scaffolds (AND-01, AND-02, AND-03)` — **Implemented & Pushed**
+- **[#294](https://github.com/Sovereign-Communication/SCMessenger/pull/294)** (`7251b459`): `fix(ci): enforce fail-closed release signing gate on version tags (SEC-01)` — **Implemented & Pushed**
+- **[#293](https://github.com/Sovereign-Communication/SCMessenger/pull/293)** (`27a261f4`): `fix(docker): restrict control API to localhost and drop root privileges (CLI-01)` — **Implemented & Pushed**
+- **[#292](https://github.com/Sovereign-Communication/SCMessenger/pull/292)** (`f5b3cf05`): `fix(transport): decouple swarm event channel backpressure deadlock (TRN-01)` — **Implemented & Pushed**
+- **[#291](https://github.com/Sovereign-Communication/SCMessenger/pull/291)**: `fix(android): cold-start notification gate — fail closed until hydrated` (reconciled and superseded by #295's buffer-and-replay)
+- **[#290](https://github.com/Sovereign-Communication/SCMessenger/pull/290)**: `fix(android): null-safe SubnetProbe hostAddress handling` (audited, review posted)
 - **[#156](https://github.com/Sovereign-Communication/SCMessenger/pull/156)**: `ci: mark Docker integration suite non-blocking for v0.4.0 tag` (Issue #155 evidence uploaded)
+
+### Concurrent Work-Ahead Audit Summary:
+Adversarial audits and review comments were posted to all active work-ahead PRs:
+- **[#289](https://github.com/Sovereign-Communication/SCMessenger/pull/289)**: Request changes on sign-bit clearing endianness inversion (`copy[31]` vs `copy[0]`), RFC 8032 non-canonical $x=0$, and `bod-dd336324`.
+- **[#290](https://github.com/Sovereign-Communication/SCMessenger/pull/290)**: Noted `octets.size` IndexOutOfBounds hazard and omitted port 9001 (restored in #295).
+- **[#291](https://github.com/Sovereign-Communication/SCMessenger/pull/291)**: Detailed cold-start unhydrated message loss race, resolved via PR #295 buffer-and-replay.
+- **[#298](https://github.com/Sovereign-Communication/SCMessenger/pull/298)**: Identified complete lockout for de-Googled ROMs (GrapheneOS/CalyxOS/F-Droid) lacking manual entry fallback.
+- **[#299](https://github.com/Sovereign-Communication/SCMessenger/pull/299)**: Identified unbounded JNI allocations from untrusted seed lists and silent 0-seed logging on uninitialized ledger.
+- **[#300](https://github.com/Sovereign-Communication/SCMessenger/pull/300)**: Identified thread leak on `ExecutorService`, synchronous accept loop DOS, unbounded `readLine()` memory exhaustion, and rejection of `HEAD`/query strings.
+- **[#301](https://github.com/Sovereign-Communication/SCMessenger/pull/301)**: Identified `String` passing breaking AirDrop/rich link previews and iPad popover presentation crash risk.
+- **[#302](https://github.com/Sovereign-Communication/SCMessenger/pull/302)**: Identified breaking custom URI scheme `scmessenger://` preventing stock camera sideloading for uninitiated peers, and unpinned SHA-256 emitting `null`.

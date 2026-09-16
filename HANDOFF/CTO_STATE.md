@@ -3142,3 +3142,57 @@ before merging anything.
 session's uncommitted work. `cargo clean --target <triple>` wiped 44.7 GB. The
 preflight hook now blocks both and prints the working form — if it fires, read
 it; it is there because someone already paid for that lesson.
+
+---
+
+## 2026-09-16 — Pre-v0.4.0 Shadow Audit, Remediation Merge Train & Work-Ahead Coordination
+
+Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main` 1e2fb747.
+
+### 1. Pre-v0.4.0 Adversarial Shadow Audit Completed
+- Master Audit Report committed: `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`.
+- Issue #155 Evidence Uploaded: Comment posted on [PR #156 (Comment 5705455726)](https://github.com/Sovereign-Communication/SCMessenger/pull/156#issuecomment-5705455726).
+- Six targeted P1 remediation PRs created, fully implemented, and pushed:
+  - **PR #292** (`fix/swarm-channel-backpressure-deadlock`, commit `f5b3cf05`): TRN-01 resolved. Decoupled `register_identity_with_relay`, `share_ledger`, `flush_outbox_for_peer`, and delivery ACKs onto `tokio::spawn` in `cmd_start` and `cmd_relay`; widened swarm event channels to 1024 slots. Clears the cyclic deadlock causing the recurring Windows silent wedge.
+  - **PR #293** (`fix/docker-control-api-security`, commit `27a261f4`): CLI-01 resolved. Restricted HTTP API bind default to `127.0.0.1:9876` (`SCM_HTTP_BIND` override retained); added non-root `USER scm` (UID 10001) in `docker/Dockerfile`.
+  - **PR #294** (`fix/release-signing-gate-fail-closed`, commit `7251b459`): SEC-01 resolved. Added fail-closed release signing assertion (`startsWith(github.ref, 'refs/tags/v') && env.HAS_KEYSTORE != 'true'`); blocked debug APK publishing via negative glob.
+  - **PR #295** (`fix/android-coldstart-and-scaffold-remediation`, commit `78d0a35a`): AND-01, AND-02, AND-03 resolved. Implemented startup cold-boot notification buffer and replay queue in `NotificationHelper.kt` (with unit tests in `NotificationHelperGateTest.kt`); de-nested child `Scaffold` composables in `PeerListScreen.kt` and `TopologyScreen.kt` into `Column(Modifier.fillMaxSize())` to resolve SlotTable corruption; restored port `9001` to `SubnetProbe.RAW_TCP_PORTS`; removed crash-swallowing logic in `MeshApplication.kt` to prevent zombie ANR states. Reconciles and supersedes #291.
+  - **PR #296** (`fix/core-identity-spoof-and-wasm-topic-parity`, commit `5f0bce67`): CRYPTO-01 & TRN-03 resolved. Passed verified `canonical_peer_id` and authenticated `sender_public_key_hex` to `delegate.on_message_received`; subscribed WASM swarm to own peer topic `/scmessenger/peer/<own_hex>/v1` guarded by `is_ghost_peer_topic`.
+  - **PR #297** (`fix/cli-outbox-canonical-drain-and-sled-unification`, commit `a9861f25`): CLI-03 & CORE-02 resolved. Fixed outbox drain by resolving both Base58 and canonical 64-hex keys; unified `IronCore::with_storage` with persistent Sled storage backend across daemon restarts.
+
+### 2. Clearance of Previous Draft Holds
+- Earlier 7-day merge plan notes (PR #303) placed a HOLD on #292 and #295 when they were initial docs-only tracking tickets.
+- **HOLD IS CLEARED**: Both #292 and #295 have full, tested code implementations pushed.
+  - PR #292 is not docs-only; it contains the complete async decoupling fix for TRN-01.
+  - PR #295 resolves the semantic question with #291 by implementing cold-start buffering with replay upon DataStore hydration, satisfying both fail-closed security and zero message loss.
+
+### 3. Concurrent Work-Ahead Audits & Review Comments Posted
+Adversarial security audits were conducted via subagents for all concurrent work-ahead PRs, with actionable review comments posted to GitHub:
+- **PR #289** (`p1/curve-uniffi-kotlin-20260914`): Commented on critical index-inversion bug in sign-bit clearing (`copy[31]` vs `copy[0]`), non-canonical $x=0$ omissions, and Board resolution `bod-dd336324`.
+- **PR #290** (`fix/subnetprobe-hostaddress-null-20260915`): Commented on octets IndexOutOfBounds hazard and port scanning gaps.
+- **PR #291** (`workahead/notif-cold-start-gate`): Commented on unhydrated notification permanent loss race (resolved by PR #295's buffer-and-replay).
+- **PR #298** (`workahead/android-joinmesh-gms-gate`): Commented on total UX lockout on de-Googled ROMs (GrapheneOS/CalyxOS/F-Droid) due to missing manual paste fallback.
+- **PR #299** (`workahead/android-persist-join-seeds`): Commented on unbounded JNI FFI allocation risk from untrusted join bundles and uninitialized `ledgerManager` silent logging.
+- **PR #300** (`workahead/android-apk-host-hardening`): Commented on leaked `ExecutorService`, single-client accept loop DOS, unbounded `readLine()` memory exhaustion, and rejection of `HEAD`/query strings breaking `DownloadManager`.
+- **PR #301** (`workahead/ios-apk-link-share`): Commented on passing `String` breaking AirDrop/rich link previews and iPad popover crash risk (recommended native `ShareLink`).
+- **PR #302** (`workahead/android-install-qr-payload`): Commented on critical breaking change migrating to `scmessenger://` scheme which breaks off-grid sideload onboarding for new users scanning with stock cameras, and unpinned SHA-256 emitting `null`.
+
+### 4. Verified Merge Recommendation & Phase Order
+1. **Phase 1: Merge into `feat/v040-multi-transport-store-forward` (carrier PR #288)**
+   1. `PR #290` (SubnetProbe null-safety)
+   2. `PR #294` (Release signing fail-closed gate)
+   3. `PR #293` (Docker localhost control API & non-root UID)
+   4. `PR #292` (Swarm backpressure deadlock decoupling & 1024-slot channels)
+   5. `PR #295` (Cold-start notification buffer & replay, scaffold de-nesting, port 9001)
+   6. `PR #296` (Verified delegate identity & WASM own-topic parity)
+   7. `PR #297` (Canonical 64-hex outbox drain & Sled storage unification)
+2. **Phase 2: Refresh & Merge Carrier PR #288 into `main`**
+   - Rerun all pending checks on PR #288; verify mergeability; merge to `main`.
+3. **Phase 3: Main Stack Rollout (Post-#288)**
+   - `PR #283` (V1.0.0 docs readiness audit -> `main`)
+   - `PR #289` (Fix sign-bit index `copy[0]` + vector tests before merging)
+   - `PR #298` (Add manual paste fallback for de-Googled devices before merging)
+   - `PR #299` (Add `take(16)` bounding and uninitialized ledger check before merging)
+   - `PR #300` (Add executor shutdown, concurrent accept worker, and `HEAD` support before merging)
+   - `PR #302` (Revert to HTTP URL to keep stock camera sideloading working before merging)
+   - `PR #301` (Adopt SwiftUI `ShareLink` with native `URL` before merging)
