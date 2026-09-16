@@ -21,9 +21,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.scmessenger.android.BuildConfig
 import com.scmessenger.android.R
 import com.scmessenger.android.ui.components.QrCodeImage
 import com.scmessenger.android.utils.ApkShareManager
+import com.scmessenger.android.utils.buildInstallPayloadUri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -41,6 +43,19 @@ fun ApkShareDialog(
     var downloadUrl by remember { mutableStateOf<String?>(null) }
     var isServerRunning by remember { mutableStateOf(false) }
     var secondsRemaining by remember { mutableLongStateOf(900L) } // 15 mins default
+
+    // Combined install payload (emit side): single-scan apk URL + version
+    // identity. SHA-256 slot stays null until the hash source lands.
+    val installPayloadUri = remember(downloadUrl) {
+        downloadUrl?.let {
+            buildInstallPayloadUri(
+                apkUrl = it,
+                versionName = BuildConfig.VERSION_NAME,
+                versionCode = BuildConfig.VERSION_CODE,
+                sha256Hex = null
+            )
+        }
+    }
 
     LaunchedEffect(Unit) {
         ApkShareManager.startLocalApkHost(context, durationMinutes = 15) { url ->
@@ -121,7 +136,7 @@ fun ApkShareDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                if (downloadUrl != null) {
+                if (installPayloadUri != null) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.padding(8.dp)
@@ -131,7 +146,7 @@ fun ApkShareDialog(
                             modifier = Modifier.padding(16.dp)
                         ) {
                             QrCodeImage(
-                                data = downloadUrl!!,
+                                data = installPayloadUri,
                                 size = 200,
                                 contentDescription = stringResource(R.string.apk_share_qr_content_description)
                             )
@@ -139,7 +154,7 @@ fun ApkShareDialog(
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
-                                text = downloadUrl!!,
+                                text = installPayloadUri,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 textAlign = TextAlign.Center
@@ -150,7 +165,7 @@ fun ApkShareDialog(
                             OutlinedButton(
                                 onClick = {
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("Download URL", downloadUrl)
+                                    val clip = ClipData.newPlainText("Download URL", installPayloadUri)
                                     clipboard.setPrimaryClip(clip)
                                     Toast.makeText(context, context.getString(R.string.apk_share_toast_url_copied), Toast.LENGTH_SHORT).show()
                                 }
