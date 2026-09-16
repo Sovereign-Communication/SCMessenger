@@ -110,14 +110,37 @@ Auto-reply 1:1 behaviour re-confirmed live on the same run: 6 inbound, **3
 auto-replies, exactly one for each genuine chat message** (`9ea92977`,
 `7eaba29b`, `b7b1fcce`) and **zero** for the three machine envelopes.
 
+Phone side captured on the same device, same window (Pixel 6a
+`26261JEGR01896`, APK with identity `f83ab163` / `12D3KooWD776`):
+
+```
+10:31:40.621  [RECEIPT-RX] Received from core: msg=9ea92977-... status=Delivered
+10:31:40.651  [RECEIPT-RX] Emitted MessageEvent.Delivered: msg=9ea92977-...
+10:31:40.699  [RECEIPT-RX] Received from core: msg=7eaba29b-... status=Delivered
+10:31:41.315  delivery_state msg=9ea92977-... state=delivered
+10:31:41.327  delivery_state msg=7eaba29b-... state=delivered
+10:31:41.286  delivery_state msg=b7b1fcce-... state=delivered
+```
+
+`files/pending_outbox.json` on the device now reads `[]` - the stuck
+messages drained. The return path is proven in the same second: the phone
+received the node's own queued messages as real inbound traffic
+(`delivery_attempt msg=81c846c1-... medium=core phase=rx outcome=received
+detail=sender=30d0fa678c2...`, then a notification posted for that peer).
+
 ## Still open (tracked, not silently dropped)
 
-1. **Cloud-node parity.** The AWS node runs image `sha-31776b4`, built before
-   this fix, so it still carries the unfixed guard: a message addressed to the
-   cloud node's own topic is dropped the same way, and the cloud node's
+1. **Cloud-node parity.** The AWS node runs image `testbotz/scmessenger:sha-31776b4`
+   (up 44h), built before this fix: `docker exec ... strings
+   /usr/local/bin/scmessenger-cli | grep -c "Subscribed to own peer topic"`
+   returns **0**, so it still carries the unfixed guard: a message addressed to
+   the cloud node's own topic is dropped the same way, and the cloud node's
    subscriptions to peers' topics are gated by the same impossible ledger test.
-   The cloud node must be rebuilt and redeployed from a commit containing this
-   fix before cloud-addressed messaging can be called proven.
+   Operator approved the deploy path; `docker-publish.yml` was dispatched on
+   this branch (run 35147959061, head `6acaa2317`) to publish
+   `testbotz/scmessenger:sha-6acaa23`. The container swap preserving `/data`
+   is the remaining step; until it lands, cloud-addressed messaging is NOT
+   proven.
 2. **The guard still skips live-but-unproven peers.** On this same run the
    Windows node skipped `/scmessenger/peer/69805e17.../v1` - the AWS node's
    topic - because AWS has no `success_count > 0` entry inside
@@ -138,11 +161,16 @@ auto-replies, exactly one for each genuine chat message** (`9ea92977`,
    receipt, which is the correct contract, so no behaviour change is filed
    here - but an operator-visible "no subscriber for recipient topic" warning
    on the sending side would have surfaced this in minutes instead of hours.
-5. **Phone-side confirmation.** The Pixel was off wireless debugging during
-   verification, so `state=delivered` on the device was not captured this pass.
-   Node-side evidence is complete (inbound + ACK sent); capturing
-   `[RECEIPT-RX]`/`state=delivered` on the phone remains the last unlanded
-   confirmation.
+5. ~~**Phone-side confirmation.**~~ LANDED: `[RECEIPT-RX]` and
+   `state=delivered` were captured on the device for all three operator
+   messages, and the pending outbox drained to `[]`. See the Verification
+   section above.
+6. **A transient false alarm worth recording.** `adb devices` returned empty
+   mid-session because this lane ran `adb kill-server`, which drops the
+   wireless-debugging (TLS) connection; the device re-registered over mDNS
+   afterwards. Do not kill the adb server while the device is connected only
+   over wireless debugging - it costs a reconnect and looks like a missing
+   device.
 
 ## Scope note
 
