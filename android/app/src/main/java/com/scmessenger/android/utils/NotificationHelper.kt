@@ -90,6 +90,22 @@ object NotificationHelper {
     private val messageGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
     private val requestGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
 
+    private data class PendingMessageNotification(
+        val context: Context,
+        val peerId: String,
+        val messageId: String,
+        val content: String,
+        val nickname: String?,
+        val timestamp: Long,
+        val isKnownContact: Boolean,
+        val hasExistingConversation: Boolean,
+        val appInForeground: Boolean,
+        val activeConversationId: String?,
+        val explicitDmRequest: Boolean?
+    )
+
+    private val startupNotificationQueue = mutableListOf<PendingMessageNotification>()
+
     // Notification settings (defaults per WS14 spec).
     // Null = not yet hydrated from DataStore; any message arriving before
     // hydration completes must be treated as disabled to avoid the cold-start
@@ -258,9 +274,36 @@ object NotificationHelper {
         Timber.i("Processing notification - peerId=$peerId, messageId=$messageId, isKnownContact=$isKnownContact, hasExistingConversation=$hasExistingConversation, explicitDmRequest=$explicitDmRequest, appInForeground=$appInForeground")
 
         // Check global notifications enabled. Null means not yet hydrated
-        // from DataStore — treat as disabled (fail closed) rather than the
-        // old default-true which let one cold-start message through.
-        if (notificationsEnabled == false || notificationsEnabled == null) {
+        // from DataStore — buffer inbound messages until hydrated rather than
+        // permanently dropping them.
+        if (notificationsEnabled == null) {
+            trackNotificationEvent("suppressed_settings")
+            synchronized(startupNotificationQueue) {
+                if (startupNotificationQueue.size < 50) {
+                    startupNotificationQueue.add(
+                        PendingMessageNotification(
+                            context = context.applicationContext,
+                            peerId = peerId,
+                            messageId = messageId,
+                            content = content,
+                            nickname = nickname,
+                            timestamp = timestamp,
+                            isKnownContact = isKnownContact,
+                            hasExistingConversation = hasExistingConversation,
+                            appInForeground = appInForeground,
+                            activeConversationId = activeConversationId,
+                            explicitDmRequest = explicitDmRequest
+                        )
+                    )
+                    Timber.i("Queued notification for peerId=$peerId during cold-start hydration (queue size=${startupNotificationQueue.size})")
+                } else {
+                    Timber.w("Cold-start notification queue full (50), dropping message for peerId=$peerId")
+                }
+            }
+            return
+        }
+
+        if (notificationsEnabled == false) {
             trackNotificationEvent("suppressed_settings")
             Timber.w("Notifications disabled (gate=$notificationsEnabled), skipping notification for peerId=$peerId")
             return
@@ -632,13 +675,44 @@ object NotificationHelper {
         sound: Boolean? = null,
         badge: Boolean? = null
     ) {
-        enabled?.let { notificationsEnabled = it }
         dmEnabled?.let { notifyDmEnabled = it }
         dmRequestEnabled?.let { notifyDmRequestEnabled = it }
         dmInForeground?.let { notifyDmInForeground = it }
         dmRequestInForeground?.let { notifyDmRequestInForeground = it }
         sound?.let { soundEnabled = it }
         badge?.let { badgeEnabled = it }
+
+        enabled?.let { newEnabled ->
+            val wasUninitialized = (notificationsEnabled == null)
+            notificationsEnabled = newEnabled
+            if (wasUninitialized) {
+                val pendingToReplay = synchronized(startupNotificationQueue) {
+                    val list = startupNotificationQueue.toList()
+                    startupNotificationQueue.clear()
+                    list
+                }
+                if (newEnabled) {
+                    Timber.i("Replaying ${pendingToReplay.size} cold-start notifications after DataStore hydration")
+                    for (pending in pendingToReplay) {
+                        showMessageNotification(
+                            context = pending.context,
+                            peerId = pending.peerId,
+                            messageId = pending.messageId,
+                            content = pending.content,
+                            nickname = pending.nickname,
+                            timestamp = pending.timestamp,
+                            isKnownContact = pending.isKnownContact,
+                            hasExistingConversation = pending.hasExistingConversation,
+                            appInForeground = pending.appInForeground,
+                            activeConversationId = pending.activeConversationId,
+                            explicitDmRequest = pending.explicitDmRequest
+                        )
+                    }
+                } else {
+                    Timber.i("Discarded ${pendingToReplay.size} cold-start notifications because notifications are disabled")
+                }
+            }
+        }
         Timber.d("Notification settings updated")
     }
 
@@ -667,6 +741,9 @@ object NotificationHelper {
      */
     fun resetNotificationStats() {
         notificationStats.keys.forEach { notificationStats[it] = 0 }
+        synchronized(startupNotificationQueue) {
+            startupNotificationQueue.clear()
+        }
         Timber.d("Notification statistics reset")
     }
 

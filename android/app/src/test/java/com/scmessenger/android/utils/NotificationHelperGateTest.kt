@@ -208,6 +208,34 @@ class NotificationHelperGateTest {
         assertEquals(true, NotificationHelper.shouldPostGroupSummary(true, true))
     }
 
+    @Test
+    fun `unhydrated gate buffers message and replays when hydrated ON`() {
+        NotificationHelper.notificationsEnabled = null
+        showMessage()
+
+        assertEquals("unhydrated gate must record a settings suppression", 1, stat("suppressed_settings"))
+        assertEquals("message must not be posted as DM yet", 0, stat("dm"))
+
+        // Hydration finishes with notifications enabled:
+        NotificationHelper.updateSettings(enabled = true)
+
+        assertEquals("buffered message must replay upon hydration", 1, stat("dm"))
+    }
+
+    @Test
+    fun `unhydrated gate buffers message and discards when hydrated OFF`() {
+        NotificationHelper.notificationsEnabled = null
+        showMessage()
+
+        assertEquals("unhydrated gate must record a settings suppression", 1, stat("suppressed_settings"))
+        assertEquals("message must not be posted as DM yet", 0, stat("dm"))
+
+        // Hydration finishes with notifications disabled:
+        NotificationHelper.updateSettings(enabled = false)
+
+        assertEquals("buffered message must not be replayed when hydration is disabled", 0, stat("dm"))
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /** Known contact with an existing conversation classifies as a DM, not a request. */
