@@ -393,7 +393,11 @@ struct SettingsView: View {
     }
 
     private func shareAndroidAppLink() {
-        androidApkShareItems = [Self.releaseApkURL]
+        if let url = URL(string: Self.releaseApkURL) {
+            androidApkShareItems = [url]
+        } else {
+            androidApkShareItems = [Self.releaseApkURL]
+        }
         showingAndroidApkShare = true
     }
 
