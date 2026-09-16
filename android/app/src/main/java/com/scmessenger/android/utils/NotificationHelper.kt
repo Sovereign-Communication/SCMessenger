@@ -79,8 +79,15 @@ object NotificationHelper {
     private val messageGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
     private val requestGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
 
-    // Notification settings (defaults per WS14 spec)
-    var notificationsEnabled: Boolean = true
+    // Notification settings (defaults per WS14 spec).
+    // Null = not yet hydrated from DataStore; any message arriving before
+    // hydration completes must be treated as disabled to avoid the cold-start
+    // race where a message delivered during service startup slips through as
+    // true before the OFF setting is read. hydrateNotificationGates() fills
+    // this from PreferencesRepository.notificationsEnabled, and coil will keep
+    // it live for the lifetime of the service process.
+    @Volatile
+    var notificationsEnabled: Boolean? = null
     var notifyDmEnabled: Boolean = true
     var notifyDmRequestEnabled: Boolean = true
     var notifyDmInForeground: Boolean = false
@@ -239,10 +246,12 @@ object NotificationHelper {
         // Log notification attempt with classification details
         Timber.i("Processing notification - peerId=$peerId, messageId=$messageId, isKnownContact=$isKnownContact, hasExistingConversation=$hasExistingConversation, explicitDmRequest=$explicitDmRequest, appInForeground=$appInForeground")
 
-        // Check global notifications enabled
-        if (!notificationsEnabled) {
+        // Check global notifications enabled. Null means not yet hydrated
+        // from DataStore — treat as disabled (fail closed) rather than the
+        // old default-true which let one cold-start message through.
+        if (notificationsEnabled == false || notificationsEnabled == null) {
             trackNotificationEvent("suppressed_settings")
-            Timber.w("Notifications disabled globally, skipping notification for peerId=$peerId")
+            Timber.w("Notifications disabled (gate=$notificationsEnabled), skipping notification for peerId=$peerId")
             return
         }
 
@@ -535,9 +544,11 @@ object NotificationHelper {
         transport: String
     ) {
         // Gate: honor the global notifications toggle (was DND-only).
-        if (!notificationsEnabled) {
+        // Fail closed when not yet hydrated (null) — same rationale as
+        // showMessageNotification.
+        if (notificationsEnabled == false || notificationsEnabled == null) {
             trackNotificationEvent("suppressed_settings")
-            Timber.d("Notifications disabled globally, skipping peer-discovered for peerId=$peerId")
+            Timber.d("Notifications disabled (gate=$notificationsEnabled), skipping peer-discovered for peerId=$peerId")
             return
         }
         if (isDndEnabled(context)) return
