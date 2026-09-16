@@ -232,12 +232,90 @@ node goes down until something restarts it - options (a)/(b)/(c) above are
 still the operator's call, and the underlying stall in the swarm/event loop is
 still unfixed and rule-8 gated.
 
-### Status
+## Update 2026-09-16T05:45Z: node recovered, stuck message DELIVERED, supervised restart landed
 
-- Detection: FIXED and CI-gated (see update above).
-- Recovery policy: OPEN, operator ruling required (a/b/c above).
-- v0.4.0 tag: this ticket must NOT be closed. The "bounded and observable
-  failure mode" claim made at 19:15Z on 2026-09-15 does not hold yet: the
-  failure mode is now detectable but still silent in the field until a restart
-  policy exists.
-- Windows node requires a manual restart to serve the stuck Pixel message.
+Recovery executed on the Windows host (operator directed). Evidence below is
+from commands run this session.
+
+**Before (05:25:44Z).** Node PID 1032, up since 09-15 08:46:45 local, listening
+on 80/443/8080/9002/9090 with `/health` = healthy, but the last operational log
+line was 03:19:17.606293Z - 2h06m of silence. The 05 hour file held exactly two
+lines, both v2 watchdog warnings (05:08:47.293488Z, 05:19:47.293010Z).
+
+**Deploy.** Stopped the node (ports released), then
+`cargo build --release -p scmessenger-cli` (6m06s). Note the ordering: a running
+node holds the .exe lock, so cargo fails with `Access is denied` until it is
+stopped. Relaunched through the new supervisor at 05:34:03Z (node PID 17768).
+
+**The stuck message `cf84b8ab-60ba-4614-903f-6de0627637e8` - delivered.**
+- Node side within ~30s of the node returning: five
+  `Sending delivery ACK for cf84b8ab-... to 12D3KooWKT1e1PU7p3...` lines from
+  05:32:53.706895Z to 05:32:57.692755Z, each paired with
+  `[OK] Message delivered successfully to 12D3KooWKT1e1PU7p3... (14-50ms)`.
+- Phone side at 19:33:03.634 local (05:33:03Z), 38s after the ACKs:
+  `[RECEIPT-RX] Received from core: msg=cf84b8ab-... status=Delivered`,
+  `History lookup: found=true direction=SENT`, then
+  `delivery_state msg=cf84b8ab-... state=delivered
+  detail=delivery_receipt_duplicate_status=delivered`.
+  The five ACKs were deduped correctly (`[RECEIPT-RX] DUPLICATE: Already
+  delivered and already processed receipt`), so the duplicates are noise, not a
+  second delivery.
+- Outbox drained: `files/pending_outbox.json` is now `[]`; it held exactly this
+  one entry, at attempt=23 with `all_transports_failed`.
+- Mesh reformed in both directions: the node connected to the phone
+  (/ip4/192.168.0.111/tcp/443) and to AWS (18.234.62.247:9001) at 05:34:06Z;
+  AWS logged `Relay circuit reservation ACCEPTED via 12D3KooWD6vZQ...` at
+  05:35:06Z and received fresh phone messages (`inbox_receive` 4ab6b3fa at
+  05:36:06Z, dbd6a2f3 at 05:37:18Z).
+
+**Fixed watchdog on the live node, 05:34:03Z -> 05:43:42Z.** 320 log lines;
+custody-audit heartbeat every 60s and growing (12283 -> 12292);
+`log_silence` lines since restart: 0; `logs/watchdog/` diagnostics directory:
+does not exist (it is created only when a silence reading occurs); `/health`
+healthy. The fixed watchdog neither exits nor fabricates silence on a node that
+is working.
+
+### Availability gap closed (option (a), minimal form)
+
+`scripts/run_node_supervised.ps1` - bounded restart wrapper, no service
+framework, no install, no elevation. Restarts the node on NON-ZERO exit with
+exponential backoff (5s, 10s, ... capped at 60s); gives up with a `[FAIL]` line
+after 5 restarts inside 60 minutes; resets the budget when a child ran >= 10
+minutes, so a wedge hours into a healthy run is not a crash loop; treats exit 0
+as a clean stop and does not restart; refuses to double-start while a
+scmessenger-cli process is alive. `scripts/stop_node.ps1` is the matching
+one-command stop. Supervisor log: `tmp/node-supervisor.log`.
+
+Trade-off, plainly: it supervises only while its own wrapper process lives, so a
+logoff or reboot ends supervision, and it is NOT release-grade supervision for
+the always-on/cloud role - a Windows service or a Task Scheduler entry with a
+restart policy is still the right answer there. What it deliberately does not
+do: recover an in-process stall any more cheaply than a full node restart, or
+supervise the supervisor itself.
+
+Two defects in my own first wrapper revision, both found live rather than
+theorised, are worth recording: `Start-Process -PassThru` returned an EMPTY
+`ExitCode` on this host, which the wrapper read as failure and turned into bogus
+restarts (fixed with the call operator + `$LASTEXITCODE`); and a stale node
+holding the ports makes every launch fail instantly, which is
+indistinguishable from a crash loop without a guard (hence the double-start
+check).
+
+### Status (updated)
+
+- Detection: FIXED, CI-gated, and verified on the live node.
+- Recovery: option (a) implemented in minimal form and now in use for this node.
+  Whether to promote it to Task Scheduler/a service for the always-on role is
+  still the operator's call.
+- The original pending/stored defect: RESOLVED for this message, and root-caused
+  to the node wedge - not to custody correctness and not to the cellular path.
+- Windows node is up and supervised as of 05:34:03Z; it needs operator action
+  only if the wrapper process itself dies.
+- Separate observation, not scored as a defect: on startup the node logs
+  `GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic:
+  /scmessenger/peer/30d0fa678c218b.../v1` - the recipient identity of this
+  message is treated as a ghost for auto-subscribe purposes. Delivery completed
+  anyway; recorded for follow-up.
+- Still open, and different from detection: the underlying stall in the swarm
+  event loop (`core/src/transport/swarm`, rule-8 gated) is unfixed, so a wedge
+  can still occur. It is now detected and restarted instead of silent.
