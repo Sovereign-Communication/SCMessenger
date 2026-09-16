@@ -40,7 +40,7 @@ use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Register this node's identity (device_id + seniority) with a relay peer so
 /// custody can accept store-and-forward requests *to* this node.
@@ -755,6 +755,67 @@ mod dial_scheduler_tests {
             "a different message",
             &mut seen_ids,
             &mut seen_order
+        ));
+    }
+
+    /// AUTO-REPLY-RATE-001: 1:1 per message, but never more than one
+    /// acknowledgement per minute node-wide, so a burst of distinct messages
+    /// (or a peer replaying traffic with fresh ids) cannot make an unattended
+    /// node spam the operator.
+    #[test]
+    fn auto_reply_is_capped_at_one_per_minute() {
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+        let mut last_sent_at: Option<Instant> = None;
+        let t0 = Instant::now();
+
+        // No reply yet sent: nothing is rate limited.
+        assert!(!auto_reply_rate_limited(last_sent_at, t0));
+
+        // A five-message burst inside one second, evaluated in the caller's
+        // gate order (rate limit first, dedup second): exactly one reply.
+        let mut answered = 0;
+        for (idx, id) in ["burst-1", "burst-2", "burst-3", "burst-4", "burst-5"]
+            .iter()
+            .enumerate()
+        {
+            let now = t0 + Duration::from_millis(idx as u64 * 200);
+            if !auto_reply_rate_limited(last_sent_at, now)
+                && should_send_auto_reply(id, "hello there", &mut seen_ids, &mut seen_order)
+            {
+                last_sent_at = Some(now);
+                answered += 1;
+            }
+        }
+        assert_eq!(answered, 1, "a burst must not produce one reply per message");
+
+        // The window is exactly one minute: still shut one second short,
+        // open again at the boundary.
+        assert!(auto_reply_rate_limited(last_sent_at, t0 + Duration::from_secs(59)));
+        assert!(!auto_reply_rate_limited(last_sent_at, t0 + Duration::from_secs(60)));
+
+        // A distinct message can be answered once the window reopens...
+        let reopened = t0 + Duration::from_secs(61);
+        assert!(!auto_reply_rate_limited(last_sent_at, reopened));
+        assert!(should_send_auto_reply(
+            "burst-9",
+            "hello there",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        last_sent_at = Some(reopened);
+
+        // ...but a redelivery of that same message is still a duplicate, and
+        // the window stays shut for the next minute regardless of message id.
+        assert!(!should_send_auto_reply(
+            "burst-9",
+            "hello there",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        assert!(auto_reply_rate_limited(
+            last_sent_at,
+            reopened + Duration::from_secs(30)
         ));
     }
 
@@ -1991,6 +2052,13 @@ const AUTO_REPLY_PREFIX: &str = "[auto-reply] ";
 const AUTO_REPLY_ACK: &str =
     "[auto-reply] Thank you. Your message was received by this CLI; no further reply will be sent.";
 const AUTO_REPLY_SEEN_CAPACITY: usize = 4096;
+/// AUTO-REPLY-RATE-001: the responder answers a genuine chat message 1:1, but
+/// NEVER more than one acknowledgement per interval, node-wide. Without a cap a
+/// burst of distinct messages (or a peer replaying traffic with fresh ids) turns
+/// an unattended always-on node into a spammer pointed at the operator's phone.
+/// Suppressed messages are not deferred - the delivery receipt is the real
+/// signal that a message arrived; the acknowledgement is only a courtesy.
+const AUTO_REPLY_MIN_INTERVAL_SECS: u64 = 60;
 
 /// Resolve the acknowledgement body for auto-reply mode.
 ///
@@ -2027,6 +2095,15 @@ fn resolve_auto_reply_body(custom: Option<&str>) -> String {
         None | Some("") => AUTO_REPLY_ACK.to_string(),
         Some(text) if text.starts_with(AUTO_REPLY_PREFIX) => text.to_string(),
         Some(text) => format!("{}{}", AUTO_REPLY_PREFIX, text),
+    }
+}
+
+/// True when the responder must stay quiet because it acknowledged something
+/// less than `AUTO_REPLY_MIN_INTERVAL_SECS` ago.
+fn auto_reply_rate_limited(last_sent_at: Option<Instant>, now: Instant) -> bool {
+    match last_sent_at {
+        Some(last) => now.saturating_duration_since(last) < Duration::from_secs(AUTO_REPLY_MIN_INTERVAL_SECS),
+        None => false,
     }
 }
 
@@ -2579,6 +2656,8 @@ async fn cmd_start(
     // of an already-seen message remain covered for the lifetime of the node.
     let mut auto_reply_seen_ids = HashSet::new();
     let mut auto_reply_seen_order = VecDeque::new();
+    // When this responder last acknowledged anything, for the once-per-minute cap.
+    let mut auto_reply_last_sent_at: Option<Instant> = None;
 
     // Swarm liveness watchdog.
     //
@@ -3063,6 +3142,16 @@ async fn cmd_start(
                                                         envelope_kind,
                                                         incoming.len()
                                                     );
+                                                } else if auto_reply_rate_limited(
+                                                    auto_reply_last_sent_at,
+                                                    Instant::now(),
+                                                ) {
+                                                    tracing::info!(
+                                                        "auto_reply_suppressed_rate_limit in_reply_to={} from={} min_interval_secs={}",
+                                                        msg.id,
+                                                        sender_peer_id,
+                                                        AUTO_REPLY_MIN_INTERVAL_SECS
+                                                    );
                                                 } else if !should_send_auto_reply(
                                                     &msg.id,
                                                     &incoming,
@@ -3088,11 +3177,16 @@ async fn cmd_start(
                                                                 .send_message(sender_peer_id, prep.envelope_data, None, None)
                                                                 .await
                                                             {
-                                                                Ok(_) => tracing::info!(
+                                                                Ok(_) => {
+                                                                // Only a reply that was actually queued consumes
+                                                                // the once-per-minute window.
+                                                                auto_reply_last_sent_at = Some(Instant::now());
+                                                                tracing::info!(
                                                                     "auto_reply_ack_queued in_reply_to={} to={}",
                                                                     msg.id,
                                                                     sender_peer_id
-                                                                ),
+                                                                )
+                                                            }
                                                                 Err(e) => tracing::warn!(
                                                                     "auto_reply_ack_queue_failed in_reply_to={} to={}: {}",
                                                                     msg.id,

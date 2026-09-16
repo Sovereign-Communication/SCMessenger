@@ -161,6 +161,78 @@ first differential run was run against a stale `target/debug` binary
 the binary must be checked for the change (`grep -c
 "auto_reply_skipped_machine_message" <bin>`) before any run is credited.
 
+## Feature: auto-reply is capped at one acknowledgement per minute (operator directive)
+
+Operator, 2026-09-16: "auto reply 1:1 but with a max of 1x auto reply per minute,
+so it doesn't ever spam more than once per minute."
+
+Implemented as `AUTO_REPLY_MIN_INTERVAL_SECS = 60` plus a pure predicate
+`auto_reply_rate_limited(last_sent_at, now)`, evaluated in the responder's gate
+order BEFORE the per-message dedup check:
+
+```
+answerable text -> rate limit -> per-message dedup -> queue reply
+```
+
+Rate-limit first is deliberate. Because the message id is recorded only when a
+reply is actually queued, 1:1-per-message still holds exactly: a message can earn
+at most one acknowledgement ever, and the node as a whole emits at most one per
+minute. A suppressed message is NOT deferred, and only a reply that was really
+queued consumes the window (`auto_reply_last_sent_at` is set in the successful
+queue branch, not before the attempt).
+
+Suppressions are observable in the log as `auto_reply_suppressed_rate_limit`
+(separate from `auto_reply_suppressed_duplicate`), so "no reply" can always be
+told apart from "reply throttled".
+
+Unit proof: `cargo test --bin scmessenger-cli auto_reply` -> 6 passed, including
+the new `auto_reply_is_capped_at_one_per_minute` (five-message burst yields
+exactly one reply; window shut at 59s, open at 60s; a later distinct message is
+answerable; a redelivery of an answered message is still a duplicate).
+
+### Why the operator's Android test still saw uncapped replies (provenance)
+
+That test hit a node running a binary built BEFORE this change:
+
+- node PID 18024 started 10:31:36, binary `target/release/scmessenger-cli.exe`
+  built 10:31:25 - `grep -c auto_reply_suppressed_rate_limit` on that binary = 0.
+- Its log shows the uncapped behaviour the operator reported:
+  `21:07:53.606, 21:07:56.455, 21:07:57.990, 21:07:59.698, 21:08:01.699,
+  21:08:03.311, 21:08:04.738` - **seven `auto_reply_ack_queued` in 11 seconds**.
+- Note the first attempt to build this change failed with `Access is denied.
+  (os error 5)`: on Windows the running node holds the exe, so the link step
+  cannot replace it. Stop the node, rebuild, then start - a build that "ran"
+  while the node was up can silently leave the old binary in place.
+- The node now runs PID 18124 on the binary built 11:19:39, which contains both
+  the own-topic fix and the rate-limit fix (`grep -c` = 1 for each string).
+
+Live burst proof is still pending an inbound burst: the Pixel may not be driven
+for testing (see below), so it needs either the operator sending 2-3 messages in
+quick succession or a second node that can send. The check is: the node log must
+show ONE `auto_reply_ack_queued` followed by `auto_reply_suppressed_rate_limit`
+for every other human message inside the same minute.
+
+## Device handling rule recorded (operator directive, 2026-09-16)
+
+"NEVER EVER drive the pixel - that's a mandatory rule - only app deploy and
+passive log pull for SCMessenger logs." Recorded in `docs/rules/FREEBUFF.md`
+section 4 as a hard prohibition: no UI automation (`input text`/`input tap`), no
+`am start`/`am force-stop`, no reading state by provoking it. Permitted device
+interactions are exactly two: `adb install -r` of an APK, and passive log pulls
+(`adb logcat`, `run-as` reads of the app's own files).
+
+## Newly found defect, same canonical-identifier class: `/api/send` cannot send
+
+The local HTTP API has the identical bug this ticket fixed in the CLI
+(`cli/src/api_axum.rs:260-269`): it finds the contact, then does
+`contact.peer_id.parse::<libp2p::PeerId>()`. Contacts now store the canonical
+64-hex public key in `peer_id`, so the parse fails and the endpoint returns
+`400 Invalid peer ID` for every real contact - the API is the only programmatic
+send path for tests, so this is a real break, not cosmetic. Not fixed in this
+commit (not yet confirmed with a live request); it needs the same resolver the
+CLI now uses, and it is the reason a burst could not be injected from the cloud
+node for the rate-limit proof above.
+
 ### Auto-reply findings from the same window (report only)
 
 - Auto-reply messages are NOT written to local history: every delivery logs
