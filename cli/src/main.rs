@@ -2331,7 +2331,7 @@ async fn cmd_start(
     let (ui_broadcast, mut ui_cmd_rx) = server::start(ws_port, web_ctx.clone()).await?;
 
     let listen_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?;
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
 
     // Build discovery config from CLI config
     let discovery_config =
@@ -2857,16 +2857,18 @@ async fn cmd_start(
                                      // AUTO LEDGER EXCHANGE: Share our known peers with the new
                                      // connection. The payload is built inside the swarm from
                                      // `LedgerManager::exchange_response_entries`
-                                     if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                         tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
-                                     }
-
-                                     // OUTBOX FLUSH: Deliver any queued messages for this peer now
-                                     // that they are online.
+                                     let swarm_task = swarm_handle.clone();
+                                     let outbox_task = Arc::clone(&outbox_rx);
+                                     tokio::spawn(async move {
+                                         if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                             tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
+                                         }
+                                         if can_reach {
+                                             flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                         }
+                                     });
                                      if !can_reach {
                                          tracing::warn!("No compatible transport path to {}; deferring outbox flush", peer_id);
-                                     } else {
-                                         flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
                                      }
                                  }
                             }
@@ -2980,13 +2982,19 @@ async fn cmd_start(
                                         listen_addrs.iter().map(|a| a.to_string()).collect();
                                     l.record_identified_peer(&peer_id.to_string(), &advertised);
                                 }
-                                // Register with this peer so it can custody-store
-                                // messages for us (required for cell/AWS relay).
-                                register_identity_with_relay(&core_rx, &swarm_handle, peer_id).await;
-                                if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                    tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
-                                }
-                                flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
+                                // Decouple from event loop: spawn relay registration, ledger sharing,
+                                // and outbox flush onto a background task so event_rx is never blocked
+                                // while awaiting swarm reply channels.
+                                let core_task = Arc::clone(&core_rx);
+                                let swarm_task = swarm_handle.clone();
+                                let outbox_task = Arc::clone(&outbox_rx);
+                                tokio::spawn(async move {
+                                    register_identity_with_relay(&core_task, &swarm_task, peer_id).await;
+                                    if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                        tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
+                                    }
+                                    flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                });
                             }
 
                             // GOSSIPSUB: New topic discovered
@@ -3115,9 +3123,13 @@ async fn cmd_start(
                                                             // the node's default INFO level and a lost ACK is
                                                             // indistinguishable from an unsent one.
                                                             tracing::info!("Sending delivery ACK for {} to {}", msg.id, sender_peer_id);
-                                                            if let Err(e) = swarm_handle.send_message(sender_peer_id, ack_bytes, None, None).await {
-                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, sender_peer_id, e);
-                                                            }
+                                                            let swarm_task = swarm_handle.clone();
+                                                            let msg_id = msg.id.clone();
+                                                            tokio::spawn(async move {
+                                                                if let Err(e) = swarm_task.send_message(sender_peer_id, ack_bytes, None, None).await {
+                                                                    tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, sender_peer_id, e);
+                                                                }
+                                                            });
                                                         }
                                                         Err(e) => {
                                                             tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
@@ -3903,7 +3915,7 @@ async fn cmd_relay(
     // Start swarm
     let listen_multiaddr: libp2p::Multiaddr =
         listen_addr.parse().context("Invalid listen multiaddr")?;
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
 
     let discovery_config =
         scmessenger_core::transport::DiscoveryConfig::new(if config.enable_mdns {
@@ -4161,15 +4173,18 @@ async fn cmd_relay(
 
                             // Share ledger with new peer. Payload built inside the swarm
                             // from `exchange_response_entries`.
-                            if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
-                            }
-
-                            // Flush outbox for this peer (only if transport-reachable)
+                            let swarm_task = swarm_handle.clone();
+                            let outbox_task = Arc::clone(&outbox_rx);
+                            tokio::spawn(async move {
+                                if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                    tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
+                                }
+                                if can_reach {
+                                    flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                }
+                            });
                             if !can_reach {
                                 tracing::warn!("No compatible transport path to {}; deferring outbox flush", peer_id);
-                            } else {
-                                flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
                             }
                         }
                     }
@@ -4247,11 +4262,16 @@ async fn cmd_relay(
                         l.record_identified_peer(&peer_id.to_string(), &advertised);
                         drop(l);
                         // Relay nodes must also register so peers can custody to us.
-                        register_identity_with_relay(core_arc.as_ref(), &swarm_handle, peer_id).await;
-                        if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                            tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
-                        }
-                        flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
+                        let core_task = core_arc.clone();
+                        let swarm_task = swarm_handle.clone();
+                        let outbox_task = Arc::clone(&outbox_rx);
+                        tokio::spawn(async move {
+                            register_identity_with_relay(core_task.as_ref(), &swarm_task, peer_id).await;
+                            if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
+                            }
+                            flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                        });
                     }
                     SwarmEvent::TopicDiscovered { peer_id, topic } => {
                         tracing::info!("Topic discovered from {}: {}", peer_id, topic);
@@ -4443,7 +4463,7 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         "{} Starting temporary swarm for immediate send...",
         "".yellow()
     );
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(16);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
     let core_for_events = Arc::clone(&core);
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
