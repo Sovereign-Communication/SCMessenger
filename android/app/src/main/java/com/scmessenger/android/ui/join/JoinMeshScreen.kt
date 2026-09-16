@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.mlkit.common.MlKitException
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -158,32 +160,53 @@ private fun QrScannerView(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(onClick = {
-            val options = GmsBarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-            val scanner = GmsBarcodeScanning.getClient(context, options)
-            val qrEmptyError = context.getString(R.string.add_contact_error_qr_empty)
-            val qrFailedError = context.getString(R.string.add_contact_error_qr_failed)
+        val gmsAvailable = remember {
+            GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
+        }
+        val gmsUnavailableError = stringResource(R.string.add_contact_error_gms_unavailable)
 
-            scanner.startScan()
-                .addOnSuccessListener { barcode ->
-                    val rawValue = barcode.rawValue
-                    if (rawValue.isNullOrBlank()) {
-                        onScanError(qrEmptyError)
-                    } else {
-                        onQrScanned(rawValue)
-                    }
+        Button(
+            onClick = {
+                if (!gmsAvailable) {
+                    onScanError(gmsUnavailableError)
+                    return@Button
                 }
-                .addOnFailureListener { e ->
-                    Timber.w(e, "Join QR scan failed")
-                    if (e is MlKitException && e.errorCode == CommonStatusCodes.CANCELED) {
-                        return@addOnFailureListener
+                val options = GmsBarcodeScannerOptions.Builder()
+                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                    .build()
+                val scanner = GmsBarcodeScanning.getClient(context, options)
+                val qrEmptyError = context.getString(R.string.add_contact_error_qr_empty)
+                val qrFailedError = context.getString(R.string.add_contact_error_qr_failed)
+
+                scanner.startScan()
+                    .addOnSuccessListener { barcode ->
+                        val rawValue = barcode.rawValue
+                        if (rawValue.isNullOrBlank()) {
+                            onScanError(qrEmptyError)
+                        } else {
+                            onQrScanned(rawValue)
+                        }
                     }
-                    onScanError(qrFailedError)
-                }
-        }) {
+                    .addOnFailureListener { e ->
+                        Timber.w(e, "Join QR scan failed")
+                        if (e is MlKitException && e.errorCode == CommonStatusCodes.CANCELED) {
+                            return@addOnFailureListener
+                        }
+                        onScanError(qrFailedError)
+                    }
+            },
+            enabled = gmsAvailable
+        ) {
             Text(stringResource(R.string.join_mesh_qr_title))
+        }
+
+        if (!gmsAvailable) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.add_contact_gms_requirement_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
