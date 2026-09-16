@@ -6585,6 +6585,38 @@ open class MeshRepository(
     }
 
     /**
+     * Persist bootstrap addresses learned from an invite or QR join bundle.
+     *
+     * Android parity with iOS MeshRepository.importSeedAddresses: seeds remain
+     * lower-confidence until an active transport session identifies the peer,
+     * but they must survive this screen and app launch via the ledger.
+     *
+     * No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.
+     * Additive only: existing flows never call this, null ledger returns 0.
+     */
+    open fun importSeedAddresses(addresses: List<String>): Int {
+        val seeds = addresses
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
+        if (seeds.isEmpty()) {
+            return 0
+        }
+        return try {
+            val added = importSeedsToLedger(seeds)
+            Timber.i("Ledger: imported $added bootstrap seed(s) from join bundle")
+            added.toInt()
+        } catch (e: Exception) {
+            Timber.w(e, "Ledger: failed to import bootstrap seeds")
+            0
+        }
+    }
+
+    protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
+        return ledgerManager?.importSeedEntries(seeds) ?: 0u
+    }
+
+    /**
      * Dial candidates from the ledger, with identity fields masked on any
      * entry whose key binding is not self-certifying.
      *
