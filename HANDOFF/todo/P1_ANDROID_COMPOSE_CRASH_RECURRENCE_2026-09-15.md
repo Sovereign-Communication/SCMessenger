@@ -192,6 +192,43 @@ INCREASE on that number is a new event. The historical latency was hours into a
 session, so a short window cannot clear the class; the window is stated with
 the result whenever it is read.
 
+### Soak result - 6 h 43 m, zero new events (read 2026-09-16T18:19Z)
+
+    grep -m1 "SOAK START" tmp/soak/soak.log
+      SOAK START 2026-09-16T11:00:02Z pid=448
+    grep "heartbeat" tmp/soak/soak.log | head -1
+      2026-09-16T11:00:02Z heartbeat logcat_matches=3 pid=28316
+    grep "heartbeat" tmp/soak/soak.log | tail -1
+      2026-09-16T17:43:20Z heartbeat logcat_matches=3 pid=22189
+    grep -o "logcat_matches=[0-9]*" tmp/soak/soak.log | sort | uniq -c
+        166 logcat_matches=3
+    grep -o "pid=[0-9]*" tmp/soak/soak.log | sort -u
+        pid=448  pid=28316  pid=22189
+
+The window is 2026-09-16T11:00:02Z to 17:43:20Z = 6 h 43 m, 166 heartbeats,
+and `logcat_matches` never moved off its baseline of 3 - the three stale
+09-15 17:35 `dataAnchor` lines. The window straddles an app process change
+(28316 -> 22189), so it covers a relaunch as well as steady state.
+
+Limits of this evidence, stated plainly:
+- It does NOT clear Crash A. That signature
+  (`src.length=16 srcPos=4 ... length=-1` through `insertBottomUp`) is not in
+the retained logcat buffer at all, so absence cannot be asserted for it either
+way here; its only occurrence is 09-16T02:43:44Z, before the buffer's start.
+- `tmp/soak/watch.sh` computes an ANR count but never writes it
+  (`grep -c anr tmp/soak/soak.log` = 0), so the log evidences crash absence
+  only, not ANR absence, over this window. ANR absence was checked separately
+  via `dumpsys activity exit-info` (all exits `reason=16 PACKAGE UPDATED` or
+  `reason=10 USER REQUESTED`, `anrInfo=null`) and by the app's own
+  `ANR watchdog stopped (total ANR events=0)` line.
+- adb went offline at the end of the window (`adb devices` empty), so no
+  further on-device polling was possible after 17:43:20Z.
+
+Verdict: not reproduced across 6 h 43 m of passive monitoring, which is the
+first window of the same order as the historical latency (hours into a
+session). Still not a demonstrated fix of the runtime race - the runtime race
+remains OPEN and the scope decision below is unchanged.
+
 ## Scope decision required (not mine to make)
 
 1. Compose BOM upgrade (currently `compose-bom:2024.12.01`,
@@ -213,6 +250,10 @@ the result whenever it is read.
 2. DONE (this pass): mesh/topology composables audited - no lazy layout, no
    subcomposition, no duplicate/blank keys; churn removed (CHURN-001).
 3. OPEN, operator scope call: which of the three options in "Scope decision".
-4. OPEN: the crash-absence window must be read from `tmp/soak/soak.log` and
-   reported with its length; a short window does not close a class whose
-   historical latency is hours.
+4. DONE (2026-09-16T18:19Z): window read and reported above - 6 h 43 m,
+   166 heartbeats, zero new crash events; limits stated.
+5. DONE (2026-09-16): the per-step CI verdict that had been cancelled by every
+   prior push is landed on the tip `e51a8035` - Mobile run 35089691443,
+   job `Android JVM Unit Tests`, step 6 `Run JVM unit tests`: success.
+   `iOS Build & Test` is success on `ee93394c` and on `e51a8035` (run
+   35089691370), i.e. green rather than pre-existing-red.
