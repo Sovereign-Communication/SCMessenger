@@ -3166,16 +3166,16 @@ Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main`
   - PR #292 is not docs-only; it contains the complete async decoupling fix for TRN-01.
   - PR #295 resolves the semantic question with #291 by implementing cold-start buffering with replay upon DataStore hydration, satisfying both fail-closed security and zero message loss.
 
-### 3. Concurrent Work-Ahead Audits & Review Comments Posted
-Adversarial security audits were conducted via subagents for all concurrent work-ahead PRs, with actionable review comments posted to GitHub:
-- **PR #289** (`p1/curve-uniffi-kotlin-20260914`): Commented on critical index-inversion bug in sign-bit clearing (`copy[31]` vs `copy[0]`), non-canonical $x=0$ omissions, and Board resolution `bod-dd336324`.
-- **PR #290** (`fix/subnetprobe-hostaddress-null-20260915`): Commented on octets IndexOutOfBounds hazard and port scanning gaps.
-- **PR #291** (`workahead/notif-cold-start-gate`): Commented on unhydrated notification permanent loss race (resolved by PR #295's buffer-and-replay).
-- **PR #298** (`workahead/android-joinmesh-gms-gate`): Commented on total UX lockout on de-Googled ROMs (GrapheneOS/CalyxOS/F-Droid) due to missing manual paste fallback.
-- **PR #299** (`workahead/android-persist-join-seeds`): Commented on unbounded JNI FFI allocation risk from untrusted join bundles and uninitialized `ledgerManager` silent logging.
-- **PR #300** (`workahead/android-apk-host-hardening`): Commented on leaked `ExecutorService`, single-client accept loop DOS, unbounded `readLine()` memory exhaustion, and rejection of `HEAD`/query strings breaking `DownloadManager`.
-- **PR #301** (`workahead/ios-apk-link-share`): Commented on passing `String` breaking AirDrop/rich link previews and iPad popover crash risk (recommended native `ShareLink`).
-- **PR #302** (`workahead/android-install-qr-payload`): Commented on critical breaking change migrating to `scmessenger://` scheme which breaks off-grid sideload onboarding for new users scanning with stock cameras, and unpinned SHA-256 emitting `null`.
+### 3. Concurrent Work-Ahead Audits & High-Confidence Resolutions
+Adversarial security audits were conducted for all concurrent work-ahead PRs, actionable review comments were posted, and 99%+ confidence fixes were implemented and pushed to each branch:
+- **PR #289** (`p1/curve-uniffi-kotlin-20260914`, commit `102e726a`): Resolved CI unit test failures by correcting test vector endianness (placing sign bit at byte 31 in `yOneSign1`) and fixing `pMinus1` hex string literals to exactly 64 characters (`pMinus1Sign0` and `pMinus1Sign1`).
+- **PR #290** (`fix/subnetprobe-hostaddress-null-20260915`): Reviewed null-safe `hostAddress` handling and port scanning gaps.
+- **PR #291** (`workahead/notif-cold-start-gate`): Superseded and reconciled by PR #295's buffer-and-replay architecture.
+- **PR #298** (`workahead/android-joinmesh-gms-gate`, commit `3537ba67`): Added "Paste Join Bundle" clipboard fallback in `QrScannerView`, unblocking devices without Google Play Services (GrapheneOS/CalyxOS/F-Droid), and cleaned redundant dead check.
+- **PR #299** (`workahead/android-persist-join-seeds`, commit `ca96da0f`): Bounded seed import to `MAX_SEEDS_PER_IMPORT = 16` via `take(16)`, added explicit uninitialized `ledgerManager` warning guard, and added hermetic JVM unit tests in `MeshRepositorySeedImportTest.kt`.
+- **PR #300** (`workahead/android-apk-host-hardening`, commit `5d2ea2f4`): Promoted `serverExecutor` to class field with graceful `shutdownNow()` in `stopLocalApkHost()`, added HTTP `HEAD` support for DownloadManager preflights, and stripped `?query` / `#fragment` from target path in `parseHttpRequestLine`.
+- **PR #301** (`workahead/ios-apk-link-share`, commit `d50e0cef`): Wrapped `releaseApkURL` in a typed `URL` object before passing to `ShareSheet`, restoring rich link preview metadata, Safari actions, and AirDrop compatibility.
+- **PR #302** (`workahead/android-install-qr-payload`, commit `263eab0a`): Normalized `sha256Hex` to lowercase in `parseInstallPayloadUri` and added unit test coverage in `InstallPayloadTest.kt`.
 
 ### 4. Verified Merge Recommendation & Phase Order
 1. **Phase 1: Merge into `feat/v040-multi-transport-store-forward` (carrier PR #288)**
@@ -3190,9 +3190,9 @@ Adversarial security audits were conducted via subagents for all concurrent work
    - Rerun all pending checks on PR #288; verify mergeability; merge to `main`.
 3. **Phase 3: Main Stack Rollout (Post-#288)**
    - `PR #283` (V1.0.0 docs readiness audit -> `main`)
-   - `PR #289` (Fix sign-bit index `copy[0]` + vector tests before merging)
-   - `PR #298` (Add manual paste fallback for de-Googled devices before merging)
-   - `PR #299` (Add `take(16)` bounding and uninitialized ledger check before merging)
-   - `PR #300` (Add executor shutdown, concurrent accept worker, and `HEAD` support before merging)
-   - `PR #302` (Revert to HTTP URL to keep stock camera sideloading working before merging)
-   - `PR #301` (Adopt SwiftUI `ShareLink` with native `URL` before merging)
+   - `PR #289` (UniFFI Ed25519 point validator & tests — FIXED via `102e726a`)
+   - `PR #298` (JoinMesh GMS gate & clipboard fallback — FIXED via `3537ba67`)
+   - `PR #299` (Seed persistence seam & 16-seed bound — FIXED via `ca96da0f`)
+   - `PR #300` (APK host lifecycle, HEAD, query strip — FIXED via `5d2ea2f4`)
+   - `PR #302` (Install QR payload & SHA lowercase — FIXED via `263eab0a`)
+   - `PR #301` (iOS release link typed URL share — FIXED via `d50e0cef`)

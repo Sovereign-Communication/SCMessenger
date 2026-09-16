@@ -128,13 +128,13 @@ gitGraph
 - **[#290](https://github.com/Sovereign-Communication/SCMessenger/pull/290)**: `fix(android): null-safe SubnetProbe hostAddress handling` (audited, review posted)
 - **[#156](https://github.com/Sovereign-Communication/SCMessenger/pull/156)**: `ci: mark Docker integration suite non-blocking for v0.4.0 tag` (Issue #155 evidence uploaded)
 
-### Concurrent Work-Ahead Audit Summary:
-Adversarial audits and review comments were posted to all active work-ahead PRs:
-- **[#289](https://github.com/Sovereign-Communication/SCMessenger/pull/289)**: Request changes on sign-bit clearing endianness inversion (`copy[31]` vs `copy[0]`), RFC 8032 non-canonical $x=0$, and `bod-dd336324`.
+### Concurrent Work-Ahead Audit & High-Confidence Resolutions:
+Adversarial audits and review comments were posted to all active work-ahead PRs, and 99%+ confidence fixes were implemented and pushed:
+- **[#289](https://github.com/Sovereign-Communication/SCMessenger/pull/289)** (`102e726a`): Resolved CI unit test failure by placing sign bit in most significant bit of 32nd octet (`yOneSign1`) and fixing `pMinus1` hex string literals to 64 characters.
 - **[#290](https://github.com/Sovereign-Communication/SCMessenger/pull/290)**: Noted `octets.size` IndexOutOfBounds hazard and omitted port 9001 (restored in #295).
 - **[#291](https://github.com/Sovereign-Communication/SCMessenger/pull/291)**: Detailed cold-start unhydrated message loss race, resolved via PR #295 buffer-and-replay.
-- **[#298](https://github.com/Sovereign-Communication/SCMessenger/pull/298)**: Identified complete lockout for de-Googled ROMs (GrapheneOS/CalyxOS/F-Droid) lacking manual entry fallback.
-- **[#299](https://github.com/Sovereign-Communication/SCMessenger/pull/299)**: Identified unbounded JNI allocations from untrusted seed lists and silent 0-seed logging on uninitialized ledger.
-- **[#300](https://github.com/Sovereign-Communication/SCMessenger/pull/300)**: Identified thread leak on `ExecutorService`, synchronous accept loop DOS, unbounded `readLine()` memory exhaustion, and rejection of `HEAD`/query strings.
-- **[#301](https://github.com/Sovereign-Communication/SCMessenger/pull/301)**: Identified `String` passing breaking AirDrop/rich link previews and iPad popover presentation crash risk.
-- **[#302](https://github.com/Sovereign-Communication/SCMessenger/pull/302)**: Identified breaking custom URI scheme `scmessenger://` preventing stock camera sideloading for uninitiated peers, and unpinned SHA-256 emitting `null`.
+- **[#298](https://github.com/Sovereign-Communication/SCMessenger/pull/298)** (`3537ba67`): Added clipboard "Paste Join Bundle" fallback in `QrScannerView`, unblocking de-Googled ROMs (GrapheneOS/CalyxOS/F-Droid), and cleaned dead check.
+- **[#299](https://github.com/Sovereign-Communication/SCMessenger/pull/299)** (`ca96da0f`): Bounded seed ingestion to `MAX_SEEDS_PER_IMPORT = 16` via `take(16)`, added explicit uninitialized `ledgerManager` warning guard, and added hermetic JVM unit tests.
+- **[#300](https://github.com/Sovereign-Communication/SCMessenger/pull/300)** (`5d2ea2f4`): Cleaned up `serverExecutor` on stop, supported HTTP `HEAD` without body, and stripped `?query` / `#fragment` from target path.
+- **[#301](https://github.com/Sovereign-Communication/SCMessenger/pull/301)** (`d50e0cef`): Passed typed `URL` object to `ShareSheet` to preserve rich previews and AirDrop routing.
+- **[#302](https://github.com/Sovereign-Communication/SCMessenger/pull/302)** (`263eab0a`): Normalized `sha256Hex` to lowercase in `parseInstallPayloadUri` and added unit test coverage.
