@@ -3839,7 +3839,7 @@ impl IronCore {
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
             local_identity_id,
-            Some(canonical_peer_id),
+            Some(canonical_peer_id.clone()),
             None,
         );
 
