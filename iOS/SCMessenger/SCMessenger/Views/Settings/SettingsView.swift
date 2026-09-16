@@ -18,7 +18,16 @@ struct SettingsView: View {
     @State private var nicknameDraft: String = ""
     @State private var showingExportBackup: Bool = false
     @State private var showingImportBackup: Bool = false
+    @State private var showingAndroidApkShare: Bool = false
+    @State private var androidApkShareItems: [Any] = []
     let onIdentityChanged: () -> Void
+
+    // Release APK link shared via the existing ShareSheet. No on-device
+    // hosting, no entitlements, no Info.plist changes.
+    // TODO: inject exact v0.4.0 signed APK asset URL once D2 publishes
+    // (e.g. .../releases/download/v0.4.0/scmessenger-v0.4.0.apk).
+    // Full NWListener hosting deferred until signed APK + need proven.
+    private static let releaseApkURL = "https://github.com/Sovereign-Communication/SCMessenger/releases/latest"
 
     init(onIdentityChanged: @escaping () -> Void = {}) {
         self.onIdentityChanged = onIdentityChanged
@@ -273,6 +282,8 @@ struct SettingsView: View {
             }
 
             // MARK: - Information (mirrors Android)
+            // iOS-only additive row below shares the Android release link.
+            // No on-device APK hosting; parity with Android preserved.
             Section {
                 HStack {
                     Text("Contacts")
@@ -294,8 +305,17 @@ struct SettingsView: View {
                     Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
                         .foregroundStyle(Theme.onSurfaceVariant)
                 }
+
+                Button {
+                    shareAndroidAppLink()
+                } label: {
+                    Label("Share Android app link", systemImage: "square.and.arrow.up")
+                }
             } header: {
                 Text("Information")
+            } footer: {
+                Text("Shares the Android release download link. iOS does not host APK bytes on-device.")
+                    .foregroundStyle(.secondary)
             }
 
             // MARK: - Danger Zone (mirrors Android Delete All Data section)
@@ -352,6 +372,9 @@ struct SettingsView: View {
                 ImportIdentityBackupSheet(viewModel: viewModel)
             }
         }
+        .sheet(isPresented: $showingAndroidApkShare) {
+            ShareSheet(items: androidApkShareItems)
+        }
         .confirmationDialog(
             "Delete All Data & Reset App?",
             isPresented: $showingResetConfirmation,
@@ -367,6 +390,11 @@ struct SettingsView: View {
         } message: {
             Text("This will permanently delete your identity, all contacts, messages, and settings. You will need to set up the app again.")
         }
+    }
+
+    private func shareAndroidAppLink() {
+        androidApkShareItems = [Self.releaseApkURL]
+        showingAndroidApkShare = true
     }
 
     private func createIdentityFromSettings() {
