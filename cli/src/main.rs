@@ -787,12 +787,21 @@ mod dial_scheduler_tests {
                 answered += 1;
             }
         }
-        assert_eq!(answered, 1, "a burst must not produce one reply per message");
+        assert_eq!(
+            answered, 1,
+            "a burst must not produce one reply per message"
+        );
 
         // The window is exactly one minute: still shut one second short,
         // open again at the boundary.
-        assert!(auto_reply_rate_limited(last_sent_at, t0 + Duration::from_secs(59)));
-        assert!(!auto_reply_rate_limited(last_sent_at, t0 + Duration::from_secs(60)));
+        assert!(auto_reply_rate_limited(
+            last_sent_at,
+            t0 + Duration::from_secs(59)
+        ));
+        assert!(!auto_reply_rate_limited(
+            last_sent_at,
+            t0 + Duration::from_secs(60)
+        ));
 
         // A distinct message can be answered once the window reopens...
         let reopened = t0 + Duration::from_secs(61);
@@ -2102,7 +2111,9 @@ fn resolve_auto_reply_body(custom: Option<&str>) -> String {
 /// less than `AUTO_REPLY_MIN_INTERVAL_SECS` ago.
 fn auto_reply_rate_limited(last_sent_at: Option<Instant>, now: Instant) -> bool {
     match last_sent_at {
-        Some(last) => now.saturating_duration_since(last) < Duration::from_secs(AUTO_REPLY_MIN_INTERVAL_SECS),
+        Some(last) => {
+            now.saturating_duration_since(last) < Duration::from_secs(AUTO_REPLY_MIN_INTERVAL_SECS)
+        }
         None => false,
     }
 }
