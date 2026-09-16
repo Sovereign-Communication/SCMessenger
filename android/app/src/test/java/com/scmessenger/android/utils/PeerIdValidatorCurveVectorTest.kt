@@ -38,7 +38,8 @@ class PeerIdValidatorCurveVectorTest {
     fun `y equals one is a valid point only with sign bit zero`() {
         // y = 1 => x^2 = 0 => canonical encoding requires sign bit 0.
         val yOneSign0 = "01" + "00".repeat(31)
-        val yOneSign1 = "81" + "00".repeat(31)
+        // In little-endian Ed25519 (RFC 8032), sign bit is the most significant bit of the 32nd octet (byte 31).
+        val yOneSign1 = "01" + "00".repeat(30) + "80"
         assertTrue(PeerIdValidator.isValidEd25519Point(yOneSign0))
         assertFalse(PeerIdValidator.isValidEd25519Point(yOneSign1))
     }
@@ -46,17 +47,15 @@ class PeerIdValidatorCurveVectorTest {
     @Test
     fun `y equals p minus one is a valid point only with sign bit zero`() {
         // y = p-1 => y^2 = 1 => x^2 = 0; sign bit decides canonical validity.
-        val pMinus1Sign0 = "ecffffffffffffffffffffffffffffffffffffffffffffffffffffff7f" +
-            "ffffffff"
-        // p-1 little-endian is ec ff*31, then sign bit set on the top byte (0xff).
-        val pMinus1Sign1 = "ecffffffffffffffffffffffffffffffffffffffffffffffffffffff7f" +
-            "ff"
+        // p-1 little-endian is ec followed by 30 0xff bytes and byte 31 = 0x7f (sign 0) or 0xff (sign 1).
+        val pMinus1Sign0 = "ec" + "ff".repeat(30) + "7f"
+        val pMinus1Sign1 = "ec" + "ff".repeat(30) + "ff"
         assertTrue(pMinus1Sign0.length == 64)
+        assertTrue(pMinus1Sign1.length == 64)
         assertTrue(PeerIdValidator.isValidEd25519Point(pMinus1Sign0))
         // Top byte ff = 0x7f | 0x80: same y, non-canonical sign bit.
         val nonCanonical = pMinus1Sign0.dropLast(2) + "ff"
         assertFalse(PeerIdValidator.isValidEd25519Point(nonCanonical))
-        // Sanity: the deliberately truncated string is rejected on length.
         assertFalse(PeerIdValidator.isValidEd25519Point(pMinus1Sign1))
     }
 
