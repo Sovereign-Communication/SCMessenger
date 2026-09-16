@@ -263,12 +263,17 @@ enum Commands {
     Start {
         #[arg(short, long)]
         port: Option<u16>,
-        /// Send one bounded acknowledgement for each unique incoming text message.
-        /// Test-harness capability: without it a CLI node can receive but never
-        /// respond, so it can only ever demonstrate one direction of a pair.
-        /// Also enabled by setting SCM_AUTO_REPLY=1.
-        #[arg(long)]
-        auto_reply: bool,
+        /// Send one bounded acknowledgement for each unique incoming text message,
+        /// optionally with a custom body. Useful for an always-on node that its
+        /// operator does not watch: a sender learns the node is alive and reading.
+        /// Bare `--auto-reply` sends the generic acknowledgement; a value sends
+        /// that text instead. Test-harness capability: without it a CLI node can
+        /// receive but never respond, so it can only ever demonstrate one
+        /// direction of a pair.
+        /// Also enabled by setting SCM_AUTO_REPLY: `1`/`true` for the generic body,
+        /// any other non-empty value for that text.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        auto_reply: Option<String>,
     },
     /// Run headless relay node (no interactive console)
     Relay {
@@ -765,6 +770,48 @@ mod dial_scheduler_tests {
             &mut seen_order
         ));
         assert!(seen_ids.is_empty());
+    }
+
+    #[test]
+    fn auto_reply_body_defaults_to_generic_and_accepts_custom_text() {
+        // Bare `--auto-reply` and `SCM_AUTO_REPLY=1` both arrive here as an
+        // empty body, and must fall back to the generic acknowledgement.
+        assert_eq!(resolve_auto_reply_body(None), AUTO_REPLY_ACK);
+        assert_eq!(resolve_auto_reply_body(Some("")), AUTO_REPLY_ACK);
+        assert_eq!(resolve_auto_reply_body(Some("   ")), AUTO_REPLY_ACK);
+
+        // A custom body is sent behind the machine marker, trimmed.
+        assert_eq!(
+            resolve_auto_reply_body(Some("Away from the desk; I will read this later.")),
+            "[auto-reply] Away from the desk; I will read this later."
+        );
+        assert_eq!(
+            resolve_auto_reply_body(Some("  node is on but unwatched  ")),
+            "[auto-reply] node is on but unwatched"
+        );
+    }
+
+    #[test]
+    fn custom_auto_reply_text_still_carries_the_machine_marker() {
+        // Loop safety: whatever the operator types, the body must still start
+        // with the marker, or two responder nodes would answer each other
+        // forever. Operator text that already carries the marker is not doubled.
+        let body = resolve_auto_reply_body(Some("please stop replying"));
+        assert!(body.starts_with(AUTO_REPLY_PREFIX));
+
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+        assert!(!should_send_auto_reply(
+            "other-node-ack",
+            &body,
+            &mut seen_ids,
+            &mut seen_order
+        ));
+
+        assert_eq!(
+            resolve_auto_reply_body(Some("[auto-reply] already marked")),
+            "[auto-reply] already marked"
+        );
     }
 
     /// SELF-CERTIFYING KEY BINDING: an identity envelope without a usable
@@ -1926,6 +1973,21 @@ const AUTO_REPLY_ACK: &str =
     "[auto-reply] Thank you. Your message was received by this CLI; no further reply will be sent.";
 const AUTO_REPLY_SEEN_CAPACITY: usize = 4096;
 
+/// Resolve the acknowledgement body for auto-reply mode.
+///
+/// A bare `--auto-reply` (or `SCM_AUTO_REPLY=1`) sends the generic body; a custom
+/// message is sent verbatim but always carries `AUTO_REPLY_PREFIX`. That prefix is
+/// what stops two responder nodes from answering each other forever, so it is
+/// applied even to operator-supplied text (and recognised rather than doubled if
+/// the operator included it).
+fn resolve_auto_reply_body(custom: Option<&str>) -> String {
+    match custom.map(str::trim) {
+        None | Some("") => AUTO_REPLY_ACK.to_string(),
+        Some(text) if text.starts_with(AUTO_REPLY_PREFIX) => text.to_string(),
+        Some(text) => format!("{}{}", AUTO_REPLY_PREFIX, text),
+    }
+}
+
 /// Permit at most one machine acknowledgement for a logical incoming message.
 ///
 /// A transport can deliver the same envelope more than once while a connection
@@ -1950,19 +2012,32 @@ fn should_send_auto_reply(
     true
 }
 
-async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: bool) -> Result<()> {
+async fn cmd_start(
+    port: Option<u16>,
+    http_bind: Option<String>,
+    auto_reply: Option<String>,
+) -> Result<()> {
     // Env fallback so a node already under a process supervisor can be flipped
-    // into responder mode without changing its argv.
-    let auto_reply = auto_reply
-        || matches!(
-            std::env::var("SCM_AUTO_REPLY").as_deref(),
-            Ok("1") | Ok("true")
-        );
-    if auto_reply {
+    // into responder mode without changing its argv. `SCM_AUTO_REPLY=1` (or
+    // `true`) keeps the generic body; any other value is used as the text.
+    let auto_reply = match auto_reply {
+        Some(custom) => Some(custom),
+        None => match std::env::var("SCM_AUTO_REPLY") {
+            Ok(v) => match v.trim() {
+                "" => None,
+                "1" | "true" => Some(String::new()),
+                other => Some(other.to_string()),
+            },
+            Err(_) => None,
+        },
+    };
+    let auto_reply_body = auto_reply.map(|custom| resolve_auto_reply_body(Some(&custom)));
+    if let Some(body) = &auto_reply_body {
         println!(
             "{} Bounded auto-reply ENABLED: one acknowledgement per unique text message",
             "[INFO]".yellow()
         );
+        println!("  body: {}", body);
     }
     let config = config::Config::load()?;
     let ws_port = port.unwrap_or({
@@ -2925,7 +3000,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             // receipt above already provides delivery
                                             // evidence; this acknowledgement exists only
                                             // for the explicit CLI test-harness mode.
-                                            if auto_reply {
+                                            if let Some(auto_reply_body) = auto_reply_body.as_deref() {
                                                 let incoming = decoded_envelope
                                                     .as_ref()
                                                     .map(|d| d.text.clone())
@@ -2948,7 +3023,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 {
                                                     match core_rx.prepare_message_with_id(
                                                         pk_hex.clone(),
-                                                        AUTO_REPLY_ACK.to_string(),
+                                                        auto_reply_body.to_string(),
                                                         scmessenger_core::MessageType::Text,
                                                         None,
                                                     ) {
@@ -3077,7 +3152,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 let target_peer = if let Ok(pid) = peer_id_res {
                                     Some(pid)
                                 } else if let Ok(Some(contact)) = contact_res {
-                                    contact.peer_id.parse().ok()
+                                    peer_id_from_contact_identifier(&contact.peer_id)
                                 } else {
                                     None
                                 };
@@ -3270,7 +3345,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         let target_peer = if let Ok(pid) = peer_id_res {
                                             Some(pid)
                                         } else if let Ok(Some(contact)) = contact_res {
-                                            contact.peer_id.parse().ok()
+                                            peer_id_from_contact_identifier(&contact.peer_id)
                                         } else {
                                             None
                                         };
@@ -4273,11 +4348,12 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         envelope_bytes.len()
     );
 
-    // Send the message via the swarm
-    let recipient_peer_id = contact
-        .peer_id
-        .parse::<libp2p::PeerId>()
-        .context("Invalid peer ID in contact: {}")?;
+    // Send the message via the swarm. `contact.peer_id` holds the canonical
+    // public-key hex, so it must go through the shared identifier resolver:
+    // parsing hex as base58 failed here and reported a failure for a message
+    // that had already been enqueued.
+    let recipient_peer_id = peer_id_from_contact_identifier(&contact.peer_id)
+        .with_context(|| format!("Invalid peer ID in contact: {}", contact.peer_id))?;
     println!(
         "{} Sending message to {}...",
         "[OK]".green(),
@@ -4985,6 +5061,22 @@ fn looks_like_ed25519_pk(s: &str) -> bool {
 /// (base58-encoded multihash, e.g. "12D3Koo...").
 fn looks_like_libp2p_peer_id(s: &str) -> bool {
     s.parse::<libp2p::PeerId>().is_ok()
+}
+
+/// Resolve a stored contact identifier to a libp2p `PeerId`.
+///
+/// Contact rows are canonically keyed by public-key hex (`contacts_canonical_hex_live`
+/// in `core/src/store/contacts.rs`), and `contact list` prints that hex as the
+/// contact's "Peer ID". Parsing that hex as base58 fails (hex contains '0'),
+/// which made every `send` report "Invalid peer ID in contact" for a message it
+/// had already enqueued. Legacy base58 peer ids still resolve.
+fn peer_id_from_contact_identifier(identifier: &str) -> Option<PeerId> {
+    let identifier = identifier.trim();
+    if let Ok(peer_id) = identifier.parse::<PeerId>() {
+        return Some(peer_id);
+    }
+    scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex(identifier)
+        .and_then(|derived| derived.parse::<PeerId>().ok())
 }
 
 fn find_contact(manager: &ContactManager, query: &str) -> Result<Contact> {
