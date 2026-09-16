@@ -63,6 +63,17 @@ object NotificationHelper {
     private const val NOTIFICATION_ID_PEER_EVENT = 4000
     private const val NOTIFICATION_ID_GROUP_SUMMARY_BASE = 4500
 
+    /**
+     * NOTIF-UNIFY-002: a group summary only has something to collapse when one
+     * person has BOTH kinds of child (a DM and a DM request). Posting it
+     * unconditionally put a second record per conversation in the shade whose
+     * title and MessagingStyle repeated the child's content -- the same person
+     * appearing twice (summary id 4500+hash beside message id 2000+hash),
+     * i.e. the operator-reported "split notifications".
+     */
+    fun shouldPostGroupSummary(hasDirectMessageChild: Boolean, hasRequestChild: Boolean): Boolean =
+        hasDirectMessageChild && hasRequestChild
+
     // Actions — package-qualified with the applicationId so notification
     // actions share one app identity (was com.scmessenger.*, which looked
     // like a foreign app next to com.scmessenger.android).
@@ -435,29 +446,38 @@ object NotificationHelper {
         } else {
             NOTIFICATION_ID_MESSAGE_BASE + peerId.hashCode()
         }
-        // NOTIF-UNIFY-001: group summary - Android only collapses setGroup()
+        // NOTIF-UNIFY-001/002: group summary - Android only collapses setGroup()
         // children into one conversation card when a summary notification
         // exists; without it the children render as separate cards (the
         // "split notifications" symptom). The caller passes a canonical
         // peerId, so all identity forms of the same human share one
         // group key and one notification id.
-        try {
-            NotificationManagerCompat.from(context).notify(
-                NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode(),
-                NotificationCompat.Builder(context, channelId)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setGroup(peerId)
-                    .setGroupSummary(true)
-                    // Summary carries the conversation identity: Android collapses the
-                    // group children under this card; a contentless summary renders as
-                    // an empty card on some launchers.
-                    .setContentTitle(displayName)
-                    .setStyle(messagingStyle)
-                    .setAutoCancel(true)
-                    .build()
-            )
-        } catch (e: SecurityException) {
-            Timber.w("Group summary notification blocked (SecurityException); posting individual card only")
+        //
+        // It is emitted only when this person actually has both children, and
+        // it is a header (conversation name only) -- not a second copy of the
+        // newest message. When there is nothing to collapse, any stale summary
+        // is cancelled so it cannot linger beside the single card.
+        val summaryId = NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode()
+        val hasDmChild = messageGroups[peerId]?.isNotEmpty() == true
+        val hasRequestChild = requestGroups[peerId]?.isNotEmpty() == true
+        if (shouldPostGroupSummary(hasDmChild, hasRequestChild)) {
+            try {
+                NotificationManagerCompat.from(context).notify(
+                    summaryId,
+                    NotificationCompat.Builder(context, channelId)
+                        .setSmallIcon(R.drawable.ic_notification)
+                        .setGroup(peerId)
+                        .setGroupSummary(true)
+                        .setContentTitle(displayName)
+                        .setContentText(context.getString(R.string.notification_summary_new_messages))
+                        .setAutoCancel(true)
+                        .build()
+                )
+            } catch (e: SecurityException) {
+                Timber.w("Group summary notification blocked (SecurityException); posting individual card only")
+            }
+        } else {
+            NotificationManagerCompat.from(context).cancel(summaryId)
         }
         try {
             Timber.i("Displaying notification - peerId=$peerId, notificationId=$notificationId, type=${if (isDmRequest) "DM_REQUEST" else "DM"}")

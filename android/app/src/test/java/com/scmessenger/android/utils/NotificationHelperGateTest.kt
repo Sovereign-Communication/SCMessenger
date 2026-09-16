@@ -195,6 +195,19 @@ class NotificationHelperGateTest {
         assertEquals("com.scmessenger.android.ACTION_OPEN_REQUESTS", NotificationHelper.ACTION_OPEN_REQUESTS)
     }
 
+    @Test
+    fun `group summary is only posted when one person has both children`() {
+        // NOTIF-UNIFY-002: the summary exists to collapse a DM and a DM request
+        // for the SAME person into one conversation card. Posting it for a
+        // single-child conversation added a second record (4500+hash beside
+        // 2000+hash) that repeated the message text -- the "split
+        // notifications" symptom. It is therefore conditional.
+        assertEquals(false, NotificationHelper.shouldPostGroupSummary(false, false))
+        assertEquals(false, NotificationHelper.shouldPostGroupSummary(true, false))
+        assertEquals(false, NotificationHelper.shouldPostGroupSummary(false, true))
+        assertEquals(true, NotificationHelper.shouldPostGroupSummary(true, true))
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /** Known contact with an existing conversation classifies as a DM, not a request. */
