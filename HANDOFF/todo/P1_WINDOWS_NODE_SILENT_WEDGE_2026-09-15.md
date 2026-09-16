@@ -126,3 +126,80 @@ outbox flush; Windows published the delivery ACKs (19:00:36Z) and received
 fresh inbound messages from the phone (inbox_receive 6b4a708f, 2691efb4);
 first DIRECT LAN connection established Windows<->Pixel
 (/ip4/192.168.0.134), previously relay-only.
+
+## Update 2026-09-16T04:27Z: WEDGE RECURRED, AND THE v2 WATCHDOG FAILED OPEN
+
+Passive audit of the live three-node mesh (no UI driving; operator active).
+The Windows node wedged again and the v2 watchdog did not exit. Raw evidence,
+all commands run this session:
+
+- Windows process alive: `tasklist` -> `scmessenger-cli.exe` PID 1032;
+  `netstat -ano` shows it LISTENING on 0.0.0.0:{80,443,8080,9002,9090} and
+  127.0.0.1:9001; control API `curl http://127.0.0.1:9876/health` ->
+  `{"status":"healthy"}` (HTTP 200, 5 ms).
+- Last operational log line: `2026-09-16T03:19:17.606293Z  [OK] Custody ...
+  delivered to 12D3KooWGvCWJNoWnReNCT...`. The relay-custody audit task,
+  which logs unconditionally every 60s even when idle (`Relay custody audit
+  log count: N` every :47), last fired 03:18:47Z and has NOT fired since.
+  Silence at capture: 68 minutes (04:27Z - 03:19Z).
+- The entire current-hour log `scm.log.2026-09-16-04` is 3 lines, all of them
+  the watchdog warning and nothing else:
+    04:02:47.341278Z measured 659s without log output (threshold 600s);
+                     requiring a second consecutive reading before exit
+    04:13:47.326254Z measured 659s ...
+    04:24:47.328801Z measured 660s ...
+  Constant ~660s at 11-minute spacing, never exiting.
+- Consequence: the Pixel's only pending message is stuck. `files/pending_outbox.json`
+  holds exactly one entry (`cf84b8ab-60ba-4614-903f-6de0627637e8`, peer
+  `30d0fa67...`) whose listeners are the Windows LAN endpoints
+  (`/ip4/192.168.0.121/tcp/{80,443,9090,8080,60863}`, `/tcp/9002/ws`), and every
+  dial to them fails: `Failed to dial /ip4/192.168.0.121/tcp/80`,
+  `.../tcp/8080`, `.../tcp/9002/ws` -> `IronCoreException$NetworkException`,
+  ending `delivery_attempt ... outcome=failed ...
+  reason=all_transports_failed` then `delivery_state ... state=stored
+  attempt=23`. The phone also reports `0 peers (Core)`.
+
+### Root cause of the fail-open: the watchdog's own warning resets its own
+### silence measurement
+
+`cli/src/main.rs` `log_silence_watchdog` emits its first-reading diagnostic
+through `tracing::warn!`, which the log appender writes into the SAME
+directory the watchdog measures via `config::latest_log_age_secs`. The file's
+newest mtime therefore becomes "now" on every warning, so the next poll reads
+age ~0, hits the `consecutive_silence = 0` reset branch, and the streak can
+never reach the `>= 2` exit condition. The measured ~660s is the age of the
+watchdog's OWN previous warning - not node activity. Under a real wedge the
+watchdog now warns forever and never exits: strictly worse than v1, which at
+least terminated.
+
+### Why the CI test did not catch this (test-fidelity gap)
+
+`cli/tests/heartbeat_watchdog_integration.rs` drives
+`cli/src/bin/heartbeat-probe.rs`, which (a) exits on the FIRST silent reading
+and (b) never writes anything into the monitored directory. It therefore
+exercises neither the two-consecutive-readings guard nor the production
+warning-write that defeats it. The test passes while production fails.
+
+### Decision required before code changes (operator ruling, rule 9)
+
+The minimal correctness fix is "the watchdog's own writes must not count as
+node activity" (snapshot the directory's total log bytes immediately AFTER
+the warning and require them unchanged on the next poll before incrementing
+the streak; or route the warning off the monitored stream). But that converts
+a silent wedge into a deliberate `exit(1)`, and per this ticket's own
+"Consequence disclosure" there is no supervisor on this host to restart it -
+so detection without a restart policy means a down node, which is what cost
+the operator 75 minutes on 2026-09-15. Options:
+  (a) exit(1) + install a restart policy (Windows Task Scheduler / supervisor);
+  (b) keep the process alive and recover in-process (re-spawn the stalled
+      swarm/event-loop task) so no supervisor is needed;
+  (c) both.
+The underlying stall is in the swarm/event loop (`core/src/transport/swarm`,
+rule-8 gated: needs an adversarial security review before it can land).
+
+### Status
+
+- v0.4.0 tag: this ticket must NOT be closed. The "bounded and observable
+  failure mode" claim made at 19:15Z on 2026-09-15 no longer holds - the
+  failure mode is currently unbounded and silent.
+- Windows node requires a manual restart to serve the stuck Pixel message.
