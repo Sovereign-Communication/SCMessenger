@@ -8121,6 +8121,30 @@ pub async fn start_swarm_with_config(
         subscribed_topics.insert("sc-mesh".to_string());
         subscribed_topics.insert(DELIVERY_CONVERGENCE_TOPIC.to_string());
 
+        let own_peer_key_hex: Option<String> =
+            extract_ed25519_public_key_from_peer_id(swarm.local_peer_id())
+                .ok()
+                .map(|pk| pk.iter().map(|b| format!("{:02x}", b)).collect());
+        if let Some(own_hex) = own_peer_key_hex.as_deref() {
+            let own_topic_str = format!("/scmessenger/peer/{}/v1", own_hex);
+            let own_topic = libp2p::gossipsub::IdentTopic::new(own_topic_str.clone());
+            match swarm.behaviour_mut().gossipsub.subscribe(&own_topic) {
+                Ok(_) => {
+                    tracing::info!("Subscribed to own peer topic on wasm: {}", own_topic_str);
+                    subscribed_topics.insert(own_topic_str);
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to subscribe to own peer topic on wasm {}: {}",
+                    own_topic_str,
+                    e
+                ),
+            }
+        } else {
+            tracing::warn!(
+                "Own peer topic not subscribed on wasm: local peer id carries no inline Ed25519 public key"
+            );
+        }
+
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
         let mut pending_ledger_exchanges: HashMap<
             PeerId,
@@ -9043,7 +9067,16 @@ pub async fn start_swarm_with_config(
                                 gossipsub::Event::Subscribed { peer_id, topic }
                             )) => {
                                 let topic_str = topic.to_string();
-                                if !subscribed_topics.contains(&topic_str) {
+                                if is_ghost_peer_topic(
+                                    &topic_str,
+                                    &core_handle,
+                                    own_peer_key_hex.as_deref(),
+                                ) {
+                                    tracing::info!(
+                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic on wasm: {}",
+                                        topic_str
+                                    );
+                                } else if !subscribed_topics.contains(&topic_str) {
                                     let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
                                     if swarm.behaviour_mut().gossipsub.subscribe(&ident_topic).is_ok() {
                                         subscribed_topics.insert(topic_str.clone());
