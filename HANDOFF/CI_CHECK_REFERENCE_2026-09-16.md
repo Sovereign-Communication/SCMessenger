@@ -58,6 +58,9 @@ gh run cancel <id>
 - Never cancel the newest run of a relevant job.
 - Rerun via `gh run rerun <id>` before marking ready.
 - Do not bulk-rebase while the queue drains.
+- Note: `gh pr view` can return mergeable/mergeStateStatus UNKNOWN
+  on first query (eventual consistency) — re-query to resolve; and
+  `gh run rerun <id> --failed` for infra-flake retries.
 
 ## Per-PR targeted gates (rollout stack)
 

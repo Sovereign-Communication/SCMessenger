@@ -3076,3 +3076,11 @@ Base: origin/main 1e2fb747. 16 PRs audited (opened 2026-09-09..2026-09-16).
 - Details: `HANDOFF/MERGE_PLAN_2026-09-16.md`.
 - CI resume sheet: `HANDOFF/CI_CHECK_REFERENCE_2026-09-16.md`
   (docs-only stays cheap: Docs/lint/label only).
+- Re-verify later same day — see `HANDOFF/MERGE_PLAN_2026-09-16.md`
+  `## Re-verify 2026-09-16 (later same day) — deltas`: #292/#295 no
+  longer docs-only (code landed, #295 failing JVM tests, #291
+  contradiction stands); #289 failures cleared, fresh run pending;
+  rollout #299/#300/#302/#301 red under fix, #298 clean so far;
+  zero approvals on all 16 PRs — assign reviewers; feat head
+  b8f069a6->93408dbb docs-only, no rebase pressure; #303 still
+  draft+UNMERGED, 12 pass/6 pending.
