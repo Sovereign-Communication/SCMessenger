@@ -14,6 +14,7 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -33,6 +34,7 @@ object ApkShareManager {
     private var isHosting = false
     private var hostingPort = 8080
     private var scheduler: ScheduledExecutorService? = null
+    private var serverExecutor: ExecutorService? = null
 
     private const val APK_HTTP_PATH = "/scmessenger.apk"
     private const val MAX_HTTP_REQUEST_BYTES = 8192
@@ -161,7 +163,7 @@ object ApkShareManager {
         }
 
         val apkFile = prepareShareableApk(context)
-        val executor = Executors.newSingleThreadExecutor()
+        serverExecutor = Executors.newSingleThreadExecutor()
 
         try {
             serverSocket = ServerSocket(0) // Bind to dynamic available port
@@ -173,7 +175,7 @@ object ApkShareManager {
             // seed an unrelated node before the app had verified its identity.
             val downloadUrl = "http://$ip:$hostingPort/scmessenger.apk"
 
-            executor.execute {
+            serverExecutor?.execute {
                 while (isHosting && serverSocket != null && !serverSocket!!.isClosed) {
                     try {
                         val clientSocket = serverSocket!!.accept()
@@ -214,6 +216,8 @@ object ApkShareManager {
         serverSocket = null
         scheduler?.shutdownNow()
         scheduler = null
+        serverExecutor?.shutdownNow()
+        serverExecutor = null
         Timber.i("Stopped local APK server")
     }
 
@@ -247,7 +251,7 @@ object ApkShareManager {
                     return
                 }
                 val (method, path) = parsed
-                if (method != "GET" || path != APK_HTTP_PATH) {
+                if ((method != "GET" && method != "HEAD") || path != APK_HTTP_PATH) {
                     Timber.w("APK host: denied $method $path")
                     writeHttpError(output, 404, "Not Found")
                     return
@@ -262,15 +266,19 @@ object ApkShareManager {
                 output.write(header.toByteArray(Charsets.UTF_8))
                 output.flush()
 
-                FileInputStream(apkFile).use { input ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
+                if (method == "GET") {
+                    FileInputStream(apkFile).use { input ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                        }
                     }
+                    output.flush()
+                    Timber.i("Successfully served APK download to ${s.inetAddress.hostAddress}")
+                } else {
+                    Timber.i("Successfully served APK HEAD headers to ${s.inetAddress.hostAddress}")
                 }
-                output.flush()
-                Timber.i("Successfully served APK download to ${s.inetAddress.hostAddress}")
             }
         } catch (e: Exception) {
             Timber.w(e, "Error serving APK client request")
@@ -303,8 +311,8 @@ object ApkShareManager {
     /**
      * Parse an HTTP request line into (method, path). Returns null when the
      * line is malformed. Absolute-form targets are reduced to their path;
-     * query/fragment-bearing targets are kept verbatim so they miss the exact
-     * allow-match and fall through to 404.
+     * query/fragment delimiters are stripped so standard cache-busters or
+     * download parameters match the allowlist.
      */
     private fun parseHttpRequestLine(requestLine: String): Pair<String, String>? {
         val parts = requestLine.trim().split(" ")
@@ -319,7 +327,8 @@ object ApkShareManager {
             if (pathStart == -1) return null
             target = target.substring(pathStart)
         }
-        return Pair(method, target)
+        val path = target.substringBefore('?').substringBefore('#')
+        return Pair(method, path)
     }
 
     private fun writeHttpError(output: OutputStream, statusCode: Int, reason: String) {
