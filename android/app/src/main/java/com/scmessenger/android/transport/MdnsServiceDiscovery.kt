@@ -68,6 +68,12 @@ class MdnsServiceDiscovery(
 
     @Volatile private var isRunning = false
     @Volatile private var isRegistered = false
+
+    // Identity-wait retries: registration is deferred until the local peer id
+    // is available, so this device never advertises a peer-id-less service that
+    // every compliant peer has to ignore. See registerService().
+    private var identityWaitAttempts = 0
+    private val maxIdentityWaitAttempts = 30
     @Volatile private var isDiscovering = false
     // Tracks if start() failed due to missing permissions or SecurityException.
     // Callers can query this to distinguish "no peers found" from "discovery dead".
@@ -100,6 +106,24 @@ class MdnsServiceDiscovery(
      * this project for Ed25519 identities. Rejecting fabricated IDs prevents
      * polluting downstream peer stores with undialable placeholders.
      */
+    /**
+     * Extract the peer id from a libp2p-mdns `dnsaddr` TXT value.
+     *
+     * libp2p-mdns publishes `<multiaddr>/p2p/<base58 peer id>`
+     * (libp2p-mdns behaviour/iface/dns.rs). SCMessenger's own advertisement
+     * writes the same key, so both sides now read the contract they publish.
+     * Returns null when the key is absent or carries no peer component, which
+     * keeps the "never synthesize an identifier" rule intact.
+     */
+    private fun peerIdFromDnsaddr(dnsaddr: String?): String? {
+        val value = dnsaddr?.trim().orEmpty()
+        val marker = "/p2p/"
+        val index = value.lastIndexOf(marker)
+        if (index < 0) return null
+        val candidate = value.substring(index + marker.length).trim()
+        return candidate.takeIf { it.isNotBlank() }
+    }
+
     private fun getValidatedLibp2pPeerId(peerId: String?): String? {
         if (peerId.isNullOrBlank() || !peerId.startsWith("12D3KooW")) return null
         return peerId
@@ -228,6 +252,36 @@ class MdnsServiceDiscovery(
     }
 
     /**
+     * Defer registration until the local peer id is available.
+     *
+     * The identity is derived during repository startup, which can finish after
+     * mDNS starts. Retries use an increasing 1s..N second delay and are bounded:
+     * giving up leaves this device unadvertised, which is strictly better than
+     * broadcasting a service no compliant peer can use.
+     */
+    private fun scheduleRegistrationAfterIdentity() {
+        if (!isRunning) return
+        if (identityWaitAttempts >= maxIdentityWaitAttempts) {
+            Timber.e(
+                "mDNS: no local peer id after $identityWaitAttempts attempts; " +
+                    "not registering (an advert without a peer id is ignored by every peer)"
+            )
+            return
+        }
+        identityWaitAttempts++
+        val delayMs = 1000L * identityWaitAttempts
+        Timber.i(
+            "mDNS: deferring registration until identity loads " +
+                "(attempt $identityWaitAttempts/$maxIdentityWaitAttempts, ${delayMs}ms)"
+        )
+        handler.postDelayed({
+            if (isRunning && !isRegistered) {
+                registerService()
+            }
+        }, delayMs)
+    }
+
+    /**
      * Called when an mDNS service is resolved (host and port obtained).
      * Wired from NsdManager.ResolveListener.onServiceResolved.
      * Extracts peer identity from TXT records and adds to mesh.
@@ -263,7 +317,14 @@ class MdnsServiceDiscovery(
         Timber.d("mDNS TXT records for ${resolvedInfo.serviceName}: $txtMap")
 
         // Try to extract libp2p peer-id from TXT records
-        val libp2pPeerId = txtMap["peer-id"] ?: txtMap["p2p"]
+        // Peer-id sources, most specific key first:
+        //  - "peer-id" / "p2p": SCMessenger's explicit keys (Android, iOS).
+        //  - "dnsaddr": the libp2p-mdns convention, "<multiaddr>/p2p/<peer id>".
+        //    libp2p-mdns publishes ONLY dnsaddr (behaviour/iface/dns.rs), so
+        //    without this the Android client ignored every Rust node on the LAN:
+        //    Rust discovered us (we publish dnsaddr as well) while we could never
+        //    discover Rust, leaving a fresh install LAN-isolated.
+        val libp2pPeerId = txtMap["peer-id"] ?: txtMap["p2p"] ?: peerIdFromDnsaddr(txtMap["dnsaddr"])
 
         // Reject services that do not advertise a valid libp2p peer id.
         // Synthesizing identifiers pollutes peer stores and produces undialable entries.
@@ -598,6 +659,19 @@ class MdnsServiceDiscovery(
             return
         }
         val localId = getLocalPeerId?.invoke()
+
+        // PEER-ID GATE: an advert without a peer id is worse than no advert.
+        // Every compliant peer must reject it (NsdManager's own resolver here,
+        // libp2p-mdns on a CLI node), and NsdManager holds one registration for
+        // the whole session, so registering before the identity is derived left
+        // this device invisible on the LAN until the next restart - literally
+        // "ignoring resolved service SCMessenger without valid libp2p peer id"
+        // on a fresh install. Defer and retry instead.
+        if (localId.isNullOrBlank()) {
+            scheduleRegistrationAfterIdentity()
+            return
+        }
+        identityWaitAttempts = 0
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = if (!localId.isNullOrBlank()) localId else this@MdnsServiceDiscovery.serviceName
             serviceType = this@MdnsServiceDiscovery.serviceType
