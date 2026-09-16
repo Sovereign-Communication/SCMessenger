@@ -3283,8 +3283,20 @@ fn ledger_verified_pair(
 /// its id is 64-hex (identity-confusion class: pk stored as peer_id) and we
 /// have no proven ledger entry for it (`success_count == 0` or missing).
 /// Mesh-wide topics (`sc-lobby`, `sc-mesh`, …) always auto-negotiate.
+///
+/// EXEMPTION (2026-09-16, receipts-never-arrive RCA): our OWN identity topic is
+/// never a ghost. The ledger test below can never prove our own key -- a node
+/// does not dial itself -- so every node classified its own topic as a ghost,
+/// refused to subscribe to it, and silently dropped every inbound message
+/// addressed to it (gossipsub `publish` still returns Ok with no subscriber,
+/// so the sender recorded a transport ACK and then waited forever for a
+/// receipt). Senders address us on exactly this topic.
 #[cfg(not(target_arch = "wasm32"))]
-fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCore>>) -> bool {
+fn is_ghost_peer_topic(
+    topic_str: &str,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    own_peer_key_hex: Option<&str>,
+) -> bool {
     let Some(rest) = topic_str.strip_prefix("/scmessenger/peer/") else {
         return false;
     };
@@ -3299,6 +3311,11 @@ fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCor
         });
     if !is_hex64 {
         return false;
+    }
+    if let Some(own) = own_peer_key_hex {
+        if own.eq_ignore_ascii_case(peer_key) {
+            return false;
+        }
     }
     let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
         // Fail closed on ghost shape when we cannot consult the ledger.
@@ -3693,6 +3710,37 @@ pub async fn start_swarm_with_config(
         subscribed_topics.insert("sc-lobby".to_string());
         subscribed_topics.insert("sc-mesh".to_string());
         subscribed_topics.insert(DELIVERY_CONVERGENCE_TOPIC.to_string());
+
+        // A node must be reachable on its OWN messaging topic: senders publish
+        // to `/scmessenger/peer/<recipient-identity-hex>/v1`, so a node that
+        // never subscribes to its own topic receives nothing. Gossipsub
+        // `publish` succeeds even with zero subscribers, so the sender records
+        // a transport ACK and then waits forever for a receipt. Subscribing
+        // here (rather than only on a peer's `Subscribed` event) removes the
+        // dependency on the peer subscribing first.
+        let own_peer_key_hex: Option<String> =
+            extract_ed25519_public_key_from_peer_id(swarm.local_peer_id())
+                .ok()
+                .map(|pk| pk.iter().map(|b| format!("{:02x}", b)).collect());
+        if let Some(own_hex) = own_peer_key_hex.as_deref() {
+            let own_topic_str = format!("/scmessenger/peer/{}/v1", own_hex);
+            let own_topic = libp2p::gossipsub::IdentTopic::new(own_topic_str.clone());
+            match swarm.behaviour_mut().gossipsub.subscribe(&own_topic) {
+                Ok(_) => {
+                    tracing::info!("Subscribed to own peer topic: {}", own_topic_str);
+                    subscribed_topics.insert(own_topic_str);
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to subscribe to own peer topic {}: {}",
+                    own_topic_str,
+                    e
+                ),
+            }
+        } else {
+            tracing::warn!(
+                "Own peer topic not subscribed: local peer id carries no inline Ed25519 public key"
+            );
+        }
 
         // Track peers we've already exchanged ledgers with (avoid spamming)
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
@@ -5462,7 +5510,11 @@ pub async fn start_swarm_with_config(
                                 // GHOST-IDENTITY-001: NEVER auto-negotiate retired-identity peer
                                 // topics (`/scmessenger/peer/<old-pk>/v1`) — that is the amplifier
                                 // that made PK:577fd171 reappear mesh-wide after Pixel reinstall.
-                                if is_ghost_peer_topic(&topic_str, &core_handle) {
+                                if is_ghost_peer_topic(
+                                    &topic_str,
+                                    &core_handle,
+                                    own_peer_key_hex.as_deref(),
+                                ) {
                                     tracing::info!(
                                         "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
                                         topic_str
