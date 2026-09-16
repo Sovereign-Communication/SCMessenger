@@ -61,6 +61,7 @@ object NotificationHelper {
     private const val NOTIFICATION_ID_REQUEST_BASE = 2500
     private const val NOTIFICATION_ID_MESH_STATUS = 3000
     private const val NOTIFICATION_ID_PEER_EVENT = 4000
+    private const val NOTIFICATION_ID_GROUP_SUMMARY_BASE = 4500
 
     // Actions — package-qualified with the applicationId so notification
     // actions share one app identity (was com.scmessenger.*, which looked
@@ -425,6 +426,30 @@ object NotificationHelper {
         } else {
             NOTIFICATION_ID_MESSAGE_BASE + peerId.hashCode()
         }
+        // NOTIF-UNIFY-001: group summary - Android only collapses setGroup()
+        // children into one conversation card when a summary notification
+        // exists; without it the children render as separate cards (the
+        // "split notifications" symptom). The caller passes a canonical
+        // peerId, so all identity forms of the same human share one
+        // group key and one notification id.
+        try {
+            NotificationManagerCompat.from(context).notify(
+                NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode(),
+                NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setGroup(peerId)
+                    .setGroupSummary(true)
+                    // Summary carries the conversation identity: Android collapses the
+                    // group children under this card; a contentless summary renders as
+                    // an empty card on some launchers.
+                    .setContentTitle(displayName)
+                    .setStyle(messagingStyle)
+                    .setAutoCancel(true)
+                    .build()
+            )
+        } catch (e: SecurityException) {
+            Timber.w("Group summary notification blocked (SecurityException); posting individual card only")
+        }
         try {
             Timber.i("Displaying notification - peerId=$peerId, notificationId=$notificationId, type=${if (isDmRequest) "DM_REQUEST" else "DM"}")
             NotificationManagerCompat.from(context).notify(notificationId, notification)
@@ -485,7 +510,11 @@ object NotificationHelper {
         val requestId = NOTIFICATION_ID_REQUEST_BASE + peerId.hashCode()
         NotificationManagerCompat.from(context).cancel(notificationId)
         NotificationManagerCompat.from(context).cancel(requestId)
-        Timber.d("Cleared notifications for $peerId (DM + Request)")
+        // NOTIF-UNIFY-001: clear posts cancel DM + Request for this peer, so
+        // the group summary has no remaining children - cancel it too or a
+        // zombie summary card lingers after the conversation is read.
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode())
+        Timber.d("Cleared notifications for $peerId (DM + Request + summary)")
     }
 
     /**

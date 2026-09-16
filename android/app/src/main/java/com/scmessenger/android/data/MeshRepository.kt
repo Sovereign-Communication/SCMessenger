@@ -4881,11 +4881,20 @@ open class MeshRepository(
         return contactManager?.search(query) ?: emptyList()
     }
 
-    fun setContactNickname(peerId: String, nickname: String?) {
-        // UNIFICATION: federated nickname save — verbose logging, synthetic filtering handled by caller
+    suspend fun setContactNickname(peerId: String, nickname: String?) {
+        // UNIFICATION: federated nickname save — serialized under contactUpsertMutex so a
+        // concurrent identity-envelope upsert cannot write back a stale snapshot over this
+        // write (race previously let a rename be silently reverted). Suspend: all callers
+        // invoke from viewModelScope coroutines.
         Timber.i("UNIFICATION setContactNickname: save peer $peerId -> federated nick ${nickname?.take(16) ?: "null"} (clears if blank)")
-        contactManager?.setNickname(peerId, nickname)
-        Timber.d("Contact nickname updated: $peerId -> $nickname")
+        try {
+            contactUpsertMutex.withLock {
+                contactManager?.setNickname(peerId, nickname)
+            }
+            Timber.d("Contact nickname updated: $peerId -> $nickname")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set contact nickname for $peerId")
+        }
         try {
             val normalized = nickname?.trim()?.takeIf { it.isNotEmpty() }
             if (normalized != null && !isSyntheticFallbackNickname(normalized)) {
@@ -5476,16 +5485,21 @@ open class MeshRepository(
         }
     }
 
-    fun setLocalNickname(peerId: String, nickname: String?) {
+    suspend fun setLocalNickname(peerId: String, nickname: String?) {
         // UNIFICATION: user-defined localNickname save — verbose logging, never overwritten by federated sync
         val normalizedInput = nickname?.trim()?.takeIf { it.isNotEmpty() }
         Timber.i("UNIFICATION setLocalNickname: save peer $peerId -> localNick ${normalizedInput?.take(16) ?: "null (clear)"} raw=${nickname?.take(16) ?: "null"}")
         try {
-            contactManager?.setLocalNickname(peerId, nickname)
-            Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
-            if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
-                reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+            // UNIFICATION: localNickname save + federated-nickname reclaim are serialized
+            // under contactUpsertMutex together with upsertFederatedContact so a concurrent
+            // envelope upsert cannot write back a stale snapshot over the user's rename.
+            contactUpsertMutex.withLock {
+                contactManager?.setLocalNickname(peerId, nickname)
+                if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
+                    reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+                }
             }
+            Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
             _discoveredPeers.update { current ->
                 val normalized = peerId.trim()
                 if (current.containsKey(normalized)) {

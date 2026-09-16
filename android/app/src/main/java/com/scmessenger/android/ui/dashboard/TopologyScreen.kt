@@ -208,7 +208,13 @@ private fun TopologyGraph(
     Canvas(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
         val centerX = size.width / 2
         val centerY = size.height / 2
-        val radius = minOf(size.width, size.height) / 2 - 60f
+        // TOPOLOGY-CLIP-001: margin must scale with density - a raw 60px margin
+        // is only ~23dp on modern phones, so nodes at the circle edge (radius
+        // 25px + 35px highlight halo) drew past the Canvas bounds and were
+        // clipped at the screen edges. Scale with density and keep enough room
+        // for the halo plus breathing space.
+        val margin = 48.dp.toPx() + 60f
+        val radius = minOf(size.width, size.height) / 2 - margin
 
         // Calculate node positions in a circle
         val nodePositions = mutableMapOf<String, Offset>()
