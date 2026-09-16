@@ -132,6 +132,16 @@ fun TopologyScreen(
                         TopologyLegend(
                             modifier = Modifier.padding(16.dp)
                         )
+
+                        // TOPOLOGY-SCROLL-001: the app shell's bottom navigation
+                        // bar overlaps the bottom of this screen's scroll range, so
+                        // the legend's last connection-type row could never be
+                        // scrolled into view (operator-reported "mesh topology does
+                        // not scroll fully"): at maximum scroll the final row sat
+                        // under the bar. Trailing content space lets it clear the
+                        // bar, the same inset DashboardScreen gets from its own
+                        // trailing content padding.
+                        Spacer(modifier = Modifier.height(72.dp))
                     }
                 }
             }
