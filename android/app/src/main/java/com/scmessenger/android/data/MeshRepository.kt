@@ -5331,6 +5331,17 @@ open class MeshRepository(
             return
         }
         persistIdentityBackup(core)
+        // NICKNAME-REVERT-001: keep the DataStore fallback in lockstep with the
+        // core. It used to be written only at identity creation, so a later
+        // rename left it stale and the next syncNicknameFromDatastore() pushed
+        // that stale value back over the core.
+        repoScope.launch {
+            try {
+                preferencesRepository?.setIdentityNickname(trimmed)
+            } catch (e: Exception) {
+                Timber.w(e, "setNickname: failed to update DataStore nickname fallback")
+            }
+        }
         // If swarm start was postponed before identity/nickname was ready, resume now.
         // Launched on repoScope: initializeAndStartSwarm is a suspend fun that can
         // block up to 15s waiting for the listener bind, and setNickname may be
@@ -5395,12 +5406,33 @@ open class MeshRepository(
 
         // Get current identity info to check if we already have this nickname
         val currentInfo = core.getIdentityInfo()
-        if (currentInfo?.nickname == cachedNickname) {
+        val coreNickname = currentInfo?.nickname?.trim()
+        if (coreNickname == cachedNickname.trim()) {
             Timber.d("syncNicknameFromDatastore: Nickname already synced: %s", cachedNickname)
             return
         }
 
-        // Push the cached nickname to Rust Core
+        // NICKNAME-REVERT-001: this function is a repair path for a core that
+        // has no nickname yet (see the doc comment above), not a way to impose
+        // the cache. A non-blank core nickname is authoritative -- the user may
+        // have just renamed through Settings -- so never overwrite it; refresh
+        // the stale fallback from the core instead. Overwriting here reverted a
+        // renamed identity the moment Settings observed the service RUNNING.
+        if (!coreNickname.isNullOrBlank()) {
+            Timber.i(
+                "syncNicknameFromDatastore: core nickname '%s' is authoritative; refreshing stale DataStore fallback '%s'",
+                coreNickname,
+                cachedNickname
+            )
+            try {
+                preferencesRepository?.setIdentityNickname(coreNickname)
+            } catch (e: Exception) {
+                Timber.w(e, "syncNicknameFromDatastore: failed to refresh DataStore fallback")
+            }
+            return
+        }
+
+        // Push the cached nickname to Rust Core (core has no nickname yet)
         Timber.i("syncNicknameFromDatastore: Pushing DataStore nickname to IronCore: %s", cachedNickname)
         try {
             core.setNickname(cachedNickname.trim())
