@@ -94,7 +94,7 @@ fun parseInstallPayloadUri(raw: String): InstallPayload? {
             shaRaw == null -> null
             shaRaw.isEmpty() -> return null
             !shaRaw.matches(Regex("^[0-9a-fA-F]{64}$")) -> return null
-            else -> shaRaw
+            else -> shaRaw.lowercase()
         }
 
         return InstallPayload(

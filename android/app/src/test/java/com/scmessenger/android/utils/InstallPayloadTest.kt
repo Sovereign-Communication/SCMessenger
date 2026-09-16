@@ -66,6 +66,17 @@ class InstallPayloadTest {
     }
 
     @Test
+    fun `parse normalizes sha256 to lowercase`() {
+        val mixedSha = "A1B2C3D4E5F6".padEnd(64, 'A')
+        val uri = "scmessenger://install?apk=http%3A%2F%2F192.168.1.10%3A8080%2Fscmessenger.apk&v=0.4.0&vc=15&sha256=$mixedSha"
+
+        val parsed = parseInstallPayloadUri(uri)
+
+        assertTrue(parsed != null)
+        assertEquals(mixedSha.lowercase(), parsed!!.sha256Hex)
+    }
+
+    @Test
     fun `malformed inputs return null`() {
         val malformed = listOf(
             "",
