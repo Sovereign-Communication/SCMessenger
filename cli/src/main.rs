@@ -3310,19 +3310,23 @@ async fn cmd_start(
                                 let peer_id_res = recipient.parse::<libp2p::PeerId>();
                                 let contact_res = contacts_rx.get(recipient.clone());
 
-                                let target_peer = if let Ok(pid) = peer_id_res {
-                                    Some(pid)
+                                let (target_peer, pk_from_contact) = if let Ok(pid) = peer_id_res {
+                                    (Some(pid), None)
                                 } else if let Ok(Some(contact)) = contact_res {
-                                    peer_id_from_contact_identifier(&contact.peer_id)
+                                    (peer_id_from_contact_identifier(&contact.peer_id), Some(contact.public_key))
                                 } else {
-                                    None
+                                    (None, None)
                                 };
 
                                 if let Some(target) = target_peer {
                                      // Try to find public key
-                                     let pk_opt = if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
-                                         Some(c.public_key)
-                                     } else { None };
+                                     let pk_opt = pk_from_contact.or_else(|| {
+                                         if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
+                                             Some(c.public_key)
+                                         } else {
+                                             None
+                                         }
+                                     });
 
                                      if let Some(pk) = pk_opt {
                                          // prepare_message_with_id automatically saves outgoing history
@@ -3503,22 +3507,24 @@ async fn cmd_start(
                                     } => {
                                         let peer_id_res = recipient.parse::<libp2p::PeerId>();
                                         let contact_res = contacts_rx.get(recipient.clone());
-                                        let target_peer = if let Ok(pid) = peer_id_res {
-                                            Some(pid)
+                                        let (target_peer, pk_from_contact) = if let Ok(pid) = peer_id_res {
+                                            (Some(pid), None)
                                         } else if let Ok(Some(contact)) = contact_res {
-                                            peer_id_from_contact_identifier(&contact.peer_id)
+                                            (peer_id_from_contact_identifier(&contact.peer_id), Some(contact.public_key))
                                         } else {
-                                            None
+                                            (None, None)
                                         };
                                         let Some(target) = target_peer else {
                                             push_err(-32001, "Recipient not found".into());
                                             continue;
                                         };
-                                        let pk_opt = if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
-                                            Some(c.public_key)
-                                        } else {
-                                            None
-                                        };
+                                        let pk_opt = pk_from_contact.or_else(|| {
+                                            if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
+                                                Some(c.public_key)
+                                            } else {
+                                                None
+                                            }
+                                        });
                                         let Some(pk) = pk_opt else {
                                             push_err(-32002, "No public key for recipient".into());
                                             continue;
@@ -3743,7 +3749,13 @@ async fn flush_outbox_for_peer(
 ) {
     let queued = {
         let mut ob = outbox.lock().await;
-        ob.drain_for_peer(&peer_id.to_string())
+        let mut messages = ob.drain_for_peer(&peer_id.to_string());
+        if let Ok(pk) = scmessenger_core::transport::extract_ed25519_public_key_from_peer_id(&peer_id) {
+            let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
+            let mut canonical_msgs = ob.drain_for_peer(&hex_pk);
+            messages.append(&mut canonical_msgs);
+        }
+        messages
     };
 
     if !queued.is_empty() {
