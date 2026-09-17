@@ -220,6 +220,11 @@ the same relay behavior.
     - Never delete these to free space: `tmp/` evidence, identity keys,
       `~/.scm-purge-backup-*`, `/opt/scm-relay-data`, or any file you did not
       create. Rule 11 already forbids it; a full disk is not an exception.
+    - A RUNNING NODE'S BINARY DOES NOT LIVE IN `target/`. On 2026-09-17 the
+      reclaim deleted `target/release/scmessenger-cli.exe` out from under the
+      live Windows node: the process kept running on a deleted image and could
+      not be restarted. Stage node binaries in `tmp/radio-<sha>/` (the runbook's
+      Node 1 convention) so build output stays freely reclaimable.
     - State disk facts with the number AND the command that produced it. "The
       disk was full" with no `df` line is not a finding.
 
