@@ -118,7 +118,7 @@ gitGraph
 ```
 
 ### Active Tracking PRs & Implementation Status:
-- **[#297](https://github.com/Sovereign-Communication/SCMessenger/pull/297)** (`a9861f25`): `fix(cli): drain outbox by canonical hex and unify IronCore persistent outbox store (CLI-03, CORE-02)` — **Implemented & Pushed**
+- **[#297](https://github.com/Sovereign-Communication/SCMessenger/pull/297)** (`9dc2a77c`): `fix(cli): drain outbox by canonical hex and unify IronCore persistent outbox store (CLI-03, CORE-02)` — **Implemented & Pushed**
 - **[#296](https://github.com/Sovereign-Communication/SCMessenger/pull/296)** (`5f0bce67`): `fix(core): verify sender pubkey in app delegate and subscribe WASM swarm to own topic (CRYPTO-01, TRN-03)` — **Implemented & Pushed**
 - **[#295](https://github.com/Sovereign-Communication/SCMessenger/pull/295)** (`7bb999e1`): `fix(android): buffer cold-start notifications and un-nest screen scaffolds (AND-01, AND-02, AND-03)` — **Implemented & Pushed**
 - **[#294](https://github.com/Sovereign-Communication/SCMessenger/pull/294)** (`7251b459`): `fix(ci): enforce fail-closed release signing gate on version tags (SEC-01)` — **Implemented & Pushed**
