@@ -52,6 +52,14 @@ class NotificationHelperGateTest {
 
     @Before
     fun setUp() {
+        notificationManager = mockk(relaxed = true)
+        every { notificationManager.currentInterruptionFilter } returns
+            NotificationManager.INTERRUPTION_FILTER_ALL
+        context = mockk(relaxed = true)
+        every { context.getSystemService(Context.NOTIFICATION_SERVICE) } returns notificationManager
+        every { context.getSystemService(any<String>()) } returns notificationManager
+
+        NotificationHelper.resetNotificationStats()
         // Reset to known hydrated defaults before each test (object is process-global).
         NotificationHelper.updateSettings(
             enabled = true,
@@ -62,17 +70,11 @@ class NotificationHelperGateTest {
             sound = true,
             badge = true
         )
-        NotificationHelper.resetNotificationStats()
-        notificationManager = mockk(relaxed = true)
-        every { notificationManager.currentInterruptionFilter } returns
-            NotificationManager.INTERRUPTION_FILTER_ALL
-        context = mockk(relaxed = true)
-        every { context.getSystemService(Context.NOTIFICATION_SERVICE) } returns notificationManager
     }
 
     @After
     fun tearDown() {
-        setUp()
+        NotificationHelper.resetNotificationStats()
     }
 
     // ---------------------------------------------------------------- unhydrated

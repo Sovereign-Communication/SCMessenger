@@ -717,8 +717,16 @@ object NotificationHelper {
     }
 
     private fun isDndEnabled(context: Context): Boolean {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        return notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
+        val notificationManager = try {
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        return try {
+            notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
+        } catch (_: Exception) {
+            false
+        }
     }
     
     /**
