@@ -58,8 +58,8 @@ class SubnetProbeDialCandidateTest {
         // Must stay in step with core/src/transport/multiport.rs COMMON_PORTS.
         // The Windows node's own Listening on lines were 443, 80, 8080, 9090
         // plus one random port, which is this ladder.
-        assertEquals(listOf(443, 80, 8080, 9090), SubnetProbe.RAW_TCP_PORTS)
-        assertEquals(443, SubnetProbe.RAW_TCP_PORTS.first())
+        assertEquals(listOf(9001, 443, 80, 8080, 9090), SubnetProbe.RAW_TCP_PORTS)
+        assertEquals(9001, SubnetProbe.RAW_TCP_PORTS.first())
         assertTrue(
             "the WebSocket port must never be probed as raw TCP",
             !SubnetProbe.RAW_TCP_PORTS.contains(SubnetProbe.WEBSOCKET_PORT)

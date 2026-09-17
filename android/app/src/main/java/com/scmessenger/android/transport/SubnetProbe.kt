@@ -510,7 +510,7 @@ class SubnetProbe(
          * with `core/src/transport/multiport.rs` COMMON_PORTS, in that order
          * (443 first, because that is the node's first listener).
          */
-        val RAW_TCP_PORTS = listOf(443, 80, 8080, 9090)
+        val RAW_TCP_PORTS = listOf(9001, 443, 80, 8080, 9090)
 
         /**
          * The dialable multiaddr for a probe hit, or null when the port is a
