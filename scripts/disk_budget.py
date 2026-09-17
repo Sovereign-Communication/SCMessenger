@@ -36,6 +36,141 @@ GB = 1024 ** 3
 DEFAULT_TIGHT_GB = 20.0
 DEFAULT_FLOOR_GB = 8.0
 
+# --- managed classes OUTSIDE the checkout -----------------------------------
+#
+# The worktree model below misses these entirely, because they belong to no
+# single tree. On 2026-09-17 the shared cargo cache alone measured 22.22 GB and
+# the emulator's runtime state another 6.5 GB, while this guard reported the two
+# paths it was looking for and called the disk TIGHT. A guard that cannot see a
+# class cannot warn about it (rule 15).
+SHARED_TARGET_HOME = os.environ.get(
+    "SCM_SHARED_TARGET", r"C:\Users\SCM\Documents\GitHub\.scm-shared-target")
+ANDROID_AVD_HOME = os.path.join(os.path.expanduser("~"), ".android", "avd")
+
+# Emulator runtime state only. The AVD *definition* -- config.ini, AVD.conf,
+# userdata.img -- is deliberately NOT in this list: it is the thing that lets the
+# AVD re-spawn fresh, and deleting it is the difference between "clean" and
+# "broken".
+EMULATOR_STATE_NAMES = [
+    "snapshots",              # boot snapshots, rebuilt on first boot
+    "userdata-qemu.img.qcow2",  # live userdata overlay, rebuilt from userdata.img
+    "cache.img", "cache.img.qcow2",
+    "encryptionkey.img", "encryptionkey.img.qcow2",
+    "hardware-qemu.ini", "hardware-qemu.ini.lock",
+    "multiinstance.lock", "tmpAdbCmds",
+    "read-snapshot.txt", "bootcompleted.ini",
+]
+
+# A reclaimable class must be 100% regenerable. These extensions must never
+# appear under a path this guard reports as reclaimable -- if one does, the
+# class is not a cache and the verdict must fail closed (rule 15).
+NEVER_RECLAIMABLE_SUFFIXES = (
+    ".log", ".pid", ".db", ".pem", ".key", ".jsonl", ".sqlite", ".sqlite3",
+    ".wal", ".img", ".apk", ".aab", ".backup", ".bak", ".md", ".py",
+    ".ps1", ".sh", ".toml", ".rs", ".kt", ".yml", ".yaml", ".csv",
+)
+
+# Build-script outputs live under build/*/out/ and match the suffix list above
+# while still being perfectly regenerable. They are the only sanctioned
+# exception, and they are matched by path, not by suffix alone.
+def is_build_script_output(rel_path):
+    parts = rel_path.replace("/", os.sep).split(os.sep)
+    return "build" in parts and "out" in parts
+
+
+def _durable_files(path, budget_seconds=45):
+    """Files under `path` that indicate the class is NOT a pure cache."""
+    import time
+    hits = []
+    if not os.path.isdir(path):
+        return hits
+    started = time.time()
+    stack = [path]
+    while stack:
+        if time.time() - started > budget_seconds:
+            break
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            if e.name.lower().endswith(NEVER_RECLAIMABLE_SUFFIXES):
+                                rel = os.path.relpath(e.path, path)
+                                if not is_build_script_output(rel):
+                                    hits.append((rel, e.stat().st_size))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return hits
+
+
+def external_classes():
+    """Managed classes outside the checkout, with a durability gate each."""
+    out = []
+
+    if os.path.isdir(SHARED_TARGET_HOME):
+        children = []
+        for name in sorted(os.listdir(SHARED_TARGET_HOME)):
+            p = os.path.join(SHARED_TARGET_HOME, name)
+            if os.path.isdir(p):
+                b, complete = dir_size(p)
+                children.append({"path": p, "bytes": b, "complete": complete})
+            else:
+                try:
+                    children.append({"path": p, "bytes": os.path.getsize(p),
+                                     "complete": True})
+                except OSError:
+                    pass
+        durable = []
+        for c in children:
+            durable.extend((c["path"], sz) for _, sz in _durable_files(c["path"]))
+        out.append({
+            "scope": "shared-target",
+            "path": SHARED_TARGET_HOME,
+            "bytes": sum(c["bytes"] for c in children),
+            "complete": all(c["complete"] for c in children),
+            "children": children,
+            "durable_files": durable,
+            "reclaim_cmd": "python scripts/reclaim_safe.py --reclaim-shared-target",
+            "note": "shared cargo warm cache; documented in docs/rules/BUILD_AND_CI.md",
+        })
+
+    if os.path.isdir(ANDROID_AVD_HOME):
+        for avd in sorted(os.listdir(ANDROID_AVD_HOME)):
+            if not avd.endswith(".avd"):
+                continue
+            avd_path = os.path.join(ANDROID_AVD_HOME, avd)
+            total, complete, durable = 0, True, []
+            for name in EMULATOR_STATE_NAMES:
+                p = os.path.join(avd_path, name)
+                if not os.path.exists(p):
+                    continue
+                if os.path.isdir(p):
+                    b, c = dir_size(p)
+                    complete = complete and c
+                else:
+                    try:
+                        b = os.path.getsize(p)
+                    except OSError:
+                        b = 0
+                total += b
+                durable.extend((p, sz) for _, sz in _durable_files(p))
+            out.append({
+                "scope": "emulator",
+                "path": avd_path,
+                "bytes": total,
+                "complete": complete,
+                "durable_files": durable,
+                "reclaim_cmd": "python scripts/reclaim_safe.py --reclaim-emulator-state",
+                "note": "runtime state only; config.ini/AVD.conf/userdata.img are KEPT so the AVD re-spawns",
+            })
+
+    return out
+
 # Paths inside one checkout that are build output or cached downloads. Every
 # entry is regenerable: cargo/gradle rebuild them, the CI artifacts in
 # .codebuff_deploy are re-downloadable with `gh run download`.
@@ -146,7 +281,10 @@ def main():
                                    "scope": "worktree"})
 
     candidates.sort(key=lambda c: c["bytes"], reverse=True)
+
+    external = external_classes()
     reclaimable = sum(c["bytes"] for c in candidates)
+    reclaimable += sum(e["bytes"] for e in external)
 
     if args.as_json:
         print(json.dumps({
@@ -159,6 +297,7 @@ def main():
             "verdict": verdict,
             "reclaimable_bytes": reclaimable,
             "candidates": candidates,
+            "external_classes": external,
         }, indent=2))
         return {"OK": 0, "TIGHT": 1, "BLOCKED": 2}[verdict]
 
@@ -181,10 +320,25 @@ def main():
     print("  total reclaimable: %s" % human(reclaimable))
     print()
 
+    print("Managed classes OUTSIDE the checkout (%d entries):" % len(external))
+    if not external:
+        print("  (none found)")
+    for e in external:
+        note = "" if e["complete"] else "  [WARNING] size is a FLOOR, walk hit its time budget"
+        print("  %-14s %10s  %s%s" % (e["scope"], human(e["bytes"]), e["path"], note))
+        if e["durable_files"]:
+            print("    [WARNING] %d non-build file(s) present -- NOT a pure cache, do not bulk-delete:"
+                  % len(e["durable_files"]))
+            for rel, sz in e["durable_files"][:10]:
+                print("      %10.3f MB  %s" % (sz / 1024 ** 2, rel))
+    print()
+
     print("To reclaim (deletion happens in reclaim_safe.py ONLY):")
-    print("  python scripts/reclaim_safe.py            # safety survey, no deletion")
-    print("  python scripts/reclaim_safe.py --reclaim  # delete target/ in SAFE worktrees only")
-    print("  rm -rf target                             # this checkout's build output")
+    print("  python scripts/reclaim_safe.py                      # safety survey, no deletion")
+    print("  python scripts/reclaim_safe.py --reclaim            # delete target/ in SAFE worktrees only")
+    print("  python scripts/reclaim_safe.py --reclaim-shared-target   # shared cargo cache")
+    print("  python scripts/reclaim_safe.py --reclaim-emulator-state  # AVD runtime state")
+    print("  rm -rf target                                       # this checkout's build output")
     print()
     print("NOT reclaimable and never to be deleted by an agent:")
     print("  tmp/ evidence, ~/.scm-purge-backup-*, identity keys, /opt/scm-relay-data,")

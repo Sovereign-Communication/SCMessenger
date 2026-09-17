@@ -227,6 +227,38 @@ the same relay behavior.
       Node 1 convention) so build output stays freely reclaimable.
     - State disk facts with the number AND the command that produced it. "The
       disk was full" with no `df` line is not a finding.
+    - TWO OTHER CLASSES EXIST AND THE WORKTREE MODEL DOES NOT SEE THEM. Both are
+      outside the checkout: the shared cargo warm cache at
+      `~/Documents/GitHub/.scm-shared-target` (documented in
+      `docs/rules/BUILD_AND_CI.md`; measured 22.22 GB) and the AVD runtime state
+      under `~/.android/avd/<name>.avd` (measured 6.5 GB). `disk_budget.py`
+      reports both; `reclaim_safe.py --reclaim-shared-target` and
+      `--reclaim-emulator-state` delete them. A guard that cannot see a class
+      cannot warn about it.
+    - BOTH OF THOSE DELETERS REFUSE UNLESS TWO GATES PASS. (1) Nothing may be
+      running out of the tree: on 2026-09-17 a sanctioned reclaim deleted a live
+      node's own restart path, so a running image inside a "cache" refuses the
+      delete, and so does a FAILED check (unable to enumerate processes must not
+      read as "nothing running"). (2) No durable non-build file may be present
+      (`*.log`, `*.db`, `*.pem`, `*.key`, `*.md`, `*.py`, evidence, keys). If one
+      is found, the class is not a cache and the tool refuses rather than
+      bulk-deletes -- build-script outputs under `build/*/out/` are the only
+      sanctioned exception, matched by path, not by suffix.
+    - THE EMULATOR IS TORN DOWN TO SPEC, NOT DELETED. Remove runtime state
+      (`snapshots/`, `userdata-qemu.img.qcow2`, `cache.img`, `encryptionkey.img`,
+      locks) and KEEP the definition (`config.ini`, `AVD.conf`, `userdata.img`),
+      so the AVD re-spawns fresh with `-wipe-data` instead of being recreated by
+      hand. Never delete `~/.android/debug.keystore` or `adbkey`: those are the
+      local signing and adb identities, not cache.
+    - COMMIT, PUSH, THEN RECLAIM. Cleaning up before the work is on a remote is
+      how build output becomes the only copy of something. The order is: verify
+      locally (one targeted test) -> commit -> push -> let CI run the wide
+      sweep -> reclaim locally. Do not hold a warm `target/` open "for later".
+    - `scripts/reclaim_safe.py` reports a worktree as UNKNOWN when a durable ref
+      does not resolve, which is correct but inert: it now drops refs that do not
+      exist ON THIS CLONE and says so, instead of marking 7 of 11 trees
+      permanently un-reclaimable. If it prints that warning, the durable-ref list
+      needs updating -- not the verdict.
 
 ## Capability classes — know which one you are
 
