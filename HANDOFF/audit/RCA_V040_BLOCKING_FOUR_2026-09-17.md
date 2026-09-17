@@ -11,8 +11,10 @@
 Local verification performed for this document:
 
 ```
-cargo check -p scmessenger-core --lib      -> Finished (dev profile) in 8m 15s, 0 errors
-cargo test  -p scmessenger-core --lib      -> test result: ok. 1455 passed; 0 failed; 5 ignored
+cargo check -p scmessenger-core --lib                                  -> clean, 0 errors
+cargo test  -p scmessenger-core --lib                                  -> 1461 passed; 0 failed; 5 ignored
+cargo test  -p scmessenger-core --test test_and06_public_key_vector_parity -> 8 passed
+cargo test  -p scmessenger-core --test test_trn04_custody_lifecycle    -> 2 passed
 ```
 
 That is a Windows-host run in the fix worktree. It is not the CI matrix (Linux,
@@ -67,9 +69,16 @@ unbounded, so the bound was not a bound.
   under a key the sender also chooses and cannot deliver anything new.
 - `CustodyState::Expired` (appended last so existing bincode variants keep their
   encoding) + `purge_expired_custody(max_age_ms) -> CustodyRetentionReport`, which
-  writes a `custody_expired` audit transition per dropped record and leaves
-  `Delivered` records alone (they are the delivery trail, not expiry candidates).
-  `max_age_ms == 0` disables the sweep rather than expiring everything.
+  writes a `custody_expired` audit transition per dropped record. `max_age_ms == 0`
+  disables the sweep rather than expiring everything.
+- CORRECTION (found by running the lifecycle, section 0 below): an earlier draft of
+  this document said delivered records are "the delivery trail" and are retained.
+  That is **wrong**. `mark_delivered` writes the transition and then REMOVES the
+  record -- custody ends at handover. The delivery trail is the transition log,
+  which the sweep never touches. The sweep's `Delivered` guard is defensive: a
+  stored `Delivered` row means a crash between the transition write and the removal,
+  or data from an older build, and leaving the one trace of it alone is safer than
+  deleting it.
 - `CUSTODY_DEFAULT_MAX_AGE_MS = 7 days`.
 - **Wired** (rule 16): the swarm's 5-minute `backoff_prune_interval` tick now runs the
   sweep on `relay_custody_store`, and `IronCore::purge_expired_custody` exposes it for
@@ -77,12 +86,20 @@ unbounded, so the bound was not a bound.
 - Ordering note: validation now runs *before* `find_existing` so a malformed
   destination cannot drive a scan prefix.
 
-Tests: 4 new (`custody_ingestion_rejects_unbounded_and_malformed_identifiers`,
+Tests: 4 new unit tests (`custody_ingestion_rejects_unbounded_and_malformed_identifiers`,
 `custody_ingestion_rejects_self_relay`,
 `custody_destination_prefix_must_not_alias_across_destinations`,
 `custody_retention_expires_only_undelivered_records_past_the_window`). The third
 asserts the aliasing arithmetic directly, then asserts ingestion refuses it, so the
 rule cannot be "cleaned up" later without the test failing.
+
+Plus 2 integration tests in `core/tests/test_trn04_custody_lifecycle.rs` that drive a
+real sled-backed store across three sessions (open, reopen, reopen) and assert the
+full lifecycle: accept -> dispatch -> deliver-removes-the-record, the abandoned
+record expiring, the expiry transition persisting, the default window leaving fresh
+records alone, and the ingestion guards refusing on a real store. The unit tests
+cannot cover this: they use `in_memory()` and seed state through the private
+`put_message`.
 
 ### Regression this work introduced, caught by the existing suite
 
@@ -142,7 +159,25 @@ final.
 - Deliberately **not** emitted as an `AbuseSignalDetected`: the peer may be carrying
   legitimate mesh traffic, and inflating its spam score would punish delivery.
 
-Tests: 3 new in a dedicated `relay_per_peer_budget_tests` module.
+Tests: the ladder itself was not testable as written -- all four budget/shape gates
+were inline `else if` conditions inside a ~10 000-line `select!` arm, so only the
+divisor arithmetic could be exercised. The ladder is now a pure function
+(`relay_admission`, with an explicit `RelayAdmission` outcome) called by BOTH the
+native and wasm loops, which makes the ordering assertable and removes the second
+copy of the rule that was the shape of the TRN-03 defect. 8 tests in
+`relay_per_peer_budget_tests` now cover it, including the named scenario
+`a_greedy_peer_is_throttled_while_others_still_relay` (the greedy peer is refused
+at its share while a peer inside its share is admitted, with the node ceiling still
+having room), the ordering where several gates would refuse, and that
+`relay_budget == 0` still means "no budget enforced" rather than "refuse all
+relaying" -- the semantics the original `relay_budget > 0 &&` guard encoded.
+
+NOT COVERED: the stateful half -- that the swarm actually increments
+`relay_counts_this_hour` on admission and clears it on the hourly rollover. That
+needs two real swarms exchanging relay requests, which no existing test does
+(`RelayRequest` appears in no integration test). The decision function is tested and
+wired; the counter bookkeeping is verified by inspection only, and the rule-8
+reviewer should look at exactly there.
 
 ### Trade-off, stated plainly
 
@@ -195,6 +230,36 @@ which no longer exists; the file moved to `.../utils/`.
   by the Gradle task at `android/app/build.gradle:218-224` into
   `core/target/generated-sources/uniffi/kotlin`, so the new function reaches Kotlin and
   Swift through normal regeneration.
+
+### The core check was LAXER than the Kotlin it replaces -- found by running it
+
+Exposing the function was not enough, and the difference was not theoretical. Driving
+the exact vectors from `PeerIdValidatorCurveVectorTest.kt` (whose own doc comment
+requires that "when the UniFFI path is wired on-device the same vectors must pass
+against the core implementation") showed the core ACCEPTING three shapes the Kotlin
+authority rejects:
+
+| Input | Kotlin | core (before) |
+|---|---|---|
+| `y = 1`, sign bit set (non-canonical x = 0) | reject | **accept** |
+| `y = p-1`, non-canonical sign bit | reject | **accept** |
+| `y = p` (outside the field) | reject | **accept** |
+
+`ed25519_dalek::VerifyingKey::from_bytes` decodes leniently, and this predicate is
+what separates a 64-hex `public_key` from a 64-hex Blake3 `identity_id`. Roughly half
+of all identity_ids decompress to *some* point (a fact this repo already documents in
+`test_identity_id_is_not_valid_ed25519_point`), so a laxer test means MORE identity_ids
+get misread as public keys -- the documented cause of "callers encrypt to a hash and
+produce ciphertext nobody can decrypt". Migrating Android onto this function as it
+stood would have LOOSENED validation on the platform.
+
+Fixed in `core/src/identity/keys.rs`: `is_valid_public_key` now requires a canonically
+encoded point, via `is_canonical_ed25519_encoding`, which enforces (1) the
+sign-bit-masked `y < p`, and (2) no set sign bit when `x = 0` -- i.e. when `y^2 = 1`,
+so `y == 1` or `y == p-1`, since there is no negative zero. Both rules are plain
+byte comparisons against `p = 2^255 - 19`, so this added no dependency. The two
+accepted forms in the table above (`y = 1` and `y = p-1` with sign bit clear) are
+asserted as still accepted, so the fix is strictness and not over-rejection.
 
 ### Not landed, with the reason
 
@@ -262,14 +327,45 @@ which option is chosen.
 |---|---|---|
 | N-06 | HIGH (fixed here) | Custody storage-key namespace aliasing across destinations (`message_key("a","b_c") == message_key("a_b","c")`), plus a cross-destination `pending_for_destination` scan leak. Proven by test; closed by the TRN-04 destination rule. |
 | N-07 | MED (process) | Two large unmanaged disk classes: `~/Documents/GitHub/.scm-shared-target` (22.22 GB, the documented shared warm cache) and emulator state (`~/.android/avd/scm_test_34.avd`, 6.5 GB). No guard reported either. See the disk policy change in the same branch. |
+| N-08 | **HIGH (fixed here)** | `identity::keys::is_valid_public_key` accepted non-canonical Ed25519 encodings (`y >= p`, set sign bit on `x = 0`) that the Android validator rejects, so the UniFFI function was not behaviour-equivalent to the thing it must replace. Fixed with strict canonical decoding. This is the defect that would have shipped as "AND-06 done". |
+| N-09 | MED (process) | A unit test seeded a `Delivered` custody record through the private `put_message`, asserting a state the real `mark_delivered` path never leaves behind. It passed while the production behaviour went unverified. Now covered by an integration test that drives the public API. |
+
+## 0. Behavioural verification: what was actually run
+
+Unit tests passing is not evidence of behaviour, and two of the four findings had
+only been verified at the level of helper functions. So the real surfaces were driven:
+
+```
+cargo test -p scmessenger-core --test test_and06_public_key_vector_parity   -> 8 passed
+cargo test -p scmessenger-core --test test_trn04_custody_lifecycle          -> 2 passed
+cargo test -p scmessenger-core --lib                                        -> 1461 passed; 0 failed
+cargo test -p scmessenger-core --lib -- relay_per_peer_budget_tests         -> 8 passed
+```
+
+What running them changed:
+
+1. **AND-06 was not fixed, and would have shipped broken.** The first run was 4 of 8
+   FAILED, every failure in the direction "core is more permissive". See N-08. Fixed,
+   then 8/8.
+2. **A claim of mine was false.** The lifecycle test failed on "the delivered record
+   must still be present as the delivery trail". `mark_delivered` removes the record;
+   the trail is the transition log. Test corrected, document corrected, and the
+   misleading unit test re-documented (N-09).
+3. **The TRN-07 ladder was untestable**, so it was extracted into a pure function
+   used by both loops, and the ordering is now asserted -- including the exact
+   scenario the finding names.
+
+Not verified behaviourally, and not claimed: the swarm's own counter bookkeeping
+(increment on admission, clear on rollover), because no test in this repo exchanges
+`RelayRequest` over a real swarm.
 
 ## Status against the 0.4.0 blocking set
 
 | Finding | Status |
 |---|---|
-| TRN-04 | Fixed, tested, wired. Awaits rule-8 review only if the reviewer considers `store/` in scope. |
-| TRN-07 | Fixed, tested, wired in native and wasm. **Rule-8 adversarial APPROVE outstanding — this is a transport-directory change.** |
-| AND-06 | Half fixed: UniFFI function landed. Kotlin migration blocked on the cold-start/JVM contract decision. |
+| TRN-04 | Fixed, unit + lifecycle tested against a persistent store, wired. Awaits rule-8 review only if the reviewer considers `store/` in scope. |
+| TRN-07 | Fixed, ladder extracted and tested, wired in native and wasm. **Rule-8 adversarial APPROVE outstanding — this is a transport-directory change.** Counter bookkeeping is inspection-only; see the TRN-07 section. |
+| AND-06 | Core half fixed AND corrected (N-08: the function was laxer than Kotlin and would have loosened Android validation on migration). 8/8 vector parity. The Kotlin migration is still blocked on the cold-start/JVM contract decision — but it is no longer blocked on the core being wrong, which it was. |
 | SEC-03 | Escalated with a recommendation. No code or dependency change made. |
 
 The 0.4.0 tag should not be cut on the strength of this document alone: TRN-07's gate is

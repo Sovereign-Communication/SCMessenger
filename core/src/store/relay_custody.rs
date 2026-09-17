@@ -832,8 +832,15 @@ impl RelayCustodyStore {
     ///
     /// Removes every non-delivered record whose `accepted_at_ms` is older than
     /// `max_age_ms`, recording an `expired` transition for each so the drop is
-    /// attributable in the audit trail rather than silent. Delivered records
-    /// are the delivery trail and are left to size-based policy eviction.
+    /// attributable in the audit trail rather than silent.
+    ///
+    /// A record still marked `Delivered` is skipped. That is defensive, not
+    /// load-bearing: `mark_delivered` writes the transition and then REMOVES the
+    /// record, so delivery normally leaves no row behind. A stored `Delivered`
+    /// record therefore means a crash between that write and its removal, or
+    /// data from an older build -- and in that case leaving the one trace of it
+    /// alone is the safer default. The delivery trail proper is the transition
+    /// log, which this sweep never touches.
     ///
     /// `max_age_ms == 0` disables retention and returns an empty report; it does
     /// not mean "expire everything".
@@ -855,6 +862,8 @@ impl RelayCustodyStore {
 
         for stored in records {
             let record = stored.record;
+            // See the doc comment: this state should not persist, and when it
+            // does it is a crashed handover, not a live custody obligation.
             if record.state == CustodyState::Delivered {
                 continue;
             }
@@ -3305,6 +3314,9 @@ mod tests {
                 CustodyState::Accepted,
             ))
             .expect("seed fresh record");
+        // Seeded directly because the real delivery path (mark_delivered)
+        // removes the record; this row stands in for the crash/legacy leftover
+        // the sweep's Delivered guard exists for.
         store
             .put_message(&aged_custody_record(
                 "dest-delivered",
@@ -3327,8 +3339,9 @@ mod tests {
         assert!(store.pending_for_destination("dest-expire", 10).is_empty());
         // Fresh: retained, because the window has not elapsed.
         assert_eq!(store.pending_for_destination("dest-fresh", 10).len(), 1);
-        // Delivered: retained. Delivered records are the delivery trail, and
-        // expiring them would erase proof that a message was handed over.
+        // A stored Delivered row is a crashed-handover leftover; the sweep
+        // leaves it rather than deleting the only trace of it. The delivery
+        // trail itself is the transition log, which this sweep never touches.
         assert!(store.has_message_for_destination("dest-delivered", "msg-delivered"));
 
         // The drop is attributable, not silent.

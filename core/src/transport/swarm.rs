@@ -1149,6 +1149,56 @@ fn relay_per_peer_budget(global_budget: u32) -> u32 {
     (global_budget / RELAY_PER_PEER_BUDGET_DIVISOR).max(RELAY_PER_PEER_BUDGET_MIN)
 }
 
+/// The relay admission decision for one request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayAdmission {
+    Admitted,
+    /// Cheap shape checks failed (empty or oversized message id, envelope bounds).
+    Malformed(&'static str),
+    /// The node's own hourly ceiling is spent.
+    GlobalBudgetExhausted,
+    /// TRN-07: this peer has used its share of the node's ceiling.
+    PerPeerBudgetExhausted,
+    /// Too many custody dispatches are already in flight.
+    InflightCapped,
+}
+
+/// TRN-07: the relay admission ladder, as a pure function so its **ordering**
+/// can be tested. The ordering is the security property:
+///
+///   1. shape first, so nonsense never reaches the budget accounting;
+///   2. the node ceiling before the per-peer share, so a peer cannot exceed the
+///      node's limit by being individually under its share;
+///   3. the per-peer share before admission, so one peer cannot consume the whole
+///      ceiling and deny relay to every other peer -- the defect TRN-07 names;
+///   4. the inflight cap last, because it is a resource limit rather than a
+///      fairness rule.
+///
+/// A `global_budget` of 0 is this code base's encoding for "no budget enforced"
+/// (the gate has always been `relay_budget > 0 && ...`); the extraction must not
+/// quietly turn that into "refuse everything".
+fn relay_admission(
+    malformed_reason: Option<&'static str>,
+    global_budget: u32,
+    global_used: u32,
+    peer_used: u32,
+    inflight: usize,
+) -> RelayAdmission {
+    if let Some(reason) = malformed_reason {
+        return RelayAdmission::Malformed(reason);
+    }
+    if global_budget > 0 && global_used >= global_budget {
+        return RelayAdmission::GlobalBudgetExhausted;
+    }
+    if global_budget > 0 && peer_used >= relay_per_peer_budget(global_budget) {
+        return RelayAdmission::PerPeerBudgetExhausted;
+    }
+    if inflight >= RELAY_MAX_INFLIGHT_DISPATCHES {
+        return RelayAdmission::InflightCapped;
+    }
+    RelayAdmission::Admitted
+}
+
 const RELAY_PEER_BUCKET_REFILL_PER_SEC: f64 = 4.0;
 const RELAY_PEER_BUCKET_BURST_CAPACITY: f64 = 20.0;
 const RELAY_PEER_BUCKET_MAX_TRACKED: usize = 2048;
@@ -4997,12 +5047,26 @@ pub async fn start_swarm_with_config(
                                             .unwrap_or_default()
                                             .as_millis() as u64;
 
-                                        // Determine response; channel consumed exactly once at the end
-                                        let relay_response = if let Some(reason) = relay_guardrails
-                                            .should_reject_cheap_heuristics(
+                                        // TRN-07: the ladder is decided in one pure
+                                        // function so its ordering is testable. All side
+                                        // effects below are unchanged.
+                                        let admission = relay_admission(
+                                            relay_guardrails.should_reject_cheap_heuristics(
                                                 &request.message_id,
                                                 request.envelope_data.len(),
-                                            )
+                                            ),
+                                            relay_budget,
+                                            relay_count_this_hour,
+                                            relay_counts_this_hour
+                                                .get(&peer.to_string())
+                                                .copied()
+                                                .unwrap_or(0),
+                                            pending_custody_dispatches.len(),
+                                        );
+
+                                        // Determine response; channel consumed exactly once at the end
+                                        let relay_response = if let RelayAdmission::Malformed(reason) =
+                                            admission
                                         {
                                             tracing::warn!(
                                                 "Relay request rejected by heuristic from {} (message {}): {}",
@@ -5026,7 +5090,7 @@ pub async fn start_swarm_with_config(
                                                 error: Some(reason.to_string()),
                                                 message_id: request.message_id.clone(),
                                             }
-                                        } else if relay_budget > 0 && relay_count_this_hour >= relay_budget {
+                                        } else if admission == RelayAdmission::GlobalBudgetExhausted {
                                             tracing::warn!(
                                                 "Relay budget ({}/hr) exhausted — dropping relay request {}",
                                                 relay_budget,
@@ -5037,13 +5101,7 @@ pub async fn start_swarm_with_config(
                                                 error: Some("relay_budget_exhausted".to_string()),
                                                 message_id: request.message_id.clone(),
                                             }
-                                        } else if relay_budget > 0
-                                            && relay_counts_this_hour
-                                                .get(&peer.to_string())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                >= relay_per_peer_budget(relay_budget)
-                                        {
+                                        } else if admission == RelayAdmission::PerPeerBudgetExhausted {
                                             // TRN-07: this peer has taken its share of the
                                             // node's budget. Deliberately NOT emitted as an
                                             // abuse signal: the peer may simply be carrying
@@ -5064,9 +5122,7 @@ pub async fn start_swarm_with_config(
                                                 error: Some("relay_peer_budget_exhausted".to_string()),
                                                 message_id: request.message_id.clone(),
                                             }
-                                        } else if pending_custody_dispatches.len()
-                                            >= RELAY_MAX_INFLIGHT_DISPATCHES
-                                        {
+                                        } else if admission == RelayAdmission::InflightCapped {
                                             tracing::warn!(
                                                 "Relay inflight cap reached ({}) — rejecting relay request {}",
                                                 RELAY_MAX_INFLIGHT_DISPATCHES,
@@ -8894,11 +8950,23 @@ pub async fn start_swarm_with_config(
                                                 relay_hour_start = js_sys::Date::now();
                                             }
 
-                                            let relay_response = if let Some(reason) = relay_guardrails
-                                                .should_reject_cheap_heuristics(
+                                            // TRN-07 parity: same pure ladder as the
+                                            // native loop, so the two cannot drift.
+                                            let admission = relay_admission(
+                                                relay_guardrails.should_reject_cheap_heuristics(
                                                     &request.message_id,
                                                     request.envelope_data.len(),
-                                                )
+                                                ),
+                                                relay_budget,
+                                                relay_count_this_hour,
+                                                relay_counts_this_hour
+                                                    .get(&peer.to_string())
+                                                    .copied()
+                                                    .unwrap_or(0),
+                                                pending_custody_dispatches.len(),
+                                            );
+                                            let relay_response = if let RelayAdmission::Malformed(reason) =
+                                                admission
                                             {
                                                 tracing::warn!(
                                                     "Relay request rejected by heuristic from {} (message {}): {}",
@@ -8922,19 +8990,13 @@ pub async fn start_swarm_with_config(
                                                     error: Some(reason.to_string()),
                                                     message_id: request.message_id.clone(),
                                                 }
-                                            } else if relay_budget > 0 && relay_count_this_hour >= relay_budget {
+                                            } else if admission == RelayAdmission::GlobalBudgetExhausted {
                                                 RelayResponse {
                                                     accepted: false,
                                                     error: Some("relay_budget_exhausted".to_string()),
                                                     message_id: request.message_id.clone(),
                                                 }
-                                            } else if relay_budget > 0
-                                                && relay_counts_this_hour
-                                                    .get(&peer.to_string())
-                                                    .copied()
-                                                    .unwrap_or(0)
-                                                    >= relay_per_peer_budget(relay_budget)
-                                            {
+                                            } else if admission == RelayAdmission::PerPeerBudgetExhausted {
                                                 tracing::warn!(
                                                     "Relay per-peer share reached for {} (wasm) — refusing {}",
                                                     peer,
@@ -8947,9 +9009,7 @@ pub async fn start_swarm_with_config(
                                                     ),
                                                     message_id: request.message_id.clone(),
                                                 }
-                                            } else if pending_custody_dispatches.len()
-                                                >= RELAY_MAX_INFLIGHT_DISPATCHES
-                                            {
+                                            } else if admission == RelayAdmission::InflightCapped {
                                                 tracing::warn!(
                                                     "Relay inflight cap reached ({}) — rejecting relay request {}",
                                                     RELAY_MAX_INFLIGHT_DISPATCHES,
@@ -11206,7 +11266,10 @@ mod ledger_seeding_hardening_tests {
 /// the private constants it is defined against.
 #[cfg(test)]
 mod relay_per_peer_budget_tests {
-    use super::{relay_per_peer_budget, RELAY_PER_PEER_BUDGET_MIN};
+    use super::{
+        relay_admission, relay_per_peer_budget, RelayAdmission, RELAY_MAX_INFLIGHT_DISPATCHES,
+        RELAY_PER_PEER_BUDGET_MIN,
+    };
 
     #[test]
     fn per_peer_share_bounds_a_single_peer_by_default() {
@@ -11240,5 +11303,96 @@ mod relay_per_peer_budget_tests {
             "the floor must beat the naive division, or a small mesh starves"
         );
         assert!(relay_per_peer_budget(100) >= RELAY_PER_PEER_BUDGET_MIN);
+    }
+
+    // --- the admission ladder's ordering ---------------------------------
+
+    #[test]
+    fn a_greedy_peer_is_throttled_while_others_still_relay() {
+        // The exact defect TRN-07 names: one peer consumes far past its share
+        // while the node's own hourly ceiling still has room. The greedy peer
+        // must be refused AND a peer that has barely relayed must be admitted.
+        // Before the per-peer dimension existed, the greedy peer's traffic was
+        // charged against the global counter alone, so it could take the whole
+        // ceiling and then every other peer was refused for the rest of the
+        // hour -- a node-wide outage caused by one connection.
+        let budget = 200;
+        let share = relay_per_peer_budget(budget);
+
+        assert_eq!(
+            relay_admission(None, budget, 120, share, 0),
+            RelayAdmission::PerPeerBudgetExhausted,
+            "a peer at its share must be refused even while the node has room"
+        );
+        assert_eq!(
+            relay_admission(None, budget, 120, 0, 0),
+            RelayAdmission::Admitted,
+            "a peer inside its share must still relay: this is the whole point"
+        );
+    }
+
+    #[test]
+    fn the_node_ceiling_bounds_every_peer() {
+        let budget = 200;
+        assert_eq!(
+            relay_admission(None, budget, budget, 0, 0),
+            RelayAdmission::GlobalBudgetExhausted,
+            "the node ceiling must bind before any per-peer allowance"
+        );
+    }
+
+    #[test]
+    fn zero_budget_still_means_unlimited() {
+        // `relay_budget == 0` is this code base's encoding for "no budget
+        // enforced" (the gate has always been `relay_budget > 0 && ...`).
+        // Extraction must not silently turn 0 into "refuse all relaying".
+        assert_eq!(
+            relay_admission(None, 0, 10_000, 10_000, 0),
+            RelayAdmission::Admitted
+        );
+        assert_eq!(
+            relay_admission(None, 0, 0, 0, RELAY_MAX_INFLIGHT_DISPATCHES),
+            RelayAdmission::InflightCapped,
+            "with no budget, the inflight cap is still the only limiter"
+        );
+    }
+
+    #[test]
+    fn malformed_requests_never_reach_the_budget_accounting() {
+        assert_eq!(
+            relay_admission(Some("relay_envelope_too_large"), 0, 0, 0, 0),
+            RelayAdmission::Malformed("relay_envelope_too_large")
+        );
+    }
+
+    #[test]
+    fn earlier_gates_win_when_several_would_refuse() {
+        // Ordering is the property, so assert it where two gates disagree.
+        let budget = 200;
+        assert_eq!(
+            relay_admission(None, budget, 0, 0, RELAY_MAX_INFLIGHT_DISPATCHES),
+            RelayAdmission::InflightCapped
+        );
+        assert_eq!(
+            relay_admission(Some("relay_message_id_empty"), budget, budget, budget, 999),
+            RelayAdmission::Malformed("relay_message_id_empty"),
+            "shape beats every budget gate"
+        );
+        assert_eq!(
+            relay_admission(None, budget, budget, 0, RELAY_MAX_INFLIGHT_DISPATCHES),
+            RelayAdmission::GlobalBudgetExhausted,
+            "the node ceiling beats the inflight cap"
+        );
+        assert_eq!(
+            relay_admission(
+                None,
+                budget,
+                10,
+                relay_per_peer_budget(budget),
+                RELAY_MAX_INFLIGHT_DISPATCHES
+            ),
+            RelayAdmission::PerPeerBudgetExhausted,
+            "the per-peer share beats the inflight cap"
+        );
     }
 }

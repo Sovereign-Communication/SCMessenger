@@ -10,14 +10,76 @@ pub const PUBLIC_KEY_PREFIX: &str = "pk:";
 /// Prefix for identity_id (blake3 hash) in logs and payloads to distinguish from public_key_hex
 pub const IDENTITY_ID_PREFIX: &str = "id:";
 
-/// Check if a 64-hex string looks like a public key (valid Ed25519 curve point)
+/// Ed25519 field prime p = 2^255 - 19, little-endian (RFC 8032 section 5.1).
+const ED25519_FIELD_P_LE: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
+/// Bytewise `a >= b` for two 32-byte little-endian integers.
+fn le_bytes_ge(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for i in (0..32).rev() {
+        if a[i] != b[i] {
+            return a[i] > b[i];
+        }
+    }
+    true
+}
+
+/// Strict (canonical) Ed25519 compressed-point decoding, per RFC 8032.
+///
+/// `ed25519_dalek::VerifyingKey::from_bytes` is LENIENT, and measured on
+/// 2026-09-17 that difference is load-bearing here: it accepts a y coordinate
+/// that is not canonically encoded (y >= p) and accepts a set sign bit on the
+/// encodings of x = 0. `is_valid_public_key` is what separates a 64-hex
+/// `public_key` from a 64-hex Blake3 `identity_id`, and roughly half of all
+/// identity_ids decompress to *some* point (see
+/// `test_identity_id_is_not_valid_ed25519_point`), so being laxer than the
+/// platform validator means more identity_ids are misread as public keys --
+/// the documented cause of "callers encrypt to a hash and produce ciphertext
+/// nobody can decrypt".
+///
+/// Two rules, both expressible without a curve dependency:
+///   1. The sign-bit-masked y must be < p; y >= p is a non-canonical encoding.
+///   2. x = 0 exactly when y^2 = 1, i.e. y == 1 or y == p-1. A set sign bit
+///      there is non-canonical: there is no negative zero.
+fn is_canonical_ed25519_encoding(bytes: &[u8; 32]) -> bool {
+    let sign_bit_set = bytes[31] & 0x80 != 0;
+    let mut y = *bytes;
+    y[31] &= 0x7f;
+
+    if le_bytes_ge(&y, &ED25519_FIELD_P_LE) {
+        return false;
+    }
+
+    if sign_bit_set {
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        let mut p_minus_one = ED25519_FIELD_P_LE;
+        p_minus_one[0] = 0xec; // p - 1 = 2^255 - 20
+        if y == one || y == p_minus_one {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Check if a 64-hex string is a public key: a canonically encoded, valid
+/// Ed25519 curve point.
+///
+/// Strictness matters, not just point-on-curve membership: see
+/// [`is_canonical_ed25519_encoding`]. The platform adapters this is exposed to
+/// over UniFFI rely on it to tell a public key from an identity_id, so it must
+/// not be laxer than they are.
 pub fn is_valid_public_key(hex_str: &str) -> bool {
     if hex_str.len() != 64 || !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
         return false;
     }
     if let Ok(bytes) = hex::decode(hex_str) {
         if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return ed25519_dalek::VerifyingKey::from_bytes(&arr).is_ok();
+            return is_canonical_ed25519_encoding(&arr)
+                && ed25519_dalek::VerifyingKey::from_bytes(&arr).is_ok();
         }
     }
     false
@@ -821,8 +883,52 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_identity_id_is_not_valid_ed25519_point() {
+#[test]
+fn test_strict_canonical_decoding_matches_rfc8032() {
+    // These four shapes are the ones the platform validator rejected and this
+    // core function used to ACCEPT (measured 2026-09-17, before the strict
+    // check was added). Kept as named regression vectors.
+
+    // y = 1 with the sign bit set: x = 0, and there is no negative zero.
+    let y_one_sign_one = {
+        let mut b = [0u8; 32];
+        b[0] = 1;
+        b[31] = 0x80;
+        b
+    };
+    assert!(!is_valid_public_key(&hex::encode(y_one_sign_one)));
+
+    // y = 1, sign bit clear: the canonical encoding of the same point.
+    let y_one_sign_zero = {
+        let mut b = [0u8; 32];
+        b[0] = 1;
+        b
+    };
+    assert!(is_valid_public_key(&hex::encode(y_one_sign_zero)));
+
+    // y = p-1 with the sign bit set: x = 0 again, non-canonical.
+    let mut y_p_minus_one_sign_one = ED25519_FIELD_P_LE;
+    y_p_minus_one_sign_one[0] = 0xec;
+    y_p_minus_one_sign_one[31] = 0xff;
+    assert!(!is_valid_public_key(&hex::encode(y_p_minus_one_sign_one)));
+
+    // y = p-1, sign bit clear: canonical.
+    let mut y_p_minus_one_sign_zero = ED25519_FIELD_P_LE;
+    y_p_minus_one_sign_zero[0] = 0xec;
+    assert!(is_valid_public_key(&hex::encode(y_p_minus_one_sign_zero)));
+
+    // y = p is outside the field entirely, however the sign bit is set.
+    assert!(!is_valid_public_key(&hex::encode(ED25519_FIELD_P_LE)));
+    let mut p_sign_set = ED25519_FIELD_P_LE;
+    p_sign_set[31] = 0xff;
+    assert!(!is_valid_public_key(&hex::encode(p_sign_set)));
+
+    // All-ff masks to a y far above p.
+    assert!(!is_valid_public_key(&hex::encode([0xffu8; 32])));
+}
+
+#[test]
+fn test_identity_id_is_not_valid_ed25519_point() {
         // WHAT THIS ACTUALLY PROVES: that a curve-point test CANNOT be used to
         // tell a public key apart from an identity_id.
         //
