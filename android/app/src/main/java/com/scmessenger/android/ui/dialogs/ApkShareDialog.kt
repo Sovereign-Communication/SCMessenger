@@ -26,6 +26,7 @@ import com.scmessenger.android.R
 import com.scmessenger.android.ui.components.QrCodeImage
 import com.scmessenger.android.utils.ApkShareManager
 import com.scmessenger.android.utils.buildInstallPayloadUri
+import com.scmessenger.android.utils.parseInstallPayloadUri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,14 +47,20 @@ fun ApkShareDialog(
 
     // Combined install payload (emit side): single-scan apk URL + version
     // identity. SHA-256 slot stays null until the hash source lands.
+    // Round-trip self-check keeps parseInstallPayloadUri wired until the
+    // JoinMesh accept side lands.
     val installPayloadUri = remember(downloadUrl) {
         downloadUrl?.let {
-            buildInstallPayloadUri(
+            val uri = buildInstallPayloadUri(
                 apkUrl = it,
                 versionName = BuildConfig.VERSION_NAME,
                 versionCode = BuildConfig.VERSION_CODE,
                 sha256Hex = null
             )
+            if (parseInstallPayloadUri(uri) == null) {
+                timber.log.Timber.w("ApkShareDialog: built install payload failed to parse")
+            }
+            uri
         }
     }
 
