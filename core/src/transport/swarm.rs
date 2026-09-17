@@ -1706,7 +1706,7 @@ fn should_apply_delivery_convergence_marker(
     Ok(())
 }
 
-fn extract_ed25519_public_key_from_peer_id(peer_id: &PeerId) -> Result<[u8; 32], &'static str> {
+pub fn extract_ed25519_public_key_from_peer_id(peer_id: &PeerId) -> Result<[u8; 32], &'static str> {
     let bytes = peer_id.to_bytes();
     // Inline Ed25519 PeerIds use the protobuf-encoded public key bytes:
     // 0x00(identity multihash), 0x24(total len 36), 0x08(field 1), 0x01(Ed25519),

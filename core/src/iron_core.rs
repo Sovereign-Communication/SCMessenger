@@ -473,7 +473,7 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::new();
+        let outbox = Outbox::persistent(backend.clone());
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
