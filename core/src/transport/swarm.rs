@@ -3291,7 +3291,12 @@ fn ledger_verified_pair(
 /// addressed to it (gossipsub `publish` still returns Ok with no subscriber,
 /// so the sender recorded a transport ACK and then waited forever for a
 /// receipt). Senders address us on exactly this topic.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// WASM (2026-09-17 compile fix): `LedgerManager` is a native-only field of
+/// `IronCore` (`iron_core.rs` cfg), so the ledger consultation below is
+/// compiled out on wasm. Wasm keeps its pre-exemption auto-negotiation
+/// behavior for peer topics; the own-topic exemption above still applies
+/// there. Native behavior (fail closed on unproven ghost shape) unchanged.
 fn is_ghost_peer_topic(
     topic_str: &str,
     core_handle: &Option<Weak<crate::IronCore>>,
@@ -3317,21 +3322,31 @@ fn is_ghost_peer_topic(
             return false;
         }
     }
-    let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
-        // Fail closed on ghost shape when we cannot consult the ledger.
-        return true;
-    };
-    let proven = core
-        .ledger_manager
-        .get_preferred_relays(64)
-        .iter()
-        .any(|e| {
-            e.success_count > 0
-            && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
-            && (e.peer_id.as_deref() == Some(peer_key)
-                || e.public_key.as_deref() == Some(peer_key))
-        });
-    !proven
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
+            // Fail closed on ghost shape when we cannot consult the ledger.
+            return true;
+        };
+        let proven = core
+            .ledger_manager
+            .get_preferred_relays(64)
+            .iter()
+            .any(|e| {
+                e.success_count > 0
+                    && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
+                    && (e.peer_id.as_deref() == Some(peer_key)
+                        || e.public_key.as_deref() == Some(peer_key))
+            });
+        !proven
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // No ledger exists on wasm: with no provenance to consult, this is
+        // not a ghost (pre-GHOST-IDENTITY-001 wasm behavior).
+        let _ = core_handle;
+        false
+    }
 }
 
 /// Build and start the libp2p swarm, returning a handle for communication.
