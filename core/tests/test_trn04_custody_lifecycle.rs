@@ -171,8 +171,9 @@ fn custody_lifecycle_is_correct_and_survives_a_restart() {
 
         // ...and now expiry runs against a record that really was persisted.
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let report: CustodyRetentionReport =
-            store.purge_expired_custody(1).expect("sweep must not error");
+        let report: CustodyRetentionReport = store
+            .purge_expired_custody(1)
+            .expect("sweep must not error");
 
         assert_eq!(
             report.expired, 1,

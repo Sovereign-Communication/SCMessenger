@@ -640,7 +640,11 @@ impl RelayCustodyStore {
         // scan prefix out of `destination_peer_id` -- so an unvalidated
         // destination is not merely stored, it is scanned for on the very first
         // line of custody ingestion.
-        validate_custody_token("source_peer_id", &source_peer_id, CUSTODY_MAX_IDENTIFIER_CHARS)?;
+        validate_custody_token(
+            "source_peer_id",
+            &source_peer_id,
+            CUSTODY_MAX_IDENTIFIER_CHARS,
+        )?;
         validate_custody_destination_identifier(&destination_peer_id)?;
         if source_peer_id == destination_peer_id {
             // A custody hop from X to X cannot deliver anything the node itself
@@ -844,10 +848,7 @@ impl RelayCustodyStore {
     ///
     /// `max_age_ms == 0` disables retention and returns an empty report; it does
     /// not mean "expire everything".
-    pub fn purge_expired_custody(
-        &self,
-        max_age_ms: u64,
-    ) -> Result<CustodyRetentionReport, String> {
+    pub fn purge_expired_custody(&self, max_age_ms: u64) -> Result<CustodyRetentionReport, String> {
         let mut report = CustodyRetentionReport {
             max_age_ms,
             ..Default::default()
@@ -3346,7 +3347,11 @@ mod tests {
 
         // The drop is attributable, not silent.
         let transitions = store.transitions_for_custody("msg-expire-custody");
-        assert_eq!(transitions.len(), 1, "expiry must write exactly one transition");
+        assert_eq!(
+            transitions.len(),
+            1,
+            "expiry must write exactly one transition"
+        );
         assert_eq!(transitions[0].from_state, Some(CustodyState::Accepted));
         assert_eq!(transitions[0].to_state, CustodyState::Expired);
         assert_eq!(transitions[0].reason, "custody_expired");

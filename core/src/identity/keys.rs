@@ -883,52 +883,52 @@ mod tests {
         );
     }
 
-#[test]
-fn test_strict_canonical_decoding_matches_rfc8032() {
-    // These four shapes are the ones the platform validator rejected and this
-    // core function used to ACCEPT (measured 2026-09-17, before the strict
-    // check was added). Kept as named regression vectors.
+    #[test]
+    fn test_strict_canonical_decoding_matches_rfc8032() {
+        // These four shapes are the ones the platform validator rejected and this
+        // core function used to ACCEPT (measured 2026-09-17, before the strict
+        // check was added). Kept as named regression vectors.
 
-    // y = 1 with the sign bit set: x = 0, and there is no negative zero.
-    let y_one_sign_one = {
-        let mut b = [0u8; 32];
-        b[0] = 1;
-        b[31] = 0x80;
-        b
-    };
-    assert!(!is_valid_public_key(&hex::encode(y_one_sign_one)));
+        // y = 1 with the sign bit set: x = 0, and there is no negative zero.
+        let y_one_sign_one = {
+            let mut b = [0u8; 32];
+            b[0] = 1;
+            b[31] = 0x80;
+            b
+        };
+        assert!(!is_valid_public_key(&hex::encode(y_one_sign_one)));
 
-    // y = 1, sign bit clear: the canonical encoding of the same point.
-    let y_one_sign_zero = {
-        let mut b = [0u8; 32];
-        b[0] = 1;
-        b
-    };
-    assert!(is_valid_public_key(&hex::encode(y_one_sign_zero)));
+        // y = 1, sign bit clear: the canonical encoding of the same point.
+        let y_one_sign_zero = {
+            let mut b = [0u8; 32];
+            b[0] = 1;
+            b
+        };
+        assert!(is_valid_public_key(&hex::encode(y_one_sign_zero)));
 
-    // y = p-1 with the sign bit set: x = 0 again, non-canonical.
-    let mut y_p_minus_one_sign_one = ED25519_FIELD_P_LE;
-    y_p_minus_one_sign_one[0] = 0xec;
-    y_p_minus_one_sign_one[31] = 0xff;
-    assert!(!is_valid_public_key(&hex::encode(y_p_minus_one_sign_one)));
+        // y = p-1 with the sign bit set: x = 0 again, non-canonical.
+        let mut y_p_minus_one_sign_one = ED25519_FIELD_P_LE;
+        y_p_minus_one_sign_one[0] = 0xec;
+        y_p_minus_one_sign_one[31] = 0xff;
+        assert!(!is_valid_public_key(&hex::encode(y_p_minus_one_sign_one)));
 
-    // y = p-1, sign bit clear: canonical.
-    let mut y_p_minus_one_sign_zero = ED25519_FIELD_P_LE;
-    y_p_minus_one_sign_zero[0] = 0xec;
-    assert!(is_valid_public_key(&hex::encode(y_p_minus_one_sign_zero)));
+        // y = p-1, sign bit clear: canonical.
+        let mut y_p_minus_one_sign_zero = ED25519_FIELD_P_LE;
+        y_p_minus_one_sign_zero[0] = 0xec;
+        assert!(is_valid_public_key(&hex::encode(y_p_minus_one_sign_zero)));
 
-    // y = p is outside the field entirely, however the sign bit is set.
-    assert!(!is_valid_public_key(&hex::encode(ED25519_FIELD_P_LE)));
-    let mut p_sign_set = ED25519_FIELD_P_LE;
-    p_sign_set[31] = 0xff;
-    assert!(!is_valid_public_key(&hex::encode(p_sign_set)));
+        // y = p is outside the field entirely, however the sign bit is set.
+        assert!(!is_valid_public_key(&hex::encode(ED25519_FIELD_P_LE)));
+        let mut p_sign_set = ED25519_FIELD_P_LE;
+        p_sign_set[31] = 0xff;
+        assert!(!is_valid_public_key(&hex::encode(p_sign_set)));
 
-    // All-ff masks to a y far above p.
-    assert!(!is_valid_public_key(&hex::encode([0xffu8; 32])));
-}
+        // All-ff masks to a y far above p.
+        assert!(!is_valid_public_key(&hex::encode([0xffu8; 32])));
+    }
 
-#[test]
-fn test_identity_id_is_not_valid_ed25519_point() {
+    #[test]
+    fn test_identity_id_is_not_valid_ed25519_point() {
         // WHAT THIS ACTUALLY PROVES: that a curve-point test CANNOT be used to
         // tell a public key apart from an identity_id.
         //

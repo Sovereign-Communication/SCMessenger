@@ -11256,7 +11256,6 @@ mod ledger_seeding_hardening_tests {
             "loopback bases are undiscoverable and must never anchor a reservation"
         );
     }
-
 }
 
 /// TRN-07: the per-peer share of the node's hourly relay budget.

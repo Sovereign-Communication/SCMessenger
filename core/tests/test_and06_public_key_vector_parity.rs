@@ -58,7 +58,10 @@ fn y_equals_p_minus_one_is_valid_only_with_sign_bit_zero() {
     assert_eq!(p_minus_1_sign0.len(), 64);
     assert_eq!(p_minus_1_sign1.len(), 64);
 
-    assert!(valid(&p_minus_1_sign0), "y=p-1 with sign bit 0 must be accepted");
+    assert!(
+        valid(&p_minus_1_sign0),
+        "y=p-1 with sign bit 0 must be accepted"
+    );
 
     // Top byte ff = 0x7f | 0x80: same y, non-canonical sign bit.
     let non_canonical = format!("{}ff", &p_minus_1_sign0[..62]);
