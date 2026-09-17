@@ -473,7 +473,7 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::new();
+        let outbox = Outbox::persistent(backend.clone());
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -3839,15 +3839,15 @@ impl IronCore {
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
             local_identity_id,
-            Some(canonical_peer_id),
+            Some(canonical_peer_id.clone()),
             None,
         );
 
-        // Notify delegate
+        // Notify delegate with verified canonical identity and authenticated public key hex
         if let Some(delegate) = self.delegate.read().as_ref() {
             delegate.on_message_received(
-                message.sender_id.clone(),
-                message.sender_id.clone(),
+                canonical_peer_id,
+                sender_public_key_hex,
                 message.id.clone(),
                 message.timestamp,
                 message.payload.clone(),

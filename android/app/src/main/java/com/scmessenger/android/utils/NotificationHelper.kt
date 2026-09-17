@@ -61,6 +61,18 @@ object NotificationHelper {
     private const val NOTIFICATION_ID_REQUEST_BASE = 2500
     private const val NOTIFICATION_ID_MESH_STATUS = 3000
     private const val NOTIFICATION_ID_PEER_EVENT = 4000
+    private const val NOTIFICATION_ID_GROUP_SUMMARY_BASE = 4500
+
+    /**
+     * NOTIF-UNIFY-002: a group summary only has something to collapse when one
+     * person has BOTH kinds of child (a DM and a DM request). Posting it
+     * unconditionally put a second record per conversation in the shade whose
+     * title and MessagingStyle repeated the child's content -- the same person
+     * appearing twice (summary id 4500+hash beside message id 2000+hash),
+     * i.e. the operator-reported "split notifications".
+     */
+    fun shouldPostGroupSummary(hasDirectMessageChild: Boolean, hasRequestChild: Boolean): Boolean =
+        hasDirectMessageChild && hasRequestChild
 
     // Actions — package-qualified with the applicationId so notification
     // actions share one app identity (was com.scmessenger.*, which looked
@@ -78,8 +90,15 @@ object NotificationHelper {
     private val messageGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
     private val requestGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
 
-    // Notification settings (defaults per WS14 spec)
-    var notificationsEnabled: Boolean = true
+    // Notification settings (defaults per WS14 spec).
+    // Null = not yet hydrated from DataStore; any message arriving before
+    // hydration completes must be treated as disabled to avoid the cold-start
+    // race where a message delivered during service startup slips through as
+    // true before the OFF setting is read. hydrateNotificationGates() fills
+    // this from PreferencesRepository.notificationsEnabled, and coil will keep
+    // it live for the lifetime of the service process.
+    @Volatile
+    var notificationsEnabled: Boolean? = null
     var notifyDmEnabled: Boolean = true
     var notifyDmRequestEnabled: Boolean = true
     var notifyDmInForeground: Boolean = false
@@ -238,10 +257,12 @@ object NotificationHelper {
         // Log notification attempt with classification details
         Timber.i("Processing notification - peerId=$peerId, messageId=$messageId, isKnownContact=$isKnownContact, hasExistingConversation=$hasExistingConversation, explicitDmRequest=$explicitDmRequest, appInForeground=$appInForeground")
 
-        // Check global notifications enabled
-        if (!notificationsEnabled) {
+        // Check global notifications enabled. Null means not yet hydrated
+        // from DataStore — treat as disabled (fail closed) rather than the
+        // old default-true which let one cold-start message through.
+        if (notificationsEnabled == false || notificationsEnabled == null) {
             trackNotificationEvent("suppressed_settings")
-            Timber.w("Notifications disabled globally, skipping notification for peerId=$peerId")
+            Timber.w("Notifications disabled (gate=$notificationsEnabled), skipping notification for peerId=$peerId")
             return
         }
 
@@ -425,6 +446,39 @@ object NotificationHelper {
         } else {
             NOTIFICATION_ID_MESSAGE_BASE + peerId.hashCode()
         }
+        // NOTIF-UNIFY-001/002: group summary - Android only collapses setGroup()
+        // children into one conversation card when a summary notification
+        // exists; without it the children render as separate cards (the
+        // "split notifications" symptom). The caller passes a canonical
+        // peerId, so all identity forms of the same human share one
+        // group key and one notification id.
+        //
+        // It is emitted only when this person actually has both children, and
+        // it is a header (conversation name only) -- not a second copy of the
+        // newest message. When there is nothing to collapse, any stale summary
+        // is cancelled so it cannot linger beside the single card.
+        val summaryId = NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode()
+        val hasDmChild = messageGroups[peerId]?.isNotEmpty() == true
+        val hasRequestChild = requestGroups[peerId]?.isNotEmpty() == true
+        if (shouldPostGroupSummary(hasDmChild, hasRequestChild)) {
+            try {
+                NotificationManagerCompat.from(context).notify(
+                    summaryId,
+                    NotificationCompat.Builder(context, channelId)
+                        .setSmallIcon(R.drawable.ic_notification)
+                        .setGroup(peerId)
+                        .setGroupSummary(true)
+                        .setContentTitle(displayName)
+                        .setContentText(context.getString(R.string.notification_summary_new_messages))
+                        .setAutoCancel(true)
+                        .build()
+                )
+            } catch (e: SecurityException) {
+                Timber.w("Group summary notification blocked (SecurityException); posting individual card only")
+            }
+        } else {
+            NotificationManagerCompat.from(context).cancel(summaryId)
+        }
         try {
             Timber.i("Displaying notification - peerId=$peerId, notificationId=$notificationId, type=${if (isDmRequest) "DM_REQUEST" else "DM"}")
             NotificationManagerCompat.from(context).notify(notificationId, notification)
@@ -485,7 +539,11 @@ object NotificationHelper {
         val requestId = NOTIFICATION_ID_REQUEST_BASE + peerId.hashCode()
         NotificationManagerCompat.from(context).cancel(notificationId)
         NotificationManagerCompat.from(context).cancel(requestId)
-        Timber.d("Cleared notifications for $peerId (DM + Request)")
+        // NOTIF-UNIFY-001: clear posts cancel DM + Request for this peer, so
+        // the group summary has no remaining children - cancel it too or a
+        // zombie summary card lingers after the conversation is read.
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID_GROUP_SUMMARY_BASE + peerId.hashCode())
+        Timber.d("Cleared notifications for $peerId (DM + Request + summary)")
     }
 
     /**
@@ -506,9 +564,11 @@ object NotificationHelper {
         transport: String
     ) {
         // Gate: honor the global notifications toggle (was DND-only).
-        if (!notificationsEnabled) {
+        // Fail closed when not yet hydrated (null) — same rationale as
+        // showMessageNotification.
+        if (notificationsEnabled == false || notificationsEnabled == null) {
             trackNotificationEvent("suppressed_settings")
-            Timber.d("Notifications disabled globally, skipping peer-discovered for peerId=$peerId")
+            Timber.d("Notifications disabled (gate=$notificationsEnabled), skipping peer-discovered for peerId=$peerId")
             return
         }
         if (isDndEnabled(context)) return

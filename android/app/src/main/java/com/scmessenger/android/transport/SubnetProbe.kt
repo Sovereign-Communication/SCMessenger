@@ -208,9 +208,27 @@ class SubnetProbe(
         if (!opened) return
 
         recentlyReported[key] = now
-        // Port 9002 is a WebSocket listener — append /ws so libp2p uses the
-        // correct transport. Port 9001 is raw TCP.
-        val multiaddr = if (port == 9002) "/ip4/$host/tcp/$port/ws" else "/ip4/$host/tcp/$port"
+        val multiaddr = dialCandidateFor(host, port)
+        if (multiaddr == null) {
+            // The port accepted a TCP connect but is not dialable by this client
+            // (see WEBSOCKET_PORT). A hit here is still decisive mesh liveness:
+            // this host serves the node's WebSocket p2p port. So ask which port
+            // the node actually listens on for raw TCP and report that instead,
+            // rather than leaving the host undiscoverable.
+            val tcpCandidate = firstRawTcpCandidate(host, now)
+            if (tcpCandidate == null) {
+                Timber.i("SubnetProbe: $host:$port is the WebSocket listener and no raw TCP port accepted - no dial candidate")
+                return
+            }
+            Timber.i("SubnetProbe: $host is a SCMessenger node ($port is its WebSocket port); raw TCP -> $tcpCandidate")
+            if (dialDelayMs > 0) delay(dialDelayMs)
+            try {
+                onLanAddressResolved(tcpCandidate, TransportType.TCP_MDNS)
+            } catch (t: Throwable) {
+                Timber.w(t, "SubnetProbe: onLanAddressResolved callback threw")
+            }
+            return
+        }
         Timber.i("SubnetProbe: open port $host:$port (likely SCMessenger peer) -> $multiaddr")
         // Let the probe socket's TIME_WAIT state clear on the peer before the
         // dialer opens the real libp2p connection to the same ip:port.
@@ -220,6 +238,32 @@ class SubnetProbe(
         } catch (t: Throwable) {
             Timber.w(t, "SubnetProbe: onLanAddressResolved callback threw")
         }
+    }
+
+    /**
+     * The raw-TCP port this host serves, asked only of a host that already
+     * answered on the node's WebSocket p2p port, so a generic web server cannot
+     * be mistaken for a peer.
+     *
+     * The ladder is the node's own: `core/src/transport/multiport.rs` binds
+     * `COMMON_PORTS = [443, 80, 8080, 9090]` as plain TCP (9002 is excluded
+     * there precisely because it is the WebSocket listener), and
+     * `core/src/transport/swarm.rs` dials peers with the same ladder. The
+     * Windows node's own `Listening on` lines confirm 443/80/8080/9090 plus one
+     * random port.
+     */
+    private suspend fun firstRawTcpCandidate(host: String, now: Long): String? {
+        for (tcpPort in RAW_TCP_PORTS) {
+            val tcpKey = "$host:$tcpPort"
+            if (recentlyReported.containsKey(tcpKey)) continue
+            val accepted = withTimeoutOrNull(connectTimeoutMs.toLong() + 250L) {
+                connectAsync(host, tcpPort)
+            } ?: false
+            if (!accepted) continue
+            recentlyReported[tcpKey] = now
+            return "/ip4/$host/tcp/$tcpPort"
+        }
+        return null
     }
 
     /**
@@ -368,8 +412,25 @@ class SubnetProbe(
     private fun narrowToScanSubnet(addr: LinkAddress): String {
         val ip = addr.address as Inet4Address
         val rawPrefix = addr.prefixLength
-        val octets = ip.hostAddress.split(".")
-        if (octets.size != 4) return "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
+        // Kotlin warning Class A (SubnetProbe.kt:371): InetAddress.getHostAddress is a
+        // platform-typed (String!) API — a null return here previously flowed into
+        // String.split and would crash. Additionally, the old size!=4 early-return
+        // indexed octets[1..2] on the short list it had just checked, an
+        // IndexOutOfBounds path. Both fixed: fall back to the interface's /24.
+        val hostAddress: String? = ip.hostAddress
+        if (hostAddress.isNullOrEmpty()) {
+            Timber.w("SubnetProbe: null/empty hostAddress for $addr; using interface-literal fallback")
+            return "${ip.address[0].toInt() and 0xff}.${ip.address[1].toInt() and 0xff}.${ip.address[2].toInt() and 0xff}.0/24"
+        }
+        val octets = hostAddress.split(".")
+        if (octets.size != 4) {
+            return when (octets.size) {
+                1 -> "${octets[0]}.0.0.0/8"
+                2 -> "${octets[0]}.${octets[1]}.0.0/16"
+                3 -> "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
+                else -> "${ip.address[0].toInt() and 0xff}.${ip.address[1].toInt() and 0xff}.${ip.address[2].toInt() and 0xff}.0/24"
+            }
+        }
         return when {
             // Use /24 around the local host for the typical /16 home LAN.
             rawPrefix < 24 -> "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
@@ -430,6 +491,34 @@ class SubnetProbe(
     }
 
     companion object {
+        /**
+         * libp2p WebSocket listener port. A successful TCP connect on this port
+         * proves a peer is present, but it is NOT a dialable endpoint for this
+         * client: Android's libp2p dial of a `/ws` multiaddr has never once
+         * completed on this mesh (the Windows node logs 0
+         * `direction=inbound transport=ws` against every accepted inbound, all of
+         * which are `transport=tcp`), and the phone's `/ws` dial of
+         * 192.168.0.121:9002 fails client-side in ~80ms with no connection
+         * attempt visible on the peer, while the same phone reaches that node
+         * over TCP. Synthesizing `/ip4/<host>/tcp/9002/ws` therefore produced
+         * only failed dials (`Failed to dial /ip4/192.168.0.121/tcp/9002/ws`).
+         */
+        const val WEBSOCKET_PORT = 9002
+
+        /**
+         * Raw-TCP ports the node binds for LAN reachability - must stay in step
+         * with `core/src/transport/multiport.rs` COMMON_PORTS, in that order
+         * (443 first, because that is the node's first listener).
+         */
+        val RAW_TCP_PORTS = listOf(443, 80, 8080, 9090)
+
+        /**
+         * The dialable multiaddr for a probe hit, or null when the port is a
+         * WebSocket listener this client cannot dial. Port 9001 is raw TCP.
+         */
+        fun dialCandidateFor(host: String, port: Int): String? =
+            if (port == WEBSOCKET_PORT) null else "/ip4/$host/tcp/$port"
+
         // A handful of common router defaults. Keep this list short — the
         // point is to catch the obvious cases (home WiFi /24 = 192.168.0.x
         // and 192.168.1.x, plus 10.0.0.x used by some mesh routers).
