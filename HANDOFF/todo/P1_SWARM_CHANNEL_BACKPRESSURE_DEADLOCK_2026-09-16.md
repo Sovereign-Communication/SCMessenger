@@ -1,9 +1,9 @@
 ﻿# P1: Swarm Bounded Event Channel Backpressure Deadlock (TRN-01)
 
-**Status:** OPEN  
-**Priority:** P1 (v0.4.0 Release Blocker)  
-**Target Branch:** `feat/v040-multi-transport-store-forward`  
-**Components:** `core/src/transport/swarm.rs`, `cli/src/main.rs`  
+**Status:** OPEN
+**Priority:** P1 (v0.4.0 Release Blocker)
+**Target Branch:** `feat/v040-multi-transport-store-forward`
+**Components:** `core/src/transport/swarm.rs`, `cli/src/main.rs`
 **Reference Audit:** `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`
 
 ## Problem Description

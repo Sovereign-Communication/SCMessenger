@@ -1,9 +1,9 @@
 ﻿# P1: Release Signing Gate Fail-Closed Enforcement (SEC-01 & SEC-02)
 
-**Status:** OPEN  
-**Priority:** P1 (v0.4.0 Release Blocker)  
-**Target Branch:** `feat/v040-multi-transport-store-forward`  
-**Components:** `.github/workflows/release.yml`, `scripts/verify_release_keystore.sh`  
+**Status:** OPEN
+**Priority:** P1 (v0.4.0 Release Blocker)
+**Target Branch:** `feat/v040-multi-transport-store-forward`
+**Components:** `.github/workflows/release.yml`, `scripts/verify_release_keystore.sh`
 **Reference Audit:** `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`
 
 ## Problem Description
