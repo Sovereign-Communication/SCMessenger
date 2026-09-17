@@ -1,9 +1,9 @@
 ﻿# P1: Android Cold-Start Notification Buffering & Scaffold Layout De-Nesting (AND-01 & AND-02)
 
-**Status:** OPEN  
-**Priority:** P1 (v0.4.0 Release Blocker)  
-**Target Branch:** `feat/v040-multi-transport-store-forward`  
-**Components:** `android/app/src/main/java/com/scmessenger/android/utils/NotificationHelper.kt`, `android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt`, `PeerListScreen.kt`, `TopologyScreen.kt`, `MeshApplication.kt`  
+**Status:** OPEN
+**Priority:** P1 (v0.4.0 Release Blocker)
+**Target Branch:** `feat/v040-multi-transport-store-forward`
+**Components:** `android/app/src/main/java/com/scmessenger/android/utils/NotificationHelper.kt`, `android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt`, `PeerListScreen.kt`, `TopologyScreen.kt`, `MeshApplication.kt`
 **Reference Audit:** `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`
 
 ## Problem Description
