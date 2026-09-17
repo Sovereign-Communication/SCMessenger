@@ -2,6 +2,10 @@
 
 Candidate SHA: `3ccf0ec2b2091b556e68caa44c3e97797094cdf2`
 Branch: `unified/v040-3node-parity`
+
+Superseded candidate for the 2026-09-17 cutover: PR #295 lane
+`7becf8a0ac87bd9d7c3058723e702d4933377c22` (tree-equivalent to the synthetic
+merge commit `1005da142c7e7cae94801241ac834a04824db99d` that CI actually built).
 Workspace: `C:\Users\SCM\Documents\GitHub\MiMoSCMessengerFresh`
 Gates so far: `cargo check -p scmessenger-core -p scmessenger-cli` PASS; observation unit tests 11/11 PASS.
 
@@ -33,15 +37,89 @@ before the 3-node matrix is scored. Mixed generations are a known failure mode
 3. Redeploy preserving `/data` identity bind-mount.
 4. Verify: `curl /version` git hash equals candidate; health 200; Windows + Pixel peers.
 
+### Recreate recipe that actually works (verified live 2026-09-17T21:13Z)
+
+Since PR #293 the image runs as `USER scm` (uid 10001), so any env copied
+from a pre-#293 container is a trap: the legacy `SCM_CONFIG_DIR=/root/.config/scmessenger`
+makes the entrypoint die with `mkdir: cannot create directory '/root': Permission denied`
+in a restart loop. Two consequences, both hit in production on the 09-17 cutover:
+
+1. **`/opt/scm-relay-data` must be writable by uid 10001.** It has been root-owned
+   since the container ran as root. Fix without a privilege wrapper on the host
+   (the docker group is enough):
+   ```bash
+   docker run --rm --user root -v /opt/scm-relay-data:/d \
+     testbotz/scmessenger:<tag> chown -R 10001:10001 /d
+   ```
+2. **Use the image's own config dir** (`/home/scm/.config/scmessenger`), not `/root/...`.
+
+Identity does NOT live in the config dir. It survives container replacement
+because it is in the mounted sled store under `/data` — proved by the 09-17 cutover:
+the node came back with the same `identity_id`, `libp2p_peer_id` and `public_key_hex`
+after `docker rm -f` + fresh container on a new image. Do not treat the config
+dir as the identity-bearing path, and do not skip the `/data` mount.
+
+```bash
+docker pull testbotz/scmessenger:<newtag>
+docker rm -f scm-node
+docker run -d --name scm-node --network host --restart unless-stopped \
+  -v /opt/scm-relay-data:/data \
+  -e LISTEN_PORT=9000 -e RUST_LOG=info -e SCM_LISTEN_PORT=9876 -e SCM_P2P_PORT=9002 \
+  -e SCM_HTTP_HEALTH_PORT=9876 -e SCM_CONFIG_DIR=/home/scm/.config/scmessenger \
+  -e SCMESSENGER_DATA_DIR=/data -e SCM_WASM_PORT=9003 -e SCM_DATA_DIR=/data \
+  testbotz/scmessenger:<newtag> scm start
+# verify identity is unchanged, then confirm RestartCount stays 0
+docker inspect scm-node --format 'RestartCount={{.RestartCount}} Started={{.State.StartedAt}}'
+```
+
+Rollback: the previous image stays in `docker images`; re-run with the old tag.
+Never `docker system prune` on this host before the checkpoint is written.
+
 ## Node 3 — Pixel 6a (operator-owned)
 
 1. Build APK from this SHA:
    ```powershell
    .\gradlew :app:assembleDebug
    ```
-2. Operator installs via adb (no shell-forced service actions from CTO lanes).
+2. Operator installs via adb.
+
+   **Operator ruling, 2026-09-17:** the agent lanes are ALWAYS allowed to
+   install an APK and to pull logs (`adb install`, `adb logcat`, `run-as … cat`,
+   `adb pull`). No other device driving — no forcing service start/stop, no
+   settings changes, no uninstall without a separate explicit approval.
 3. Record `pm path` APK SHA256 and post-install service identity (E5).
 4. Verify: app diagnostics git hash equals candidate; peersDiscovered matches fleet.
+
+### PRECONDITION: the debug keystore must match, or the install cannot happen
+
+Check this before promising a Pixel cutover (measured 2026-09-17):
+
+| APK source | Signer #1 certificate SHA-256 |
+|---|---|
+| CI `android-debug-apk` artifact | `47a84596e934e98293252e3874ecae4c2e2a9c3715a8ea7ce64963357c9a6097` |
+| Local `gradlew :app:assembleDebug` | `1cdef09cd3b80f9b686e5f9e7b760d360b1fd338c6720bcb59b15b233967835f` |
+
+CI generates its own debug keystore, so a CI-built APK produces:
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.scmessenger.android
+signatures do not match newer version; ignoring!` — and the only way past it is
+`adb uninstall`, which destroys the phone's on-device node identity, ledger and
+contacts. That is an identity change on a node, i.e. a hard stop under
+"Stop conditions" above; do not do it as a side effect of a routine cutover.
+
+Two clean routes:
+- **Identity-preserving (default):** build the APK locally at the candidate
+  (`gradlew :app:assembleDebug`) so it carries the device's existing debug
+  keystore, then `adb install -r` over the top. The build's embedded git hash
+  must be made to match the other two nodes (check out the candidate commit
+  itself, not a synthetic merge commit, or accept the provenance note).
+- **CI-artifact install:** only with explicit operator approval of the identity
+  reset, or after CI is given the operator's debug keystore as a secret so both
+  sides sign identically.
+
+Verify with:
+```bash
+"$LOCALAPPDATA/Android/Sdk/build-tools/35.0.0/apksigner.bat" verify --print-certs <apk>
+```
 
 ## Score matrix (after all three match SHA)
 
