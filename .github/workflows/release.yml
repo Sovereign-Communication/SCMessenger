@@ -128,6 +128,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Assert release keystore configured for version tag
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_KEYSTORE != 'true'
+        run: |
+          echo "::error::Cannot build release tag ${{ github.ref_name }} without configured release keystore secrets (SCMESSENGER_KEYSTORE_BASE64). Failing closed."
+          exit 1
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -422,8 +428,8 @@ jobs:
 
       - name: Generate Combined Checksums
         run: |
-          # Find all binary files (excluding checksums)
-          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.wasm" \) ! -name "*.sha256" | while read file; do
+          # Find all binary files (excluding checksums and debug APKs)
+          find . -type f \( -name "scm-*" -o -name "*.apk" -o -name "*.aab" -o -name "*.wasm" \) ! -name "*debug*.apk" ! -name "*.sha256" | while read file; do
             if [ -f "$file" ]; then
               sha256sum "$file" >> SHA256SUMS.txt
             fi
@@ -436,6 +442,7 @@ jobs:
         with:
           files: |
             **/scm-*
+            !**/*debug*.apk
             **/*.apk
             **/*.aab
             **/*.wasm

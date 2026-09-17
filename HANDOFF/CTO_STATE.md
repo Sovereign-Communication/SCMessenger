@@ -3142,3 +3142,57 @@ before merging anything.
 session's uncommitted work. `cargo clean --target <triple>` wiped 44.7 GB. The
 preflight hook now blocks both and prints the working form — if it fires, read
 it; it is there because someone already paid for that lesson.
+
+---
+
+## 2026-09-16 — Pre-v0.4.0 Shadow Audit, Remediation Merge Train & Work-Ahead Coordination
+
+Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main` 1e2fb747.
+
+### 1. Pre-v0.4.0 Adversarial Shadow Audit Completed
+- Master Audit Report committed: `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`.
+- Issue #155 Evidence Uploaded: Comment posted on [PR #156 (Comment 5705455726)](https://github.com/Sovereign-Communication/SCMessenger/pull/156#issuecomment-5705455726).
+- Six targeted P1 remediation PRs created, fully implemented, and pushed:
+  - **PR #292** (`fix/swarm-channel-backpressure-deadlock`, commit `f5b3cf05`): TRN-01 resolved. Decoupled `register_identity_with_relay`, `share_ledger`, `flush_outbox_for_peer`, and delivery ACKs onto `tokio::spawn` in `cmd_start` and `cmd_relay`; widened swarm event channels to 1024 slots. Clears the cyclic deadlock causing the recurring Windows silent wedge.
+  - **PR #293** (`fix/docker-control-api-security`, commit `27a261f4`): CLI-01 resolved. Restricted HTTP API bind default to `127.0.0.1:9876` (`SCM_HTTP_BIND` override retained); added non-root `USER scm` (UID 10001) in `docker/Dockerfile`.
+  - **PR #294** (`fix/release-signing-gate-fail-closed`, commit `7251b459`): SEC-01 resolved. Added fail-closed release signing assertion (`startsWith(github.ref, 'refs/tags/v') && env.HAS_KEYSTORE != 'true'`); blocked debug APK publishing via negative glob.
+  - **PR #295** (`fix/android-coldstart-and-scaffold-remediation`, commit `78d0a35a`): AND-01, AND-02, AND-03 resolved. Implemented startup cold-boot notification buffer and replay queue in `NotificationHelper.kt` (with unit tests in `NotificationHelperGateTest.kt`); de-nested child `Scaffold` composables in `PeerListScreen.kt` and `TopologyScreen.kt` into `Column(Modifier.fillMaxSize())` to resolve SlotTable corruption; restored port `9001` to `SubnetProbe.RAW_TCP_PORTS`; removed crash-swallowing logic in `MeshApplication.kt` to prevent zombie ANR states. Reconciles and supersedes #291.
+  - **PR #296** (`fix/core-identity-spoof-and-wasm-topic-parity`, commit `5f0bce67`): CRYPTO-01 & TRN-03 resolved. Passed verified `canonical_peer_id` and authenticated `sender_public_key_hex` to `delegate.on_message_received`; subscribed WASM swarm to own peer topic `/scmessenger/peer/<own_hex>/v1` guarded by `is_ghost_peer_topic`.
+  - **PR #297** (`fix/cli-outbox-canonical-drain-and-sled-unification`, commit `a9861f25`): CLI-03 & CORE-02 resolved. Fixed outbox drain by resolving both Base58 and canonical 64-hex keys; unified `IronCore::with_storage` with persistent Sled storage backend across daemon restarts.
+
+### 2. Clearance of Previous Draft Holds
+- Earlier 7-day merge plan notes (PR #303) placed a HOLD on #292 and #295 when they were initial docs-only tracking tickets.
+- **HOLD IS CLEARED**: Both #292 and #295 have full, tested code implementations pushed.
+  - PR #292 is not docs-only; it contains the complete async decoupling fix for TRN-01.
+  - PR #295 resolves the semantic question with #291 by implementing cold-start buffering with replay upon DataStore hydration, satisfying both fail-closed security and zero message loss.
+
+### 3. Concurrent Work-Ahead Audits & High-Confidence Resolutions
+Adversarial security audits were conducted for all concurrent work-ahead PRs, actionable review comments were posted, and 99%+ confidence fixes were implemented and pushed to each branch:
+- **PR #289** (`p1/curve-uniffi-kotlin-20260914`, commit `102e726a`): Resolved CI unit test failures by correcting test vector endianness (placing sign bit at byte 31 in `yOneSign1`) and fixing `pMinus1` hex string literals to exactly 64 characters (`pMinus1Sign0` and `pMinus1Sign1`).
+- **PR #290** (`fix/subnetprobe-hostaddress-null-20260915`): Reviewed null-safe `hostAddress` handling and port scanning gaps.
+- **PR #291** (`workahead/notif-cold-start-gate`): Superseded and reconciled by PR #295's buffer-and-replay architecture.
+- **PR #298** (`workahead/android-joinmesh-gms-gate`, commit `3537ba67`): Added "Paste Join Bundle" clipboard fallback in `QrScannerView`, unblocking devices without Google Play Services (GrapheneOS/CalyxOS/F-Droid), and cleaned redundant dead check.
+- **PR #299** (`workahead/android-persist-join-seeds`, commit `ca96da0f`): Bounded seed import to `MAX_SEEDS_PER_IMPORT = 16` via `take(16)`, added explicit uninitialized `ledgerManager` warning guard, and added hermetic JVM unit tests in `MeshRepositorySeedImportTest.kt`.
+- **PR #300** (`workahead/android-apk-host-hardening`, commit `5d2ea2f4`): Promoted `serverExecutor` to class field with graceful `shutdownNow()` in `stopLocalApkHost()`, added HTTP `HEAD` support for DownloadManager preflights, and stripped `?query` / `#fragment` from target path in `parseHttpRequestLine`.
+- **PR #301** (`workahead/ios-apk-link-share`, commit `d50e0cef`): Wrapped `releaseApkURL` in a typed `URL` object before passing to `ShareSheet`, restoring rich link preview metadata, Safari actions, and AirDrop compatibility.
+- **PR #302** (`workahead/android-install-qr-payload`, commit `263eab0a`): Normalized `sha256Hex` to lowercase in `parseInstallPayloadUri` and added unit test coverage in `InstallPayloadTest.kt`.
+
+### 4. Verified Merge Recommendation & Phase Order
+1. **Phase 1: Merge into `feat/v040-multi-transport-store-forward` (carrier PR #288)**
+   1. `PR #290` (SubnetProbe null-safety)
+   2. `PR #294` (Release signing fail-closed gate)
+   3. `PR #293` (Docker localhost control API & non-root UID)
+   4. `PR #292` (Swarm backpressure deadlock decoupling & 1024-slot channels)
+   5. `PR #295` (Cold-start notification buffer & replay, scaffold de-nesting, port 9001)
+   6. `PR #296` (Verified delegate identity & WASM own-topic parity)
+   7. `PR #297` (Canonical 64-hex outbox drain & Sled storage unification)
+2. **Phase 2: Refresh & Merge Carrier PR #288 into `main`**
+   - Rerun all pending checks on PR #288; verify mergeability; merge to `main`.
+3. **Phase 3: Main Stack Rollout (Post-#288)**
+   - `PR #283` (V1.0.0 docs readiness audit -> `main`)
+   - `PR #289` (UniFFI Ed25519 point validator & tests — FIXED via `102e726a`)
+   - `PR #298` (JoinMesh GMS gate & clipboard fallback — FIXED via `3537ba67`)
+   - `PR #299` (Seed persistence seam & 16-seed bound — FIXED via `ca96da0f`)
+   - `PR #300` (APK host lifecycle, HEAD, query strip — FIXED via `5d2ea2f4`)
+   - `PR #302` (Install QR payload & SHA lowercase — FIXED via `263eab0a`)
+   - `PR #301` (iOS release link typed URL share — FIXED via `d50e0cef`)
