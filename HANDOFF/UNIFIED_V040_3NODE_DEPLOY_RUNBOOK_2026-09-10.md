@@ -160,9 +160,22 @@ from the phone, `nc` to 192.168.0.121 succeeds on 9002, 443, 80, 8080 and 9090.
 
 ## Disk notes
 
-- ~17 GB free. If Android/full suite needs room: run `scripts/reclaim_safe.py`
-  or `scripts/clean_target.sh --all` only on **this** workspace's `target/`.
-- Never delete uncommitted work, identity keys, or rollback artifacts.
+- Measure before you build: `python scripts/disk_budget.py`. It reports the
+  free space, every reclaimable `target/` in this checkout and in each
+  registered worktree, and exits 2 when the host is below the hard floor
+  (AGENTS.md rule 17). On 2026-09-17 this host hit 100% (1.2 GB free) with
+  20.7 GB of build output in the main tree alone, and `du` could not even
+  finish a survey of the worktrees.
+- Reclaim with `python scripts/reclaim_safe.py --reclaim` (build output in
+  provably-safe worktrees only). `scripts/clean_target.sh` is the blunter
+  fallback and stays scoped to **this** workspace's `target/`.
+- Prefer the CI artifact to a local build whenever one exists:
+  `gh run download <run-id> -n <artifact-name> -D tmp/<dir>`. That is how the
+  09-17 cutover avoided every large build on a nearly-full disk.
+- Local runs are for a single targeted test, then wipe. The wide sweep is CI's
+  job.
+- Never delete uncommitted work, identity keys, rollback artifacts, `tmp/`
+  evidence, or `~/.scm-purge-backup-*`. A full disk is not an exception.
 
 ## Stop conditions
 

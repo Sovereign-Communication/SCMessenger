@@ -196,6 +196,33 @@ the same relay behavior.
     reachability question, never a cosmetic one. `scripts/check_wiring.py` is
     the executable form — run it, do not re-derive it by eye.
 
+17. THE DISK IS A SHARED, FINITE RESOURCE. BUILD OUTPUT DOES NOT BELONG IN
+    EVERY TREE, AND CI IS THE DEFAULT BUILDER.
+
+    On 2026-09-17 this host reached 100% (1.2 GB free). Eleven registered git
+    worktrees are each capable of carrying their own cargo `target/`; the one
+    tree that mattered measured 20.7 GB by itself, and `du` could not finish a
+    survey because the disk was thrashing. Nothing in the toolchain paces
+    that, so it has to be a checked state rather than a discovery.
+
+    - Run `python scripts/disk_budget.py` before a build. A BLOCKED verdict
+      (exit 2) means do not build in this checkout: pull the artifact from CI
+      instead with `gh run download <run-id> -n <artifact-name> -D tmp/<dir>`.
+    - ONE tree builds. Worktrees are for source and review. A worktree that
+      does get a build reclaims it immediately afterwards
+      (`python scripts/reclaim_safe.py --reclaim`).
+    - CI is the default verifier. A local run is for a SINGLE targeted test
+      (`cargo test -p <crate> <one_test>`), then wipe; the wide sweep belongs to
+      CI, which has its own disk.
+    - `scripts/reclaim_safe.py` is the only sanctioned deleter of build output.
+      It requires a worktree to be clean, fully pushed, and merged before it
+      will remove a `target/`. Do not hand-roll `rm -rf` across other trees.
+    - Never delete these to free space: `tmp/` evidence, identity keys,
+      `~/.scm-purge-backup-*`, `/opt/scm-relay-data`, or any file you did not
+      create. Rule 11 already forbids it; a full disk is not an exception.
+    - State disk facts with the number AND the command that produced it. "The
+      disk was full" with no `df` line is not a finding.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)
