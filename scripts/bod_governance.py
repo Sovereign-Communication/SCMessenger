@@ -58,6 +58,104 @@ except ImportError as err:
 MAX_BOD_COST_CEILING = 0.10
 REQUIRED_PANELISTS = 5
 
+# ---- Paid lane (default paid tier: structured votes, reasoning OFF) ----
+# Operator rulings 2026-09-13: "default to the smartest models for the $";
+# "stop using reasoning if it's not needed". Every member below emitted a
+# parseable JSON vote in a live probe on 2026-09-13 (evidence:
+# tmp/review/MODEL_PROBE_20260913.json + REASONING_OFF_PROBE_20260913.json).
+# Vote-mode reasoning contract: the reasoning key must be sent as
+# {"effort": "none"} -- OMITTING it leaves the provider default (ON) for
+# reasoning-native models, which produces reasoning-only output at small
+# token budgets (that exact failure killed bod-e3238cd5 round 2).
+# Requires harness chat.py patch: _effort_to_send("off") -> "none".
+# Until that patch lands, run this lane with --reasoning-effort auto and
+# max_tokens >= 8192 (auto sends low effort to deepseek/kimi-hinted ids).
+# Prices $/Mtok in/out (live catalog 2026-09-13):
+#   deepseek-v4.1-flash 0.150/0.600 | deepseek-v4-flash 0.048/0.096
+#   gpt-5.6-luna 0.200/1.200 (rankings #1 by daily tokens) | gpt-4o-mini 0.150/0.600
+#   ling-3.0-flash 0.021/0.063
+# kimi-k3 (2.648/13.283) REMOVED: its output price price-bombs the panel
+# worst-case preflight (7 x 4096 x $13.28/M = $0.38 > $0.10 ceiling) while
+# offering no verified edge over the five below.
+# Dropped as outdated generation per operator ruling: granite-4.0-h-micro,
+# llama-3.1-8b (weak/old), deepseek-chat V3.1 (dominated by v4.1-flash).
+# Panel seat mechanics (verified in harness/capability.py + panel.py,
+# 2026-09-13):
+#   1. The pool is CAPABILITY-REORDERED, cheapest-first (paid tier), so
+#      configured order is only a tiebreak -- every member must be a verified
+#      emitter, not just the head of the list.
+#   2. The governor's learned-BYOK cache (~/.config/harness/byok_prefixes.json)
+#      SILENTLY drops any org prefix previously observed routing paid-BYOK
+#      (this session: google/ and m/ were cached and silently removed
+#      gemini-3.8-flash from dispatch; cache cleared 2026-09-13).
+#   3. Two ledger strikes of unusable output (e.g. reasoning-only votes) gate
+#      a model out of dispatch (v4.1-flash evidence, runs bod-f16cfd7f/bod-).
+#      Do not configure reasoning-native models into VOTE pools until the
+#      chat.py effort:none patch lands (see Harness handoff) -- their provider
+#      default reasoning makes 4096-token votes reason-only under auto/low.
+# v4.1-flash is therefore the JUDGE, not a panelist: its synthesis parses
+# reliably, and judge calls are separate from ledger strike accounting.
+PAID_PANEL_POOL = [
+    "openai/gpt-5.6-luna",            # $0.000321/vote reasoning-off, 7.5s
+    "deepseek/deepseek-v4-flash",     # $0.000050/vote reasoning-off, 17.8s
+    "inclusionai/ling-3.0-flash-fin:free",  # fifth seat (verified 2026-09-13:
+                                      # clean APPROVE JSON, 4.6s, $0.00,
+                                      # BYOK-immune). Replaces:
+                                      #  - google/gemini-3.8-flash (removed for
+                                      #    cause: OpenRouter routed it BYOK in
+                                      #    run bod-T1T2-R4; governor re-learned
+                                      #    the google/ org prefix -- unusable as
+                                      #    a deterministic pool member here)
+                                      #  - openai/gpt-4o-mini (removed for cause:
+                                      #    stale-gen voter, filed a content-free
+                                      #    REJECT dissent with no file/line/
+                                      #    evidence against 4 evidence-citing
+                                      #    APPROVEs)
+                                      #  - openai/gpt-5.6-sol / kimi-k3 (probed
+                                      #    clean but their own reserve rows
+                                      #    price-bomb the $0.10 preflight)
+    "inclusionai/ling-3.0-flash",     # cheapest input of the pool
+    "openai/gpt-5-mini",              # verified at auto/4096 (probe 2026-09-13: 10.2s,
+                                      # $0.0014, parseable); reasoning MANDATORY on its
+                                      # route (400 on effort:none) so it needs budget,
+                                      # never a disable. NOTE: google/gemini-3.8-flash
+                                      # is also verified but sits behind the governor's
+                                      # learned-BYOK org filter (google/), which rotates
+                                      # it out non-deterministically.
+]
+PAID_JUDGE = "deepseek/deepseek-v4.1-flash"   # $0.000055/vote at effort:none (probe);
+                                               # as judge its synthesis parses reliably
+
+# ---- Heavy tier (operator directive 2026-09-13: "use even bigger/better
+# models when work is hard and warrants it") ----
+# Ids catalog-validated 2026-09-13 via `harness models --all` (445 live ids);
+# stale ids hard-fatal at fetch_pricing, so re-validate before editing.
+# anthropic/* excluded: BYOK_DENYLIST_PREFIXES hard-gates it in the harness.
+# V3-era deepseek-v3.2 (0.269/0.400) replaced by the V4 generation per the
+# same operator ruling; v4-pro (1.600/3.200) undercuts gpt-4.1 (2.00/8.00)
+# on output price by 2.5x. The canonical $0.10 BoD cost ceiling (BoD
+# canonical rule 4) is KEPT: at review-scale prompts the heavy tier fits
+# inside it. A higher ceiling is a BoD rule change and requires an explicit
+# recorded operator ruling.
+HEAVY_PANEL_POOL = [
+    "z-ai/glm-5.3-flash",             # reasoning MANDATORY on its route: 400 on
+                                      # effort:none (probed 2026-09-13); needs
+                                      # max_tokens >= 2048 (spends ~1132 thinking)
+    "openai/gpt-5-mini",              # same mandatory class; ~676 tok at 2048 budget
+    "deepseek/deepseek-v4-pro",       # dual-mode: effort:none -> $0.00012 clean vote
+    "openai/gpt-5.6-sol",             # flagship; $0.0026/vote
+    "openai/gpt-5.6-luna",            # cheap enough to double here for depth
+    "openai/gpt-4.1",                 # R2 APPROVE-1.0 on corrected facts
+    "google/gemini-3.8-flash",        # current Gemini generation (2.5-pro BANNED
+                                      # by operator ruling 2026-09-13); slow (31s)
+]
+HEAVY_JUDGE = "openai/gpt-5.6-sol"     # gpt-5 superseded by the 5.6 line
+# Heavy-lane reasoning allocation: run with --max-tokens 2048+ and default
+# auto effort. glm-5.3-flash / gpt-5-mini get their mandatory default
+# reasoning; deepseek ids get low; non-hinted ids omit. All seven members
+# verified parseable under exactly these conditions 2026-09-13
+# (tmp/review/HEAVY_PROBE_20260913.json + MODEL_PROBE_20260913.json).
+
 REPO_PHILOSOPHY_RUBRIC = """
 --- SCMESSENGER REPO PHILOSOPHY & CANONICAL DOCTRINE ---
 1. NODES, NOT RELAYS:
@@ -181,6 +279,7 @@ def evaluate_board_proposal(
     dry_run: bool = False,
     task_id: str = None,
     use_paid: bool = False,
+    use_heavy: bool = False,
 ) -> dict:
     """Run the 5-judge panel and judge synthesis over a proposal."""
     cost_ceiling = min(float(max_cost), MAX_BOD_COST_CEILING)
@@ -212,17 +311,14 @@ def evaluate_board_proposal(
     overrides = {
         "max_panelists": REQUIRED_PANELISTS,
         "max_cost": cost_ceiling,
-        "use_free": not use_paid,
+        "use_free": not (use_paid or use_heavy),
     }
-    if use_paid:
-        overrides["panel_pool"] = (
-            "inclusionai/ling-3.0-flash,"
-            "meta-llama/llama-3.1-8b-instruct,"
-            "deepseek/deepseek-chat,"
-            "openai/gpt-4o-mini,"
-            "ibm-granite/granite-4.0-h-micro"
-        )
-        overrides["judge"] = "openai/gpt-4o-mini"
+    if use_heavy:
+        overrides["panel_pool"] = ",".join(HEAVY_PANEL_POOL)
+        overrides["judge"] = HEAVY_JUDGE
+    elif use_paid:
+        overrides["panel_pool"] = ",".join(PAID_PANEL_POOL)
+        overrides["judge"] = PAID_JUDGE
     settings = load_settings(overrides=overrides)
 
     api_key, gov = governor_for(settings, cost_ceiling)
@@ -292,8 +388,18 @@ def evaluate_board_proposal(
 
     if all_models_agreed:
         target_vote = "APPROVE" if unanimous_approved else "REJECT"
-        judge_verdict_str = str(consensus.get("verdict", "")).lower()
         judge_content_str = str(judge_content).lower()
+        # 2026-09-13 (bod-F6 run): the consensus dict carries agreement/
+        # confidence/defer/disagreements but NO verdict key -- the judge's
+        # actual verdict wording only exists in its raw synthesis content.
+        # Scanning consensus alone made every APPROVE verdict invisible to
+        # the token scan, so a single disagreement (even one the judge
+        # explicitly called non-blocking) fell through to
+        # REJECTED_JUDGE_DIVERGENCE despite a 5/5 panel and an APPROVE
+        # synthesis at 0.97 confidence. Scan both texts.
+        judge_verdict_str = (
+            str(consensus.get("verdict", "")) + " " + judge_content_str
+        ).strip().lower()
         judge_deferred = bool(consensus.get("defer", False))
         judge_agreement = str(consensus.get("agreement", "")).lower()
         disagreements = consensus.get("disagreements", []) or []
@@ -360,6 +466,7 @@ def evaluate_board_proposal(
     resolution = {
         "resolution_id": task_id,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "tier": "heavy" if use_heavy else ("paid" if use_paid else "free"),
         "status": status,
         "proposal": proposal,
         "verdict": final_verdict,
@@ -391,6 +498,7 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
     entry = [
         f"\n### Resolution {resolution['resolution_id']} [{resolution['status']}]",
         f"- **Timestamp**: {resolution['timestamp']}",
+        f"- **Tier**: {resolution.get('tier', 'free')}",
         f"- **Verdict**: `{resolution['verdict']}`",
         f"- **Cost**: ${resolution['cost']:.6f} (Ceiling: ${resolution['cost_ceiling']:.2f})",
         f"- **Summary**: {resolution['summary']}",
@@ -405,9 +513,7 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
 
     entry.append(f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}` (Agreed: {resolution.get('judge_agreed')})")
     entry.append("- **Proposal Text**:")
-    proposal_lines = resolution["proposal"].splitlines()
-    formatted_proposal = "\n".join(f"  > {line}".rstrip() for line in proposal_lines)
-    entry.append(formatted_proposal)
+    entry.append(f"  > {resolution['proposal'].replace(chr(10), chr(10) + '  > ')}")
     entry.append("")
 
     with open(state_file, "a", encoding="utf-8") as f:
@@ -446,7 +552,19 @@ def main():
     parser.add_argument(
         "--paid",
         action="store_true",
-        help="Dispatch through paid model pool (bounded by $0.10 ceiling)",
+        help=(
+            "Dispatch through the paid pool (DeepSeek V4 generation per "
+            "operator ruling 2026-09-13; bounded by $0.10 ceiling)"
+        ),
+    )
+    parser.add_argument(
+        "--heavy",
+        action="store_true",
+        help=(
+            "Dispatch through the heavy-model panel (gpt-5 / gpt-4.1 / "
+            "deepseek-v3.2 / gemini-2.5-pro; operator directive 2026-09-13 "
+            "for hard work; canonical $0.10 ceiling unchanged)"
+        ),
     )
     parser.add_argument(
         "--record",
@@ -489,6 +607,7 @@ def main():
             reasoning_effort=args.reasoning_effort,
             dry_run=args.dry_run,
             use_paid=args.paid,
+            use_heavy=args.heavy,
         )
     except HarnessError as e:
         print(f"[FAIL] Sovereign-harness error: {e}", file=sys.stderr)
