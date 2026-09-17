@@ -3839,15 +3839,15 @@ impl IronCore {
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
             local_identity_id,
-            Some(canonical_peer_id),
+            Some(canonical_peer_id.clone()),
             None,
         );
 
-        // Notify delegate
+        // Notify delegate with verified canonical identity and authenticated public key hex
         if let Some(delegate) = self.delegate.read().as_ref() {
             delegate.on_message_received(
-                message.sender_id.clone(),
-                message.sender_id.clone(),
+                canonical_peer_id,
+                sender_public_key_hex,
                 message.id.clone(),
                 message.timestamp,
                 message.payload.clone(),
