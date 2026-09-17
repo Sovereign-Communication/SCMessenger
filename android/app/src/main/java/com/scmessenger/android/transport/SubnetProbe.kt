@@ -412,8 +412,25 @@ class SubnetProbe(
     private fun narrowToScanSubnet(addr: LinkAddress): String {
         val ip = addr.address as Inet4Address
         val rawPrefix = addr.prefixLength
-        val octets = ip.hostAddress.split(".")
-        if (octets.size != 4) return "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
+        // Kotlin warning Class A (SubnetProbe.kt:371): InetAddress.getHostAddress is a
+        // platform-typed (String!) API — a null return here previously flowed into
+        // String.split and would crash. Additionally, the old size!=4 early-return
+        // indexed octets[1..2] on the short list it had just checked, an
+        // IndexOutOfBounds path. Both fixed: fall back to the interface's /24.
+        val hostAddress: String? = ip.hostAddress
+        if (hostAddress.isNullOrEmpty()) {
+            Timber.w("SubnetProbe: null/empty hostAddress for $addr; using interface-literal fallback")
+            return "${ip.address[0].toInt() and 0xff}.${ip.address[1].toInt() and 0xff}.${ip.address[2].toInt() and 0xff}.0/24"
+        }
+        val octets = hostAddress.split(".")
+        if (octets.size != 4) {
+            return when (octets.size) {
+                1 -> "${octets[0]}.0.0.0/8"
+                2 -> "${octets[0]}.${octets[1]}.0.0/16"
+                3 -> "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
+                else -> "${ip.address[0].toInt() and 0xff}.${ip.address[1].toInt() and 0xff}.${ip.address[2].toInt() and 0xff}.0/24"
+            }
+        }
         return when {
             // Use /24 around the local host for the typical /16 home LAN.
             rawPrefix < 24 -> "${octets[0]}.${octets[1]}.${octets[2]}.0/24"
