@@ -218,7 +218,11 @@ class MdnsServiceDiscoveryTest {
         val discovery = MdnsServiceDiscovery(
             context,
             onPeerDiscovered,
-            onDataReceived
+            onDataReceived,
+            // Registration is gated on the local peer id (an advert without one
+            // is ignored by every peer), so supply an identity to reach the
+            // registerService() call this test hardens.
+            getLocalPeerId = { "12D3KooWLocalPeerId1234567890123456789012345678" }
         )
 
         discovery.start()

@@ -42,7 +42,9 @@ use super::routing::{
     smart_retry::{calculate_next_attempt, BackoffStrategy},
 };
 use crate::drift::{DriftFrame, SyncSession};
-use crate::store::relay_custody::{CustodyCompatMode, CustodyEnforcement, RelayCustodyStore};
+use crate::store::relay_custody::{
+    CustodyCompatMode, CustodyEnforcement, CustodyError, RelayCustodyStore,
+};
 use anyhow::Result;
 use bincode;
 #[cfg(target_arch = "wasm32")]
@@ -1704,7 +1706,7 @@ fn should_apply_delivery_convergence_marker(
     Ok(())
 }
 
-fn extract_ed25519_public_key_from_peer_id(peer_id: &PeerId) -> Result<[u8; 32], &'static str> {
+pub fn extract_ed25519_public_key_from_peer_id(peer_id: &PeerId) -> Result<[u8; 32], &'static str> {
     let bytes = peer_id.to_bytes();
     // Inline Ed25519 PeerIds use the protobuf-encoded public key bytes:
     // 0x00(identity multihash), 0x24(total len 36), 0x08(field 1), 0x01(Ed25519),
@@ -1799,6 +1801,28 @@ fn resolve_custody_metadata(
                     to_device_id,
                     ..
                 }) => Ok((Some(identity_id), Some(to_device_id))),
+                Err(CustodyError::NoRegistration) => {
+                    // Cooperative mesh: recipient has not directly registered on this node,
+                    // but node accepts custody for store-and-forward to the intended recipient.
+                    // Strictly validate recipient identity ID format (64-character hex Blake3 hash).
+                    if identity_id.len() != 64
+                        || !identity_id.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        return Err(format!(
+                            "invalid recipient identity id format for cooperative custody: {}",
+                            identity_id
+                        ));
+                    }
+                    if device_id.is_empty() || device_id.len() > 128 {
+                        return Err("invalid device id format for cooperative custody".to_string());
+                    }
+                    tracing::debug!(
+                        identity_id,
+                        device_id,
+                        "node custody accepted for unregistered recipient in cooperative mesh"
+                    );
+                    Ok((Some(identity_id.to_string()), Some(device_id.to_string())))
+                }
                 Err(error) => Err(error.to_string()),
             }
         }
@@ -3259,8 +3283,25 @@ fn ledger_verified_pair(
 /// its id is 64-hex (identity-confusion class: pk stored as peer_id) and we
 /// have no proven ledger entry for it (`success_count == 0` or missing).
 /// Mesh-wide topics (`sc-lobby`, `sc-mesh`, …) always auto-negotiate.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCore>>) -> bool {
+///
+/// EXEMPTION (2026-09-16, receipts-never-arrive RCA): our OWN identity topic is
+/// never a ghost. The ledger test below can never prove our own key -- a node
+/// does not dial itself -- so every node classified its own topic as a ghost,
+/// refused to subscribe to it, and silently dropped every inbound message
+/// addressed to it (gossipsub `publish` still returns Ok with no subscriber,
+/// so the sender recorded a transport ACK and then waited forever for a
+/// receipt). Senders address us on exactly this topic.
+///
+/// WASM (2026-09-17 compile fix): `LedgerManager` is a native-only field of
+/// `IronCore` (`iron_core.rs` cfg), so the ledger consultation below is
+/// compiled out on wasm. Wasm keeps its pre-exemption auto-negotiation
+/// behavior for peer topics; the own-topic exemption above still applies
+/// there. Native behavior (fail closed on unproven ghost shape) unchanged.
+fn is_ghost_peer_topic(
+    topic_str: &str,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    own_peer_key_hex: Option<&str>,
+) -> bool {
     let Some(rest) = topic_str.strip_prefix("/scmessenger/peer/") else {
         return false;
     };
@@ -3276,21 +3317,36 @@ fn is_ghost_peer_topic(topic_str: &str, core_handle: &Option<Weak<crate::IronCor
     if !is_hex64 {
         return false;
     }
-    let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
-        // Fail closed on ghost shape when we cannot consult the ledger.
-        return true;
-    };
-    let proven = core
-        .ledger_manager
-        .get_preferred_relays(64)
-        .iter()
-        .any(|e| {
-            e.success_count > 0
-            && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
-            && (e.peer_id.as_deref() == Some(peer_key)
-                || e.public_key.as_deref() == Some(peer_key))
-        });
-    !proven
+    if let Some(own) = own_peer_key_hex {
+        if own.eq_ignore_ascii_case(peer_key) {
+            return false;
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) else {
+            // Fail closed on ghost shape when we cannot consult the ledger.
+            return true;
+        };
+        let proven = core
+            .ledger_manager
+            .get_preferred_relays(64)
+            .iter()
+            .any(|e| {
+                e.success_count > 0
+                    && e.failure_count < 3u32 // LEDGER_DEAD_FAILURE_THRESHOLD
+                    && (e.peer_id.as_deref() == Some(peer_key)
+                        || e.public_key.as_deref() == Some(peer_key))
+            });
+        !proven
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // No ledger exists on wasm: with no provenance to consult, this is
+        // not a ghost (pre-GHOST-IDENTITY-001 wasm behavior).
+        let _ = core_handle;
+        false
+    }
 }
 
 /// Build and start the libp2p swarm, returning a handle for communication.
@@ -3381,18 +3437,34 @@ pub async fn start_swarm_with_config(
                 .with_tokio()
                 .with_other_transport(
                     |id_keys| -> std::result::Result<_, Box<dyn std::error::Error + Send + Sync>> {
+                        fn google_resolver_config() -> hickory_resolver::config::ResolverConfig {
+                            use hickory_resolver::config::{ConnectionConfig, NameServerConfig};
+                            use std::net::IpAddr;
+                            hickory_resolver::config::ResolverConfig::from_name_servers(
+                                ["8.8.8.8", "8.8.4.4"]
+                                    .iter()
+                                    .map(|&ip| {
+                                        NameServerConfig::new(
+                                            ip.parse::<IpAddr>().expect("valid DNS IP literal"),
+                                            true,
+                                            vec![ConnectionConfig::udp(), ConnectionConfig::tcp()],
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        }
                         let tcp_transport1 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp1 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport1,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let tcp_transport2 =
                             libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default());
                         let dns_tcp2 = libp2p::dns::tokio::Transport::custom(
                             tcp_transport2,
-                            libp2p::dns::ResolverConfig::google(),
+                            google_resolver_config(),
                             libp2p::dns::ResolverOpts::default(),
                         );
                         let ws_transport = libp2p::websocket::Config::new(dns_tcp2);
@@ -3653,6 +3725,37 @@ pub async fn start_swarm_with_config(
         subscribed_topics.insert("sc-lobby".to_string());
         subscribed_topics.insert("sc-mesh".to_string());
         subscribed_topics.insert(DELIVERY_CONVERGENCE_TOPIC.to_string());
+
+        // A node must be reachable on its OWN messaging topic: senders publish
+        // to `/scmessenger/peer/<recipient-identity-hex>/v1`, so a node that
+        // never subscribes to its own topic receives nothing. Gossipsub
+        // `publish` succeeds even with zero subscribers, so the sender records
+        // a transport ACK and then waits forever for a receipt. Subscribing
+        // here (rather than only on a peer's `Subscribed` event) removes the
+        // dependency on the peer subscribing first.
+        let own_peer_key_hex: Option<String> =
+            extract_ed25519_public_key_from_peer_id(swarm.local_peer_id())
+                .ok()
+                .map(|pk| pk.iter().map(|b| format!("{:02x}", b)).collect());
+        if let Some(own_hex) = own_peer_key_hex.as_deref() {
+            let own_topic_str = format!("/scmessenger/peer/{}/v1", own_hex);
+            let own_topic = libp2p::gossipsub::IdentTopic::new(own_topic_str.clone());
+            match swarm.behaviour_mut().gossipsub.subscribe(&own_topic) {
+                Ok(_) => {
+                    tracing::info!("Subscribed to own peer topic: {}", own_topic_str);
+                    subscribed_topics.insert(own_topic_str);
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to subscribe to own peer topic {}: {}",
+                    own_topic_str,
+                    e
+                ),
+            }
+        } else {
+            tracing::warn!(
+                "Own peer topic not subscribed: local peer id carries no inline Ed25519 public key"
+            );
+        }
 
         // Track peers we've already exchanged ledgers with (avoid spamming)
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
@@ -5422,7 +5525,11 @@ pub async fn start_swarm_with_config(
                                 // GHOST-IDENTITY-001: NEVER auto-negotiate retired-identity peer
                                 // topics (`/scmessenger/peer/<old-pk>/v1`) — that is the amplifier
                                 // that made PK:577fd171 reappear mesh-wide after Pixel reinstall.
-                                if is_ghost_peer_topic(&topic_str, &core_handle) {
+                                if is_ghost_peer_topic(
+                                    &topic_str,
+                                    &core_handle,
+                                    own_peer_key_hex.as_deref(),
+                                ) {
                                     tracing::info!(
                                         "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
                                         topic_str
@@ -5684,6 +5791,12 @@ pub async fn start_swarm_with_config(
                                             dst_peer_id
                                         );
                                     }
+                                    RelayServerEvent::StatusChanged { status } => {
+                                        tracing::debug!(
+                                            "Relay server status changed: {:?}",
+                                            status
+                                        );
+                                    }
                                     RelayServerEvent::ReservationReqDenied { .. } |
                                     RelayServerEvent::ReservationTimedOut { .. } |
                                     RelayServerEvent::ReservationClosed { .. } |
@@ -5699,7 +5812,25 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
-                                tracing::trace!("Ping event: {:?}", event);
+                                match event.result {
+                                    Ok(rtt) => {
+                                        tracing::trace!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            rtt = ?rtt,
+                                            "Ping success"
+                                        );
+                                    }
+                                    Err(ref failure) => {
+                                        tracing::warn!(
+                                            peer = %event.peer,
+                                            connection_id = ?event.connection,
+                                            failure = ?failure,
+                                            "Ping failed; closing dead connection"
+                                        );
+                                        let _ = swarm.close_connection(event.connection);
+                                    }
+                                }
                             }
 
                             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
@@ -8005,6 +8136,30 @@ pub async fn start_swarm_with_config(
         subscribed_topics.insert("sc-mesh".to_string());
         subscribed_topics.insert(DELIVERY_CONVERGENCE_TOPIC.to_string());
 
+        let own_peer_key_hex: Option<String> =
+            extract_ed25519_public_key_from_peer_id(swarm.local_peer_id())
+                .ok()
+                .map(|pk| pk.iter().map(|b| format!("{:02x}", b)).collect());
+        if let Some(own_hex) = own_peer_key_hex.as_deref() {
+            let own_topic_str = format!("/scmessenger/peer/{}/v1", own_hex);
+            let own_topic = libp2p::gossipsub::IdentTopic::new(own_topic_str.clone());
+            match swarm.behaviour_mut().gossipsub.subscribe(&own_topic) {
+                Ok(_) => {
+                    tracing::info!("Subscribed to own peer topic on wasm: {}", own_topic_str);
+                    subscribed_topics.insert(own_topic_str);
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to subscribe to own peer topic on wasm {}: {}",
+                    own_topic_str,
+                    e
+                ),
+            }
+        } else {
+            tracing::warn!(
+                "Own peer topic not subscribed on wasm: local peer id carries no inline Ed25519 public key"
+            );
+        }
+
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
         let mut pending_ledger_exchanges: HashMap<
             PeerId,
@@ -8927,7 +9082,16 @@ pub async fn start_swarm_with_config(
                                 gossipsub::Event::Subscribed { peer_id, topic }
                             )) => {
                                 let topic_str = topic.to_string();
-                                if !subscribed_topics.contains(&topic_str) {
+                                if is_ghost_peer_topic(
+                                    &topic_str,
+                                    &core_handle,
+                                    own_peer_key_hex.as_deref(),
+                                ) {
+                                    tracing::info!(
+                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic on wasm: {}",
+                                        topic_str
+                                    );
+                                } else if !subscribed_topics.contains(&topic_str) {
                                     let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
                                     if swarm.behaviour_mut().gossipsub.subscribe(&ident_topic).is_ok() {
                                         subscribed_topics.insert(topic_str.clone());
