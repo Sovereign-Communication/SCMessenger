@@ -44,6 +44,7 @@ use super::routing::{
 use crate::drift::{DriftFrame, SyncSession};
 use crate::store::relay_custody::{
     CustodyCompatMode, CustodyEnforcement, CustodyError, RelayCustodyStore,
+    CUSTODY_DEFAULT_MAX_AGE_MS,
 };
 use anyhow::Result;
 use bincode;
@@ -1126,6 +1127,28 @@ const ROUTE_ATTEMPT_REASON_RETRY_CYCLE: &str = "RETRY_CYCLE_RESTART";
 const DELIVERY_CONVERGENCE_TOPIC: &str = "sc-receipt-convergence";
 const DELIVERY_CONVERGENCE_PREFIX: &[u8] = b"scm.delivery.convergence.v1:";
 const RELAY_MAX_INFLIGHT_DISPATCHES: usize = 256;
+
+// --- TRN-07: per-peer share of the hourly relay budget ---
+//
+// The hourly budget gate used to be evaluated before any per-peer fairness
+// dimension existed, so a single peer could consume the node's whole budget and
+// every other peer was then refused with `relay_budget_exhausted` for the rest
+// of the hour. One connection produced a node-wide relay outage. Dividing the
+// budget bounds what any single peer can take, so the rest of the mesh keeps
+// relaying while a greedy peer is throttled.
+/// Divisor applied to the global budget to derive one peer's share.
+const RELAY_PER_PEER_BUDGET_DIVISOR: u32 = 4;
+/// Floor for the derived share, so a small mesh (or a small configured budget)
+/// does not round a peer's allowance down to zero.
+const RELAY_PER_PEER_BUDGET_MIN: u32 = 25;
+
+/// TRN-07: the share of `global_budget` any single peer may consume in the same
+/// hourly window. Scaled by the global budget so raising the node budget also
+/// raises each peer's allowance.
+fn relay_per_peer_budget(global_budget: u32) -> u32 {
+    (global_budget / RELAY_PER_PEER_BUDGET_DIVISOR).max(RELAY_PER_PEER_BUDGET_MIN)
+}
+
 const RELAY_PEER_BUCKET_REFILL_PER_SEC: f64 = 4.0;
 const RELAY_PEER_BUCKET_BURST_CAPACITY: f64 = 20.0;
 const RELAY_PEER_BUCKET_MAX_TRACKED: usize = 2048;
@@ -3900,6 +3923,9 @@ pub async fn start_swarm_with_config(
             // Relay budget rate-limiting
             let mut relay_budget: u32 = 200;
             let mut relay_count_this_hour: u32 = 0;
+            // TRN-07: per-peer consumption of the same hourly window, so the
+            // budget can be divided instead of handed to whoever arrives first.
+            let mut relay_counts_this_hour: HashMap<String, u32> = HashMap::new();
             let mut relay_hour_start = web_time::Instant::now();
             let mut relay_guardrails = RelayAbuseGuardrails::new();
 
@@ -4139,6 +4165,25 @@ pub async fn start_swarm_with_config(
                         // ConnectionEstablished via reset_peer_backoff above.
                         dial_policy_manager.prune_old_entries(Duration::from_secs(3600)); // Prune entries older than 1 hour
                         tracing::debug!("[DIAL-POLICY] Pruned stale backoff entries");
+
+                        // TRN-04: custody must not outlive its retention window.
+                        // This 5-minute tick is the sweep's call site — the API
+                        // exists on RelayCustodyStore and is reachable from here,
+                        // rather than being dead code (rule 16).
+                        match relay_custody_store.purge_expired_custody(CUSTODY_DEFAULT_MAX_AGE_MS) {
+                            Ok(report) if report.purged_records > 0 => tracing::info!(
+                                "[CUSTODY] Retention sweep expired {} of {} record(s), {} bytes reclaimed (window {}ms)",
+                                report.purged_records,
+                                report.scanned,
+                                report.purged_bytes,
+                                report.max_age_ms
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::warn!(
+                                "[CUSTODY] Retention sweep failed; custody retention is NOT being enforced: {}",
+                                error
+                            ),
+                        }
                     }
 
                     // Mycorrhizal routing: periodic optimization tick
@@ -4937,7 +4982,13 @@ pub async fn start_swarm_with_config(
 
                                         // Enforce relay budget — reset counter hourly
                                         if relay_hour_start.elapsed() >= web_time::Duration::from_secs(3600) {
+                                            tracing::debug!(
+                                                "Relay budget window rolled over: {} relay(s) used, {} peer(s) accounted",
+                                                relay_count_this_hour,
+                                                relay_counts_this_hour.len()
+                                            );
                                             relay_count_this_hour = 0;
+                                            relay_counts_this_hour.clear();
                                             relay_hour_start = web_time::Instant::now();
                                         }
 
@@ -4984,6 +5035,33 @@ pub async fn start_swarm_with_config(
                                             RelayResponse {
                                                 accepted: false,
                                                 error: Some("relay_budget_exhausted".to_string()),
+                                                message_id: request.message_id.clone(),
+                                            }
+                                        } else if relay_budget > 0
+                                            && relay_counts_this_hour
+                                                .get(&peer.to_string())
+                                                .copied()
+                                                .unwrap_or(0)
+                                                >= relay_per_peer_budget(relay_budget)
+                                        {
+                                            // TRN-07: this peer has taken its share of the
+                                            // node's budget. Deliberately NOT emitted as an
+                                            // abuse signal: the peer may simply be carrying
+                                            // legitimate traffic for the mesh, and inflating
+                                            // its spam score here would punish delivery.
+                                            tracing::warn!(
+                                                "Relay per-peer share ({}/{} this hour) reached for {} — refusing {}",
+                                                relay_counts_this_hour
+                                                    .get(&peer.to_string())
+                                                    .copied()
+                                                    .unwrap_or(0),
+                                                relay_per_peer_budget(relay_budget),
+                                                peer,
+                                                request.message_id
+                                            );
+                                            RelayResponse {
+                                                accepted: false,
+                                                error: Some("relay_peer_budget_exhausted".to_string()),
                                                 message_id: request.message_id.clone(),
                                             }
                                         } else if pending_custody_dispatches.len()
@@ -5035,7 +5113,11 @@ pub async fn start_swarm_with_config(
                                                 message_id: request.message_id.clone(),
                                             }
                                         } else {
-                                            relay_count_this_hour += 1;
+                                            relay_count_this_hour =
+                                                relay_count_this_hour.saturating_add(1);
+                                            *relay_counts_this_hour
+                                                .entry(peer.to_string())
+                                                .or_insert(0) += 1;
                                             match PeerId::from_bytes(&request.destination_peer) {
                                                 Ok(destination) => {
                                                     let relay_message_id = request.message_id.clone();
@@ -8182,6 +8264,10 @@ pub async fn start_swarm_with_config(
         let mut address_observer = AddressObserver::new();
         let mut relay_budget: u32 = 200;
         let mut relay_count_this_hour: u32 = 0;
+        // TRN-07 parity: the native path divides the hourly budget per peer; this
+        // loop must apply the same rule or a wasm node keeps the node-wide
+        // starvation the native path no longer has.
+        let mut relay_counts_this_hour: HashMap<String, u32> = HashMap::new();
         let mut relay_guardrails = RelayAbuseGuardrails::new();
         let mut ledger_exchange_guardrails = RelayAbuseGuardrails::new();
         // This WASM-only event loop uses js_sys::Date::now() (f64 ms since
@@ -8798,7 +8884,13 @@ pub async fn start_swarm_with_config(
                                             }
                                             let now_ms = js_sys::Date::now() as u64;
                                             if js_sys::Date::now() - relay_hour_start >= 3_600_000.0 {
+                                                tracing::debug!(
+                                                    "Relay budget window rolled over (wasm): {} relay(s) used, {} peer(s) accounted",
+                                                    relay_count_this_hour,
+                                                    relay_counts_this_hour.len()
+                                                );
                                                 relay_count_this_hour = 0;
+                                                relay_counts_this_hour.clear();
                                                 relay_hour_start = js_sys::Date::now();
                                             }
 
@@ -8836,6 +8928,25 @@ pub async fn start_swarm_with_config(
                                                     error: Some("relay_budget_exhausted".to_string()),
                                                     message_id: request.message_id.clone(),
                                                 }
+                                            } else if relay_budget > 0
+                                                && relay_counts_this_hour
+                                                    .get(&peer.to_string())
+                                                    .copied()
+                                                    .unwrap_or(0)
+                                                    >= relay_per_peer_budget(relay_budget)
+                                            {
+                                                tracing::warn!(
+                                                    "Relay per-peer share reached for {} (wasm) — refusing {}",
+                                                    peer,
+                                                    request.message_id
+                                                );
+                                                RelayResponse {
+                                                    accepted: false,
+                                                    error: Some(
+                                                        "relay_peer_budget_exhausted".to_string(),
+                                                    ),
+                                                    message_id: request.message_id.clone(),
+                                                }
                                             } else if pending_custody_dispatches.len()
                                                 >= RELAY_MAX_INFLIGHT_DISPATCHES
                                             {
@@ -8869,7 +8980,11 @@ pub async fn start_swarm_with_config(
                                                     message_id: request.message_id.clone(),
                                                 }
                                             } else {
-                                                relay_count_this_hour += 1;
+                                                relay_count_this_hour =
+                                                    relay_count_this_hour.saturating_add(1);
+                                                *relay_counts_this_hour
+                                                    .entry(peer.to_string())
+                                                    .or_insert(0) += 1;
                                                 match PeerId::from_bytes(&request.destination_peer) {
                                                     Ok(destination) => {
                                                         let relay_message_id = request.message_id.clone();
@@ -11080,5 +11195,50 @@ mod ledger_seeding_hardening_tests {
             !is_valid_reservation_base(&loopback, &[]),
             "loopback bases are undiscoverable and must never anchor a reservation"
         );
+    }
+
+}
+
+/// TRN-07: the per-peer share of the node's hourly relay budget.
+///
+/// A dedicated module so the pure policy function can be tested without
+/// constructing a swarm; declared here (inside `swarm.rs`) so `super` resolves
+/// the private constants it is defined against.
+#[cfg(test)]
+mod relay_per_peer_budget_tests {
+    use super::{relay_per_peer_budget, RELAY_PER_PEER_BUDGET_MIN};
+
+    #[test]
+    fn per_peer_share_bounds_a_single_peer_by_default() {
+        // The default node budget is 200/hr. Before TRN-07 one peer could consume
+        // all of it and every other peer was then refused, so the share must be a
+        // strict fraction of the budget rather than the whole budget.
+        assert_eq!(relay_per_peer_budget(200), 50);
+        assert!(
+            relay_per_peer_budget(200) < 200,
+            "a single peer must not be able to consume the whole node budget"
+        );
+    }
+
+    #[test]
+    fn per_peer_share_scales_with_the_configured_budget() {
+        // Raising the node budget must raise each peer's allowance, otherwise the
+        // operator's only tuning knob would be one that does not help them.
+        assert!(relay_per_peer_budget(4_000) > relay_per_peer_budget(200));
+        assert_eq!(relay_per_peer_budget(4_000), 1_000);
+    }
+
+    #[test]
+    fn per_peer_share_has_a_floor_so_small_budgets_do_not_starve_peers() {
+        // 4/4 = 1 would let one peer relay exactly once an hour. The floor keeps a
+        // small mesh usable. When the floor exceeds the global budget the global
+        // gate binds first, so the node is still bounded by the budget itself.
+        assert_eq!(relay_per_peer_budget(4), RELAY_PER_PEER_BUDGET_MIN);
+        assert_eq!(relay_per_peer_budget(0), RELAY_PER_PEER_BUDGET_MIN);
+        assert!(
+            relay_per_peer_budget(4) > 4,
+            "the floor must beat the naive division, or a small mesh starves"
+        );
+        assert!(relay_per_peer_budget(100) >= RELAY_PER_PEER_BUDGET_MIN);
     }
 }

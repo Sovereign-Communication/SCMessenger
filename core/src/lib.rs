@@ -158,6 +158,21 @@ pub fn get_build_provenance() -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// AND-06: true when `hex_str` is a 64-hex string that decodes to a valid
+/// Ed25519 curve point.
+///
+/// Exposed over UniFFI (see `api.udl`) so platform adapters do not reimplement
+/// curve arithmetic. Board resolution bod-dd336324 rejects Kotlin-level
+/// BigInteger Ed25519 decompression and Legendre-symbol arithmetic: the Rust
+/// core is the sole cryptographic authority and adapters are dumb byte pipes.
+///
+/// This is a thin, stateless re-export of the core's own predicate
+/// [`identity::keys::is_valid_public_key`], so the FFI answer and the in-core
+/// answer cannot drift apart.
+pub fn is_valid_public_key(hex_str: String) -> bool {
+    identity::keys::is_valid_public_key(&hex_str)
+}
+
 /// Safely execute an FFI closure with panic isolation across the C ABI boundary.
 ///
 /// Prevents Rust panics in background or FFI threads from unwinding across JNI/C
