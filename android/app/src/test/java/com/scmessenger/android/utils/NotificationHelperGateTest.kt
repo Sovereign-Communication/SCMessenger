@@ -210,8 +210,18 @@ class NotificationHelperGateTest {
         assertEquals(true, NotificationHelper.shouldPostGroupSummary(true, true))
     }
 
+    /**
+     * Replay pin under the module testability contract (no Robolectric): the
+     * replayed message must not reach NotificationCompat.Builder, so the DM
+     * kind gate is switched OFF before hydration. The replay still proves what
+     * matters: it runs, it is NOT re-suppressed at the settings gate, and it
+     * gets past DM classification (where the "dm" counter increments, the same
+     * pin as the `enabled gate passes the settings gate` test above). Full
+     * posting of a replayed notification is covered by on-device log evidence.
+     */
     @Test
     fun `unhydrated gate buffers message and replays when hydrated ON`() {
+        NotificationHelper.updateSettings(dmEnabled = false)
         NotificationHelper.notificationsEnabled = null
         showMessage()
 
