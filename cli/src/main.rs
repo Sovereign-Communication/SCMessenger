@@ -3762,7 +3762,9 @@ async fn flush_outbox_for_peer(
     let queued = {
         let mut ob = outbox.lock().await;
         let mut messages = ob.drain_for_peer(&peer_id.to_string());
-        if let Ok(pk) = scmessenger_core::transport::extract_ed25519_public_key_from_peer_id(&peer_id) {
+        if let Ok(pk) =
+            scmessenger_core::transport::extract_ed25519_public_key_from_peer_id(&peer_id)
+        {
             let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
             let mut canonical_msgs = ob.drain_for_peer(&hex_pk);
             messages.append(&mut canonical_msgs);
