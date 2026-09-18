@@ -138,7 +138,9 @@ fn strictness_is_monotone_relative_to_the_lenient_decode() {
     for i in 0..4096 {
         let signing_key = SigningKey::from_bytes(&deterministic_seed(i));
         check(&hex::encode(signing_key.verifying_key().to_bytes()));
-        check(&hex::encode(blake3::hash(&deterministic_seed(i)).as_bytes()));
+        check(&hex::encode(
+            blake3::hash(&deterministic_seed(i)).as_bytes(),
+        ));
     }
     // Boundary encodings that the canonicity rules exist for.
     for boundary in [
@@ -174,10 +176,8 @@ fn generated_keys_at_scale_are_all_accepted_and_derive_their_identity() {
             valid(&public_key_hex),
             "generated Ed25519 public key #{i} was rejected"
         );
-        let expected = hex::encode(blake3::hash(
-            &signing_key.verifying_key().to_bytes(),
-        )
-        .as_bytes());
+        let expected =
+            hex::encode(blake3::hash(&signing_key.verifying_key().to_bytes()).as_bytes());
         assert_eq!(
             identity_id_from_public_key_hex(&public_key_hex).as_deref(),
             Some(expected.as_str()),
