@@ -164,3 +164,19 @@ Inputs: `SCMessenger/tmp/rule8-pr305/claims_{identity,custody}.json`,
 
 Total paid spend, all runs including invalid and initial ones: ≈ $0.0797 across 9
 runs, every run inside its own $0.10 worst-case ceiling (actuals 6–13% of ceiling).
+
+## Operator ruling (2026-09-18, post-verdict)
+
+- **Merge:** operator approved merging #305 once CI was green on the final head.
+  CI fully green on `7e462737` (all checks SUCCESS, zero pending; code head
+  `44ed8071` reviewed). Merged as `55ef300b` on `main`.
+- **c4:** Option A adopted for the 0.5.0 lane (known/unknown classification,
+  aggregate unknown pool, newcomer grace window). Ticket:
+  `HANDOFF/freebuff/queue/V050_C4_IDENTITY_AWARE_RELAY_ADMISSION.md`. Until it
+  ships, the c4 residual stands bounded by the global 200/hr ceiling.
+- **c5 residual** (bulk migration of pre-ban custody rows) remains open as a
+  0.5.0 follow-up; the serve path fix (exact-destination match) is merged.
+- Follow-up commit on the branch extending this PR's scope: the
+  zombie-connection fix (`8cc356b8` + `44ed8071`), gated separately and
+  recorded in `HANDOFF/review/RULE8_ZOMBIE_FIX_VERDICT_2026-09-18.md` (CLEAR,
+  full 3-of-3 seats).
