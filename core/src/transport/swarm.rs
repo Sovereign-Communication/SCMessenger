@@ -1199,6 +1199,50 @@ fn relay_admission(
     RelayAdmission::Admitted
 }
 
+/// TRN-07: one peer's consumption of the hourly relay budget.
+///
+/// The value carries the timestamp the map needs to bound itself. The key is an
+/// attacker-chosen peer id, so the map that holds this is memory an attacker
+/// pays for: it must be capped exactly like the sibling token-bucket map
+/// beside it (`RELAY_PEER_BUCKET_MAX_TRACKED`). Rule-8 review of PR #305, c3.
+#[derive(Debug, Clone, Copy)]
+struct PeerRelayUse {
+    used: u32,
+    last_seen_ms: u64,
+}
+
+/// TRN-07: this peer's admitted relays in the current hourly window.
+fn peer_relay_used(counts: &HashMap<String, PeerRelayUse>, peer: &str) -> u32 {
+    counts.get(peer).map(|state| state.used).unwrap_or(0)
+}
+
+/// TRN-07: record one admitted relay for `peer` in the window.
+fn note_peer_relay_admitted(counts: &mut HashMap<String, PeerRelayUse>, peer: &str, now_ms: u64) {
+    let entry = counts.entry(peer.to_string()).or_insert(PeerRelayUse {
+        used: 0,
+        last_seen_ms: now_ms,
+    });
+    entry.used = entry.used.saturating_add(1);
+    entry.last_seen_ms = now_ms;
+    prune_peer_relay_use(counts);
+}
+
+/// TRN-07: keep the per-peer budget map bounded by dropping the least recently
+/// active peers. Bounding is the point: without it, an attacker submitting many
+/// peer ids grows this map for a full hour with nothing to evict it.
+fn prune_peer_relay_use(counts: &mut HashMap<String, PeerRelayUse>) {
+    while counts.len() > RELAY_PEER_BUCKET_MAX_TRACKED {
+        let Some(stalest) = counts
+            .iter()
+            .min_by_key(|(_, state)| state.last_seen_ms)
+            .map(|(peer, _)| peer.clone())
+        else {
+            return;
+        };
+        counts.remove(&stalest);
+    }
+}
+
 const RELAY_PEER_BUCKET_REFILL_PER_SEC: f64 = 4.0;
 const RELAY_PEER_BUCKET_BURST_CAPACITY: f64 = 20.0;
 const RELAY_PEER_BUCKET_MAX_TRACKED: usize = 2048;
@@ -3963,6 +4007,11 @@ pub async fn start_swarm_with_config(
             // P1 Item 3: Per-peer backoff state machine (max 3 concurrent dials)
             let dial_policy_manager = DialPolicyManager::new();
             let mut backoff_prune_interval = tokio::time::interval(Duration::from_secs(300)); // Prune stale entries every 5 minutes
+                                                                                              // TRN-04 (rule-8 review of PR #305, c7): retention gets its own tick
+                                                                                              // rather than riding the dial-policy prune arm, so custody expiry is
+                                                                                              // not a passenger on an unrelated schedule and keeps running on a node
+                                                                                              // that is not dialing at all.
+            let mut custody_retention_interval = tokio::time::interval(Duration::from_secs(300));
 
             // P1 Item 4: Circuit-relay preference after connection established
             let circuit_relay_ladder = CircuitRelayLadder::new();
@@ -3975,7 +4024,9 @@ pub async fn start_swarm_with_config(
             let mut relay_count_this_hour: u32 = 0;
             // TRN-07: per-peer consumption of the same hourly window, so the
             // budget can be divided instead of handed to whoever arrives first.
-            let mut relay_counts_this_hour: HashMap<String, u32> = HashMap::new();
+            // Bounded by prune_peer_relay_use (rule-8 review c3), because the key
+            // is an attacker-chosen peer id.
+            let mut relay_counts_this_hour: HashMap<String, PeerRelayUse> = HashMap::new();
             let mut relay_hour_start = web_time::Instant::now();
             let mut relay_guardrails = RelayAbuseGuardrails::new();
 
@@ -4215,22 +4266,29 @@ pub async fn start_swarm_with_config(
                         // ConnectionEstablished via reset_peer_backoff above.
                         dial_policy_manager.prune_old_entries(Duration::from_secs(3600)); // Prune entries older than 1 hour
                         tracing::debug!("[DIAL-POLICY] Pruned stale backoff entries");
+                    }
 
-                        // TRN-04: custody must not outlive its retention window.
-                        // This 5-minute tick is the sweep's call site — the API
-                        // exists on RelayCustodyStore and is reachable from here,
-                        // rather than being dead code (rule 16).
+                    // TRN-04: custody must not outlive its retention window. Its own
+                    // tick (rule-8 review of PR #305, c7): the store API is reachable
+                    // from here rather than dead code (rule 16), and retention no
+                    // longer depends on the dial-policy schedule firing.
+                    _ = custody_retention_interval.tick() => {
                         match relay_custody_store.purge_expired_custody(CUSTODY_DEFAULT_MAX_AGE_MS) {
-                            Ok(report) if report.purged_records > 0 => tracing::info!(
-                                "[CUSTODY] Retention sweep expired {} of {} record(s), {} bytes reclaimed (window {}ms)",
+                            Ok(report) => tracing::info!(
+                                "[CUSTODY] Retention sweep ran: {} of {} record(s) expired, {} bytes reclaimed, {} deferred in-flight, {} changed (window {}ms)",
                                 report.purged_records,
                                 report.scanned,
                                 report.purged_bytes,
+                                report.skipped_recently_dispatched,
+                                report.skipped_changed,
                                 report.max_age_ms
                             ),
-                            Ok(_) => {}
-                            Err(error) => tracing::warn!(
-                                "[CUSTODY] Retention sweep failed; custody retention is NOT being enforced: {}",
+                            // Not warn: a sweep that cannot run means custody is
+                            // silently unbounded, which is an operator condition,
+                            // not a hiccup. Error level keeps it out of the debug
+                            // noise floor (c7).
+                            Err(error) => tracing::error!(
+                                "[CUSTODY] Retention sweep FAILED; custody retention is NOT being enforced: {}",
                                 error
                             ),
                         }
@@ -5057,10 +5115,10 @@ pub async fn start_swarm_with_config(
                                             ),
                                             relay_budget,
                                             relay_count_this_hour,
-                                            relay_counts_this_hour
-                                                .get(&peer.to_string())
-                                                .copied()
-                                                .unwrap_or(0),
+                                            peer_relay_used(
+                                                &relay_counts_this_hour,
+                                                &peer.to_string(),
+                                            ),
                                             pending_custody_dispatches.len(),
                                         );
 
@@ -5109,10 +5167,10 @@ pub async fn start_swarm_with_config(
                                             // its spam score here would punish delivery.
                                             tracing::warn!(
                                                 "Relay per-peer share ({}/{} this hour) reached for {} — refusing {}",
-                                                relay_counts_this_hour
-                                                    .get(&peer.to_string())
-                                                    .copied()
-                                                    .unwrap_or(0),
+                                                peer_relay_used(
+                                                    &relay_counts_this_hour,
+                                                    &peer.to_string(),
+                                                ),
                                                 relay_per_peer_budget(relay_budget),
                                                 peer,
                                                 request.message_id
@@ -5169,11 +5227,12 @@ pub async fn start_swarm_with_config(
                                                 message_id: request.message_id.clone(),
                                             }
                                         } else {
-                                            relay_count_this_hour =
-                                                relay_count_this_hour.saturating_add(1);
-                                            *relay_counts_this_hour
-                                                .entry(peer.to_string())
-                                                .or_insert(0) += 1;
+                                            // Rule-8 review of PR #305, c8: the hourly budget and
+                                            // the peer's share are accounted where custody is
+                                            // actually COMMITTED (below), not here. Charging requests
+                                            // the node then declines to relay spent both the node
+                                            // ceiling and the peer's new share on traffic that was
+                                            // never carried.
                                             match PeerId::from_bytes(&request.destination_peer) {
                                                 Ok(destination) => {
                                                     let relay_message_id = request.message_id.clone();
@@ -5235,6 +5294,18 @@ pub async fn start_swarm_with_config(
                                                                     resolved_device_id,
                                                                 ) {
                                                                     Ok(custody) => {
+                                                                        // C8-CHARGE-POINT: the hourly
+                                                                        // budget and the peer's share are
+                                                                        // charged only on a committed
+                                                                        // relay (rule-8 review c8).
+                                                                        note_peer_relay_admitted(
+                                                                            &mut relay_counts_this_hour,
+                                                                            &peer.to_string(),
+                                                                            now_ms,
+                                                                        );
+                                                                        relay_count_this_hour =
+                                                                            relay_count_this_hour
+                                                                                .saturating_add(1);
                                                                         relay_guardrails.record_accepted(
                                                                             &peer.to_string(),
                                                                             &destination.to_string(),
@@ -8322,8 +8393,9 @@ pub async fn start_swarm_with_config(
         let mut relay_count_this_hour: u32 = 0;
         // TRN-07 parity: the native path divides the hourly budget per peer; this
         // loop must apply the same rule or a wasm node keeps the node-wide
-        // starvation the native path no longer has.
-        let mut relay_counts_this_hour: HashMap<String, u32> = HashMap::new();
+        // starvation the native path no longer has. Bounded like the native map
+        // (rule-8 review c3).
+        let mut relay_counts_this_hour: HashMap<String, PeerRelayUse> = HashMap::new();
         let mut relay_guardrails = RelayAbuseGuardrails::new();
         let mut ledger_exchange_guardrails = RelayAbuseGuardrails::new();
         // This WASM-only event loop uses js_sys::Date::now() (f64 ms since
@@ -8959,10 +9031,10 @@ pub async fn start_swarm_with_config(
                                                 ),
                                                 relay_budget,
                                                 relay_count_this_hour,
-                                                relay_counts_this_hour
-                                                    .get(&peer.to_string())
-                                                    .copied()
-                                                    .unwrap_or(0),
+                                                peer_relay_used(
+                                                    &relay_counts_this_hour,
+                                                    &peer.to_string(),
+                                                ),
                                                 pending_custody_dispatches.len(),
                                             );
                                             let relay_response = if let RelayAdmission::Malformed(reason) =
@@ -9040,11 +9112,12 @@ pub async fn start_swarm_with_config(
                                                     message_id: request.message_id.clone(),
                                                 }
                                             } else {
-                                                relay_count_this_hour =
-                                                    relay_count_this_hour.saturating_add(1);
-                                                *relay_counts_this_hour
-                                                    .entry(peer.to_string())
-                                                    .or_insert(0) += 1;
+                                                // Rule-8 review of PR #305, c8: the hourly budget
+                                                // and the peer's share are accounted where custody
+                                                // is actually COMMITTED (below), not here. Charging
+                                                // requests that the node then declines to relay
+                                                // spent both the node ceiling and the peer's new
+                                                // share on traffic that was never carried.
                                                 match PeerId::from_bytes(&request.destination_peer) {
                                                     Ok(destination) => {
                                                         let relay_message_id = request.message_id.clone();
@@ -9092,6 +9165,17 @@ pub async fn start_swarm_with_config(
                                                                         resolved_device_id,
                                                                     ) {
                                                                         Ok(_) => {
+                                                                            // C8-CHARGE-POINT: account only
+                                                                            // on a committed relay (rule-8
+                                                                            // review c8).
+                                                                            note_peer_relay_admitted(
+                                                                                &mut relay_counts_this_hour,
+                                                                                &peer.to_string(),
+                                                                                now_ms,
+                                                                            );
+                                                                            relay_count_this_hour =
+                                                                                relay_count_this_hour
+                                                                                    .saturating_add(1);
                                                                             relay_guardrails.record_accepted(
                                                                                 &peer.to_string(),
                                                                                 &destination.to_string(),
@@ -11266,9 +11350,57 @@ mod ledger_seeding_hardening_tests {
 #[cfg(test)]
 mod relay_per_peer_budget_tests {
     use super::{
-        relay_admission, relay_per_peer_budget, RelayAdmission, RELAY_MAX_INFLIGHT_DISPATCHES,
-        RELAY_PER_PEER_BUDGET_MIN,
+        note_peer_relay_admitted, peer_relay_used, prune_peer_relay_use, relay_admission,
+        relay_per_peer_budget, PeerRelayUse, RelayAdmission, RELAY_MAX_INFLIGHT_DISPATCHES,
+        RELAY_PEER_BUCKET_MAX_TRACKED, RELAY_PER_PEER_BUDGET_MIN,
     };
+    use std::collections::HashMap;
+
+    #[test]
+    fn per_peer_budget_map_is_bounded_like_the_token_bucket_map() {
+        // Rule-8 review of PR #305, c3. The map key is a peer id the caller
+        // chooses, so an attacker pays for the memory it takes: the per-peer
+        // budget map must be capped exactly like the token-bucket map beside it.
+        let mut counts: HashMap<String, PeerRelayUse> = HashMap::new();
+        let over_cap = RELAY_PEER_BUCKET_MAX_TRACKED + 257;
+        for i in 0..over_cap {
+            note_peer_relay_admitted(&mut counts, &format!("peer-{}", i), 1_000 + i as u64);
+        }
+        assert_eq!(
+            counts.len(),
+            RELAY_PEER_BUCKET_MAX_TRACKED,
+            "the per-peer budget map must not grow past the token-bucket cap"
+        );
+        assert!(
+            !counts.contains_key("peer-0"),
+            "the stalest peer must be the one evicted"
+        );
+        assert_eq!(
+            peer_relay_used(&counts, &format!("peer-{}", over_cap - 1)),
+            1,
+            "the newest peer stays tracked, so its share is still enforced"
+        );
+    }
+
+    #[test]
+    fn per_peer_budget_use_accumulates_and_reports_unknown_peers_as_unused() {
+        let mut counts: HashMap<String, PeerRelayUse> = HashMap::new();
+        note_peer_relay_admitted(&mut counts, "peer-a", 10);
+        note_peer_relay_admitted(&mut counts, "peer-a", 20);
+        assert_eq!(peer_relay_used(&counts, "peer-a"), 2);
+        assert_eq!(
+            peer_relay_used(&counts, "peer-never-seen"),
+            0,
+            "an unseen peer has used none of its share"
+        );
+        assert_eq!(
+            counts.get("peer-a").map(|state| state.last_seen_ms),
+            Some(20),
+            "the newest sighting is what the prune orders by"
+        );
+        prune_peer_relay_use(&mut counts);
+        assert_eq!(counts.len(), 1, "pruning a bounded map is a no-op");
+    }
 
     #[test]
     fn per_peer_share_bounds_a_single_peer_by_default() {
