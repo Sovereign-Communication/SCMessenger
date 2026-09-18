@@ -209,6 +209,24 @@ fn live_non_key_identifiers_are_measured_not_assumed() {
          accepts {strict_accepts}, lenient decode accepts {lenient_accepts}",
         LIVE_NON_KEY_64HEX.len()
     );
+
+    // Named, not just counted: which real identities the classifier still
+    // reads as curve points. Live, `GET /api/peer-resolve` on both candidate
+    // nodes reported `input_kind: public_key, self_certifying: true` for two of
+    // these three identity_ids, so the ambiguity is real and reachable - and
+    // identical under the lenient decode, i.e. pre-existing rather than
+    // introduced here. See HANDOFF/audit/LIVE_VERIFICATION_305_2026-09-18.md.
+    for (label, value) in [
+        ("live identity_id (windows 985a25f9)", LIVE_IDENTITIES[0].2),
+        ("live identity_id (aws 37eb7561)", LIVE_IDENTITIES[1].2),
+        ("live identity_id (peer f83ab163)", LIVE_IDENTITIES[2].2),
+    ] {
+        println!(
+            "[REPORT] {label}: strict={} lenient={}",
+            valid(value),
+            lenient_dalek_decode(value)
+        );
+    }
     assert!(
         strict_accepts <= lenient_accepts,
         "strict decoder accepted more real non-key identifiers ({strict_accepts}) \
