@@ -288,7 +288,19 @@ Windows->Pixel delivers directly with no fallback at all. Reaching AWS as a
 carrier needs the Pixel to originate traffic to a destination it cannot reach
 directly, which is the operator's phone, not something this run can drive.
 AWS's per-peer accounting is otherwise proven on this node: 112 requests, 38
-admissions, 62 refusals, 0 global refusals, and the same 50/50 share.
+admissions, 62 refusals, 0 global refusals, and the same 50/50 share. A final
+poll of its log 12 minutes after the boundary still showed `0` relay requests
+received and `0` rollover lines.
+
+### After the run
+
+Committing this record moved the head to `bc61db61`, a docs-only commit, which
+restarted CI; the head that was verified green above is `3e5eadc9`. The
+reclaim survey refuses to release this worktree's build output
+(`wt-v040-fixes ... NOT-MERGED HOLD - not an ancestor of any durable ref`),
+which is the tool behaving correctly on an unmerged branch; disk stands at
+33.73 GB free with the guard's verdict `OK`, so the output was left in place
+rather than force-deleted.
 
 ## 9. State changes this run made (and how to undo them)
 
