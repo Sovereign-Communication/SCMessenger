@@ -183,15 +183,27 @@ new retention bound applies to exactly these records, so they expire; a
    persistent sled store (3 open/reopen cycles) in
    `test_trn04_custody_lifecycle.rs`. **No live record older than 7 days could
    be constructed**, so live expiry is unproven.
-3. **Multi-peer fairness live.** The property "one peer's exhaustion does not
-   stop another peer" was exercised in-process
-   (`a_greedy_peer_is_throttled_while_others_still_relay`), but not live: after
-   the refusals, no relay request arrived from any peer other than the refused
-   one (Windows: 0 inbound in that window; AWS: 112, all from Windows). The
-   Pixel's natural rate in those minutes was zero requests, so its absence is
-   not evidence of a block - it is simply an untested live case.
+3. ~~Multi-peer fairness live.~~ **Captured on the second attempt - see 6a.**
 4. **The Pixel.** Deliberately untouched, so no on-device Android behaviour was
    observed on this run.
+
+### 6a. Multi-peer fairness, live (closes the gap above)
+
+The first pass could not test this because no second peer sent anything while the
+greedy peer was refused. Waiting for natural traffic produced the case, on the
+**AWS candidate**, in a window where the Windows peer had already hit its share:
+
+```
+refusals in the period, by peer:     62  x 12D3KooWD6vZ... (windows)  <- exhausted
+                                      0  x 12D3KooWD776... (pixel)    <- never refused
+pixel's 3 relay requests (00:55:13) -> each followed by
+     "relay request accepted in Phase A compat mode" + sled custody writes
+```
+
+So the peer that had taken its share was refused 62 times while a different peer
+was admitted and had its custody written in the same window. That is the TRN-07
+property - one connection can no longer take the node's whole hourly budget -
+demonstrated on the deployed candidate with real peers, not just in-process.
 
 ## 7. Incidental findings (not fixed here)
 
@@ -232,7 +244,51 @@ new retention bound applies to exactly these records, so they expire; a
 
 ## 8. Rollover capture
 
-Pending the boundaries noted in 6.1; appended when observed.
+### Windows candidate - captured
+
+The window opened at node start (`relay_hour_start = Instant::now()`,
+`swarm.rs:3979`) and is a hard 3600 s. Node started `00:37:44Z`, so the boundary
+is `01:37:44Z`. The first relay request after it produced, verbatim:
+
+```
+2026-09-18T01:38:15.942301Z DEBUG scmessenger_core::transport::swarm:
+  Relay budget window rolled over: 52 relay(s) used, 2 peer(s) accounted
+```
+
+That line is a claim by the node about its own counters, so it was checked
+against independently counted log lines for the window
+(`00:37:44Z <= t < 01:37:44Z`, spanning the hourly rotation at 01:00):
+
+| | windows peer | pixel peer | total |
+|---|---|---|---|
+| relay requests received | 127 | 2 | 129 |
+| per-peer refusals | 77 | 0 | 77 |
+| admitted (received - refused) | 50 | 2 | **52** |
+| custody writes | | | 42 |
+
+`52` admitted and `2` peers accounted are exactly what the rollover line
+reported, from a different log source - the counters are real and the
+accounting is consistent. The `50` for the Windows peer is the default share
+`max(200/4, 25)`; the pixel's `2` are a second live fairness sample inside the
+same window, admitted while the other peer was pinned at its share.
+
+**The reset restores service.** Immediately after the rollover line
+(`01:38:15.950Z`, `01:38:28.395Z`, `01:38:28.403Z`) the same peer's requests were
+`relay request accepted`, and there were **0 refusals** in the new window's first
+4 requests - where the same peer had been refused 77 times in the window before.
+
+### AWS candidate - NOT captured
+
+Its boundary was `01:33:40Z`, but the node received no relay request afterwards
+in the time available, and the rollover log only fires on a relay request. Every
+attempt to force one failed for a clear reason: with the Pixel connected to both
+nodes as well, `select_drift_fallback_carrier` (first connected peer that is not
+the target) now picks the Pixel for drives originating at AWS and at Windows, and
+Windows->Pixel delivers directly with no fallback at all. Reaching AWS as a
+carrier needs the Pixel to originate traffic to a destination it cannot reach
+directly, which is the operator's phone, not something this run can drive.
+AWS's per-peer accounting is otherwise proven on this node: 112 requests, 38
+admissions, 62 refusals, 0 global refusals, and the same 50/50 share.
 
 ## 9. State changes this run made (and how to undo them)
 
@@ -251,4 +307,30 @@ CI on the head (`aab7e2a8`) failed the **FFI Surface Contract** job:
 checked-in snapshots were not updated with it (`195a196`, `389a390`). That is a
 defect in the AND-06 half of this change, not a pre-existing one. Fixed by
 adding exactly the line each snapshot needed, in sorted position, and committed
-as `c8725b49`, which restarted CI on the corrected head.
+as `c8725b49`.
+
+That fix then exposed a second one: `c8725b49` passed every job except **Lint**,
+which failed on two line-wrapping differences in the new test file. Reflowed with
+the workspace rustfmt (`cargo fmt --all -- --check` is clean); committed as
+`3e5eadc9`.
+
+## 11. Status of #305 at the time of writing
+
+Head: `3e5eadc9`. CI on that head, all jobs:
+
+```
+CI            success     Lint           success     Cross         success
+Mobile        success     iOS Build & Test  success  Repository Hygiene  success
+```
+
+Which artifacts the deployed nodes are actually running, and why that is still
+correct after those commits: the CI artifact and the container image were built
+from `aab7e2a8`/`0ca9da53`, and `git diff --stat aab7e2a8 3e5eadc9` shows only
+the FFI snapshots and the two test files - i.e. the runtime fix code on both
+nodes is byte-identical to this head. Only test/CI fixtures changed.
+
+**Rule 8: not satisfied.** PR #305 has **0 reviews**
+(`gh pr view 305 --json reviews`), and it changes
+`core/src/transport/swarm.rs`, a gated directory. It needs a recorded
+adversarial APPROVE from a reviewer who did not author it before merge. Not
+merged by this run, deliberately.
