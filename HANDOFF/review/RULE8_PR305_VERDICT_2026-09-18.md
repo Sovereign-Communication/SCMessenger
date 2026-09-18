@@ -148,7 +148,9 @@ Valid (anchored windows):
 - `verify_pr305_custody_regate_20260918.json` — 3/3 voted, actual $0.0125
 - `lint_pr305_{identity,custody}_regate_20260918.json` — ok:true, issues:[]
 
-Invalid as fix-verification (stale windows; retained for the record, marked):
+Invalid as fix-verification (stale windows; retained for the record, marked by
+sidecar `INVALID_PR305_STALE_WINDOWS.md` in the same directory — the harness
+output schema has no marker field, so the JSONs themselves are untouched):
 - `verify_pr305_{identity,custody}_fixed_20260918.json`,
   `verify_pr305_custody_fixed{2,3}_20260918.json`
 
