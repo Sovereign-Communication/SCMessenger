@@ -99,3 +99,23 @@ ticket must pin this down first.
 - Pixel: app untouched, version 0.4.0 (lastUpdateTime 2026-09-16), discovery
   restored; received real traffic post-recovery.
 - AWS: unaffected throughout; still on candidate `aab7e2a` image.
+
+## Fix addendum (2026-09-18, post-RCA)
+
+The fix is implemented and reviewed; the open question above is answered by the
+field logs pulled during implementation:
+
+- Ping-failure disconnect IS wired (`close_connection` on `ping::Failure`), but
+  it is per-connection: on 09-17 `Ping failed` fired once for D776 (23:33Z) with
+  FOUR connections established -- one ghost slot was freed, three persisted, and
+  the per-peer cap stayed saturated. Per-connection liveness cannot see a peer's
+  other dead sockets; that is the reap's reason to exist.
+- Fix commits: `8cc356b8` (ZombieTracker: liveness stamps + deny-cause
+  classification + periodic reap, native and wasm loops, 9 regression tests) and
+  `44ed8071` (exact-IP join for peerless deny attribution, replacing a substring
+  join that could misattribute a LAN neighbor's denied dial).
+- Rule-8 gate: CLEAR, full 3-of-3 seat panel, one dissent (z2) overruled on code
+  evidence -- verdict at `HANDOFF/review/RULE8_ZOMBIE_FIX_VERDICT_2026-09-18.md`.
+- Deny observability is now real: a connection_limits deny logs WHICH limit and
+  count (direction 3 above); unknown causes print verbatim, never bare "denied".
+- Direction 4 stands: the cap was not raised.
