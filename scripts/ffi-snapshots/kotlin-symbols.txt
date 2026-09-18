@@ -193,6 +193,7 @@ fun `isRunning`(): kotlin.Boolean
 fun `isRunning`(): kotlin.Boolean
 fun `isStorageDegraded`(): kotlin.Boolean
 fun `isStorageHealthy`(): kotlin.Boolean
+fun `isValidPublicKey`(`hexStr`: kotlin.String): kotlin.Boolean {
 fun `listBlockedPeersBridge`(): List<BlockedIdentity>
 fun `listBlockedPeers`(): List<BlockedIdentity>
 fun `listBlocked`(): List<BlockedIdentity>
