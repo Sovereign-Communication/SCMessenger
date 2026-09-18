@@ -1403,10 +1403,16 @@ impl ZombieTracker {
     /// peer. Returns the stamped peer, if one matched.
     fn note_inbound_attempt_by_ip(&mut self, send_back_addr: &str, now_ms: u64) -> Option<PeerId> {
         let ip = extract_ip_component(send_back_addr)?;
+        // Exact IP equality, not substring: "192.168.0.1" is a prefix of
+        // "192.168.0.108", and a substring join would let one LAN neighbor's
+        // denied dial stamp another peer's attempt map.
         let peer = self
             .connections
             .iter()
-            .find(|(_, list)| list.iter().any(|c| c.remote_addr.contains(&ip)))
+            .find(|(_, list)| {
+                list.iter()
+                    .any(|c| extract_ip_component(&c.remote_addr).as_deref() == Some(ip.as_str()))
+            })
             .map(|(k, _)| *k)?;
         self.last_inbound_attempt_ms.insert(peer, now_ms);
         self.prune();
@@ -10504,6 +10510,21 @@ mod tests {
             None
         );
         assert!(!t2.reap_candidate(&peer, 200_000));
+        // A substring neighbor must not attribute: ".1" is a prefix of ".108",
+        // so the join must compare extracted IPs for equality, not substrings.
+        let other = zombie_test_peer();
+        let (mut t3, _conn3) = tracker_with_one_connection(peer, 0);
+        let _ = t3.note_connection_established(
+            other,
+            "c-neighbor".to_string(),
+            "/ip4/192.168.0.1/tcp/40000".to_string(),
+            0,
+        );
+        assert_eq!(
+            t3.note_inbound_attempt_by_ip("/ip4/192.168.0.1/tcp/1", 200_000),
+            Some(other),
+            "exact-IP join must attribute to the true neighbor, not the .108 peer"
+        );
     }
 
     #[test]
