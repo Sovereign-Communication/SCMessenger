@@ -627,8 +627,20 @@ class MeshForegroundService : Service() {
                 }
                 val isKnownContact = contactData != null
 
-                // Wire clearMessageNotifications into message read callback
-                NotificationHelper.clearMessageNotifications(this@MeshForegroundService, message.peerId)
+                // NOTIF-UNIFY-001: canonicalize the peer id ONCE so every notification
+                // (show, clear, group key, notification id) uses the same identity.
+                // The same human can arrive under different id forms (libp2p 12D3... vs
+                // canonical public_key_hex); posting per raw form created SPLIT
+                // notification cards for one person. canonicalContactIdPublic resolves
+                // via IronCore and falls back to normalized input when unresolvable.
+                val canonicalPeerId = withContext(Dispatchers.Default) {
+                    try {
+                        meshRepository.canonicalContactIdPublic(message.peerId)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Notification canonicalization failed for ${message.peerId}; using raw id")
+                        message.peerId
+                    }
+                }
 
                 // Check if conversation exists
                 val hasExistingConversation = withContext(Dispatchers.Default) {
@@ -654,9 +666,14 @@ class MeshForegroundService : Service() {
                 withContext(Dispatchers.Main) {
                     // Use NotificationHelper with WS14 classification
                     // Note: explicitDmRequest is not available in MessageRecord; classification will infer from contact state
+                    // NOTIF-UNIFY-001: no pre-show clear here - clearing before every show
+                    // wiped the MessagingStyle history, so each message rendered as a fresh
+                    // single-item card instead of one bundled conversation. The read path
+                    // (NotificationActionReceiver) clears on mark-read; foreground
+                    // suppression covers the active-conversation case.
                     NotificationHelper.showMessageNotification(
                         context = this@MeshForegroundService,
-                        peerId = message.peerId,
+                        peerId = canonicalPeerId,
                         messageId = message.id,
                         content = message.content,
                         nickname = nickname,

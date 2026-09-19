@@ -5,13 +5,30 @@ This file is the ONE place the orchestrator updates immediately after every
 AWS node rebuild. Read it fresh at use time; never copy an IP from any
 other doc, ticket, or config.
 
-## Current (updated 2026-08-29; redeployed at main `419e9678`)
+## Current (updated 2026-09-14; instance rebuilt ~2026-09-13)
 
-- **Redeployed 2026-08-29T17:54Z at main `419e9678`** (carries PRs #236
-  custody split-brain + bounded retry + GET /api/history, and #239
-  routing_peer_seen transport failover). Image `testbotz/scmessenger:latest`
-  from Docker Publish success at that SHA. Health: healthy.
-- **Identity persistence FIXED + VERIFIED (2026-08-29):** root cause was
+- **2026-09-14: INSTANCE REBUILT ~2026-09-13 with a NEW instance ID and IP.
+  The old address below was dead 2026-09-13..14 and nobody recorded the
+  replacement -- this doc's update policy was violated. Rediscovered via
+  boto3 tag sweep (tag Name=scm-always-on-node, us-east-1), verified live.
+- Instance: i-0b41aab756eabd514 (replaced i-006b14491d421bd0d)
+- Public IP: 18.234.62.247 (dynamic -- re-verify at use time)
+- Bootstrap multiaddr: /ip4/18.234.62.247/tcp/9001
+- Health check: http://18.234.62.247:9876/health -- verified 200 healthy
+  2026-09-14
+- SSH: `ec2-user@18.234.62.247` with key `~/.ssh/scm-node-key.pem`
+  (verified 2026-09-14); container `scm-node`, image
+  `testbotz/scmessenger:sha-ccce98c`, identity host path
+  `/opt/scm-relay-data`.
+- Resolution one-liner (no AWS CLI needed; creds are the
+  scmessenger-relay-orchestrator IAM user):
+  `python -c "import boto3; ec2=boto3.resource('ec2',region_name='us-east-1'); [print(i.id, i.public_ip_address) for i in ec2.instances.filter(Filters=[{'Name':'tag:Name','Values':['scm-always-on-node']}])]"`
+- Cost hygiene verified 2026-09-14: exactly 1 billable instance across all
+  34 regions, 0 Elastic IPs, 0 orphaned EBS volumes.
+
+## Historical (pre-rebuild lessons, kept for context)
+
+- Identity persistence FIXED + VERIFIED (2026-08-29): root cause was
   image setting `SCM_DATA_DIR` (entrypoint-only) while the app reads
   `SCMESSENGER_DATA_DIR`; identity was written to the container's ephemeral
   layer and rotated on every redeploy (`640c258b` -> `78869300` ->
@@ -19,25 +36,22 @@ other doc, ticket, or config.
   `/data` (bound to `/opt/scm-relay-data`). **Verified live:** after two
   consecutive `docker rm -f` + `docker run` redeploys the identity stayed
   `0b332009...` / `12D3KooWKMU...` unchanged -> identity now persists across
-  restarts. Node currently at main SHA carrying #236+#239+#240.
+  restarts.
 
 
 
+
+## Previous (STALE -- do not use)
+
+- 54.226.67.101 / i-006b14491d421bd0d (instance terminated ~2026-09-13;
+  replacement rebuilt with a new ID -- not recorded until 2026-09-14)
 - Public IP: 54.226.67.101
 - Bootstrap multiaddr: /ip4/54.226.67.101/tcp/9001
 - Health check: http://54.226.67.101:9876/health
 - Instance: i-006b14491d421bd0d, tag Name=scm-always-on-node
   (account 101533648751, us-east-1, t3.micro, AMI ami-0bdc7d025135d7b49)
 - Image: docker.io/testbotz/scmessenger:latest @
-  sha256:a58645e886409e057edb7557141e02b64cf0e9fd9f28ecab773b099a6e760583,
-  rebuilt 2026-08-25. git_hash now
-  `0064d49a0a0a8464dd22dcac2da70e5e455c7743` (= current main) --
-  version parity with the Windows + Android rig nodes achieved.
-- SSH: `ec2-user@54.226.67.101` with key `~/.ssh/scm-node-key.pem`.
-  Identity persists at host path `/opt/scm-relay-data`; container name
-  `scm-node`.
-
-## Previous (STALE -- do not use)
+  sha256:a58645e886409e057edb7557141e02b64cf0e9fd9f28ecab773b099a6e760583
 
 - Same IP/instance as Current but PRE-REBUILD image (superseded
   2026-08-25): testbotz/scmessenger:latest at commit

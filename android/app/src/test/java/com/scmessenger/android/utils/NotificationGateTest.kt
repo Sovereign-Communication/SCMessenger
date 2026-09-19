@@ -2,6 +2,7 @@
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -41,8 +42,11 @@ class NotificationGateTest {
     @Test
     fun updateSettings_disablesGlobalGate() {
         NotificationHelper.updateSettings(enabled = false)
-        assertFalse("global gate must be off after updateSettings(enabled=false)",
-            NotificationHelper.notificationsEnabled)
+        // The gate is Boolean? (null = unhydrated). Asserting the exact value
+        // rather than assertFalse keeps the assertion strict: a null gate (the
+        // fail-closed sentinel) must NOT satisfy "the user turned it off".
+        assertEquals("global gate must be off after updateSettings(enabled=false)",
+            false, NotificationHelper.notificationsEnabled)
 
         val stats = NotificationHelper.getNotificationStats()
         // Stats string must expose the suppression counters for diagnostics.
@@ -53,7 +57,24 @@ class NotificationGateTest {
     fun updateSettings_reEnablesGlobalGate() {
         NotificationHelper.updateSettings(enabled = false)
         NotificationHelper.updateSettings(enabled = true)
-        assertTrue(NotificationHelper.notificationsEnabled)
+        assertEquals("global gate must be on after updateSettings(enabled=true)",
+            true, NotificationHelper.notificationsEnabled)
+    }
+
+    /**
+     * The fail-closed sentinel must survive a no-arg updateSettings() call.
+     *
+     * notify paths call updateSettings() with all-null arguments as a no-op
+     * reset (and tests do the same in @Before). If that call hydrated the gate
+     * to true, the cold-start window would leak one notification again - the
+     * exact defect this sentinel exists to close.
+     */
+    @Test
+    fun noArgUpdateSettings_leavesUnhydratedGateNull() {
+        NotificationHelper.notificationsEnabled = null
+        NotificationHelper.updateSettings()
+        assertNull("a no-op updateSettings() must not hydrate the gate",
+            NotificationHelper.notificationsEnabled)
     }
 
     @Test

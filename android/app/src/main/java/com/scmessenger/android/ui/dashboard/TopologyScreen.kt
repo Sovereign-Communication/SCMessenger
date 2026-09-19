@@ -51,27 +51,24 @@ fun TopologyScreen(
         viewModel.refreshData()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.topology_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_action_dismiss))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.refreshData() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.diagnostics_action_refresh))
-                    }
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        TopAppBar(
+            title = { Text(stringResource(R.string.topology_title)) },
+            navigationIcon = {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_action_dismiss))
                 }
-            )
-        }
-    ) { paddingValues ->
+            },
+            actions = {
+                IconButton(onClick = { viewModel.refreshData() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.diagnostics_action_refresh))
+                }
+            }
+        )
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
+            modifier = Modifier.fillMaxSize()
         ) {
             when {
                 isLoading -> {
@@ -132,6 +129,16 @@ fun TopologyScreen(
                         TopologyLegend(
                             modifier = Modifier.padding(16.dp)
                         )
+
+                        // TOPOLOGY-SCROLL-001: the app shell's bottom navigation
+                        // bar overlaps the bottom of this screen's scroll range, so
+                        // the legend's last connection-type row could never be
+                        // scrolled into view (operator-reported "mesh topology does
+                        // not scroll fully"): at maximum scroll the final row sat
+                        // under the bar. Trailing content space lets it clear the
+                        // bar, the same inset DashboardScreen gets from its own
+                        // trailing content padding.
+                        Spacer(modifier = Modifier.height(72.dp))
                     }
                 }
             }
@@ -208,7 +215,13 @@ private fun TopologyGraph(
     Canvas(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
         val centerX = size.width / 2
         val centerY = size.height / 2
-        val radius = minOf(size.width, size.height) / 2 - 60f
+        // TOPOLOGY-CLIP-001: margin must scale with density - a raw 60px margin
+        // is only ~23dp on modern phones, so nodes at the circle edge (radius
+        // 25px + 35px highlight halo) drew past the Canvas bounds and were
+        // clipped at the screen edges. Scale with density and keep enough room
+        // for the halo plus breathing space.
+        val margin = 48.dp.toPx() + 60f
+        val radius = minOf(size.width, size.height) / 2 - margin
 
         // Calculate node positions in a circle
         val nodePositions = mutableMapOf<String, Offset>()
