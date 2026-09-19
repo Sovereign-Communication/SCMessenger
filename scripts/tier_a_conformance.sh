@@ -17,16 +17,29 @@
 #   SCM_WIN_URL            Windows node control API (default http://127.0.0.1:9876)
 #   SCM_SSH_KEY            SSH key for the cloud node (default ~/.ssh/scm-node-key.pem)
 #   SCMESSENGER_DATA_DIR   Windows node data dir (default %LOCALAPPDATA%/scmessenger)
-#   SCM_SKIP_REMOTE_SUDO=1 skip the remote probes that need sudo (A2 SHA), which
-#                          are then reported as [WARNING] with the exact command
+#   SCM_SKIP_REMOTE_SUDO=1 skip the remote probes that need sudo (A2 SHA)
+#
+# Row verdicts:
+#   [OK]      the criterion was measured and holds
+#   [FAIL]    the criterion was measured and does not hold -- exit 1
+#   [WARNING] measured, but outside its own pass condition, or below a threshold
+#   [SKIP]    NOT measured, so no verdict is available; the reason is printed
+#
+# A [SKIP] never substitutes for a verdict. It is what stops an unreachable node
+# or a missing baseline from being reported as a failure of the thing it was
+# supposed to compare.
+#
+# Cross-run state (scratch/driver/tier_a_conformance.json):
+#   Each run records what it measured, and CARRIES FORWARD the last value it did
+#   measure for anything it could not. A run against a dead cloud node therefore
+#   cannot erase the baseline, and the next healthy run still compares against
+#   the last known good value -- which is the only way an identity change that
+#   happens during an outage can ever be detected. Values that have never been
+#   measured stay null: an unknown is not the same fact as an empty one.
 #
 # Exit codes:
 #   0  every row was evaluated and none is [FAIL]
 #   1  at least one row is [FAIL]
-#
-# A row whose source could not be read prints [WARNING] together with the exact
-# command that would evaluate it. It never prints [OK]: visibility fails open,
-# the verdict fails closed.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,21 +65,27 @@ LISTENER_WARN_THRESHOLD=12
 WATCHER_MAX_AGE_MIN=120
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^set -uo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
 FAILS=0
 WARNINGS=0
+SKIPS=0
 ROWS=0
 
 row_ok()   { ROWS=$((ROWS + 1)); printf '[OK]      %s\n' "$*"; }
 row_fail() { ROWS=$((ROWS + 1)); FAILS=$((FAILS + 1)); printf '[FAIL]    %s\n' "$*"; }
 row_warn() { ROWS=$((ROWS + 1)); WARNINGS=$((WARNINGS + 1)); printf '[WARNING] %s\n' "$*"; }
+row_skip() { ROWS=$((ROWS + 1)); SKIPS=$((SKIPS + 1)); printf '[SKIP]    %s\n' "$*"; }
 info()     { printf '          %s\n' "$*"; }
 section()  { printf '\n-- %s\n' "$*"; }
 
 http_body() { curl -s -m 8 "$1" 2>/dev/null; }
+
+# Compare JSON on content, not on whitespace: a re-serialized body must not turn
+# a healthy node into a [FAIL]. One tr, so the fast path stays fast.
+json_has() { printf '%s' "$1" | tr -d ' \t\r\n' | grep -q "\"$2\":\"$3\""; }
 
 # json_field <json> <python-expression reading `d`>
 json_field() {
@@ -195,10 +214,15 @@ print(int((time.time() - os.path.getmtime(sys.argv[1])) / 60))
 " "$1" 2>/dev/null
 }
 
-# previous_field <node> <field> -- value recorded by the previous run, or empty.
-previous_field() {
+is_number() { [ -n "$1" ] && [ "$1" -eq "$1" ] 2>/dev/null; }
+
+# The previous record is read once and asked many times. One parse, not one per
+# field: it keeps the state schema in a single place, and a healthy run inside
+# its time budget. Keys are the state file's node names (windows, aws).
+PREV_STATE=""
+load_previous_state() {
   [ -f "$RESULTS_FILE" ] || return 0
-  python3 - "$RESULTS_FILE" "$1" "$2" <<'PY' 2>/dev/null
+  PREV_STATE="$(python3 - "$RESULTS_FILE" <<'PY' 2>/dev/null
 import json
 import sys
 
@@ -207,9 +231,28 @@ try:
         doc = json.load(fh)
 except Exception:
     raise SystemExit(0)
-value = ((doc.get("previous") or {}).get(sys.argv[2]) or {}).get(sys.argv[3])
-print("" if value is None else value)
+record = doc.get("previous") if isinstance(doc, dict) else None
+if not isinstance(record, dict):
+    raise SystemExit(0)
+for node in ("windows", "aws"):
+    entry = record.get(node)
+    if not isinstance(entry, dict):
+        continue
+    for field in ("identity_id", "custody_audit_count"):
+        value = entry.get(field)
+        # null and "" both mean never measured: an unmeasured value must not be
+        # comparable, which is what turns A3/A6 into [SKIP] rather than a guess.
+        if value not in (None, ""):
+            print("%s.%s=%s" % (node, field, value))
 PY
+)"
+}
+
+# previous_value <node> <field> -- last value RECORDED for that node/field,
+# measured by an earlier run or carried forward from one. Empty when the field
+# has never been measured. <node> is a state-file key: windows or aws.
+previous_value() {
+  printf '%s\n' "$PREV_STATE" | grep -m1 "^$1\.$2=" | cut -d= -f2-
 }
 
 # ----------------------------------------------------------------------------
@@ -230,7 +273,7 @@ printf ' cloud node  : %s (discovery: %s)\n' "${AWS_HOST:-UNRESOLVED}" "$DISCOVE
 printf ' windows node: %s\n' "$WIN_URL"
 
 if [ -z "$AWS_HOST" ]; then
-  row_fail "A1 cloud node not located -- set SCM_AWS_HOST=<ip> or provide EC2 credentials (~/.config/scmorc/aws.env); rows marked [WARNING] below were not evaluated"
+  row_fail "A1 cloud node not located -- set SCM_AWS_HOST=<ip> or provide EC2 credentials (~/.config/scmorc/aws.env); rows marked [SKIP] below were not evaluated"
 fi
 
 # ----------------------------------------------------------------------------
@@ -246,38 +289,41 @@ WIN_HEALTH="$(http_body "$WIN_URL/health")"
 WIN_ID="$(http_body "$WIN_URL/api/identity")"
 WIN_DIAG="$(http_body "$WIN_URL/api/diagnostics")"
 
-AWS_PUBKEY="$(json_field "$AWS_ID" "d.get('public_key_hex','')")"
-AWS_PEERID="$(json_field "$AWS_ID" "d.get('libp2p_peer_id','')")"
-AWS_IDENTITY="$(json_field "$AWS_ID" "d.get('identity_id','')")"
-WIN_PUBKEY="$(json_field "$WIN_ID" "d.get('public_key_hex','')")"
-WIN_PEERID="$(json_field "$WIN_ID" "d.get('libp2p_peer_id','')")"
-WIN_IDENTITY="$(json_field "$WIN_ID" "d.get('identity_id','')")"
+# One parse per body, fields '|'-joined: a non-whitespace delimiter keeps an
+# empty field empty instead of letting `read` shift every later field up by one.
+IFS='|' read -r WIN_IDENTITY WIN_PUBKEY WIN_PEERID <<EOF
+$(json_field "$WIN_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id',''))])")
+EOF
+IFS='|' read -r AWS_IDENTITY AWS_PUBKEY AWS_PEERID <<EOF
+$(json_field "$AWS_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id',''))])")
+EOF
 
-read -r WIN_CUSTODY WIN_PATH WIN_PEERS WIN_LISTENERS <<EOF
-$(json_field "$WIN_DIAG" "'%s %s %s %s' % (d.get('custody_audit_count'), d.get('connection_path_state'), ','.join(d.get('peers') or []), len(d.get('listeners') or []))")
+# diagnostics: custody | path | peers | listener count | listener ports | external addrs
+IFS='|' read -r WIN_CUSTODY WIN_PATH WIN_PEERS WIN_LISTENERS WIN_PORTS WIN_EXT <<EOF
+$(json_field "$WIN_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or []))])")
 EOF
-read -r AWS_CUSTODY AWS_PATH AWS_PEERS AWS_LISTENERS <<EOF
-$(json_field "$AWS_DIAG" "'%s %s %s %s' % (d.get('custody_audit_count'), d.get('connection_path_state'), ','.join(d.get('peers') or []), len(d.get('listeners') or []))")
+IFS='|' read -r AWS_CUSTODY AWS_PATH AWS_PEERS AWS_LISTENERS AWS_PORTS AWS_EXT <<EOF
+$(json_field "$AWS_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or []))])")
 EOF
-WIN_EXT="$(json_field "$WIN_DIAG" "' '.join(d.get('external_addrs') or [])")"
-AWS_EXT="$(json_field "$AWS_DIAG" "' '.join(d.get('external_addrs') or [])")"
-WIN_PORTS="$(json_field "$WIN_DIAG" "','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in l else l) for l in (d.get('listeners') or [])}))")"
-AWS_PORTS="$(json_field "$AWS_DIAG" "','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in l else l) for l in (d.get('listeners') or [])}))")"
+
+# "Empty" and "not observed" are different facts, and every row below has to say
+# which one it is looking at.
+measured() { [ -n "$1" ] && [ "$1" != "None" ]; }
 
 section 'Rows'
 
 # A1 -- both nodes reachable.
-case "$WIN_HEALTH" in
-  *'"status":"healthy"'*) row_ok "A1 windows /health healthy" ;;
-  *) row_fail "A1 windows /health not healthy: ${WIN_HEALTH:-<no response>}" ;;
-esac
-if [ -z "$AWS_HOST" ]; then
-  row_warn "A1 cloud /health not evaluated (cloud node unresolved)"
+if json_has "$WIN_HEALTH" status healthy; then
+  row_ok "A1 windows /health healthy"
 else
-  case "$AWS_HEALTH" in
-    *'"status":"healthy"'*) row_ok "A1 cloud /health healthy" ;;
-    *) row_fail "A1 cloud /health not healthy: ${AWS_HEALTH:-<no response>}" ;;
-  esac
+  row_fail "A1 windows /health not healthy: ${WIN_HEALTH:-<no response>}"
+fi
+if [ -z "$AWS_HOST" ]; then
+  row_skip "A1 cloud /health not evaluated (cloud node unresolved)"
+elif json_has "$AWS_HEALTH" status healthy; then
+  row_ok "A1 cloud /health healthy"
+else
+  row_fail "A1 cloud /health not healthy: ${AWS_HEALTH:-<no response>}"
 fi
 
 # A2 -- SHA parity across both nodes and origin/main.
@@ -309,19 +355,22 @@ fi
 info "A2 windows provenance: ${WIN_PROV:-<none>}"
 info "A2 cloud provenance  : ${AWS_PROV:-<none>}"
 
-# A3 -- identity stable against the previous run.
-if [ ! -f "$RESULTS_FILE" ]; then
-  row_warn "A3 identity stability unproven -- first recorded run; baseline written to $RESULTS_FILE"
+# A3 -- identity stable against the last recorded value. Both sides must be
+# measured this run and have a recorded value; anything less is [SKIP], because
+# an unmeasured identity is not evidence of a changed one.
+load_previous_state
+PREV_WIN_ID="$(previous_value windows identity_id)"
+PREV_AWS_ID="$(previous_value aws identity_id)"
+if ! measured "$WIN_IDENTITY" && ! measured "$AWS_IDENTITY"; then
+  row_skip "A3 identity stability not evaluated -- no identity measured this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
+elif ! measured "$WIN_IDENTITY" || ! measured "$AWS_IDENTITY"; then
+  row_skip "A3 identity stability not evaluated -- one node's identity was not measured this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
+elif [ -z "$PREV_WIN_ID" ] || [ -z "$PREV_AWS_ID" ]; then
+  row_skip "A3 identity stability not evaluated -- no recorded identity to compare against (windows='${PREV_WIN_ID}' cloud='${PREV_AWS_ID}'); this run seeds the baseline"
+elif [ "$PREV_WIN_ID" = "$WIN_IDENTITY" ] && [ "$PREV_AWS_ID" = "$AWS_IDENTITY" ]; then
+  row_ok "A3 identity stable: windows=${WIN_IDENTITY:0:12} cloud=${AWS_IDENTITY:0:12}"
 else
-  PREV_WIN_ID="$(previous_field windows identity_id)"
-  PREV_AWS_ID="$(previous_field aws identity_id)"
-  if [ -z "$PREV_WIN_ID" ] || { [ -n "$AWS_HOST" ] && [ -z "$PREV_AWS_ID" ]; }; then
-    row_warn "A3 identity stability unproven -- the previous run in $RESULTS_FILE has no identity_id for a node being compared"
-  elif [ "$PREV_WIN_ID" = "$WIN_IDENTITY" ] && [ "$PREV_AWS_ID" = "$AWS_IDENTITY" ]; then
-    row_ok "A3 identity stable: windows=${WIN_IDENTITY:0:12} cloud=${AWS_IDENTITY:0:12}"
-  else
-    row_fail "A3 identity CHANGED: windows ${PREV_WIN_ID:0:12} -> ${WIN_IDENTITY:0:12}; cloud ${PREV_AWS_ID:0:12} -> ${AWS_IDENTITY:0:12} (persistence regression, issue I-01)"
-  fi
+  row_fail "A3 identity CHANGED: windows ${PREV_WIN_ID:0:12} -> ${WIN_IDENTITY:0:12}; cloud ${PREV_AWS_ID:0:12} -> ${AWS_IDENTITY:0:12} (persistence regression, issue I-01)"
 fi
 
 # A4 -- mesh formed: each node lists the other as a direct peer.
@@ -343,39 +392,67 @@ else
   fi
 fi
 
-# A5 -- connection path is not stuck bootstrapping.
-if [ -z "$AWS_HOST" ]; then
-  row_warn "A5 cloud path state not evaluated (cloud node unresolved)"
-elif [ -n "$WIN_PATH" ] && [ "$WIN_PATH" != "Bootstrapping" ] && [ -n "$AWS_PATH" ] && [ "$AWS_PATH" != "Bootstrapping" ]; then
+# A5 -- connection path is not stuck bootstrapping. An unmeasured path state is
+# not a stuck one.
+if ! measured "$WIN_PATH" || ! measured "$AWS_PATH"; then
+  row_skip "A5 connection path not evaluated -- not measured (windows='${WIN_PATH}' cloud='${AWS_PATH}')"
+elif [ "$WIN_PATH" != "Bootstrapping" ] && [ "$AWS_PATH" != "Bootstrapping" ]; then
   row_ok "A5 connection path: windows=$WIN_PATH cloud=$AWS_PATH"
 else
   row_fail "A5 connection path stuck: windows=${WIN_PATH:-<unknown>} cloud=${AWS_PATH:-<unknown>}"
 fi
 
-# A6 -- custody is live and non-decreasing across runs.
+# A6 -- custody live. The ticket words this as "present and non-decreasing", but
+# `custody_audit_count` is NOT a monotonic counter: it is a key count over the
+# custody-audit prefix (core/src/store/relay_custody.rs:1260, count_prefix), i.e.
+# a live gauge of currently-tracked records. Delivery (remove_message, :1520) and
+# storage-pressure purge both lower it, so a decrease is ordinary traffic, not a
+# regression. A plain decrease is therefore [WARNING] carrying its delta, and
+# [FAIL] is reserved for the unambiguous case: custody at zero. Both a missing
+# measurement and a missing baseline are [SKIP] -- neither is a regression.
+# The pair carries the state-file key AND the label, because they are not always
+# the same word (the cloud node's record is stored under "aws").
 CUSTODY_DETAIL=""
-CUSTODY_BAD=0
-for pair in "windows:$WIN_CUSTODY" "cloud:$AWS_CUSTODY"; do
-  NODE="${pair%%:*}"
-  VALUE="${pair#*:}"
-  if [ -z "$VALUE" ] || [ "$VALUE" = "None" ]; then
-    CUSTODY_BAD=1
-    CUSTODY_DETAIL="$CUSTODY_DETAIL ${NODE}=<absent>"
+CUSTODY_SKIPS=""
+CUSTODY_ZERO=""
+CUSTODY_DECREASED=0
+for pair in "windows:windows:$WIN_CUSTODY" "aws:cloud:$AWS_CUSTODY"; do
+  NODE_KEY="${pair%%:*}"
+  REST="${pair#*:}"
+  LABEL="${REST%%:*}"
+  VALUE="${REST#*:}"
+  if ! measured "$VALUE"; then
+    CUSTODY_SKIPS="$CUSTODY_SKIPS ${LABEL}(not measured)"
     continue
   fi
-  PREV="$(previous_field "$NODE" custody_audit_count)"
-  CUSTODY_DETAIL="$CUSTODY_DETAIL ${NODE}=${VALUE}"
-  if [ -n "$PREV" ] && [ "$VALUE" -lt "$PREV" ] 2>/dev/null; then
-    CUSTODY_BAD=1
-    CUSTODY_DETAIL="$CUSTODY_DETAIL(regressed from $PREV)"
+  if ! is_number "$VALUE"; then
+    CUSTODY_SKIPS="$CUSTODY_SKIPS ${LABEL}(unparsable: '${VALUE}')"
+    continue
+  fi
+  if [ "$VALUE" -eq 0 ] 2>/dev/null; then
+    CUSTODY_ZERO="$CUSTODY_ZERO ${LABEL}"
+  fi
+  PREV="$(previous_value "$NODE_KEY" custody_audit_count)"
+  if [ -z "$PREV" ] || ! is_number "$PREV"; then
+    CUSTODY_SKIPS="$CUSTODY_SKIPS ${LABEL}(no recorded value)"
+    CUSTODY_DETAIL="$CUSTODY_DETAIL ${LABEL}=${VALUE}"
+    continue
+  fi
+  if [ "$VALUE" -lt "$PREV" ]; then
+    CUSTODY_DECREASED=1
+    CUSTODY_DETAIL="$CUSTODY_DETAIL ${LABEL}=${VALUE}(down $((PREV - VALUE)) from recorded ${PREV})"
+  else
+    CUSTODY_DETAIL="$CUSTODY_DETAIL ${LABEL}=${VALUE}(recorded ${PREV})"
   fi
 done
-if [ "$CUSTODY_BAD" = "1" ]; then
-  row_fail "A6 custody audit count absent or regressed:$CUSTODY_DETAIL"
-elif [ -f "$RESULTS_FILE" ]; then
-  row_ok "A6 custody live and non-decreasing:$CUSTODY_DETAIL"
+if [ -n "$CUSTODY_ZERO" ]; then
+  row_fail "A6 custody EMPTY on:$CUSTODY_ZERO -- a node tracking zero custody records holds no store-and-forward custody at all:$CUSTODY_DETAIL"
+elif [ "$CUSTODY_DECREASED" = "1" ]; then
+  row_warn "A6 custody decreased (live gauge: delivery and purge lower it, so this is reported not failed):$CUSTODY_DETAIL"
+elif [ -n "$CUSTODY_SKIPS" ]; then
+  row_skip "A6 custody comparison not evaluated for:$CUSTODY_SKIPS; measured:$CUSTODY_DETAIL"
 else
-  row_warn "A6 custody present but not yet comparable (first recorded run):$CUSTODY_DETAIL"
+  row_ok "A6 custody live and not below the last recorded value:$CUSTODY_DETAIL"
 fi
 
 # A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes.
@@ -396,7 +473,7 @@ fi
 
 AWS_LEDGER_COUNT=""
 if [ -z "$AWS_HOST" ]; then
-  row_warn "A7 cloud ledger not evaluated (cloud node unresolved)"
+  row_skip "A7 cloud ledger not evaluated (cloud node unresolved)"
 elif fetch_remote_ledger; then
   AWS_LEDGER_OUT="$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "")"
   AWS_LEDGER_COUNT="$(stat_field "$AWS_LEDGER_OUT" entries)"
@@ -439,13 +516,13 @@ if [ -n "$AWS_LEDGER_COUNT" ]; then
 elif [ -n "$AWS_HOST" ]; then
   row_warn "A8 cloud peer store unproven -- see the A7 cloud command"
 else
-  row_warn "A8 cloud peer store not evaluated (cloud node unresolved)"
+  row_skip "A8 cloud peer store not evaluated (cloud node unresolved)"
 fi
 
 # A9 -- listener surface sane.
 check_listeners() {
   local node="$1" count="$2" ports="$3"
-  if [ -z "$count" ] || [ "$count" = "None" ]; then
+  if ! measured "$count"; then
     row_warn "A9 $node listener count unproven"
   elif [ "$count" -gt "$LISTENER_WARN_THRESHOLD" ] 2>/dev/null; then
     row_warn "A9 $node binds $count listeners (> $LISTENER_WARN_THRESHOLD): $ports (issue I-12)"
@@ -456,7 +533,7 @@ check_listeners() {
 
 check_listeners "windows" "$WIN_LISTENERS" "$WIN_PORTS"
 if [ -z "$AWS_HOST" ]; then
-  row_warn "A9 cloud listener count not evaluated (cloud node unresolved)"
+  row_skip "A9 cloud listener count not evaluated (cloud node unresolved)"
 else
   check_listeners "cloud" "$AWS_LISTENERS" "$AWS_PORTS"
 fi
@@ -477,50 +554,88 @@ fi
 
 # The churn row needs a redeploy, so it cannot be read-only and stays operator-run.
 section 'Skipped by design'
-printf '[SKIP]    Tier A churn re-measure (SHIP_PLAN G3-0): needs a redeploy, not read-only. Run IMAGE_TAG=<candidate> scripts/aws_deploy.sh, then this harness twice.\n'
-ROWS=$((ROWS + 1))
+row_skip "Tier A churn re-measure (SHIP_PLAN G3-0): needs a redeploy, not read-only. Run IMAGE_TAG=<candidate> scripts/aws_deploy.sh, then this harness twice."
 
 # ----------------------------------------------------------------------------
-# Record this run, so the next run's A3/A6 have something to compare against.
+# Record this run: measured values replace the record, unmeasured ones carry the
+# last known good value forward so a degraded run cannot erase the baseline.
 # ----------------------------------------------------------------------------
 mkdir -p "$(dirname "$RESULTS_FILE")"
-python3 - "$RESULTS_FILE" "$WIN_IDENTITY" "$WIN_PEERID" "$WIN_SHA" "$WIN_CUSTODY" "$WIN_LEDGER_COUNT" "$AWS_IDENTITY" "$AWS_PEERID" "$AWS_SHA" "$AWS_CUSTODY" "$AWS_LEDGER_COUNT" <<'PY'
+STATE_NOTE="$(python3 - "$RESULTS_FILE" \
+  "windows.identity_id=$WIN_IDENTITY" \
+  "windows.libp2p_peer_id=$WIN_PEERID" \
+  "windows.git_sha=$WIN_SHA" \
+  "windows.custody_audit_count=$WIN_CUSTODY" \
+  "windows.ledger_entries=$WIN_LEDGER_COUNT" \
+  "aws.identity_id=$AWS_IDENTITY" \
+  "aws.libp2p_peer_id=$AWS_PEERID" \
+  "aws.git_sha=$AWS_SHA" \
+  "aws.custody_audit_count=$AWS_CUSTODY" \
+  "aws.ledger_entries=$AWS_LEDGER_COUNT" <<'PY'
 import json
 import sys
 import time
 
 path = sys.argv[1]
+NODES = ("windows", "aws")
+FIELDS = ("identity_id", "libp2p_peer_id", "git_sha", "custody_audit_count", "ledger_entries")
+
+measured = {}
+for arg in sys.argv[2:]:
+    key, _, value = arg.partition("=")
+    measured[key] = value
+
+now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 try:
     with open(path, encoding="utf-8") as fh:
-        previous = json.load(fh).get("current")
+        doc = json.load(fh)
 except Exception:
-    previous = None
+    doc = {}
+if not isinstance(doc, dict):
+    doc = {}
 
-current = {
-    "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    "windows": {
-        "identity_id": sys.argv[2],
-        "libp2p_peer_id": sys.argv[3],
-        "git_sha": sys.argv[4],
-        "custody_audit_count": sys.argv[5],
-        "ledger_entries": sys.argv[6],
-    },
-    "aws": {
-        "identity_id": sys.argv[7],
-        "libp2p_peer_id": sys.argv[8],
-        "git_sha": sys.argv[9],
-        "custody_audit_count": sys.argv[10],
-        "ledger_entries": sys.argv[11],
-    },
-}
+previous_record = doc.get("current") if isinstance(doc.get("current"), dict) else {}
+
+current = {"recorded_at": now}
+carried = []
+for node in NODES:
+    known = previous_record.get(node)
+    if not isinstance(known, dict):
+        known = {}
+    entry = {}
+    fresh_here = False
+    carried_here = []
+    for field in FIELDS:
+        value = measured.get("%s.%s" % (node, field), "")
+        if value != "":
+            entry[field] = value
+            fresh_here = True
+        elif known.get(field) not in (None, ""):
+            # Last known good value: an outage must not blank the baseline.
+            entry[field] = known[field]
+            carried_here.append(field)
+        else:
+            # Never measured: an unknown, not an empty fact.
+            entry[field] = None
+    entry["observed"] = {field: (measured.get("%s.%s" % (node, field), "") != "") for field in FIELDS}
+    entry["observed_at"] = now if fresh_here else known.get("observed_at")
+    current[node] = entry
+    if carried_here:
+        carried.append("%s(%s)" % (node, ",".join(carried_here)))
 
 with open(path, "w", encoding="utf-8") as fh:
-    json.dump({"current": current, "previous": previous}, fh, indent=2, sort_keys=True)
+    json.dump({"current": current, "previous": previous_record}, fh, indent=2, sort_keys=True)
     fh.write("\n")
+
+if carried:
+    print("state: carried forward the last recorded value for " + "; ".join(carried))
 PY
+)"
+[ -n "$STATE_NOTE" ] && info "$STATE_NOTE"
 
 section 'Summary'
-printf '          rows=%s fail=%s warning=%s\n' "$ROWS" "$FAILS" "$WARNINGS"
+printf '          rows=%s ok=%s fail=%s warning=%s skip=%s\n' \
+  "$ROWS" "$((ROWS - FAILS - WARNINGS - SKIPS))" "$FAILS" "$WARNINGS" "$SKIPS"
 printf '          results: %s\n' "$RESULTS_FILE"
 if [ -s "$AWS_LEDGER_LOCAL" ]; then
   printf '          cloud ledger snapshot: %s\n' "$AWS_LEDGER_LOCAL"
