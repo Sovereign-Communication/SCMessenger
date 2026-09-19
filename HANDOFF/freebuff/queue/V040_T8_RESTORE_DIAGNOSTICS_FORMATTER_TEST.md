@@ -1,9 +1,9 @@
 # V040-T8 -- Restore the WS11 test deleted under a false premise
 
-Status: PR FILED -- #271 open, CI-VERIFIED (Android JVM Unit Tests job passed both restored tests on the fresh runner 2026-09-01); awaiting review.
-Priority: P2 -- small, and it closes a real coverage hole rather than a doc link
-Lane: Freebuff / DeepSeek V4 Flash
-Scope: restore one Android unit test. No production code changes.
+Status: MERGED -- this work landed as PR #271 (merged 2026-09-03, merge commit
+36fc1faa). Both acceptance-4 artifacts are on main: the restored test and the
+risk-register link. Status corrected 2026-09-19 by the queue-reconcile pass;
+the ticket body below is unchanged.
 
 ## Why this exists
 
@@ -73,3 +73,20 @@ This ticket is what clears that `UNVERIFIED`.
 - This runs entirely in CI -- no handset required, so it is valid never-idle
   work under `docs/rules/CONTINUOUS_EXECUTION.md` whenever the device is away.
 - Shared checkout: touch only what this task requires.
+
+### Status reconciliation (2026-09-19)
+
+The status line said "PR FILED -- #271 open ... awaiting review" while the PR
+had been merged for over two weeks, which is how a lane picks already-finished
+work off this queue (it nearly happened again on 2026-09-19).
+
+```
+gh pr view 271 --json state,mergedAt,mergeCommit,files
+#  MERGED 2026-09-03T11:26:07Z  merge commit 36fc1faa
+#  files: android/app/src/test/java/com/scmessenger/android/test/DiagnosticsBundleFormatterTest.kt
+#         docs/V0.2.0_RESIDUAL_RISK_REGISTER.md
+git ls-tree --name-only origin/main android/app/src/test/java/com/scmessenger/android/test/
+#  ... DiagnosticsBundleFormatterTest.kt   <- acceptance 2 satisfied
+git show origin/main:docs/V0.2.0_RESIDUAL_RISK_REGISTER.md | grep -c UNVERIFIED
+#  0 (no UNVERIFIED note remains)          <- acceptance 4 satisfied
+```
