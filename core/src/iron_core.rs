@@ -4355,6 +4355,23 @@ impl IronCore {
         self.relay_custody_store.read().storage_pressure_state()
     }
 
+    /// TRN-04: run the custody retention sweep on demand.
+    ///
+    /// Removes undelivered custody records whose accepted-at time is older than
+    /// `max_age_ms` and returns a report. `max_age_ms == 0` disables retention
+    /// for the call. The swarm runs this on its 5-minute prune tick; this
+    /// entry point exists so a node operator (CLI, diagnostics) can run it
+    /// explicitly against a live node.
+    pub fn purge_expired_custody(
+        &self,
+        max_age_ms: u64,
+    ) -> Option<crate::store::relay_custody::CustodyRetentionReport> {
+        self.relay_custody_store
+            .read()
+            .purge_expired_custody(max_age_ms)
+            .ok()
+    }
+
     /// Create a persistent relay custody store for the given peer ID.
     /// Uses sled-backed storage with the appropriate directory path.
     #[cfg(not(target_arch = "wasm32"))]

@@ -1,5 +1,9 @@
 namespace api {
     string get_build_provenance();
+    // AND-06: Ed25519 public-key validity, so platform adapters (Kotlin, Swift)
+    // never reimplement curve arithmetic. Implemented in lib.rs and delegating to
+    // identity::keys::is_valid_public_key.
+    boolean is_valid_public_key(string hex_str);
 };
 
 // ============================================================================
