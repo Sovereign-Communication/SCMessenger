@@ -397,6 +397,22 @@ class MainViewModel @Inject constructor(
         _pendingRequestsInbox.value = peerId
     }
 
+    // NOTIF-TAP-001: DM notification taps must land in the conversation, not
+    // just open the app. The launch intent carries EXTRA_PEER_ID; MainActivity
+    // forwards it here and MeshApp navigates when the graph is ready.
+    private val _pendingChatPeer = MutableStateFlow<String?>(null)
+    val pendingChatPeer: StateFlow<String?> = _pendingChatPeer.asStateFlow()
+
+    fun navigateToChat(peerId: String) {
+        _pendingChatPeer.value = peerId
+    }
+
+    fun consumeChatNav(): String? {
+        val peerId = _pendingChatPeer.value
+        _pendingChatPeer.value = null
+        return peerId
+    }
+
     fun consumeRequestsInboxNav(): String? {
         val peerId = _pendingRequestsInbox.value
         _pendingRequestsInbox.value = null

@@ -56,6 +56,11 @@ open class MeshRepository(
     private val preferencesRepository: PreferencesRepository? = null
 ) {
     private val storagePath = context.filesDir.absolutePath
+
+    /** Application context for helpers that must touch system services
+     * (e.g. NOTIF-SOUND-001 channel sound re-pointing) without leaking an
+     * Activity reference. */
+    fun appContext(): Context = context.applicationContext
     private val networkFailureMetrics = NetworkFailureMetrics()
     private val transportHealthMonitor = com.scmessenger.android.transport.TransportHealthMonitor()
     private val retryBackoff = com.scmessenger.android.utils.BackoffStrategy()
@@ -2443,6 +2448,13 @@ open class MeshRepository(
                                             status = if (obj.getBoolean("del")) uniffi.api.MessageStatus.DELIVERED else uniffi.api.MessageStatus.SENT,
                                             hidden = false
                                         )
+                                        // MSG-ORDER-002: this is a REPLAY of
+                                        // the peer's own store, not a live
+                                        // arrival. Keep the synced stamps so the
+                                        // records keep their provenance; the
+                                        // local-device rows (created when these
+                                        // messages first arrived) are already
+                                        // locally stamped.
                                         historyManager?.add(record)
                                         repoScope.launch { _messageUpdates.emit(record) }
                                     } else {
@@ -2488,15 +2500,23 @@ open class MeshRepository(
                         }
 
                         val content = decodedPayload.text
+                        // Ordering fix (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK):
+                        // `timestamp` is the PHONE-ASSIGNED ordering key — always
+                        // local receive time, never the sender's clock, so a
+                        // reply can never sort before the message that caused it
+                        // due to cross-device clock skew. `senderTimestamp` stays
+                        // as the sender's provenance stamp (bubble "sent at").
+                        // The senderTimestamp==0 fallback mirrors the core store
+                        // (store/history.rs adjust_legacy_timestamps).
                         val fallbackNow = (System.currentTimeMillis() / 1000).toULong()
-                        val canonicalTimestamp = if (senderTimestamp > 0uL) senderTimestamp else fallbackNow
+                        val provenanceTimestamp = if (senderTimestamp > 0uL) senderTimestamp else fallbackNow
                         val record = uniffi.api.MessageRecord(
                             id = messageId,
                             direction = uniffi.api.MessageDirection.RECEIVED,
                             peerId = canonicalPeerId,
                             content = content,
-                            timestamp = canonicalTimestamp,
-                            senderTimestamp = senderTimestamp,
+                            timestamp = fallbackNow,
+                            senderTimestamp = provenanceTimestamp,
                             delivered = true,
                             status = uniffi.api.MessageStatus.DELIVERED,
                             hidden = false

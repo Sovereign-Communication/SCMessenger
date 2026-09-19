@@ -710,6 +710,12 @@ class SettingsViewModel @Inject constructor(
 
     fun setSoundEnabled(enabled: Boolean) {
         _soundEnabled.value = enabled
+        // NOTIF-SOUND-001: on API 26+ the channel, not the builder, carries the
+        // sound — re-point the channels immediately so the toggle is audible
+        // truth, then persist.
+        com.scmessenger.android.utils.NotificationHelper.applySoundPreference(
+            meshRepository.appContext(), enabled
+        )
         NotificationHelper.updateSettings(sound = enabled)
         _settings.value?.let { current ->
             debouncedUpdateSettings(current.copy(soundEnabled = enabled))

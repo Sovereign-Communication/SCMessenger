@@ -55,6 +55,7 @@ fun MeshApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val navController = rememberNavController()
     val pendingDeepLink by mainViewModel.pendingDeepLink.collectAsState()
     val pendingRequestsInbox by mainViewModel.pendingRequestsInbox.collectAsState()
+    val pendingChatPeer by mainViewModel.pendingChatPeer.collectAsState()
 
     LaunchedEffect(Unit) {
         mainViewModel.refreshIdentityState()
@@ -98,6 +99,17 @@ fun MeshApp(mainViewModel: MainViewModel = hiltViewModel()) {
                     saveState = true
                 }
             }
+        }
+    }
+
+    // NOTIF-TAP-001: navigate to the tapped DM notification's conversation
+    LaunchedEffect(pendingChatPeer, hasStableIdentity) {
+        val peerId = pendingChatPeer
+        if (peerId != null && hasStableIdentity) {
+            navController.navigate("chat/$peerId") {
+                launchSingleTop = true
+            }
+            mainViewModel.consumeChatNav()
         }
     }
 

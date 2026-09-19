@@ -78,8 +78,9 @@ fun ChatScreen(
         blockedPeers.any { it.peerId == conversationId }
     }
     val chatMessages = remember(messages, conversationId) {
-        // MSG-ORDER-001: Sort strictly by sender-assigned timestamp to ensure consistent ordering across platforms
-        messages.filter { it.peerId == conversationId }.sortedBy { it.senderTimestamp }
+        // MSG-ORDER-002: locally-assigned timestamps only (see ChatViewModel);
+        // senderTimestamp is sender provenance and must never drive ordering.
+        messages.filter { it.peerId == conversationId }.sortedBy { it.timestamp }
     }
 
     // Wire updateInputText/clearInput into ChatViewModel
