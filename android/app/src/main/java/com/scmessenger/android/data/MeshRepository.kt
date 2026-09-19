@@ -10,6 +10,7 @@ import com.scmessenger.android.utils.CircuitBreaker
 import com.scmessenger.android.utils.NetworkFailureMetrics
 import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.PeerKeyUtils
+import com.scmessenger.android.utils.FileLoggingTree
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -1346,6 +1347,7 @@ open class MeshRepository(
 
             // 2. Obtain shared IronCore instance
             ironCore = meshService?.getCore()
+            updateFileLoggingTreeCore(ironCore)
             if (ironCore == null) {
                 Timber.e("Failed to obtain IronCore from MeshService")
                 _serviceState.value = uniffi.api.ServiceState.STOPPED
@@ -3466,6 +3468,9 @@ open class MeshRepository(
         }
     }
 
+    // TODO(SEC): Plaintext storage defect — backup passphrase stored in unencrypted MODE_PRIVATE SharedPreferences.
+    // Blocked from EncryptedSharedPreferences migration in PR #216 due to device-to-device transfer data-loss regression
+    // (KeyStore reset on transfer orphans identity backup). Needs follow-up fix excluding prefs from device-transfer.
     private fun getPlatformSecuredPassphrase(): String {
         val prefs = context.getSharedPreferences("platform_secure_keys", Context.MODE_PRIVATE)
         var key = prefs.getString("backup_passphrase_v1", null)
@@ -3476,6 +3481,12 @@ open class MeshRepository(
             prefs.edit().putString("backup_passphrase_v1", key).commit()
         }
         return key ?: ""
+    }
+
+    private fun updateFileLoggingTreeCore(core: uniffi.api.IronCore?) {
+        Timber.forest().filterIsInstance<FileLoggingTree>().forEach {
+            it.setIronCore(core)
+        }
     }
 
     private fun restoreIdentityFromBackup(core: uniffi.api.IronCore): Boolean {
@@ -3757,6 +3768,7 @@ open class MeshRepository(
         coreDelegate = null
         swarmBridge = null
         ironCore = null
+        updateFileLoggingTreeCore(null)
         meshService = null
         bleScanner = null
         bleAdvertiser = null
@@ -5423,6 +5435,7 @@ open class MeshRepository(
             // Refresh ironCore reference just in case
             if (ironCore == null) {
                 ironCore = meshService?.getCore()
+                updateFileLoggingTreeCore(ironCore)
                 Timber.d("IronCore reference refreshed: ${ironCore != null}")
             }
             ensureLocalIdentityFederation()
@@ -5591,6 +5604,7 @@ open class MeshRepository(
             Timber.w("Failed to flush managers during shutdown: ${e.message}")
         }
         ironCore = null
+        updateFileLoggingTreeCore(null)
 
         contactManager = null
         historyManager = null
