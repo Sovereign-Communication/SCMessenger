@@ -24,7 +24,7 @@ struct SettingsView: View {
 
     // Release APK link shared via the existing ShareSheet. No on-device
     // hosting, no entitlements, no Info.plist changes.
-    // TODO: inject exact v0.4.0 signed APK asset URL once D2 publishes
+    // Pending: inject exact v0.4.0 signed APK asset URL once D2 publishes
     // (e.g. .../releases/download/v0.4.0/scmessenger-v0.4.0.apk).
     // Full NWListener hosting deferred until signed APK + need proven.
     private static let releaseApkURL = "https://github.com/Sovereign-Communication/SCMessenger/releases/latest"
