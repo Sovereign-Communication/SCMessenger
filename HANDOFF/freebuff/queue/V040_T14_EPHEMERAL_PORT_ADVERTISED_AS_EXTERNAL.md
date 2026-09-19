@@ -1,10 +1,8 @@
 # V040-T14 -- The node advertises an ephemeral NAT source port as its external address
 
-Status: PR FILED -- #270 open (filed 2026-09-01, observed live); awaiting adversarial review. Root cause confirmed; fix at the source (observer listen-port allowlist); see PR body.
-Priority: **P0 -- this breaks inbound reachability for every peer**
-Lane: Freebuff / DeepSeek V4 Flash
-Scope: the external-address confirmation path in `core/src/transport/`.
-**Rule-8 applies.**
+Status: MERGED -- the fix landed as PR #270 (merged 2026-09-03). Status corrected
+2026-09-19 from "PR FILED -- #270 open" by the queue-reconcile pass; the ticket
+body below is unchanged.
 
 ## Observed live, not inferred
 
@@ -92,3 +90,14 @@ fighting the behaviour internally -- but say which you chose and why.
 - No emojis. `[OK]`, `[FAIL]`, `[WARNING]`, `[INFO]`.
 - Rule-8 required; no self-certification.
 - Shared checkout: touch only what this task requires.
+
+### Status reconciliation (2026-09-19)
+
+```
+gh pr view 270 --json state,mergedAt
+#  MERGED 2026-09-03T21:55:55Z
+```
+
+[WARNING] Only the merge is asserted here. Whether the shipped fix matches the
+root cause this ticket describes is an adversarial-review question (it touches
+core/src/transport/), and it is not re-verified by this pass.
