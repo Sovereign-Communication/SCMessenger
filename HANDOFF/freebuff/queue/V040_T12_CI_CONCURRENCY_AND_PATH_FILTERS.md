@@ -1,6 +1,9 @@
 # V040-T12 -- Stop burning the CI queue on superseded and irrelevant runs
 
-Status: OPEN (filed 2026-08-31, operator directive on CI pacing)
+Status: IN REVIEW -- PR #317 (platform-relevance half, 2026-09-19). Filed
+2026-08-31 on the operator's CI-pacing directive; acceptance 1 landed on main
+earlier and is not re-verified here, acceptance 2 landed and is extended by
+this pass, acceptance 3-4 are unverified on this branch.
 Priority: P2 -- costs no correctness, costs a lot of wall-clock for everyone
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `.github/workflows/*.yml`. **Read the trap in section 3 before editing a
@@ -113,3 +116,81 @@ semantics are exactly the thing people get wrong here.
   far worse outcome than a slow queue -- see I-21, where a gate that skipped its
   own comparison reported success.
 - Shared checkout: touch only what this task requires.
+
+
+---
+
+## Evidence appendix -- platform-relevance pass (2026-09-19, PR #317)
+
+Added by the 2026-09-19 pass. Everything above this line is the ticket as filed;
+premises that turned out to be stale are named here rather than silently
+rewritten.
+
+### The second shape of the same waste
+
+Acceptance 2 kept **docs-only** diffs from starting build lanes. The identical
+waste survived one axis over: a diff that touches only one platform's code still
+started the **other** platform's lanes. Measured from `.github/workflows/` on
+this pass (b529011b):
+
+| lane | runner | started by an Android-only diff | does any step read android/ |
+|---|---|---|---|
+| iOS Build & Simulator Test (ios-build-test.yml) | macos-latest | yes | no |
+| macOS Native Tests (ios-build-test.yml) | macos-14, 60min timeout, ~29min of work | yes | no |
+| iOS Build (mobile.yml) | macos-latest | yes | no |
+| Swift Linting (lint.yml) | macos-latest | yes | no |
+
+The ios-build-test.yml trigger even disagrees with its own header, which says
+"pull requests that touch the iOS/FFI surface". `grep -n android
+.github/workflows/ios-build-test.yml` returns the two path-filter lines (58, 77)
+and nothing else: no step in either job reads android/. The entry was copied
+from mobile.yml, where the Android jobs make it correct.
+
+### What changed
+
+1. `.github/workflows/ios-build-test.yml` -- dropped `'android/**'` from the
+   pull_request and push path lists (workflow-level: both its jobs are macOS).
+2. `.github/actions/detect-platform-change/action.yml` -- NEW composite action
+   modelled on `detect-docs-only`, emitting `ios_relevant` / `android_relevant`.
+   It fails open: push/dispatch, an uncomputable diff, or any changed path
+   outside the known input sets yields true for both.
+3. `.github/workflows/mobile.yml` -- the `ios` job still starts, and its four
+   expensive steps (rust-toolchain, rust-cache, XCFramework, xcodebuild) are
+   gated on `ios_relevant`. The job is kept rather than skipped because
+   section 3's trap is about how GitHub reports checks.
+4. `.github/workflows/lint.yml` -- the `swift` job's docs-only step is replaced
+   by the platform gate, which subsumes it (same inert set, `^docs/|^HANDOFF/|
+   \.md$`), so one owner decides whether those steps run.
+
+No workflow was deleted and no required-context workflow gained a path filter:
+`ci.yml`, `hygiene.yml` and `lint.yml` still trigger on every pull_request, so
+Repository Hygiene Checks, Lint, Rust Linting and Test (ubuntu-latest) always
+report. Verified structurally, and observed on the probe PR named in the PR body.
+
+### Local verification performed
+
+```
+python tmp/verify_platform_gate.py
+```
+
+15 cases run against the action's real `run:` script, with a stub git supplying
+the diff: android-only -> android true / ios false; ios-only -> the reverse;
+core/**, mobile/**, Cargo.* -> both true; docs-only -> both false; unknown path,
+workflow edit, empty diff and main push -> both true (fail open). All 15 matched
+expectation. Every changed YAML parses and every gated `if:` names a step id
+that exists in its job.
+
+[WARNING] Local execution cannot prove what GitHub actually triggers. Only the
+probe PR observation in the PR body can, and it is recorded there.
+
+### Deliberately not done here
+
+- The reverse direction (an iOS-only diff still starts mobile.yml's three
+  Android jobs) was measured and left alone: those are ubuntu runners and the
+  saving is much smaller than the macOS side, while gating them would add a
+  repeated `if:` to four more jobs.
+- `kotlin` and `javascript` in lint.yml keep no relevance gate, for the same
+  cost reason.
+- `scripts/build_xcframework.sh` is in mobile.yml's iOS list but not in
+  ios-build-test.yml's. That is a pre-existing gap, not introduced or worsened
+  by this pass, and changing it would widen what runs rather than narrow it.
