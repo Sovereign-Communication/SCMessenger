@@ -30,9 +30,9 @@
 #             or a transient state that did not persist across re-samples
 #   [SKIP]    NOT measured, so no verdict is available; the reason is printed
 #
-# A [SKIP] never substitutes for a verdict. It is what stops an unreachable node
-# or a missing baseline from being reported as a failure of the thing it was
-# supposed to compare.
+# A row whose source cannot be read prints [WARNING] or [SKIP] and names the
+# command that would evaluate it -- never [OK], and never a [FAIL] for a value
+# that was never read.
 #
 # Measured-ness has exactly ONE definition in this script (measured(), below):
 # json_field removes the placeholder that a key the node never sent evaluates to,
@@ -428,7 +428,10 @@ a5_ready_now() {
 
 section 'Rows'
 
-# A1 -- both nodes reachable.
+# A1 -- both nodes reachable. The criterion IS reachability, so an unreadable
+# health body is the finding, not a gap in the evidence: this row [FAIL]s on no
+# response (naming the body) and cannot [OK] unless the node actually said
+# healthy.
 if json_has "$WIN_HEALTH" status healthy; then
   row_ok "A1 windows /health healthy"
 else
@@ -442,14 +445,16 @@ else
   row_fail "A1 cloud /health not healthy: ${AWS_HEALTH:-<no response>}"
 fi
 
-# A2 -- SHA parity across both nodes and origin/main.
+# A2 -- SHA parity across both nodes and origin/main. Every input is guarded: a
+# provenance line without a hash, an unknown origin/main or an unreadable log
+# is [WARNING] with the command, never a comparison against nothing.
 MAIN_SHA="$(git -C "$REPO_ROOT" rev-parse origin/main 2>/dev/null | tr -d '\r')"
 WIN_PROV="$(win_provenance || true)"
 WIN_SHA="$(sha_from_provenance "$WIN_PROV")"
 AWS_PROV="$(aws_provenance || true)"
 AWS_SHA="$(sha_from_provenance "$AWS_PROV")"
 if [ -z "$WIN_SHA" ]; then
-  row_warn "A2 windows git hash unproven -- no 'Core Provenance:' line in any retained log under $WIN_LOG_DIR"
+  row_warn "A2 windows git hash unproven -- no 'Core Provenance:' line in any retained log under $WIN_LOG_DIR; run: grep -rl 'Core Provenance:' $WIN_LOG_DIR"
 elif [ -z "$MAIN_SHA" ]; then
   row_warn "A2 origin/main unknown in $REPO_ROOT (run: git fetch origin main); windows=$WIN_SHA"
 elif [ -z "$AWS_SHA" ]; then
@@ -588,7 +593,10 @@ else
   row_ok "A6 custody live and not below the last recorded value:$CUSTODY_DETAIL"
 fi
 
-# A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes.
+# A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes. A
+# missing file, an unreadable one (bad JSON, wrong shape, permissions) or a
+# count that did not parse all leave the count empty and are [WARNING] naming
+# the command; entries=0 is the only count that is a finding, and it is [FAIL].
 if [ -f "$WIN_LEDGER" ]; then
   WIN_LEDGER_OUT="$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "")"
   WIN_LEDGER_COUNT="$(stat_field "$WIN_LEDGER_OUT" entries)"
@@ -596,9 +604,9 @@ else
   WIN_LEDGER_OUT="error=missing"
   WIN_LEDGER_COUNT=""
 fi
-if [ -z "$WIN_LEDGER_COUNT" ]; then
-  row_warn "A7 windows ledger unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown})"
-elif [ "$WIN_LEDGER_COUNT" -gt 0 ] 2>/dev/null; then
+if ! is_number "$WIN_LEDGER_COUNT"; then
+  row_warn "A7 windows ledger count unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown}) -- run: python3 -c \"import json;print(len(json.load(open(r'$WIN_LEDGER'))))\""
+elif [ "$WIN_LEDGER_COUNT" -gt 0 ]; then
   row_ok "A7 windows ledger entries=$WIN_LEDGER_COUNT ($WIN_LEDGER)"
 else
   row_fail "A7 windows ledger is EMPTY (entries=0) at $WIN_LEDGER -- a node with an empty gossiped ledger has no recovery path (T2)"
@@ -610,9 +618,9 @@ if [ -z "$AWS_HOST" ]; then
 elif fetch_remote_ledger; then
   AWS_LEDGER_OUT="$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "")"
   AWS_LEDGER_COUNT="$(stat_field "$AWS_LEDGER_OUT" entries)"
-  if [ -z "$AWS_LEDGER_COUNT" ]; then
-    row_warn "A7 cloud ledger unreadable after fetch ($AWS_LEDGER_OUT)"
-  elif [ "$AWS_LEDGER_COUNT" -gt 0 ] 2>/dev/null; then
+  if ! is_number "$AWS_LEDGER_COUNT"; then
+    row_warn "A7 cloud ledger count unreadable after fetch ($AWS_LEDGER_OUT) -- run: ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
+  elif [ "$AWS_LEDGER_COUNT" -gt 0 ]; then
     row_ok "A7 cloud ledger entries=$AWS_LEDGER_COUNT ($AWS_LEDGER)"
   else
     row_fail "A7 cloud ledger is EMPTY (entries=0) at $AWS_LEDGER"
@@ -622,14 +630,35 @@ else
 fi
 
 # A8 -- no self-entries in either peer store (issue I-06).
+#
+# This check needs the node's own identity to know what "itself" is. With no
+# public key, no peer id and no external address, nothing can match, so a store
+# that was never identified and a clean store look identical -- and the row
+# would print [OK] from a source it never read. Any identity input the node did
+# not report makes the row [WARNING] (naming what is missing and the command
+# that reads it), never [OK]. The inputs come through measured(), the same
+# contract every other row uses.
+own_identity_note() {
+  local url="$1" pubkey="$2" peer="$3" addrs="$4" missing=""
+  measured "$pubkey" || missing="$missing public_key_hex"
+  measured "$peer" || missing="$missing libp2p_peer_id"
+  measured "$addrs" || missing="$missing external_addrs"
+  if [ -n "$missing" ]; then
+    printf 'the node did not report%s, so its own entries cannot be identified; run: curl -s %s/api/identity and curl -s %s/api/diagnostics' \
+      "$missing" "$url" "$url"
+  fi
+}
+
 check_self_entries() {
-  local node="$1" stats="$2" source="$3"
+  local node="$1" stats="$2" source="$3" identity_note="$4"
   local self_entries self_addrs offenders
   self_entries="$(stat_field "$stats" self_entries)"
   self_addrs="$(stat_field "$stats" self_addrs)"
   offenders="$(stat_field "$stats" offenders)"
-  if [ -z "$self_entries" ]; then
-    row_warn "A8 $node peer store unreadable ($source)"
+  if [ -n "$identity_note" ]; then
+    row_warn "A8 $node self-entry check unproven -- $identity_note"
+  elif [ -z "$self_entries" ] || [ -z "$self_addrs" ]; then
+    row_warn "A8 $node peer store unreadable ($source) -- run: python3 -c \"import json;print(len(json.load(open(r'$source'))))\""
   elif [ "$self_entries" = "0" ] && [ "$self_addrs" = "0" ]; then
     row_ok "A8 $node peer store has no self-entries"
   else
@@ -639,24 +668,31 @@ check_self_entries() {
 
 if [ -f "$WIN_LEDGER" ]; then
   check_self_entries "windows" \
-    "$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")" "$WIN_LEDGER"
+    "$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")" "$WIN_LEDGER" \
+    "$(own_identity_note "$WIN_URL" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")"
 else
-  row_warn "A8 windows peer store unreadable at $WIN_LEDGER"
+  row_warn "A8 windows peer store unreadable at $WIN_LEDGER -- run: ls -l $WIN_LEDGER"
 fi
 if [ -n "$AWS_LEDGER_COUNT" ]; then
   check_self_entries "cloud" \
-    "$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")" "$AWS_LEDGER"
+    "$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")" "$AWS_LEDGER" \
+    "$(own_identity_note "$AWS_URL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")"
 elif [ -n "$AWS_HOST" ]; then
   row_warn "A8 cloud peer store unproven -- see the A7 cloud command"
 else
   row_skip "A8 cloud peer store not evaluated (cloud node unresolved)"
 fi
 
-# A9 -- listener surface sane.
+# A9 -- listener surface sane. A node listening on nothing accepts no
+# connection, and a count of zero is also what the diagnostics parse yields when
+# the node never sent a listener list at all -- so zero is unproven rather than a
+# passing count, and never [OK]. A non-numeric count is unproven too.
 check_listeners() {
-  local node="$1" count="$2" ports="$3"
-  if ! measured "$count"; then
-    row_warn "A9 $node listener count unproven"
+  local node="$1" count="$2" ports="$3" diag_url="$4"
+  if ! measured "$count" || ! is_number "$count"; then
+    row_warn "A9 $node listener count unproven -- run: curl -s $diag_url/api/diagnostics"
+  elif [ "$count" -eq 0 ]; then
+    row_warn "A9 $node reported no listeners (or no listener list), which cannot accept a connection -- run: curl -s $diag_url/api/diagnostics"
   elif [ "$count" -gt "$LISTENER_WARN_THRESHOLD" ] 2>/dev/null; then
     row_warn "A9 $node binds $count listeners (> $LISTENER_WARN_THRESHOLD): $ports (issue I-12)"
   else
@@ -664,20 +700,24 @@ check_listeners() {
   fi
 }
 
-check_listeners "windows" "$WIN_LISTENERS" "$WIN_PORTS"
+check_listeners "windows" "$WIN_LISTENERS" "$WIN_PORTS" "$WIN_URL"
 if [ -z "$AWS_HOST" ]; then
   row_skip "A9 cloud listener count not evaluated (cloud node unresolved)"
 else
-  check_listeners "cloud" "$AWS_LISTENERS" "$AWS_PORTS"
+  check_listeners "cloud" "$AWS_LISTENERS" "$AWS_PORTS" "$AWS_URL"
 fi
 
-# A10 -- the local watcher is alive.
+# A10 -- the local watcher is alive. An age that cannot be read, or a negative
+# one because the mtime is in the future, is not liveness evidence: [WARNING]
+# with the command, never [OK].
 if [ ! -f "$WATCHER_LOG" ]; then
-  row_warn "A10 watcher log not present at $WATCHER_LOG -- no liveness evidence either way"
+  row_warn "A10 watcher log not present at $WATCHER_LOG -- no liveness evidence either way; run: ls -l $WATCHER_LOG"
 else
   WATCHER_AGE="$(age_minutes "$WATCHER_LOG")"
-  if [ -z "$WATCHER_AGE" ]; then
-    row_warn "A10 watcher log age unreadable at $WATCHER_LOG"
+  if ! is_number "$WATCHER_AGE"; then
+    row_warn "A10 watcher log age unreadable at $WATCHER_LOG -- run: ls -l $WATCHER_LOG"
+  elif [ "$WATCHER_AGE" -lt 0 ]; then
+    row_warn "A10 watcher log mtime is $((0 - WATCHER_AGE)) min in the future, so liveness cannot be judged (clock skew or a bad mtime) -- run: ls -l $WATCHER_LOG"
   elif [ "$WATCHER_AGE" -le "$WATCHER_MAX_AGE_MIN" ] 2>/dev/null; then
     row_ok "A10 watcher log written $WATCHER_AGE min ago"
   else
