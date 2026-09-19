@@ -53,6 +53,33 @@ before the 3-node matrix is scored. Mixed generations are a known failure mode
 
 Not transport ACKs, not UI counters, not BLE local acceptance alone.
 
+## LAN discovery reality (measured 2026-09-16, Windows node on this host)
+
+Recorded here because phone-initiated LAN arrival depends on it, and because it
+is an environment fact, not a code fact. Establish it by test, not by reading:
+from the phone, `nc` to 192.168.0.121 succeeds on 9002, 443, 80, 8080 and 9090.
+
+- The node's libp2p TCP listener is NOT on 9001 on this host. 9001 is already
+  bound by the node's own local HTTP control server
+  (`Warp HTTP+WS server listening on ws://127.0.0.1:9001`), so the swarm's
+  listeners land on `/ip4/192.168.0.121/tcp/{443,80,8080,9090}` plus the
+  WebSocket listener `/ip4/192.168.0.121/tcp/9002/ws`.
+- `SubnetProbe` probes 9001 and 9002, so on this node it can only ever hit 9002.
+  That port answers a TCP connect and completes an HTTP websocket upgrade
+  (host-side handshake returns 101), but the Android client cannot complete a
+  libp2p dial against it: the node's logs show 0
+  `direction=inbound transport=ws` against 35 `transport=tcp` inbounds, and the
+  phone's dial of `/ip4/192.168.0.121/tcp/9002/ws` fails client-side in about
+  80ms with `IronCoreException$NetworkException` and no connection attempt
+  visible on the peer. SubnetProbe no longer reports a hit on the WebSocket port
+  as a dial candidate (see `SubnetProbe.WEBSOCKET_PORT`).
+- Therefore Android LAN arrival for this node is via mDNS - the node advertises
+  direct `/ip4` addresses only, because `build_mdns_advertised_addrs` excludes
+  `/ws/` and `/p2p-circuit/` - or via node-initiated connections.
+- The host firewall is NOT the blocker: no inbound allow rule is listed for
+  9001/9002 (`Get-NetFirewallPortFilter` shows one for 443 only), yet the phone
+  connects to every one of those ports. Do not chase a firewall rule for this.
+
 ## Disk notes
 
 - ~17 GB free. If Android/full suite needs room: run `scripts/reclaim_safe.py`

@@ -4881,11 +4881,20 @@ open class MeshRepository(
         return contactManager?.search(query) ?: emptyList()
     }
 
-    fun setContactNickname(peerId: String, nickname: String?) {
-        // UNIFICATION: federated nickname save — verbose logging, synthetic filtering handled by caller
+    suspend fun setContactNickname(peerId: String, nickname: String?) {
+        // UNIFICATION: federated nickname save — serialized under contactUpsertMutex so a
+        // concurrent identity-envelope upsert cannot write back a stale snapshot over this
+        // write (race previously let a rename be silently reverted). Suspend: all callers
+        // invoke from viewModelScope coroutines.
         Timber.i("UNIFICATION setContactNickname: save peer $peerId -> federated nick ${nickname?.take(16) ?: "null"} (clears if blank)")
-        contactManager?.setNickname(peerId, nickname)
-        Timber.d("Contact nickname updated: $peerId -> $nickname")
+        try {
+            contactUpsertMutex.withLock {
+                contactManager?.setNickname(peerId, nickname)
+            }
+            Timber.d("Contact nickname updated: $peerId -> $nickname")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set contact nickname for $peerId")
+        }
         try {
             val normalized = nickname?.trim()?.takeIf { it.isNotEmpty() }
             if (normalized != null && !isSyntheticFallbackNickname(normalized)) {
@@ -5322,6 +5331,17 @@ open class MeshRepository(
             return
         }
         persistIdentityBackup(core)
+        // NICKNAME-REVERT-001: keep the DataStore fallback in lockstep with the
+        // core. It used to be written only at identity creation, so a later
+        // rename left it stale and the next syncNicknameFromDatastore() pushed
+        // that stale value back over the core.
+        repoScope.launch {
+            try {
+                preferencesRepository?.setIdentityNickname(trimmed)
+            } catch (e: Exception) {
+                Timber.w(e, "setNickname: failed to update DataStore nickname fallback")
+            }
+        }
         // If swarm start was postponed before identity/nickname was ready, resume now.
         // Launched on repoScope: initializeAndStartSwarm is a suspend fun that can
         // block up to 15s waiting for the listener bind, and setNickname may be
@@ -5386,12 +5406,33 @@ open class MeshRepository(
 
         // Get current identity info to check if we already have this nickname
         val currentInfo = core.getIdentityInfo()
-        if (currentInfo?.nickname == cachedNickname) {
+        val coreNickname = currentInfo?.nickname?.trim()
+        if (coreNickname == cachedNickname.trim()) {
             Timber.d("syncNicknameFromDatastore: Nickname already synced: %s", cachedNickname)
             return
         }
 
-        // Push the cached nickname to Rust Core
+        // NICKNAME-REVERT-001: this function is a repair path for a core that
+        // has no nickname yet (see the doc comment above), not a way to impose
+        // the cache. A non-blank core nickname is authoritative -- the user may
+        // have just renamed through Settings -- so never overwrite it; refresh
+        // the stale fallback from the core instead. Overwriting here reverted a
+        // renamed identity the moment Settings observed the service RUNNING.
+        if (!coreNickname.isNullOrBlank()) {
+            Timber.i(
+                "syncNicknameFromDatastore: core nickname '%s' is authoritative; refreshing stale DataStore fallback '%s'",
+                coreNickname,
+                cachedNickname
+            )
+            try {
+                preferencesRepository?.setIdentityNickname(coreNickname)
+            } catch (e: Exception) {
+                Timber.w(e, "syncNicknameFromDatastore: failed to refresh DataStore fallback")
+            }
+            return
+        }
+
+        // Push the cached nickname to Rust Core (core has no nickname yet)
         Timber.i("syncNicknameFromDatastore: Pushing DataStore nickname to IronCore: %s", cachedNickname)
         try {
             core.setNickname(cachedNickname.trim())
@@ -5476,16 +5517,21 @@ open class MeshRepository(
         }
     }
 
-    fun setLocalNickname(peerId: String, nickname: String?) {
+    suspend fun setLocalNickname(peerId: String, nickname: String?) {
         // UNIFICATION: user-defined localNickname save — verbose logging, never overwritten by federated sync
         val normalizedInput = nickname?.trim()?.takeIf { it.isNotEmpty() }
         Timber.i("UNIFICATION setLocalNickname: save peer $peerId -> localNick ${normalizedInput?.take(16) ?: "null (clear)"} raw=${nickname?.take(16) ?: "null"}")
         try {
-            contactManager?.setLocalNickname(peerId, nickname)
-            Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
-            if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
-                reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+            // UNIFICATION: localNickname save + federated-nickname reclaim are serialized
+            // under contactUpsertMutex together with upsertFederatedContact so a concurrent
+            // envelope upsert cannot write back a stale snapshot over the user's rename.
+            contactUpsertMutex.withLock {
+                contactManager?.setLocalNickname(peerId, nickname)
+                if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
+                    reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+                }
             }
+            Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
             _discoveredPeers.update { current ->
                 val normalized = peerId.trim()
                 if (current.containsKey(normalized)) {
@@ -10577,8 +10623,20 @@ open class MeshRepository(
 
     fun getDialHintsForRoutePeer(routePeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(routePeerId)) return emptyList()
-        val fromLedger = (ledgerManager?.dialableAddresses() ?: emptyList())
-            .filter { it.peerId == routePeerId }
+        val dialable = ledgerManager?.dialableAddresses() ?: emptyList()
+        val allEntries = getAllLedgerEntries()
+        val combined = (dialable + allEntries).distinctBy { it.multiaddr }
+        val fromLedger = combined
+            .filter { entry ->
+                if (entry.peerId == routePeerId) return@filter true
+                if (entry.multiaddr.endsWith("/p2p/$routePeerId")) return@filter true
+                val key = entry.publicKey?.takeIf { it.isNotBlank() } ?: entry.peerId
+                if (key != null && key.length == 64) {
+                    val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(key)
+                    if (derived == routePeerId) return@filter true
+                }
+                false
+            }
             .map { it.multiaddr }
         return buildDialCandidatesForPeer(
             routePeerId = routePeerId,
@@ -10779,46 +10837,36 @@ open class MeshRepository(
         }
     }
 
+    // DOCTRINE: Platform adapters are dumb byte pipes. Circuit address construction
+    // and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+    // This helper only collects existing circuit hints already recorded in the ledger
+    // or established through active dynamic peers.
     private fun relayCircuitAddressesForPeer(targetPeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(targetPeerId)) return emptyList()
         val circuits = mutableListOf<String>()
 
-        // Use getHealthyRelays to pre-filter relays with closed (healthy) circuits
-        val healthyRelayAddrs = relayCircuitBreaker.getHealthyRelays().toSet()
-
-        // 1. Static Bootstrap Relays (prioritized by network type)
-        // CELL-ROUTE-AWS-001b: seed public cloud relays so Windows-via-AWS
-        // circuits exist on cellular (prioritizedNodes was hard-empty).
-        val prioritizedNodes = if (networkDetector.isCellularNetwork) {
-            getPublicInternetRelayRoutes().map { it.second }.distinct()
-        } else {
-            emptyList()
-        }
-
-        prioritizedNodes.forEach { bootstrap ->
-            val relayInfo = parseBootstrapRelay(bootstrap)
-            if (relayInfo != null) {
-                val (relayTransportAddr, relayPeerId) = relayInfo
-                // Skip circuit addresses for relays with open circuit breakers
-                if (relayCircuitBreaker.isCircuitOpen(bootstrap)) return@forEach
-                // Prioritize relays confirmed healthy by circuit breaker
-                if (bootstrap !in healthyRelayAddrs && relayCircuitBreaker.getFailureCount(bootstrap) > 0) {
-                    Timber.d("Skipping unhealthy relay: $bootstrap")
-                    return@forEach
+        // 1. Direct circuit entries already recorded in the ledger targeting targetPeerId
+        val allEntries = getAllLedgerEntries()
+        for (entry in allEntries) {
+            val addr = entry.multiaddr
+            if (addr.contains("/p2p-circuit/p2p/$targetPeerId")) {
+                if (!circuits.contains(addr)) {
+                    circuits.add(addr)
                 }
-                circuits.add("$relayTransportAddr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId")
             }
         }
 
-        // 2. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
+        // 2. Dynamic mesh peers — UNIFICATION_V2: all nodes perform custody behavior
         _discoveredPeers.value.entries.filter {
             it.key != targetPeerId && PeerIdValidator.isLibp2pPeerId(it.key)
         }.forEach { entry ->
-            val relayPeerId = entry.key
-            val directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            val nodePeerId = entry.key
+            val directAddrs = getDialHintsForRoutePeer(nodePeerId)
             directAddrs.forEach { addr ->
-                val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
-                if (!circuits.contains(circuit)) circuits.add(circuit)
+                if (!addr.contains("/p2p-circuit") && !relayCircuitBreaker.isCircuitOpen(addr)) {
+                    val circuit = "$addr/p2p/$nodePeerId/p2p-circuit/p2p/$targetPeerId"
+                    if (!circuits.contains(circuit)) circuits.add(circuit)
+                }
             }
         }
 
@@ -11300,9 +11348,19 @@ open class MeshRepository(
 
         // Filter out circuit-breaker-blocked and throttle-blocked addresses,
         // and deprioritize addresses whose host:port is confirmed blocked
-        val candidateAddresses = prioritizedAddresses.filter { addr ->
+        var candidateAddresses = prioritizedAddresses.filter { addr ->
             relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr, purpose = "bootstrap")
-        }.sortedByDescending { addr ->
+        }
+        if (candidateAddresses.isEmpty() && prioritizedAddresses.isNotEmpty()) {
+            if (relayCircuitBreaker.getOpenCircuits().isNotEmpty()) {
+                Timber.i("All bootstrap candidates circuit-breaker-blocked; resetting circuit breakers to allow retry")
+                relayCircuitBreaker.resetAll()
+                candidateAddresses = prioritizedAddresses.filter { addr ->
+                    relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr, purpose = "bootstrap")
+                }
+            }
+        }
+        val sortedCandidateAddresses = candidateAddresses.sortedByDescending { addr ->
             // Boost priority for addresses whose ports are confirmed reachable
             // Deprioritize addresses with ports likely blocked by current network (isPortLikelyBlocked)
             val port = extractPortFromMultiaddr(addr)
@@ -11315,7 +11373,7 @@ open class MeshRepository(
             portReachable && portNotBlocked
         }
 
-        if (candidateAddresses.isEmpty()) {
+        if (sortedCandidateAddresses.isEmpty()) {
             Timber.w("No candidate addresses available (all circuit-breaker-blocked or throttled)")
             return attemptMdnsFallback()
         }
@@ -11324,7 +11382,7 @@ open class MeshRepository(
         // (Individual dials may take longer; first success wins, others are cancelled)
         val result = kotlinx.coroutines.withTimeoutOrNull(3_000L) {
             kotlinx.coroutines.coroutineScope {
-                val deferreds = candidateAddresses.map { addr ->
+                val deferreds = sortedCandidateAddresses.map { addr ->
                     async(Dispatchers.IO) {
                         try {
                             val bridge = swarmBridge ?: return@async BootstrapAttempt.Failure(addr, "no bridge")

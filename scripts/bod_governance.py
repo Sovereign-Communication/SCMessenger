@@ -10,7 +10,8 @@ model. If any model dissents, times out, or if the judge disagrees with the
 unanimous panel, the resolution fails closed (REJECTED or DEFERRED).
 
 Cost Guarantee: Hard ceiling of $0.10 (10 cents) per run. Default routes to the
-free model pool ($0.00).
+PAID model pool (operator ruling 2026-09-14: "use paid, not free"); pass
+--free for the $0.00 free pool.
 
 Usage:
     python scripts/bod_governance.py --proposal "Proposal text..."
@@ -68,12 +69,29 @@ REQUIRED_PANELISTS = 5
 # reasoning-native models, which produces reasoning-only output at small
 # token budgets (that exact failure killed bod-e3238cd5 round 2).
 # Requires harness chat.py patch: _effort_to_send("off") -> "none".
-# Until that patch lands, run this lane with --reasoning-effort auto and
-# max_tokens >= 8192 (auto sends low effort to deepseek/kimi-hinted ids).
+# Until that patch lands, run this lane with --reasoning-effort auto (default)
+# and max_tokens 4096 (default; see the pool-size math below).
 # Prices $/Mtok in/out (live catalog 2026-09-13):
-#   deepseek-v4.1-flash 0.150/0.600 | deepseek-v4-flash 0.048/0.096
-#   gpt-5.6-luna 0.200/1.200 (rankings #1 by daily tokens) | gpt-4o-mini 0.150/0.600
-#   ling-3.0-flash 0.021/0.063
+#   deepseek-v4.1-flash 0.150/0.600 | deepseek-v4-flash 0.079/0.159
+#   gpt-5.6-luna 0.200/1.200 (rankings #1 by daily tokens) | gpt-5-mini 0.250/2.000
+#   deepseek-v4-pro 1.600/3.200 | glm-5.3-flash 0.150/0.500
+# Operator rulings 2026-09-14: "Ling models need to go" (both inclusionai seats
+# removed); "use paid, not free" (no :free ids in the paid pool; paid is now
+# the DEFAULT tier, --free opts out). Pool selected for best $/performance
+# against the FULL live catalog (322 paid ids priced and screened this session,
+# tmp/bod_catalog_sweep_20260914.py) and verified against panel.py's EXACT
+# reservation math (reasoning-hinted members reserve 6 preflight rows each:
+# 2 reasoning slots x 3 [1 + MAX_429_RETRIES=2]; non-hinted reserve 2).
+# At the BoD vote budget max_tokens=4096 (prompt ~2000) the worst-case is
+# $0.0892 vs the $0.10 ceiling WITH the redundancy seat
+# gpt-5-mini $0.1197, qwen3-max $0.1026, gemini-3.8-flash $0.1013 (all over),
+# and v4-pro ~$0.098 for ONE seat. At 8192 tokens NO quality 5-seat pool fits
+# the $0.10 ceiling under this reservation scheme -- 4096 is the operating
+# point (it is also the historical BoD budget; votes are short JSON).
+# Emission evidence per member: luna/v4-flash/glm-5.3-flash probes 2026-09-13;
+# v3.2 voted on corrected facts in bod-e3238cd5; nemotron-3-super-120b cast
+# substantive votes in bod-a7deb38b and bod-dd336324 (free variant, same
+# family -- the paid id is the same model).
 # kimi-k3 (2.648/13.283) REMOVED: its output price price-bombs the panel
 # worst-case preflight (7 x 4096 x $13.28/M = $0.38 > $0.10 ceiling) while
 # offering no verified edge over the five below.
@@ -96,33 +114,37 @@ REQUIRED_PANELISTS = 5
 # v4.1-flash is therefore the JUDGE, not a panelist: its synthesis parses
 # reliably, and judge calls are separate from ledger strike accounting.
 PAID_PANEL_POOL = [
-    "openai/gpt-5.6-luna",            # $0.000321/vote reasoning-off, 7.5s
-    "deepseek/deepseek-v4-flash",     # $0.000050/vote reasoning-off, 17.8s
-    "inclusionai/ling-3.0-flash-fin:free",  # fifth seat (verified 2026-09-13:
-                                      # clean APPROVE JSON, 4.6s, $0.00,
-                                      # BYOK-immune). Replaces:
-                                      #  - google/gemini-3.8-flash (removed for
-                                      #    cause: OpenRouter routed it BYOK in
-                                      #    run bod-T1T2-R4; governor re-learned
-                                      #    the google/ org prefix -- unusable as
-                                      #    a deterministic pool member here)
-                                      #  - openai/gpt-4o-mini (removed for cause:
-                                      #    stale-gen voter, filed a content-free
-                                      #    REJECT dissent with no file/line/
-                                      #    evidence against 4 evidence-citing
-                                      #    APPROVEs)
-                                      #  - openai/gpt-5.6-sol / kimi-k3 (probed
-                                      #    clean but their own reserve rows
-                                      #    price-bomb the $0.10 preflight)
-    "inclusionai/ling-3.0-flash",     # cheapest input of the pool
-    "openai/gpt-5-mini",              # verified at auto/4096 (probe 2026-09-13: 10.2s,
-                                      # $0.0014, parseable); reasoning MANDATORY on its
-                                      # route (400 on effort:none) so it needs budget,
-                                      # never a disable. NOTE: google/gemini-3.8-flash
-                                      # is also verified but sits behind the governor's
-                                      # learned-BYOK org filter (google/), which rotates
-                                      # it out non-deterministically.
+    "openai/gpt-5.6-luna",            # out $1.20/M; probe-verified emitter 2026-09-13
+    "deepseek/deepseek-v4-flash",     # out $0.159/M; cheapest quality emitter
+    "deepseek/deepseek-v3.2",         # out $0.40/M; voted on corrected facts (bod-e3238cd5)
+    "z-ai/glm-5.3-flash",             # out $0.50/M; non-hinted per chat.py heuristic -> 2 slots
+    "nvidia/nemotron-3-super-120b-a12b",  # out $0.45/M; proven voter (bod-a7deb38b,
+                                      # bod-dd336324)
+    "google/gemma-4-31b-it",          # out $0.34/M; REDUNDANCY SEAT (pool of 6, 5 seats):
+                                      # paid sibling of the harness's most JSON-reliable
+                                      # emitter (FREE_JUDGE family; panelist/judge in
+                                      # bod-a7deb38b + bod-dd336324). Fills a seat when a
+                                      # member fails emission -- glm-5.3-flash returned a
+                                      # malformed vote at 4096/auto in bod-a8ebe243 and
+                                      # fail-closed the run (Rule 15); rotation replaces it.
 ]
+# Removed from the paid pool (history -- do not silently re-add):
+#  - inclusionai/ling-3.0-flash + ling-3.0-flash-fin:free (operator ruling
+#    2026-09-14: "Ling models need to go"; the :free id also violated
+#    "use paid, not free")
+#  - google/gemini-3.8-flash (removed for cause: OpenRouter routed it BYOK in
+#    run bod-T1T2-R4; governor re-learned the google/ org prefix -- unusable
+#    as a deterministic pool member; its price also pushes the pool preflight
+#    to $0.0998, a 0.3% margin under the $0.10 ceiling)
+#  - openai/gpt-4o-mini (removed for cause: stale-gen voter, filed a
+#    content-free REJECT dissent with no file/line/evidence against 4
+#    evidence-citing APPROVEs)
+#  - openai/gpt-5.6-sol / kimi-k3 (probed clean but their own reserve rows
+#    price-bomb the $0.10 preflight)
+#  - openai/gpt-5-mini / qwen/qwen3-max / google/gemini-3.8-flash as the 5th
+#    seat: $0.1197 / $0.1026 / $0.1013 worst-case respectively at 4096 -- all
+#    over the $0.10 ceiling under panel.py's reservation math (2026-09-14 sweep)
+#  - deepseek/deepseek-v4-pro: one seat alone reserves ~$0.098; heavy-tier only
 PAID_JUDGE = "deepseek/deepseek-v4.1-flash"   # $0.000055/vote at effort:none (probe);
                                                # as judge its synthesis parses reliably
 
@@ -330,7 +352,7 @@ def evaluate_board_proposal(
     )
 
     panel_pool = settings.panel_pool
-    judge_model = settings.judge or (FREE_JUDGE if not use_paid else "inclusionai/ling-3.0-flash")
+    judge_model = settings.judge or (FREE_JUDGE if not use_paid else PAID_JUDGE)
 
     result = panel_judge(
         transport=HttpTransport(),
@@ -488,6 +510,46 @@ def evaluate_board_proposal(
     return resolution
 
 
+def _verify_ledger_append(state_file: str, resolution: dict, formatted_proposal: str) -> None:
+    """Rule 15 read-back verification of a ledger append; fails loud.
+
+    Checks the record exists exactly once and landed whole (timestamp,
+    judge line, proposal block including its final line present in the
+    record's tail). A truncated or interleaved write (observed 2026-09-14:
+    bod-a8ebe243 landed half-written with CRLF endings beside a complete LF
+    copy from a concurrent recorder) must FAIL LOUDLY, never print [OK].
+    """
+    with open(state_file, "r", encoding="utf-8") as f:
+        recorded = f.read()
+    marker = f"### Resolution {resolution['resolution_id']} [{resolution['status']}]"
+    occurrences = recorded.count(marker)
+    if occurrences > 1:
+        print(
+            f"[FAIL] Resolution {resolution['resolution_id']} appears "
+            f"{occurrences}x in the ledger (double-append); record integrity "
+            f"compromised -- inspect HANDOFF/BOD_STATE.md manually",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    start = recorded.find(marker)
+    tail = recorded[start:] if start >= 0 else ""
+    required_lines = [
+        f"- **Timestamp**: {resolution['timestamp']}",
+        f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}`",
+        "- **Proposal Text**:",
+        formatted_proposal.splitlines()[-1],
+    ]
+    missing = [r for r in required_lines if r not in tail]
+    if start < 0 or missing:
+        print(
+            f"[FAIL] Ledger append verification FAILED for "
+            f"{resolution['resolution_id']}: marker_found={start >= 0}, "
+            f"missing_lines={missing} -- inspect HANDOFF/BOD_STATE.md manually",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def record_resolution_to_handoff(resolution: dict, repo_root: str):
     """Record the resolution in HANDOFF/BOD_STATE.md."""
     state_file = os.path.join(repo_root, "HANDOFF", "BOD_STATE.md")
@@ -513,13 +575,33 @@ def record_resolution_to_handoff(resolution: dict, repo_root: str):
 
     entry.append(f"- **Judge Model**: `{resolution.get('judge_model', 'unknown')}` (Agreed: {resolution.get('judge_agreed')})")
     entry.append("- **Proposal Text**:")
-    entry.append(f"  > {resolution['proposal'].replace(chr(10), chr(10) + '  > ')}")
+    formatted_proposal = "\n".join(
+        f"  > {line}" if line.strip() else "  >"
+        for line in resolution["proposal"].splitlines()
+    )
+    entry.append(formatted_proposal)
     entry.append("")
 
-    with open(state_file, "a", encoding="utf-8") as f:
-        f.write("\n".join(entry))
+    with open(state_file, "r", encoding="utf-8") as f:
+        existing = f.read()
+    marker = f"### Resolution {resolution['resolution_id']} [{resolution['status']}]"
+    if existing.count(marker) > 0:
+        print(
+            f"[FAIL] Resolution {resolution['resolution_id']} is ALREADY in the "
+            f"ledger -- refusing to double-append (idempotency guard, observed "
+            f"concurrent-recorder defect 2026-09-14)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    print(f"[OK] Resolution {resolution['resolution_id']} appended to HANDOFF/BOD_STATE.md")
+    with open(state_file, "a", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(entry))
+        f.flush()
+        os.fsync(f.fileno())
+
+    _verify_ledger_append(state_file, resolution, formatted_proposal)
+
+    print(f"[OK] Resolution {resolution['resolution_id']} appended to HANDOFF/BOD_STATE.md (read-back verified)")
 
 
 def main():
@@ -539,8 +621,11 @@ def main():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=8192,
-        help="Maximum completion tokens per call (default: 8192)",
+        default=4096,
+        help=(
+            "Maximum completion tokens per call (default: 4096 -- the BoD vote "
+            "budget at which the paid pool fits the $0.10 worst-case preflight)"
+        ),
     )
     parser.add_argument(
         "--reasoning-effort",
@@ -549,21 +634,32 @@ def main():
         choices=["auto", "low", "medium", "high", "off"],
         help="Reasoning effort requested from reasoning models (default: auto)",
     )
-    parser.add_argument(
+    tier_group = parser.add_mutually_exclusive_group()
+    tier_group.add_argument(
         "--paid",
         action="store_true",
         help=(
-            "Dispatch through the paid pool (DeepSeek V4 generation per "
+            "Dispatch through the paid pool (DEFAULT since operator ruling "
+            "2026-09-14 'use paid, not free'; DeepSeek V4 generation per "
             "operator ruling 2026-09-13; bounded by $0.10 ceiling)"
+        ),
+    )
+    tier_group.add_argument(
+        "--free",
+        action="store_true",
+        help=(
+            "Opt OUT of the paid default and route through the free pool "
+            "($0.00). Operator ruling 2026-09-14 made paid the default tier."
         ),
     )
     parser.add_argument(
         "--heavy",
         action="store_true",
         help=(
-            "Dispatch through the heavy-model panel (gpt-5 / gpt-4.1 / "
-            "deepseek-v3.2 / gemini-2.5-pro; operator directive 2026-09-13 "
-            "for hard work; canonical $0.10 ceiling unchanged)"
+            "Dispatch through the heavy-model panel (glm-5.3-flash / "
+            "gpt-5-mini / deepseek-v4-pro / gpt-5.6-sol / gpt-4.1 / "
+            "gemini-3.8-flash; operator directive 2026-09-13 for hard work; "
+            "canonical $0.10 ceiling unchanged)"
         ),
     )
     parser.add_argument(
@@ -606,7 +702,7 @@ def main():
             max_tokens=args.max_tokens,
             reasoning_effort=args.reasoning_effort,
             dry_run=args.dry_run,
-            use_paid=args.paid,
+            use_paid=args.paid or not args.free,
             use_heavy=args.heavy,
         )
     except HarnessError as e:
