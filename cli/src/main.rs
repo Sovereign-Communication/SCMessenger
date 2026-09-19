@@ -40,7 +40,7 @@ use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Register this node's identity (device_id + seniority) with a relay peer so
 /// custody can accept store-and-forward requests *to* this node.
@@ -263,12 +263,17 @@ enum Commands {
     Start {
         #[arg(short, long)]
         port: Option<u16>,
-        /// Send one bounded acknowledgement for each unique incoming text message.
-        /// Test-harness capability: without it a CLI node can receive but never
-        /// respond, so it can only ever demonstrate one direction of a pair.
-        /// Also enabled by setting SCM_AUTO_REPLY=1.
-        #[arg(long)]
-        auto_reply: bool,
+        /// Send one bounded acknowledgement for each unique incoming text message,
+        /// optionally with a custom body. Useful for an always-on node that its
+        /// operator does not watch: a sender learns the node is alive and reading.
+        /// Bare `--auto-reply` sends the generic acknowledgement; a value sends
+        /// that text instead. Test-harness capability: without it a CLI node can
+        /// receive but never respond, so it can only ever demonstrate one
+        /// direction of a pair.
+        /// Also enabled by setting SCM_AUTO_REPLY: `1`/`true` for the generic body,
+        /// any other non-empty value for that text.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        auto_reply: Option<String>,
     },
     /// Run headless relay node (no interactive console)
     Relay {
@@ -753,6 +758,76 @@ mod dial_scheduler_tests {
         ));
     }
 
+    /// AUTO-REPLY-RATE-001: 1:1 per message, but never more than one
+    /// acknowledgement per minute node-wide, so a burst of distinct messages
+    /// (or a peer replaying traffic with fresh ids) cannot make an unattended
+    /// node spam the operator.
+    #[test]
+    fn auto_reply_is_capped_at_one_per_minute() {
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+        let mut last_sent_at: Option<Instant> = None;
+        let t0 = Instant::now();
+
+        // No reply yet sent: nothing is rate limited.
+        assert!(!auto_reply_rate_limited(last_sent_at, t0));
+
+        // A five-message burst inside one second, evaluated in the caller's
+        // gate order (rate limit first, dedup second): exactly one reply.
+        let mut answered = 0;
+        for (idx, id) in ["burst-1", "burst-2", "burst-3", "burst-4", "burst-5"]
+            .iter()
+            .enumerate()
+        {
+            let now = t0 + Duration::from_millis(idx as u64 * 200);
+            if !auto_reply_rate_limited(last_sent_at, now)
+                && should_send_auto_reply(id, "hello there", &mut seen_ids, &mut seen_order)
+            {
+                last_sent_at = Some(now);
+                answered += 1;
+            }
+        }
+        assert_eq!(
+            answered, 1,
+            "a burst must not produce one reply per message"
+        );
+
+        // The window is exactly one minute: still shut one second short,
+        // open again at the boundary.
+        assert!(auto_reply_rate_limited(
+            last_sent_at,
+            t0 + Duration::from_secs(59)
+        ));
+        assert!(!auto_reply_rate_limited(
+            last_sent_at,
+            t0 + Duration::from_secs(60)
+        ));
+
+        // A distinct message can be answered once the window reopens...
+        let reopened = t0 + Duration::from_secs(61);
+        assert!(!auto_reply_rate_limited(last_sent_at, reopened));
+        assert!(should_send_auto_reply(
+            "burst-9",
+            "hello there",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        last_sent_at = Some(reopened);
+
+        // ...but a redelivery of that same message is still a duplicate, and
+        // the window stays shut for the next minute regardless of message id.
+        assert!(!should_send_auto_reply(
+            "burst-9",
+            "hello there",
+            &mut seen_ids,
+            &mut seen_order
+        ));
+        assert!(auto_reply_rate_limited(
+            last_sent_at,
+            reopened + Duration::from_secs(30)
+        ));
+    }
+
     #[test]
     fn auto_reply_never_answers_machine_messages() {
         let mut seen_ids = HashSet::new();
@@ -765,6 +840,67 @@ mod dial_scheduler_tests {
             &mut seen_order
         ));
         assert!(seen_ids.is_empty());
+    }
+
+    #[test]
+    fn auto_reply_ignores_machine_envelopes_and_empty_bodies() {
+        // The phone's periodic identity envelope: kind history_sync, empty text.
+        // Answering these is what produced the burst of courtesy replies for an
+        // operator who had sent nothing (2026-09-16).
+        let envelope =
+            "{\"schema\":\"scm.message.identity.v1\",\"kind\":\"history_sync\",\"text\":\"\"}";
+        assert!(!is_answerable_text("", Some("history_sync")));
+        assert!(!is_answerable_text(envelope, Some("history_sync")));
+        assert!(!is_answerable_text(envelope, None)); // envelope arrived undecoded
+        assert!(!is_answerable_text("   ", Some("text")));
+        assert!(!is_answerable_text("", None));
+        assert!(!is_answerable_text(AUTO_REPLY_ACK, None));
+
+        // A genuine chat body is answerable, wrapped or not.
+        assert!(is_answerable_text("are you there?", Some("text")));
+        assert!(is_answerable_text("are you there?", None));
+    }
+
+    #[test]
+    fn auto_reply_body_defaults_to_generic_and_accepts_custom_text() {
+        // Bare `--auto-reply` and `SCM_AUTO_REPLY=1` both arrive here as an
+        // empty body, and must fall back to the generic acknowledgement.
+        assert_eq!(resolve_auto_reply_body(None), AUTO_REPLY_ACK);
+        assert_eq!(resolve_auto_reply_body(Some("")), AUTO_REPLY_ACK);
+        assert_eq!(resolve_auto_reply_body(Some("   ")), AUTO_REPLY_ACK);
+
+        // A custom body is sent behind the machine marker, trimmed.
+        assert_eq!(
+            resolve_auto_reply_body(Some("Away from the desk; I will read this later.")),
+            "[auto-reply] Away from the desk; I will read this later."
+        );
+        assert_eq!(
+            resolve_auto_reply_body(Some("  node is on but unwatched  ")),
+            "[auto-reply] node is on but unwatched"
+        );
+    }
+
+    #[test]
+    fn custom_auto_reply_text_still_carries_the_machine_marker() {
+        // Loop safety: whatever the operator types, the body must still start
+        // with the marker, or two responder nodes would answer each other
+        // forever. Operator text that already carries the marker is not doubled.
+        let body = resolve_auto_reply_body(Some("please stop replying"));
+        assert!(body.starts_with(AUTO_REPLY_PREFIX));
+
+        let mut seen_ids = HashSet::new();
+        let mut seen_order = VecDeque::new();
+        assert!(!should_send_auto_reply(
+            "other-node-ack",
+            &body,
+            &mut seen_ids,
+            &mut seen_order
+        ));
+
+        assert_eq!(
+            resolve_auto_reply_body(Some("[auto-reply] already marked")),
+            "[auto-reply] already marked"
+        );
     }
 
     /// SELF-CERTIFYING KEY BINDING: an identity envelope without a usable
@@ -1925,6 +2061,62 @@ const AUTO_REPLY_PREFIX: &str = "[auto-reply] ";
 const AUTO_REPLY_ACK: &str =
     "[auto-reply] Thank you. Your message was received by this CLI; no further reply will be sent.";
 const AUTO_REPLY_SEEN_CAPACITY: usize = 4096;
+/// AUTO-REPLY-RATE-001: the responder answers a genuine chat message 1:1, but
+/// NEVER more than one acknowledgement per interval, node-wide. Without a cap a
+/// burst of distinct messages (or a peer replaying traffic with fresh ids) turns
+/// an unattended always-on node into a spammer pointed at the operator's phone.
+/// Suppressed messages are not deferred - the delivery receipt is the real
+/// signal that a message arrived; the acknowledgement is only a courtesy.
+const AUTO_REPLY_MIN_INTERVAL_SECS: u64 = 60;
+
+/// Resolve the acknowledgement body for auto-reply mode.
+///
+/// A bare `--auto-reply` (or `SCM_AUTO_REPLY=1`) sends the generic body; a custom
+/// message is sent verbatim but always carries `AUTO_REPLY_PREFIX`. That prefix is
+/// what stops two responder nodes from answering each other forever, so it is
+/// applied even to operator-supplied text (and recognised rather than doubled if
+/// the operator included it).
+/// True when an incoming message carries a human chat body that a responder
+/// node may answer.
+///
+/// Machine traffic must never be answered. A phone broadcasts an identity
+/// envelope (`{"schema":"scm.message.identity.v1","kind":"history_sync",
+/// "text":""}`) about once a minute and its `text` field is EMPTY, so a guard
+/// that only rejects bodies already carrying the machine marker answered every
+/// envelope: the operator received a burst of courtesy replies having sent
+/// nothing (13 on 2026-09-16). The body must therefore be present, of a chat
+/// kind, and not the identity envelope itself.
+fn is_answerable_text(incoming: &str, envelope_kind: Option<&str>) -> bool {
+    if !matches!(envelope_kind, None | Some("text")) {
+        return false;
+    }
+    let body = incoming.trim();
+    if body.is_empty() || body.starts_with(AUTO_REPLY_PREFIX) {
+        return false;
+    }
+    // Belt and braces: an envelope that arrived without a decodable kind still
+    // carries its schema marker in the body text.
+    !(body.starts_with('{') && body.contains("scm.message.identity"))
+}
+
+fn resolve_auto_reply_body(custom: Option<&str>) -> String {
+    match custom.map(str::trim) {
+        None | Some("") => AUTO_REPLY_ACK.to_string(),
+        Some(text) if text.starts_with(AUTO_REPLY_PREFIX) => text.to_string(),
+        Some(text) => format!("{}{}", AUTO_REPLY_PREFIX, text),
+    }
+}
+
+/// True when the responder must stay quiet because it acknowledged something
+/// less than `AUTO_REPLY_MIN_INTERVAL_SECS` ago.
+fn auto_reply_rate_limited(last_sent_at: Option<Instant>, now: Instant) -> bool {
+    match last_sent_at {
+        Some(last) => {
+            now.saturating_duration_since(last) < Duration::from_secs(AUTO_REPLY_MIN_INTERVAL_SECS)
+        }
+        None => false,
+    }
+}
 
 /// Permit at most one machine acknowledgement for a logical incoming message.
 ///
@@ -1950,19 +2142,32 @@ fn should_send_auto_reply(
     true
 }
 
-async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: bool) -> Result<()> {
+async fn cmd_start(
+    port: Option<u16>,
+    http_bind: Option<String>,
+    auto_reply: Option<String>,
+) -> Result<()> {
     // Env fallback so a node already under a process supervisor can be flipped
-    // into responder mode without changing its argv.
-    let auto_reply = auto_reply
-        || matches!(
-            std::env::var("SCM_AUTO_REPLY").as_deref(),
-            Ok("1") | Ok("true")
-        );
-    if auto_reply {
+    // into responder mode without changing its argv. `SCM_AUTO_REPLY=1` (or
+    // `true`) keeps the generic body; any other value is used as the text.
+    let auto_reply = match auto_reply {
+        Some(custom) => Some(custom),
+        None => match std::env::var("SCM_AUTO_REPLY") {
+            Ok(v) => match v.trim() {
+                "" => None,
+                "1" | "true" => Some(String::new()),
+                other => Some(other.to_string()),
+            },
+            Err(_) => None,
+        },
+    };
+    let auto_reply_body = auto_reply.map(|custom| resolve_auto_reply_body(Some(&custom)));
+    if let Some(body) = &auto_reply_body {
         println!(
             "{} Bounded auto-reply ENABLED: one acknowledgement per unique text message",
             "[INFO]".yellow()
         );
+        println!("  body: {}", body);
     }
     let config = config::Config::load()?;
     let ws_port = port.unwrap_or({
@@ -2126,7 +2331,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     let (ui_broadcast, mut ui_cmd_rx) = server::start(ws_port, web_ctx.clone()).await?;
 
     let listen_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?;
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
 
     // Build discovery config from CLI config
     let discovery_config =
@@ -2462,6 +2667,8 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     // of an already-seen message remain covered for the lifetime of the node.
     let mut auto_reply_seen_ids = HashSet::new();
     let mut auto_reply_seen_order = VecDeque::new();
+    // When this responder last acknowledged anything, for the once-per-minute cap.
+    let mut auto_reply_last_sent_at: Option<Instant> = None;
 
     // Swarm liveness watchdog.
     //
@@ -2491,6 +2698,99 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                 );
                 std::process::exit(1);
             }
+        }
+    });
+
+    // Log-silence heartbeat watchdog.
+    //
+    // Catches the failure class the event-loop watchdog above cannot see: the
+    // process and its event-loop task both stay alive, but the node stops
+    // making progress. Observed live 2026-09-15 on the Windows node: log
+    // output frozen for 2h45m, HTTP API unresponsive, CLOSE_WAIT sockets
+    // piling up, no panic, and `swarm_event_loop_died` never fired because the
+    // event loop never died. A healthy node always has pending work -- the
+    // relay-custody audit alone logs every 60s even when idle -- so sustained
+    // log silence means wedged. Same policy as the event-loop watchdog: exit
+    // loudly so a supervisor or user restarts a node that works, instead of a
+    // zombie that silently drops traffic. Tune only for tests via
+    // SCM_LOG_SILENCE_TIMEOUT_SECS.
+    //
+    // Diagnostics go to the watchdog's OWN log
+    // (config::append_watchdog_diagnostic -> logs/watchdog/watchdog.log), never
+    // through `tracing::*`. The appender writes into the directory this task
+    // measures, so a traced warning refreshed the newest mtime, the next poll
+    // read ~0s, the streak reset, and the node never exited (live 2026-09-16).
+    // Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
+    let heartbeat_log_dir = config::Config::data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("logs");
+    let heartbeat_timeout_secs: u64 = std::env::var("SCM_LOG_SILENCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    tokio::spawn(async move {
+        // Poll at 1/10th of the timeout (min 5s) so detection latency stays
+        // proportional to the configured threshold.
+        let poll = std::time::Duration::from_secs((heartbeat_timeout_secs / 10).max(5));
+        let mut ticker = tokio::time::interval(poll);
+        ticker.tick().await; // first tick is immediate
+                             // Two consecutive silence readings are required before exit. A
+                             // single bad measurement must never kill a healthy node -- observed
+                             // live 2026-09-15 when enumeration-cached metadata made the first
+                             // version read 659s of "silence" against logs written one second
+                             // earlier. Poll cadence is timeout/10, so this costs at most one
+                             // extra poll interval of detection latency (~60s at the default).
+        let mut consecutive_silence: u32 = 0;
+        loop {
+            ticker.tick().await;
+            if let Some(age) = config::latest_log_age_secs(&heartbeat_log_dir) {
+                if age > heartbeat_timeout_secs {
+                    consecutive_silence = consecutive_silence.saturating_add(1);
+                    if consecutive_silence >= 2 {
+                        tracing::error!(
+                            "log_silence_watchdog: no log output for {}s across {} consecutive readings (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
+                            age,
+                            consecutive_silence,
+                            heartbeat_timeout_secs
+                        );
+                        eprintln!(
+                            "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
+                            "[FAIL]".red(),
+                            age
+                        );
+                        std::process::exit(1);
+                    }
+                    // Recorded in the watchdog's own log, NOT through the
+                    // tracing appender: this task measures the directory that
+                    // appender writes to, so its own warning must never feed
+                    // its own liveness measurement.
+                    let diagnostic = format!(
+                        "log_silence_watchdog: measured {}s without log output (threshold {}s); requiring a second consecutive reading before exit",
+                        age, heartbeat_timeout_secs
+                    );
+                    // The console stays the operator's live channel (this is
+                    // what the traced warning used to provide); it is not part
+                    // of the measured stream.
+                    eprintln!("{} {}", "[WARNING]".yellow(), diagnostic);
+                    if let Err(e) = config::append_watchdog_diagnostic(
+                        &heartbeat_log_dir,
+                        "WARNING",
+                        &diagnostic,
+                    ) {
+                        eprintln!(
+                            "{} could not record the watchdog diagnostic at {}: {}",
+                            "[WARNING]".yellow(),
+                            config::watchdog_diagnostics_path(&heartbeat_log_dir).display(),
+                            e
+                        );
+                    }
+                    continue;
+                }
+            }
+            // Fresh (or unreadable/missing) -- reset the streak. A missing
+            // log dir never triggers: startup writes log lines within
+            // seconds, so an absent heartbeat only exists pre-init.
+            consecutive_silence = 0;
         }
     });
 
@@ -2557,16 +2857,18 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                      // AUTO LEDGER EXCHANGE: Share our known peers with the new
                                      // connection. The payload is built inside the swarm from
                                      // `LedgerManager::exchange_response_entries`
-                                     if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                         tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
-                                     }
-
-                                     // OUTBOX FLUSH: Deliver any queued messages for this peer now
-                                     // that they are online.
+                                     let swarm_task = swarm_handle.clone();
+                                     let outbox_task = Arc::clone(&outbox_rx);
+                                     tokio::spawn(async move {
+                                         if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                             tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
+                                         }
+                                         if can_reach {
+                                             flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                         }
+                                     });
                                      if !can_reach {
                                          tracing::warn!("No compatible transport path to {}; deferring outbox flush", peer_id);
-                                     } else {
-                                         flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
                                      }
                                  }
                             }
@@ -2680,13 +2982,19 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                         listen_addrs.iter().map(|a| a.to_string()).collect();
                                     l.record_identified_peer(&peer_id.to_string(), &advertised);
                                 }
-                                // Register with this peer so it can custody-store
-                                // messages for us (required for cell/AWS relay).
-                                register_identity_with_relay(&core_rx, &swarm_handle, peer_id).await;
-                                if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                    tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
-                                }
-                                flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
+                                // Decouple from event loop: spawn relay registration, ledger sharing,
+                                // and outbox flush onto a background task so event_rx is never blocked
+                                // while awaiting swarm reply channels.
+                                let core_task = Arc::clone(&core_rx);
+                                let swarm_task = swarm_handle.clone();
+                                let outbox_task = Arc::clone(&outbox_rx);
+                                tokio::spawn(async move {
+                                    register_identity_with_relay(&core_task, &swarm_task, peer_id).await;
+                                    if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                        tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
+                                    }
+                                    flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                });
                             }
 
                             // GOSSIPSUB: New topic discovered
@@ -2738,10 +3046,15 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             let raw_text =
                                                 msg.text_content().unwrap_or_else(|| "<binary>".into());
                                             let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                            let sender_peer_id = resolve_sender_peer_id(
+                                                peer_id,
+                                                sender_public_key_hex.as_deref(),
+                                                decoded_envelope.as_ref(),
+                                            );
                                             if let Some(decoded) = decoded_envelope.as_ref() {
                                                 learn_sender_identity_from_envelope(
                                                     &contacts_rx,
-                                                    &peer_id.to_string(),
+                                                    &sender_peer_id.to_string(),
                                                     decoded,
                                                 );
                                             }
@@ -2749,10 +3062,10 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 .as_ref()
                                                 .map(|d| d.text.clone())
                                                 .unwrap_or(raw_text);
-                                            let sender_name = contacts_rx.get(peer_id.to_string())
+                                            let sender_name = contacts_rx.get(sender_peer_id.to_string())
                                                 .ok().flatten()
                                                 .map(|c| c.display_name().to_string())
-                                                .unwrap_or_else(|| peer_id.to_string());
+                                                .unwrap_or_else(|| sender_peer_id.to_string());
 
                                             println!("\n{} {}: {}", "←".bright_blue(), sender_name.bright_cyan(), text);
                                             print!("> ");
@@ -2764,13 +3077,13 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                 .unwrap_or_default()
                                                 .as_secs();
                                             let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageReceived {
-                                                from: peer_id.to_string(),
+                                                from: sender_peer_id.to_string(),
                                                 content: text.clone(),
                                                 timestamp: ts,
                                                 message_id: msg.id.clone(),
                                             }));
                                             let mn = notif_message_received(MessageReceivedParams {
-                                                from: peer_id.to_string(),
+                                                from: sender_peer_id.to_string(),
                                                 content: text,
                                                 timestamp: ts,
                                                 message_id: msg.id.clone(),
@@ -2809,10 +3122,14 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                             // audits across nodes; at DEBUG it is invisible at
                                                             // the node's default INFO level and a lost ACK is
                                                             // indistinguishable from an unsent one.
-                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, peer_id);
-                                                            if let Err(e) = swarm_handle.send_message(peer_id, ack_bytes, None, None).await {
-                                                                tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg.id, peer_id, e);
-                                                            }
+                                                            tracing::info!("Sending delivery ACK for {} to {}", msg.id, sender_peer_id);
+                                                            let swarm_task = swarm_handle.clone();
+                                                            let msg_id = msg.id.clone();
+                                                            tokio::spawn(async move {
+                                                                if let Err(e) = swarm_task.send_message(sender_peer_id, ack_bytes, None, None).await {
+                                                                    tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, sender_peer_id, e);
+                                                                }
+                                                            });
                                                         }
                                                         Err(e) => {
                                                             tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
@@ -2827,47 +3144,76 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                             // receipt above already provides delivery
                                             // evidence; this acknowledgement exists only
                                             // for the explicit CLI test-harness mode.
-                                            if auto_reply {
+                                            if let Some(auto_reply_body) = auto_reply_body.as_deref() {
                                                 let incoming = decoded_envelope
                                                     .as_ref()
                                                     .map(|d| d.text.clone())
                                                     .unwrap_or_else(|| {
                                                         msg.text_content().unwrap_or_default()
                                                     });
-                                                if !should_send_auto_reply(
+                                                let envelope_kind = decoded_envelope
+                                                    .as_ref()
+                                                    .map(|d| d.kind.as_str());
+                                                if !is_answerable_text(
+                                                    &incoming,
+                                                    envelope_kind
+                                                ) {
+                                                    tracing::debug!(
+                                                        "auto_reply_skipped_machine_message in_reply_to={} from={} kind={:?} body_len={}",
+                                                        msg.id,
+                                                        sender_peer_id,
+                                                        envelope_kind,
+                                                        incoming.len()
+                                                    );
+                                                } else if auto_reply_rate_limited(
+                                                    auto_reply_last_sent_at,
+                                                    Instant::now(),
+                                                ) {
+                                                    tracing::info!(
+                                                        "auto_reply_suppressed_rate_limit in_reply_to={} from={} min_interval_secs={}",
+                                                        msg.id,
+                                                        sender_peer_id,
+                                                        AUTO_REPLY_MIN_INTERVAL_SECS
+                                                    );
+                                                } else if !should_send_auto_reply(
                                                     &msg.id,
                                                     &incoming,
                                                     &mut auto_reply_seen_ids,
                                                     &mut auto_reply_seen_order,
                                                 ) {
                                                     tracing::debug!(
-                                                        "auto_reply_suppressed_duplicate_or_machine_message in_reply_to={} from={}",
+                                                        "auto_reply_suppressed_duplicate in_reply_to={} from={}",
                                                         msg.id,
-                                                        peer_id
+                                                        sender_peer_id
                                                     );
                                                 } else if let Some(ref pk_hex) =
                                                     sender_public_key_hex
                                                 {
                                                     match core_rx.prepare_message_with_id(
                                                         pk_hex.clone(),
-                                                        AUTO_REPLY_ACK.to_string(),
+                                                        auto_reply_body.to_string(),
                                                         scmessenger_core::MessageType::Text,
                                                         None,
                                                     ) {
                                                         Ok(prep) => {
                                                             match swarm_handle
-                                                                .send_message(peer_id, prep.envelope_data, None, None)
+                                                                .send_message(sender_peer_id, prep.envelope_data, None, None)
                                                                 .await
                                                             {
-                                                                Ok(_) => tracing::info!(
+                                                                Ok(_) => {
+                                                                // Only a reply that was actually queued consumes
+                                                                // the once-per-minute window.
+                                                                auto_reply_last_sent_at = Some(Instant::now());
+                                                                tracing::info!(
                                                                     "auto_reply_ack_queued in_reply_to={} to={}",
                                                                     msg.id,
-                                                                    peer_id
-                                                                ),
+                                                                    sender_peer_id
+                                                                )
+                                                            }
                                                                 Err(e) => tracing::warn!(
                                                                     "auto_reply_ack_queue_failed in_reply_to={} to={}: {}",
                                                                     msg.id,
-                                                                    peer_id,
+                                                                    sender_peer_id,
                                                                     e
                                                                 ),
                                                             }
@@ -2878,7 +3224,7 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                                         Err(e) => tracing::error!(
                                                             "auto_reply_ack_prepare_failed in_reply_to={} to={}: {}",
                                                             msg.id,
-                                                            peer_id,
+                                                            sender_peer_id,
                                                             e
                                                         ),
                                                     }
@@ -2976,19 +3322,23 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                 let peer_id_res = recipient.parse::<libp2p::PeerId>();
                                 let contact_res = contacts_rx.get(recipient.clone());
 
-                                let target_peer = if let Ok(pid) = peer_id_res {
-                                    Some(pid)
+                                let (target_peer, pk_from_contact) = if let Ok(pid) = peer_id_res {
+                                    (Some(pid), None)
                                 } else if let Ok(Some(contact)) = contact_res {
-                                    contact.peer_id.parse().ok()
+                                    (peer_id_from_contact_identifier(&contact.peer_id), Some(contact.public_key))
                                 } else {
-                                    None
+                                    (None, None)
                                 };
 
                                 if let Some(target) = target_peer {
                                      // Try to find public key
-                                     let pk_opt = if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
-                                         Some(c.public_key)
-                                     } else { None };
+                                     let pk_opt = pk_from_contact.or_else(|| {
+                                         if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
+                                             Some(c.public_key)
+                                         } else {
+                                             None
+                                         }
+                                     });
 
                                      if let Some(pk) = pk_opt {
                                          // prepare_message_with_id automatically saves outgoing history
@@ -3169,22 +3519,24 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
                                     } => {
                                         let peer_id_res = recipient.parse::<libp2p::PeerId>();
                                         let contact_res = contacts_rx.get(recipient.clone());
-                                        let target_peer = if let Ok(pid) = peer_id_res {
-                                            Some(pid)
+                                        let (target_peer, pk_from_contact) = if let Ok(pid) = peer_id_res {
+                                            (Some(pid), None)
                                         } else if let Ok(Some(contact)) = contact_res {
-                                            contact.peer_id.parse().ok()
+                                            (peer_id_from_contact_identifier(&contact.peer_id), Some(contact.public_key))
                                         } else {
-                                            None
+                                            (None, None)
                                         };
                                         let Some(target) = target_peer else {
                                             push_err(-32001, "Recipient not found".into());
                                             continue;
                                         };
-                                        let pk_opt = if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
-                                            Some(c.public_key)
-                                        } else {
-                                            None
-                                        };
+                                        let pk_opt = pk_from_contact.or_else(|| {
+                                            if let Ok(Some(c)) = contacts_rx.get(target.to_string()) {
+                                                Some(c.public_key)
+                                            } else {
+                                                None
+                                            }
+                                        });
                                         let Some(pk) = pk_opt else {
                                             push_err(-32002, "No public key for recipient".into());
                                             continue;
@@ -3274,6 +3626,29 @@ async fn cmd_start(port: Option<u16>, http_bind: Option<String>, auto_reply: boo
     }
 
     Ok(())
+}
+
+/// Resolve the originating sender's libp2p PeerId from the authenticated envelope
+/// public key or identity envelope metadata, falling back to the direct socket peer.
+/// This ensures delivery ACKs, auto-replies, and contact learning target the actual
+/// author rather than an intermediary relay node.
+fn resolve_sender_peer_id(
+    peer_id: PeerId,
+    sender_public_key_hex: Option<&str>,
+    decoded_envelope: Option<
+        &scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope,
+    >,
+) -> PeerId {
+    sender_public_key_hex
+        .filter(|pk| pk.len() == 64 && pk.chars().all(|c| c.is_ascii_hexdigit()))
+        .and_then(scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex)
+        .and_then(|s| s.parse::<PeerId>().ok())
+        .or_else(|| {
+            decoded_envelope
+                .and_then(|d| d.libp2p_peer_id.as_deref())
+                .and_then(|s| s.parse::<PeerId>().ok())
+        })
+        .unwrap_or(peer_id)
 }
 
 /// Learn sender identity from an inbound `scm.message.identity.v1` envelope:
@@ -3386,7 +3761,15 @@ async fn flush_outbox_for_peer(
 ) {
     let queued = {
         let mut ob = outbox.lock().await;
-        ob.drain_for_peer(&peer_id.to_string())
+        let mut messages = ob.drain_for_peer(&peer_id.to_string());
+        if let Ok(pk) =
+            scmessenger_core::transport::extract_ed25519_public_key_from_peer_id(&peer_id)
+        {
+            let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
+            let mut canonical_msgs = ob.drain_for_peer(&hex_pk);
+            messages.append(&mut canonical_msgs);
+        }
+        messages
     };
 
     if !queued.is_empty() {
@@ -3546,7 +3929,7 @@ async fn cmd_relay(
     // Start swarm
     let listen_multiaddr: libp2p::Multiaddr =
         listen_addr.parse().context("Invalid listen multiaddr")?;
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
 
     let discovery_config =
         scmessenger_core::transport::DiscoveryConfig::new(if config.enable_mdns {
@@ -3756,6 +4139,7 @@ async fn cmd_relay(
 
     // ── Main event loop (headless — no stdin) ───────────────────────────
     let contacts_rx = contacts.clone();
+    let history_rx = _history.clone();
     let ledger_rx = ledger.clone();
     let outbox_rx = outbox.clone();
     let scheduler_rx = Arc::clone(&relay_scheduler);
@@ -3803,15 +4187,18 @@ async fn cmd_relay(
 
                             // Share ledger with new peer. Payload built inside the swarm
                             // from `exchange_response_entries`.
-                            if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                                tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
-                            }
-
-                            // Flush outbox for this peer (only if transport-reachable)
+                            let swarm_task = swarm_handle.clone();
+                            let outbox_task = Arc::clone(&outbox_rx);
+                            tokio::spawn(async move {
+                                if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                    tracing::warn!("Failed to share ledger with {}: {}", peer_id, e);
+                                }
+                                if can_reach {
+                                    flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                                }
+                            });
                             if !can_reach {
                                 tracing::warn!("No compatible transport path to {}; deferring outbox flush", peer_id);
-                            } else {
-                                flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
                             }
                         }
                     }
@@ -3889,11 +4276,16 @@ async fn cmd_relay(
                         l.record_identified_peer(&peer_id.to_string(), &advertised);
                         drop(l);
                         // Relay nodes must also register so peers can custody to us.
-                        register_identity_with_relay(core_arc.as_ref(), &swarm_handle, peer_id).await;
-                        if let Err(e) = swarm_handle.share_ledger(peer_id).await {
-                            tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
-                        }
-                        flush_outbox_for_peer(&outbox_rx, &swarm_handle, peer_id).await;
+                        let core_task = core_arc.clone();
+                        let swarm_task = swarm_handle.clone();
+                        let outbox_task = Arc::clone(&outbox_rx);
+                        tokio::spawn(async move {
+                            register_identity_with_relay(core_task.as_ref(), &swarm_task, peer_id).await;
+                            if let Err(e) = swarm_task.share_ledger(peer_id).await {
+                                tracing::warn!("Failed to share ledger with identified peer {}: {}", peer_id, e);
+                            }
+                            flush_outbox_for_peer(&outbox_task, &swarm_task, peer_id).await;
+                        });
                     }
                     SwarmEvent::TopicDiscovered { peer_id, topic } => {
                         tracing::info!("Topic discovered from {}: {}", peer_id, topic);
@@ -3903,29 +4295,113 @@ async fn cmd_relay(
                         }
                     }
                     SwarmEvent::MessageReceived { peer_id, envelope_data } => {
-                        // In relay mode, we automatically peel and forward onion layers
+                        let sender_public_key_hex =
+                            decode_envelope(&envelope_data)
+                                .ok()
+                                .map(|e| hex::encode(e.sender_public_key));
+
+                        // In node mode, we automatically peel and forward onion layers or handle text/receipts
                         if let Ok(msg) = core_arc.receive_message(envelope_data.clone()) {
-                            if msg.message_type == scmessenger_core::MessageType::OnionRelay {
-                                let next_hop_hex = msg.recipient_id.clone();
-                                let payload = msg.payload.clone();
+                            match msg.message_type {
+                                MessageType::OnionRelay => {
+                                    let next_hop_hex = msg.recipient_id.clone();
+                                    let payload = msg.payload.clone();
 
-                                if let Ok(next_hop_bytes) = hex::decode(&next_hop_hex) {
-                                    if let Ok(libp2p_kp) = libp2p::identity::ed25519::Keypair::try_from_bytes(&mut next_hop_bytes[..32].to_vec()) {
-                                        let next_peer_id = libp2p::PeerId::from_public_key(&libp2p::identity::PublicKey::from(libp2p_kp.public()));
+                                    if let Ok(next_hop_bytes) = hex::decode(&next_hop_hex) {
+                                        if let Ok(libp2p_kp) = libp2p::identity::ed25519::Keypair::try_from_bytes(&mut next_hop_bytes[..32].to_vec()) {
+                                            let next_peer_id = libp2p::PeerId::from_public_key(&libp2p::identity::PublicKey::from(libp2p_kp.public()));
 
-                                        tracing::info!("Relay node: forwarding onion packet to {}", next_peer_id);
-                                        let swarm_clone = swarm_handle.clone();
-                                        tokio::spawn(async move {
-                                            let _ = swarm_clone.send_message(next_peer_id, payload, None, None).await;
-                                        });
+                                            tracing::info!("Cloud node: forwarding onion packet to {}", next_peer_id);
+                                            let swarm_clone = swarm_handle.clone();
+                                            tokio::spawn(async move {
+                                                let _ = swarm_clone.send_message(next_peer_id, payload, None, None).await;
+                                            });
+                                        }
+                                    }
+                                }
+                                MessageType::Text => {
+                                    let raw_text =
+                                        msg.text_content().unwrap_or_else(|| "<binary>".into());
+                                    let decoded_envelope = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text);
+                                    let sender_peer_id = resolve_sender_peer_id(
+                                        peer_id,
+                                        sender_public_key_hex.as_deref(),
+                                        decoded_envelope.as_ref(),
+                                    );
+                                    if let Some(decoded) = decoded_envelope.as_ref() {
+                                        learn_sender_identity_from_envelope(
+                                            &contacts_rx,
+                                            &sender_peer_id.to_string(),
+                                            decoded,
+                                        );
+                                    }
+                                    let text = decoded_envelope
+                                        .as_ref()
+                                        .map(|d| d.text.clone())
+                                        .unwrap_or(raw_text);
+
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let _ = ui_broadcast.send(server::UiOutbound::Legacy(server::UiEvent::MessageReceived {
+                                        from: sender_peer_id.to_string(),
+                                        content: text.clone(),
+                                        timestamp: ts,
+                                        message_id: msg.id.clone(),
+                                    }));
+                                    let mn = notif_message_received(MessageReceivedParams {
+                                        from: sender_peer_id.to_string(),
+                                        content: text,
+                                        timestamp: ts,
+                                        message_id: msg.id.clone(),
+                                    });
+                                    if let Ok(v) = serde_json::to_value(&mn) {
+                                        let _ = ui_broadcast.send(server::UiOutbound::JsonRpc(v));
+                                    }
+
+                                    let is_identity_metadata = decoded_envelope
+                                        .as_ref()
+                                        .map(|d| d.kind.as_str() != "text")
+                                        .unwrap_or(false);
+                                    let local_pk = core_arc.get_identity_info().public_key_hex;
+                                    let is_self_loop = local_pk
+                                        .as_deref()
+                                        .map(|pk| sender_public_key_hex.as_deref() == Some(pk))
+                                        .unwrap_or(false);
+                                    if !is_identity_metadata && !is_self_loop {
+                                        if let Some(ref pk_hex) = sender_public_key_hex {
+                                            match core_arc.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
+                                                Ok(ack_bytes) => {
+                                                    tracing::info!("Sending delivery ACK for {} to {}", msg.id, sender_peer_id);
+                                                    let swarm_clone = swarm_handle.clone();
+                                                    let msg_id = msg.id.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = swarm_clone.send_message(sender_peer_id, ack_bytes, None, None).await {
+                                                            tracing::warn!("Failed to send delivery ACK for {} to {}: {}", msg_id, sender_peer_id, e);
+                                                        }
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!("Failed to prepare delivery ACK for {}: {}", msg.id, e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                MessageType::Receipt => {
+                                    if let Ok(receipt) = scmessenger_core::decode_receipt(msg.payload.clone()) {
+                                        tracing::info!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
+                                        if let Err(e) = history_rx.mark_delivered(receipt.message_id.clone()) {
+                                            tracing::warn!("Failed to mark message {} as delivered: {}", receipt.message_id, e);
+                                        }
                                     }
                                 }
                             }
                         }
 
                         // Also log standard envelopes for debugging
-                        if let Ok(env) = decode_envelope(&envelope_data) {
-                            let sender_key = hex::encode(&env.sender_public_key);
+                        if let Some(ref sender_key) = sender_public_key_hex {
                             tracing::debug!(
                                 "Relayed envelope from {} sender={} bytes={}",
                                 peer_id,
@@ -4001,7 +4477,7 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         "{} Starting temporary swarm for immediate send...",
         "".yellow()
     );
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(16);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
     let core_for_events = Arc::clone(&core);
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -4067,11 +4543,12 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         envelope_bytes.len()
     );
 
-    // Send the message via the swarm
-    let recipient_peer_id = contact
-        .peer_id
-        .parse::<libp2p::PeerId>()
-        .context("Invalid peer ID in contact: {}")?;
+    // Send the message via the swarm. `contact.peer_id` holds the canonical
+    // public-key hex, so it must go through the shared identifier resolver:
+    // parsing hex as base58 failed here and reported a failure for a message
+    // that had already been enqueued.
+    let recipient_peer_id = peer_id_from_contact_identifier(&contact.peer_id)
+        .with_context(|| format!("Invalid peer ID in contact: {}", contact.peer_id))?;
     println!(
         "{} Sending message to {}...",
         "[OK]".green(),
@@ -4779,6 +5256,22 @@ fn looks_like_ed25519_pk(s: &str) -> bool {
 /// (base58-encoded multihash, e.g. "12D3Koo...").
 fn looks_like_libp2p_peer_id(s: &str) -> bool {
     s.parse::<libp2p::PeerId>().is_ok()
+}
+
+/// Resolve a stored contact identifier to a libp2p `PeerId`.
+///
+/// Contact rows are canonically keyed by public-key hex (`contacts_canonical_hex_live`
+/// in `core/src/store/contacts.rs`), and `contact list` prints that hex as the
+/// contact's "Peer ID". Parsing that hex as base58 fails (hex contains '0'),
+/// which made every `send` report "Invalid peer ID in contact" for a message it
+/// had already enqueued. Legacy base58 peer ids still resolve.
+fn peer_id_from_contact_identifier(identifier: &str) -> Option<PeerId> {
+    let identifier = identifier.trim();
+    if let Ok(peer_id) = identifier.parse::<PeerId>() {
+        return Some(peer_id);
+    }
+    scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex(identifier)
+        .and_then(|derived| derived.parse::<PeerId>().ok())
 }
 
 fn find_contact(manager: &ContactManager, query: &str) -> Result<Contact> {

@@ -40,6 +40,71 @@ The Board is executed as an automated 5-judge panel powered by
 
 Record of all formal resolutions adjudicated by the Board of Directors:
 
+### Resolution bod-9ee86618 [APPROVED]
+- **Timestamp**: 2026-09-14T19:29:30.035909+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.003999 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly adheres to all doctrine principles: it eliminates relay terminology, keeps platform adapters as dumb byte pipes, and reinforces cryptographic custody validation without introducing centralized dependencies or weakening integrity._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.93) - _Based on the proposal, the iteration advances multi-transport eventual delivery while preserving node parity, Rust protocol authority, cryptographic validation, and sovereign cloud-node operation. No stated change introduces a standalone relay, centralized dependency, platform-specific protocol exception, or weakened custody boundary._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.95) - _The changes preserve node-first store-and-forward behavior, central-lessness, Rust core authority, and cryptographic safeguards while removing platform-side relay logic; no doctrinal violations were identified in the proposal._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.95) - _The proposal strictly adheres to all five doctrine articles: nodes-not-relays terminology is enforced, sovereignty is preserved with the AWS instance functioning as a sovereign cloud node, cryptographic validations are strengthened with strict bounds checking and unit tests, platform parity is maintained with dumb byte pipe adapters, and verification practices are upheld with comprehensive negative test coverage._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 1.00) - _The proposal strictly upholds all five doctrines: it eliminates relay-specific framing in favor of universal node custody behavior, correctly treats the AWS instance as a sovereign cloud node, strengthens cryptographic validation with format checks and unit tests, enforces Rust-core authority over wire contracts, and adds defensive test coverage._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commits cdb09e6d and 9f3fb9c1) into main.
+  >
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  >
+  > RESOLUTIONS TO BOD DISSENTS (bod-96e3eca5):
+  > 1. Multiplatform Parity & Dumb Byte Pipes (Addressing DeepSeek V4 finding):
+  >    - Stripped all manual bootstrap relay parsing and Kotlin-side circuit address string synthesis from android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt.
+  >    - Platform adapters remain strictly dumb byte pipes: circuit address composition and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+  > 2. Cryptographic Custody Integrity & Node Terminology (Addressing GPT-5.6-Luna finding):
+  >    - In core/src/store/relay_custody.rs and core/src/transport/swarm.rs, unregistered custody acceptance strictly validates that recipient_identity_id is a genuine 64-character hex Blake3 hash, validates device ID bounds, and rejects empty or oversized payloads (> 65536 bytes). Added negative unit tests covering format rejections.
+  >    - In cli/src/main.rs: resolve_sender_peer_id strictly validates that sender_public_key_hex is a 64-char hex string matching the envelope author to prevent ACK misdirection.
+  >    - Full terminology alignment: purged standalone 'relay' framing in logs and comments, explicitly affirming that custody store-and-forward is a universal node behavior and the AWS instance is a sovereign cloud node.
+  >
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Unregistered custody operates as universal store-and-forward behavior with cryptographic bounds.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Ed25519 signatures, AAD bindings, and Blake3 identities verified; Rust core remains sole authority; platform adapters are dumb byte pipes.
+  >
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
+
+### Resolution bod-96e3eca5 [REJECTED_DISSENT]
+- **Timestamp**: 2026-09-14T18:49:59.123456+00:00
+- **Tier**: paid
+- **Verdict**: `REJECTED_DISSENT`
+- **Cost**: $0.006428 (Ceiling: $0.10)
+- **Summary**: Dissent identified in 5-judge panel (3 APPROVE, 2 REJECT). Fail closed per canonical Rule 2.
+- **Panel Voting** (3 APPROVE, 2 REJECT):
+  - `deepseek/deepseek-v4-flash`: **REJECT** (Score: 0.60) - _While the proposal strengthens store-and-forward and multi-transport capabilities, the introduction of routing logic in Android Kotlin code contradicts the multiplatform parity doctrine, which mandates that platform adapters serve solely as dumb byte pipes and that all state machine logic remains in Rust core._
+  - `openai/gpt-5.6-luna`: **REJECT** (Score: 0.42) - _The transport and custody goals are directionally aligned, but the proposal's relay terminology and dependency on known cloud/bootstrap relays leave a direct conflict with the nodes-only and zero-central-dependency doctrines. The unregistered-custody path also requires proof that identity authentication and ledger-governed discovery are not bypassed._
+  - `openai/gpt-5-mini`: **APPROVE** (Score: 0.92) - _The changes extend cooperative store-and-forward, multi-transport handover, and peer-directed ACK routing without introducing standalone relays or centralized services and keep cryptographic/state authority in Rust core, so they adhere to the repository doctrine._
+  - `inclusionai/ling-3.0-flash-fin:free`: **APPROVE** (Score: 0.88) - _The proposal implements cooperative multi-transport store-and-forward custody as a universal node behavior (not a standalone relay role), preserves all cryptographic primitives and sender authentication, maintains Rust-core sovereignty, and delivers the non-negotiable eventual delivery guarantee across disconnected network conditions — all strictly within the canonical doctrine._
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.95) - _The proposal advances working multi-transport and store-and-forward cooperative mesh while strictly upholding all five doctrine pillars: all nodes relay custody universally, sovereignty and eventual delivery are preserved end-to-end, cryptographic integrity remains intact, Rust core retains authority across platforms, and changes are concrete and verifiable._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Merge multi-transport and store-and-forward cooperative mesh iteration (commit cdb09e6d) into main.
+  >
+  > WHY: Operator verified bidirectional message delivery and delivery ACKs between Windows CLI (LAN/WiFi) and Android Pixel on Cellular (WiFi disconnected) via AWS cloud node. This is the first time multi-transport and off-WiFi operation functioned simultaneously in SCMessenger.
+  >
+  > CHANGES:
+  > 1. cli/src/main.rs: resolve_sender_peer_id resolves originating sender libp2p PeerId from authenticated envelope public key / metadata so delivery ACKs and auto-replies route back to the message author rather than terminating at the intermediary relay.
+  > 2. core/src/store/relay_custody.rs & core/src/transport/swarm.rs: accept custody for unregistered identities (CustodyError::NoRegistration) in cooperative mesh mode, enabling store-and-forward routing across communicating peers without requiring prior direct registration.
+  > 3. core/src/transport/behaviour.rs & swarm.rs: expand max_established_per_peer from 2 to 4 for mobile handover headroom (WiFi -> Cellular); actively close dead connections on ping failure.
+  > 4. android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt: dynamic circuit address discovery targeting destination peer via known cloud/bootstrap relays and ledger; auto-reset circuit breakers on complete candidate exhaustion during network switch.
+  >
+  > DOCTRINAL ALIGNMENT:
+  > - Doctrine 1 (Nodes, not relays): Relay custody is an intrinsic custody behavior all nodes perform, not a privileged role. Accepting custody for unregistered peers implements universal store-and-forward custody across all nodes.
+  > - Doctrine 2 (Sovereignty & eventual delivery): Pure sovereign mesh with zero centralized dependencies or coordinators; eventual delivery via store-and-forward is realized end-to-end.
+  > - Doctrine 3 & 4 (Cryptographic integrity & parity): Sender authentication and AAD bindings preserved; Rust core remains cryptographic authority; symmetrical node behavior across platforms.
+  >
+  > ASK: APPROVE merging this working iteration to main. REJECT if any part violates repository doctrine, introduces centralized dependencies, or weakens cryptographic integrity.
+
 ### Resolution bod-a7deb38b [APPROVED]
 - **Timestamp**: 2026-09-11T23:15:53.018144+00:00
 - **Verdict**: `APPROVED`
@@ -1146,3 +1211,197 @@ Record of all formal resolutions adjudicated by the Board of Directors:
   > ASK: APPROVE merging this bump so the D2 verification dispatch can run.
   > REJECT if version bumps require operator pre-approval per repo doctrine
   > despite the above, or if you find a release-manifest location I missed.
+
+### Resolution bod-a8ebe243 [DEFERRED]
+- **Timestamp**: 2026-09-14T20:15:42.480791+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.003896 (Ceiling: $0.10)
+- **Summary**: Only 5/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.97) - _The proposal strictly adheres to all doctrine pillars, advances completion of 0.4.0 without weakening or deviating from the architecture, and explicitly closes the only identified doctrine debt through a mandatory Rust-core relocation before release._
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 1.00) - _The proposal strictly follows all doctrinal tenets, adding only verification steps and completing pending Rule‑8 work without altering architecture, crypto, or contracts._
+  - `z-ai/glm-5.3-flash`: **UNKNOWN** (Score: 0.00) - _Malformed response (Rule 15 fail-closed)_
+  - `deepseek/deepseek-v3.2`: **APPROVE** (Score: 0.95) - _The proposal strictly upholds all doctrine principles by completing 0.4.0 through parity-focused gates, with no architectural or doctrinal changes, and enforces verification and fail-closed safety before release._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.99) - _The proposed parity-first, gate-ordered completion of 0.4.0 strictly preserves the stated architecture, sovereignty, cryptographic authority, and verification requirements. Deferring release until all named evidence and standing publish conditions are re-proven is consistent with fail-closed governance and the Canonical Doctrine._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Evaluate whether the current 0.4.0 direction is on track, per the
+  > operator's request to "consider the current state and evaluate the direction."
+  >
+  > VERIFIED STATE (all facts read this session, 2026-09-14, from git and the
+  > HANDOFF ledger; branch is even with origin/main 1e2fb747, 2026-09-13):
+  >
+  > 1. ARCHITECTURE: The nodes-not-relays doctrine is settled and enforced. The
+  >    cloud instance is a full cloud node; store-and-forward custody is a
+  >    behavior of every node; discovery is ledger sharing. Board resolutions
+  >    bod-28755305 and bod-7d92bae1 (2026-09-12) approved the unified 3-node
+  >    parity integration and its security perimeter under Rule 8. No proposal
+  >    currently on file introduces a relay role, central coordinator, or
+  >    anonymous forwarder.
+  >
+  > 2. CRYPTOGRAPHIC AUTHORITY: Rust core remains the sole cryptographic
+  >    authority; platform adapters are dumb byte pipes. The one known doctrine
+  >    debt is Kotlin-side BigInteger curve validation (isValidEd25519Point in
+  >    PeerIdValidator.kt), which predates current work and which resolution
+  >    bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  >    P1 and is the flagship remaining Rule-8 item before the tag.
+  >
+  > 3. GOVERNANCE HEALTH: The double-blind re-review of PR #282 concluded
+  >    APPROVED unanimously (bod-bbb49423, 2026-09-13, paid tier, judge
+  >    concurrence) after Round 1 REJECT and several DEFERRED runs were shown to
+  >    rest on a verified-false premise (Round 2 correction notice verified the
+  >    premise against git: PeerIdValidator.kt curve math pre-existed the commit;
+  >    the diff added only helpers and tests). Ticket closures T1/T2 and T4
+  >    code-level acceptance were likewise approved with evidence (bod-70b2c5aa,
+  >    bod-0ad63e5f). The board is functioning as designed: fail-closed on
+  >    shortfalls, unanimous on substance.
+  >
+  > 4. REMAINING GATE ITEMS (the honest open list; not claimed closed):
+  >    a. Rule-8 adversarial APPROVE for the UniFFI relocation of the Kotlin
+  >       curve check (P1, before tag), plus the standing Rule-8 rule that any
+  >       core/src/{crypto,transport,routing,privacy} change carries an
+  >       independent review on file.
+  >    b. T4 field re-measure: routing_decision events with non-zero confidence
+  >       on the physical rig (operator/device task; code level closed).
+  >    c. Cloud-node health re-verification: the recorded cloud address has gone
+  >       stale before (CTO_STATE 2026-09-10 observed it unreachable; later
+  >       sessions redeployed and verified it, most recently 2026-09-09/10
+  >       evidence windows); current reachability is UNVERIFIED this session and
+  >       must be re-proven before any 0.4.0 certification claim that counts the
+  >       cloud node.
+  >    d. Standing publish-gate conditions on file (independent review of the
+  >       merged tree, security-regression CI gate, external audit commissioned,
+  >       release body disclosure): each must be verified satisfied before any
+  >       PUBLIC release; not all were re-verified this session.
+  >    e. Small residuals: F6 doc ticket (P3), stale double-circuit dial-set
+  >       pruning (candidate cleanup, not blocking).
+  >
+  > 5. DIRECTION PROPOSED: Hold the line. Finish 0.4.0 in gate order: (1) UniFFI
+  >    relocation of the Kotlin curve check with Rule-8 review; (2) re-prove
+  >    cloud-node reachability and parity evidence at the frozen tree; (3) T4
+  >    field re-measure on the rig; (4) tag v0.4.0 (rc.1 already exists) only
+  >    after (1)-(3) are green and the standing publish-gate conditions are
+  >    re-verified; (5) iOS/macOS rollout is v0.5.0 scope per the operator
+  >    ruling on record. No architecture, crypto, or contract changes are
+  >    proposed. Cost discipline unchanged: the $0.10 board ceiling stands.
+  >
+  > ASK: Does this direction - parity-first completion of 0.4.0 through the named
+  > gate list, with zero doctrine changes and no public release before the
+  > standing publish conditions are re-verified - strictly align with the
+  > SCMessenger Repo Philosophy and Canonical Doctrine? REJECT if any element
+  > contradicts the doctrine or if you find a doctrine violation in the stated
+  > direction.
+
+### Resolution bod-6412dfc9 [APPROVED]
+- **Timestamp**: 2026-09-14T20:17:59.807083+00:00
+- **Tier**: paid
+- **Verdict**: `APPROVED`
+- **Cost**: $0.002468 (Ceiling: $0.10)
+- **Summary**: Unanimous 5/5 panel approval with judge concurrence. Proposal aligns with repo philosophy.
+- **Panel Voting** (5/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 1.00) - _The proposed direction strictly adheres to all doctrine pillars by completing pending verification and gate items without introducing any architectural, cryptographic, or centralization deviations. It fails closed on unverified claims and maintains parity and sovereignty requirements._
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 1.00) - _The proposal strictly follows all doctrine principles, completing 0.4.0 within existing gates without introducing any centralized or non-compliant changes._
+  - `z-ai/glm-5.3-flash`: **APPROVE** (Score: 0.97) - _The proposed direction introduces zero doctrinal changes or exceptions and instead gates the 0.4.0 tag behind remediation of the one known violation (Kotlin-side curve math) and re-verification of all unproven claims, exemplifying fail-closed governance; it strictly aligns with all five doctrine pillars._
+  - `deepseek/deepseek-v3.2`: **APPROVE** (Score: 0.95) - _The proposal strictly adheres to all SCMessenger doctrine principles by completing 0.4.0 with parity-first focus, maintaining all cryptographic and architectural invariants, addressing only identified technical debt within established patterns, and requiring verification of all gate conditions before any public release._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.99) - _The proposed gate-ordered, parity-first completion of 0.4.0 strictly preserves the canonical architecture, sovereignty, cryptographic authority, and verification requirements. With public release explicitly blocked until all named and standing gates are re-verified, the direction aligns with the doctrine._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: True)
+- **Proposal Text**:
+  > PROPOSAL: Evaluate whether the current 0.4.0 direction is on track, per the
+  > operator's request to "consider the current state and evaluate the direction."
+  >
+  > VERIFIED STATE (all facts read this session, 2026-09-14, from git and the
+  > HANDOFF ledger; branch is even with origin/main 1e2fb747, 2026-09-13):
+  >
+  > 1. ARCHITECTURE: The nodes-not-relays doctrine is settled and enforced. The
+  >    cloud instance is a full cloud node; store-and-forward custody is a
+  >    behavior of every node; discovery is ledger sharing. Board resolutions
+  >    bod-28755305 and bod-7d92bae1 (2026-09-12) approved the unified 3-node
+  >    parity integration and its security perimeter under Rule 8. No proposal
+  >    currently on file introduces a relay role, central coordinator, or
+  >    anonymous forwarder.
+  >
+  > 2. CRYPTOGRAPHIC AUTHORITY: Rust core remains the sole cryptographic
+  >    authority; platform adapters are dumb byte pipes. The one known doctrine
+  >    debt is Kotlin-side BigInteger curve validation (isValidEd25519Point in
+  >    PeerIdValidator.kt), which predates current work and which resolution
+  >    bod-dd336324 ordered relocated behind UniFFI. That relocation is ticketed
+  >    P1 and is the flagship remaining Rule-8 item before the tag.
+  >
+  > 3. GOVERNANCE HEALTH: The double-blind re-review of PR #282 concluded
+  >    APPROVED unanimously (bod-bbb49423, 2026-09-13, paid tier, judge
+  >    concurrence) after Round 1 REJECT and several DEFERRED runs were shown to
+  >    rest on a verified-false premise (Round 2 correction notice verified the
+  >    premise against git: PeerIdValidator.kt curve math pre-existed the commit;
+  >    the diff added only helpers and tests). Ticket closures T1/T2 and T4
+  >    code-level acceptance were likewise approved with evidence (bod-70b2c5aa,
+  >    bod-0ad63e5f). The board is functioning as designed: fail-closed on
+  >    shortfalls, unanimous on substance.
+  >
+  > 4. REMAINING GATE ITEMS (the honest open list; not claimed closed):
+  >    a. Rule-8 adversarial APPROVE for the UniFFI relocation of the Kotlin
+  >       curve check (P1, before tag), plus the standing Rule-8 rule that any
+  >       core/src/{crypto,transport,routing,privacy} change carries an
+  >       independent review on file.
+  >    b. T4 field re-measure: routing_decision events with non-zero confidence
+  >       on the physical rig (operator/device task; code level closed).
+  >    c. Cloud-node health re-verification: the recorded cloud address has gone
+  >       stale before (CTO_STATE 2026-09-10 observed it unreachable; later
+  >       sessions redeployed and verified it, most recently 2026-09-09/10
+  >       evidence windows); current reachability is UNVERIFIED this session and
+  >       must be re-proven before any 0.4.0 certification claim that counts the
+  >       cloud node.
+  >    d. Standing publish-gate conditions on file (independent review of the
+  >       merged tree, security-regression CI gate, external audit commissioned,
+  >       release body disclosure): each must be verified satisfied before any
+  >       PUBLIC release; not all were re-verified this session.
+  >    e. Small residuals: F6 doc ticket (P3), stale double-circuit dial-set
+  >       pruning (candidate cleanup, not blocking).
+  >
+  > 5. DIRECTION PROPOSED: Hold the line. Finish 0.4.0 in gate order: (1) UniFFI
+  >    relocation of the Kotlin curve check with Rule-8 review; (2) re-prove
+  >    cloud-node reachability and parity evidence at the frozen tree; (3) T4
+  >    field re-measure on the rig; (4) tag v0.4.0 (rc.1 already exists) only
+  >    after (1)-(3) are green and the standing publish-gate conditions are
+  >    re-verified; (5) iOS/macOS rollout is v0.5.0 scope per the operator
+  >    ruling on record. No architecture, crypto, or contract changes are
+  >    proposed. Cost discipline unchanged: the $0.10 board ceiling stands.
+  >
+  > ASK: Does this direction - parity-first completion of 0.4.0 through the named
+  > gate list, with zero doctrine changes and no public release before the
+  > standing publish conditions are re-verified - strictly align with the
+  > SCMessenger Repo Philosophy and Canonical Doctrine? REJECT if any element
+  > contradicts the doctrine or if you find a doctrine violation in the stated
+  > direction.
+
+### Resolution bod-78ae5652 [DEFERRED]
+- **Timestamp**: 2026-09-15T05:20:44.502437+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.004007 (Ceiling: $0.10)
+- **Summary**: Only 5/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.93) - _The proposal upholds core doctrine by bounding the outage without weakening store-and-forward or sovereignty, and appropriately defers root-cause to v0.5.0 given no reproduction path; this is operationally safe for a 0.4.0 tag._
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 0.96) - _The proposal adds a local heartbeat watchdog that bounds silent wedges without introducing relays, central services, or cryptographic changes, thus fully upholding the SCMessenger doctrine._
+  - `z-ai/glm-5.3-flash`: **APPROVE** (Score: 0.90) - _The disposition introduces no protocol, crypto, relay, or centralization exceptions: it accepts a non-doctrinal operational defect as known, mitigates it with a node-local watchdog that converts an unbounded silent hang into a loud bounded outage, and honestly defers root cause with an open ticket. Blocking the v0.4.0 tag on an unreproducible hang would protect nothing doctrinally, while the tested watchdog plus intact custody behavior keeps the release strictly aligned with canonical principles._
+  - `deepseek/deepseek-v3.2`: **UNKNOWN** (Score: 0.00) - _Malformed response (Rule 15 fail-closed)_
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.88) - _The disposition is doctrinally sound because it preserves node custody, sovereignty, and protocol behavior while bounding the observed failure. Approval is contingent on the watchdog being independent enough to detect the wedge and on CI verification confirming the stated behavior; deferring nondeterministic root-cause analysis does not itself violate the doctrine._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > DISPOSITION RULING REQUESTED - P1 Windows node silent wedge for v0.4.0 tag: The Windows desktop node silently wedged for 2h45m (process alive, logs frozen at 2026-09-15T01:32:14Z, HTTP API unresponsive, CLOSE_WAIT pile-up, no panic, existing event-loop watchdog blind because the event loop never died). Store-and-forward doctrine itself performed perfectly: 12/12 custody entries held on the AWS cloud node burst-delivered within 1s of node recovery, zero message loss, receipts converged (evidence: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md). Remediation landed: a log-silence heartbeat watchdog now exits the node loudly after 600s of no log output (verified by 2 black-box integration tests, locally 2 passed in 6.32s, CI Test lane re-runs), converting the silent wedge into a bounded, observable outage. PROPOSAL: Accept the P1 for the v0.4.0 tag as a KNOWN issue with the watchdog bounding its blast radius (max 10 min silent outage instead of unbounded), explicitly defer root-cause reproduction and fix to v0.5.0 (ticket P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md stays open), and proceed with the tag once CI is green. Alternative considered and rejected: block the tag on root-causing a nondeterministic 2h45m hang with zero log fingerprint, which has no reproduction path yet and would stall the release indefinitely. Is this disposition doctrinally sound (nodes-not-relays, sovereignty, cryptographic integrity, hygiene) and operationally safe for a 0.4.0 tag?
+
+### Resolution bod-b326b530 [DEFERRED]
+- **Timestamp**: 2026-09-15T05:23:12.111260+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.004414 (Ceiling: $0.10)
+- **Summary**: Only 5/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (4/5 APPROVE):
+  - `deepseek/deepseek-v4-flash`: **APPROVE** (Score: 0.92) - _The proposal strictly adheres to all core doctrinal pillars—no relays introduced, zero central dependencies, crypto and storage untouched—and the watchdog bounding the blast radius is operationally sound for a v0.4.0 tag. The open ticket and deferral to v0.5.0 do not weaken doctrine; they only manage a nondeterministic operational fault._
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 0.98) - _The proposal adds an internal liveness watchdog that turns an unbounded silent wedge into a bounded observable outage, preserving all doctrinal tenets while improving observability without introducing central dependencies or protocol changes._
+  - `z-ai/glm-5.3-flash`: **APPROVE** (Score: 0.92) - _The disposition upholds every doctrinal pillar: store-and-forward custody demonstrably prevented message loss, and the log-silence watchdog converts a doctrine-hostile silent wedge into a bounded loud failure without adding central dependencies, crypto changes, or parity deviations. Deferring root cause to v0.5.0 behind a verified mitigation and an open ticket is honest, evidence-backed release practice rather than a doctrine exception._
+  - `deepseek/deepseek-v3.2`: **UNKNOWN** (Score: 0.00) - _Malformed response (Rule 15 fail-closed)_
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.90) - _The disposition is doctrinally sound because it preserves sovereign peer-to-peer custody and delivery while converting an unbounded silent wedge into a bounded, observable outage. Approval is contingent on CI confirmation and evidence that the watchdog is independent of the wedged event loop and that node supervision or operator procedures restore service after exit._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > DISPOSITION RULING REQUESTED - P1 Windows node silent wedge for v0.4.0 tag: The Windows desktop node silently wedged for 2h45m (process alive, logs frozen at 2026-09-15T01:32:14Z, HTTP API unresponsive, CLOSE_WAIT pile-up, no panic, existing event-loop watchdog blind because the event loop never died). Store-and-forward doctrine itself performed perfectly: 12/12 custody entries held on the AWS cloud node burst-delivered within 1s of node recovery, zero message loss, receipts converged (evidence: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md). Remediation landed: a log-silence heartbeat watchdog now exits the node loudly after 600s of no log output (verified by 2 black-box integration tests, locally 2 passed in 6.32s, CI Test lane re-runs), converting the silent wedge into a bounded, observable outage. PROPOSAL: Accept the P1 for the v0.4.0 tag as a KNOWN issue with the watchdog bounding its blast radius (max 10 min silent outage instead of unbounded), explicitly defer root-cause reproduction and fix to v0.5.0 (ticket P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md stays open), and proceed with the tag once CI is green. Alternative considered and rejected: block the tag on root-causing a nondeterministic 2h45m hang with zero log fingerprint, which has no reproduction path yet and would stall the release indefinitely. Is this disposition doctrinally sound (nodes-not-relays, sovereignty, cryptographic integrity, hygiene) and operationally safe for a 0.4.0 tag?
