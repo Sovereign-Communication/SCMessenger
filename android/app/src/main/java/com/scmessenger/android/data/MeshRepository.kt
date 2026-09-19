@@ -10,6 +10,8 @@ import com.scmessenger.android.utils.CircuitBreaker
 import com.scmessenger.android.utils.NetworkFailureMetrics
 import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.PeerKeyUtils
+import com.scmessenger.android.utils.SecurityUtils
+import com.scmessenger.android.utils.FileLoggingTree
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -59,6 +61,9 @@ open class MeshRepository(
 
 
     companion object {
+        private const val PLATFORM_SECURE_KEYS_LEGACY_PREFS = "platform_secure_keys"
+        private const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
+
         private const val IDENTITY_BACKUP_PREFS = "identity_backup_prefs"
         private const val IDENTITY_BACKUP_KEY = "identity_backup_v1"
 
@@ -1346,6 +1351,7 @@ open class MeshRepository(
 
             // 2. Obtain shared IronCore instance
             ironCore = meshService?.getCore()
+            updateFileLoggingTreeCore(ironCore)
             if (ironCore == null) {
                 Timber.e("Failed to obtain IronCore from MeshService")
                 _serviceState.value = uniffi.api.ServiceState.STOPPED
@@ -3466,16 +3472,24 @@ open class MeshRepository(
         }
     }
 
+    private val passphraseLock = Any()
+
     private fun getPlatformSecuredPassphrase(): String {
-        val prefs = context.getSharedPreferences("platform_secure_keys", Context.MODE_PRIVATE)
-        var key = prefs.getString("backup_passphrase_v1", null)
-        if (key == null) {
-            val bytes = ByteArray(32)
-            java.security.SecureRandom().nextBytes(bytes)
-            key = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-            prefs.edit().putString("backup_passphrase_v1", key).commit()
+        synchronized(passphraseLock) {
+            val encryptedPrefs = SecurityUtils.getEncryptedSharedPreferences(context)
+            val legacyPrefs = context.getSharedPreferences(PLATFORM_SECURE_KEYS_LEGACY_PREFS, Context.MODE_PRIVATE)
+            return SecurityUtils.migrateOrGeneratePassphrase(
+                targetPrefs = encryptedPrefs,
+                legacyPrefs = legacyPrefs,
+                keyName = BACKUP_PASSPHRASE_KEY
+            )
         }
-        return key ?: ""
+    }
+
+    private fun updateFileLoggingTreeCore(core: uniffi.api.IronCore?) {
+        Timber.forest().filterIsInstance<FileLoggingTree>().forEach {
+            it.setIronCore(core)
+        }
     }
 
     private fun restoreIdentityFromBackup(core: uniffi.api.IronCore): Boolean {
@@ -3757,6 +3771,7 @@ open class MeshRepository(
         coreDelegate = null
         swarmBridge = null
         ironCore = null
+        updateFileLoggingTreeCore(null)
         meshService = null
         bleScanner = null
         bleAdvertiser = null
@@ -5423,6 +5438,7 @@ open class MeshRepository(
             // Refresh ironCore reference just in case
             if (ironCore == null) {
                 ironCore = meshService?.getCore()
+                updateFileLoggingTreeCore(ironCore)
                 Timber.d("IronCore reference refreshed: ${ironCore != null}")
             }
             ensureLocalIdentityFederation()
@@ -5591,6 +5607,7 @@ open class MeshRepository(
             Timber.w("Failed to flush managers during shutdown: ${e.message}")
         }
         ironCore = null
+        updateFileLoggingTreeCore(null)
 
         contactManager = null
         historyManager = null
@@ -5598,8 +5615,15 @@ open class MeshRepository(
         settingsManager = null
         autoAdjustEngine = null
 
-        // 2. Clear identity backup SharedPreferences
+        // 2. Clear identity backup SharedPreferences & secured passphrases
         identityBackupPrefs.edit().clear().apply()
+        try {
+            val encryptedPrefs = SecurityUtils.getEncryptedSharedPreferences(context)
+            encryptedPrefs.edit().clear().apply()
+        } catch (e: Exception) {
+            Timber.w("Failed to clear encrypted prefs during wipe: ${e.message}")
+        }
+        context.getSharedPreferences(PLATFORM_SECURE_KEYS_LEGACY_PREFS, Context.MODE_PRIVATE).edit().clear().apply()
 
         // P0: Clear cached identity fields so reset is reflected on next launch
         identityCachePrefs.edit().clear().apply()
