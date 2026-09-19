@@ -124,6 +124,10 @@ pub fn generate_listen_addresses(config: &MultiPortConfig) -> Vec<(Multiaddr, u1
 }
 
 /// Check if a port requires elevated privileges (ports < 1024 on Unix)
+// PERIMETER-ALLOW-UNDERSCORE: `_port` IS read below under cfg(unix); on
+// non-unix targets that arm compiles away and the parameter is genuinely
+// unused there, so the underscore avoids a per-platform warning without
+// needing two differently-named signatures.
 pub fn requires_elevated_privileges(_port: u16) -> bool {
     #[cfg(unix)]
     {
