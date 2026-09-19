@@ -30,10 +30,12 @@
 #             or a transient state that did not persist across re-samples
 #   [SKIP]    NOT measured, so no verdict is available; the reason is printed
 #
-# A row whose source cannot be read prints [WARNING] or [SKIP] and names the
-# command that would evaluate it -- never [OK], and never a [FAIL] for a value
-# that was never read. One exception is deliberate: reaching the node IS A1's
-# criterion, so a node that does not answer is the finding and A1 [FAIL]s.
+# A row that cannot read its source never guesses: it prints [WARNING] naming the
+# command that would read that source -- owned by unreadable(), below, which every
+# such row reaches through that one function -- and never [OK]. SKIP is for a row
+# with no verdict to give at all. No row may [FAIL] on a value that was never read,
+# with one deliberate exception: reaching the node IS A1's criterion, so a node
+# that does not answer is the finding and A1 [FAIL]s.
 #
 # Measured-ness has exactly ONE definition in this script (measured(), below):
 # json_field removes the placeholder that a key the node never sent evaluates to,
@@ -43,11 +45,10 @@
 # did not happen.
 #
 # Absent is not the same fact as empty, and the two collapse the moment a body is
-# reduced to text. Presence is therefore recorded at the parse boundary, where
-# the key set is still visible (mark_present), and asked for by name afterwards
-# (present / reported). A row decides "can I judge my criterion?" from that,
-# never from an empty string -- which is what stops "sent an empty list" and
-# "never sent the field" from producing the same verdict.
+# reduced to text. Presence is therefore recorded at the parse boundary, where the
+# key set is still visible (mark_present), and asked for by name afterwards
+# (present / reported): a row decides "can I judge my criterion?" from that, never
+# from an empty string.
 #
 # Cross-run state (scratch/driver/tier_a_conformance.json):
 #   Each run records what it measured, and CARRIES FORWARD the last value it did
@@ -100,6 +101,11 @@ row_warn() { ROWS=$((ROWS + 1)); WARNINGS=$((WARNINGS + 1)); printf '[WARNING] %
 row_skip() { ROWS=$((ROWS + 1)); SKIPS=$((SKIPS + 1)); printf '[SKIP]    %s\n' "$*"; }
 info()     { printf '          %s\n' "$*"; }
 section()  { printf '\n-- %s\n' "$*"; }
+
+# The unreadable-source rule, in one place: a row that cannot stand on its source
+# warns here with the command that would read it, so the format is owned rather
+# than re-spelled per row. Usage: unreadable "<row> <reason>" "<command>"
+unreadable() { row_warn "$1 -- run: $2"; }
 
 http_body() { curl -s -m 8 "$1" 2>/dev/null; }
 
@@ -394,23 +400,17 @@ mark_present cloud "$AWS_IDENT_KEYS" identity_id public_key_hex libp2p_peer_id
 mark_present cloud "$AWS_DIAG_KEYS" custody_audit_count connection_path_state peers listeners external_addrs
 
 # ----------------------------------------------------------------------------
-# Transient mesh state.
-#
-# connection_path_state and the peer list are outputs of a state machine, not
-# counters: a node that has just (re)connected reports Bootstrapping and no
-# peers for a few seconds. One sample of that is not a regression -- observed
-# live on 2026-09-19, the cloud node reported Bootstrapping with zero peers and
-# was back to DirectPreferred with a peer present within 15 minutes, and a
-# single-sample [FAIL] there was the harness crying wolf. The failing path of A4
-# and A5 is therefore re-sampled, and only a condition that persists across
-# every sample is a [FAIL]; one that clears is reported as [WARNING] carrying
-# both readings. A healthy run never re-samples, so it pays nothing for this.
-#
-# The default budget is deliberately small (the first sample plus one a second
-# later) so that a rig with a persistently failing row still runs in about the
-# same time as before; raise SCM_RESAMPLE_ATTEMPTS to chase a longer blip. A
-# [FAIL] here prints every sample it took, so a condition that outlasted the
-# budget is visible as evidence rather than asserted from one reading.
+# Transient mesh state: connection_path_state and the peer list come out of a
+# state machine, not a counter, so a reconnecting node reports Bootstrapping and
+# no peers for a few seconds. Observed live on 2026-09-19: the cloud node reported
+# Bootstrapping with zero peers and was back to DirectPreferred with a peer within
+# 15 minutes. A4 and A5 therefore re-sample their failing path -- only a condition
+# that persists across every sample is a [FAIL], one that clears is a [WARNING]
+# carrying both readings, and a [FAIL] prints every sample it took. A healthy run
+# never re-samples, so it pays nothing. The default budget (first sample plus one
+# a second later) is small so a rig with a persistently failing row runs in about
+# the time as before; raise SCM_RESAMPLE_ATTEMPTS to chase a longer blip.
+# ----------------------------------------------------------------------------
 RESAMPLE_ATTEMPTS="${SCM_RESAMPLE_ATTEMPTS:-2}"
 RESAMPLE_DELAY="${SCM_RESAMPLE_DELAY:-1}"
 
@@ -499,11 +499,11 @@ WIN_SHA="$(sha_from_provenance "$WIN_PROV")"
 AWS_PROV="$(aws_provenance || true)"
 AWS_SHA="$(sha_from_provenance "$AWS_PROV")"
 if [ -z "$WIN_SHA" ]; then
-  row_warn "A2 windows git hash unproven -- no 'Core Provenance:' line in any retained log under $WIN_LOG_DIR; run: grep -rl 'Core Provenance:' $WIN_LOG_DIR"
+  unreadable "A2 windows git hash unproven -- no 'Core Provenance:' line in any retained log under $WIN_LOG_DIR" "grep -rl 'Core Provenance:' $WIN_LOG_DIR"
 elif [ -z "$MAIN_SHA" ]; then
-  row_warn "A2 origin/main unknown in $REPO_ROOT (run: git fetch origin main); windows=$WIN_SHA"
+  unreadable "A2 origin/main unknown in $REPO_ROOT (windows=$WIN_SHA)" "git fetch origin main"
 elif [ -z "$AWS_SHA" ]; then
-  row_warn "A2 cloud git hash unproven -- run: ssh -i $SSH_KEY ec2-user@${AWS_HOST:-<ip>} \"sudo -n docker logs scm-node 2>&1 | grep -m1 'Core Provenance'\" (windows=$WIN_SHA origin/main=${MAIN_SHA:0:7})"
+  unreadable "A2 cloud git hash unproven (windows=$WIN_SHA origin/main=${MAIN_SHA:0:7})" "ssh -i $SSH_KEY ec2-user@${AWS_HOST:-<ip>} \"sudo -n docker logs scm-node 2>&1 | grep -m1 'Core Provenance'\""
 else
   # One node may report an abbreviated hash and the other a full 40-hex one, so
   # parity is decided on the shortest common prefix, not on string equality.
@@ -539,20 +539,19 @@ else
   row_fail "A3 identity CHANGED: windows ${PREV_WIN_ID:0:12} -> ${WIN_IDENTITY:0:12}; cloud ${PREV_AWS_ID:0:12} -> ${AWS_IDENTITY:0:12} (persistence regression, issue I-01)"
 fi
 
-# A4 -- mesh formed: each node lists the other as a direct peer.
-#
-# A peer list is transient state, so the failing path is re-sampled before it is
-# called a regression. And a list the node never sent is a different fact from a
-# list it sent empty: an unreported list is [WARNING] naming the command, because
-# a mesh cannot be judged from a field that was not there, while an empty list the
-# node did send is a judgement it can and does lose.
-if [ -z "$AWS_HOST" ] || [ -z "$AWS_PEERID" ] || [ -z "$WIN_PEERID" ]; then
-  row_warn "A4 mutual peer listing unproven (cloud node unresolved or an identity payload was empty)"
+# A4 -- mesh formed: each node lists the other as a direct peer. The failing path
+# is re-sampled before it is called a regression (see the transient note above). A
+# list the node never sent is not a list it sent empty: an unreported one is
+# [WARNING] naming the command, while an empty one it did send is judged.
+if [ -z "$AWS_HOST" ]; then
+  unreadable "A4 mutual peer listing not evaluated -- the cloud node is unresolved" "bash $SCRIPT_DIR/aws_node_ip.sh"
+elif [ -z "$AWS_PEERID" ] || [ -z "$WIN_PEERID" ]; then
+  unreadable "A4 mutual peer listing unproven -- an identity payload reported no peer id" "curl -s $WIN_URL/api/identity and curl -s $AWS_URL/api/identity"
 elif ! present windows peers || ! present cloud peers; then
   A4_UNREPORTED=""
   present windows peers || A4_UNREPORTED="windows"
   present cloud peers || A4_UNREPORTED="${A4_UNREPORTED:+$A4_UNREPORTED }cloud"
-  row_warn "A4 mutual peer listing not evaluated -- $A4_UNREPORTED did not report a peers list, so an empty mesh and an unreported one cannot be told apart; run: curl -s $WIN_URL/api/diagnostics and curl -s $AWS_URL/api/diagnostics"
+  unreadable "A4 mutual peer listing not evaluated -- $A4_UNREPORTED did not report a peers list, so an empty mesh and an unreported one cannot be told apart" "curl -s $WIN_URL/api/diagnostics and curl -s $AWS_URL/api/diagnostics"
 else
   case ",$WIN_PEERS," in
     *",$AWS_PEERID,"*) WIN_HAS_AWS=yes ;;
@@ -647,12 +646,10 @@ else
   row_ok "A6 custody live and not below the last recorded value:$CUSTODY_DETAIL"
 fi
 
-# A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes. A
-# missing file or an unreadable one (bad JSON, wrong shape, permissions) leaves
-# the count empty, which is [WARNING] naming the command; entries=0 is the only
-# count that is a finding, and it is [FAIL]. ledger_stats prints entries=<int> or
-# error=<reason>, so the count is numeric whenever it is present -- there is no
-# third case to guard.
+# A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes. The
+# count is `entries=<int>` when the ledger was read and empty when it was not, so
+# an unreadable ledger is [WARNING] with its command, and entries=0 -- the one
+# count that is a finding -- is [FAIL].
 if [ -f "$WIN_LEDGER" ]; then
   WIN_LEDGER_OUT="$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "")"
   WIN_LEDGER_COUNT="$(stat_field "$WIN_LEDGER_OUT" entries)"
@@ -661,7 +658,7 @@ else
   WIN_LEDGER_COUNT=""
 fi
 if [ -z "$WIN_LEDGER_COUNT" ]; then
-  row_warn "A7 windows ledger unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown}) -- run: python3 -c \"import json;print(len(json.load(open(r'$WIN_LEDGER'))))\""
+  unreadable "A7 windows ledger unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown})" "python3 -c \"import json;print(len(json.load(open(r'$WIN_LEDGER'))))\""
 elif [ "$WIN_LEDGER_COUNT" -gt 0 ]; then
   row_ok "A7 windows ledger entries=$WIN_LEDGER_COUNT ($WIN_LEDGER)"
 else
@@ -675,46 +672,41 @@ elif fetch_remote_ledger; then
   AWS_LEDGER_OUT="$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "")"
   AWS_LEDGER_COUNT="$(stat_field "$AWS_LEDGER_OUT" entries)"
   if [ -z "$AWS_LEDGER_COUNT" ]; then
-    row_warn "A7 cloud ledger unreadable after fetch ($AWS_LEDGER_OUT) -- run: ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
+    unreadable "A7 cloud ledger unreadable after fetch ($AWS_LEDGER_OUT)" "ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
   elif [ "$AWS_LEDGER_COUNT" -gt 0 ]; then
     row_ok "A7 cloud ledger entries=$AWS_LEDGER_COUNT ($AWS_LEDGER)"
   else
     row_fail "A7 cloud ledger is EMPTY (entries=0) at $AWS_LEDGER"
   fi
 else
-  row_warn "A7 cloud ledger unproven -- run: ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
+  unreadable "A7 cloud ledger unproven" "ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
 fi
 
 # A8 -- no self-entries in either peer store (issue I-06).
 #
-# This check needs the node's own identity to know what "itself" is. With no
-# public key and no peer id, nothing can match, so a store that was never
-# identified and a clean store look identical -- and the row would print [OK]
-# from a source it never read. Those two inputs must therefore be REPORTED and
-# usable. The external-address list is different: an empty list is a legitimate
-# answer (a node behind NAT reports no external address) and makes the
-# own-address half vacuous, so only the key being absent is unproven.
-own_identity_note() {
-  local node="$1" url="$2" pubkey="$3" peer="$4" missing=""
+# The check needs the node's own identity to know what "itself" is: with no public
+# key and no peer id nothing can match, so a store that was never identified and a
+# clean store look identical, and both inputs must therefore be reported and
+# usable. An empty external-address list is different -- legitimate behind NAT, and
+# it only makes the own-address half vacuous -- so only the absent key is unproven.
+missing_identity() {  # <node> <public_key_hex> <libp2p_peer_id>
+  local node="$1" pubkey="$2" peer="$3" missing=""
   reported "$node" public_key_hex "$pubkey" || missing="$missing public_key_hex"
   reported "$node" libp2p_peer_id "$peer" || missing="$missing libp2p_peer_id"
   present "$node" external_addrs || missing="$missing external_addrs"
-  if [ -n "$missing" ]; then
-    printf 'the node did not report%s, so its own entries cannot be identified; run: curl -s %s/api/identity and curl -s %s/api/diagnostics' \
-      "$missing" "$url" "$url"
-  fi
+  printf '%s' "$missing"
 }
 
-check_self_entries() {
-  local node="$1" stats="$2" source="$3" identity_note="$4"
+check_self_entries() {  # <node> <stats> <source> <base-url> <missing-identity>
+  local node="$1" stats="$2" source="$3" url="$4" missing="$5"
   local self_entries self_addrs offenders
   self_entries="$(stat_field "$stats" self_entries)"
   self_addrs="$(stat_field "$stats" self_addrs)"
   offenders="$(stat_field "$stats" offenders)"
-  if [ -n "$identity_note" ]; then
-    row_warn "A8 $node self-entry check unproven -- $identity_note"
+  if [ -n "$missing" ]; then
+    unreadable "A8 $node self-entry check unproven -- the node did not report$missing, so its own entries cannot be identified" "curl -s $url/api/identity and curl -s $url/api/diagnostics"
   elif [ -z "$self_entries" ] || [ -z "$self_addrs" ]; then
-    row_warn "A8 $node peer store unreadable ($source) -- run: python3 -c \"import json;print(len(json.load(open(r'$source'))))\""
+    unreadable "A8 $node peer store unreadable ($source)" "python3 -c \"import json;print(len(json.load(open(r'$source'))))\""
   elif [ "$self_entries" = "0" ] && [ "$self_addrs" = "0" ]; then
     row_ok "A8 $node peer store has no self-entries"
   else
@@ -724,32 +716,32 @@ check_self_entries() {
 
 if [ -f "$WIN_LEDGER" ]; then
   check_self_entries "windows" \
-    "$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")" "$WIN_LEDGER" \
-    "$(own_identity_note windows "$WIN_URL" "$WIN_PUBKEY" "$WIN_PEERID")"
+    "$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")" "$WIN_LEDGER" "$WIN_URL" \
+    "$(missing_identity windows "$WIN_PUBKEY" "$WIN_PEERID")"
 else
-  row_warn "A8 windows peer store unreadable at $WIN_LEDGER -- run: ls -l $WIN_LEDGER"
+  unreadable "A8 windows peer store unreadable at $WIN_LEDGER" "ls -l $WIN_LEDGER"
 fi
 if [ -n "$AWS_LEDGER_COUNT" ]; then
   check_self_entries "cloud" \
-    "$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")" "$AWS_LEDGER" \
-    "$(own_identity_note cloud "$AWS_URL" "$AWS_PUBKEY" "$AWS_PEERID")"
+    "$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")" "$AWS_LEDGER" "$AWS_URL" \
+    "$(missing_identity cloud "$AWS_PUBKEY" "$AWS_PEERID")"
 elif [ -n "$AWS_HOST" ]; then
-  row_warn "A8 cloud peer store unproven -- see the A7 cloud command"
+  unreadable "A8 cloud peer store unproven" "ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
 else
   row_skip "A8 cloud peer store not evaluated (cloud node unresolved)"
 fi
 
 # A9 -- listener surface sane. The parse reduces the listener list to its length,
-# so absent and empty both arrive as 0 -- which is why presence decides first.
-# A node that reported no list is not judged; a node that sent an empty list has
+# so absent and empty both arrive as 0 -- which is why presence decides first. A
+# node that reported no list is not judged; a node that sent an empty list has
 # told us it accepts no connection, and neither is conformance. Above the
 # threshold the count is reported as noise rather than conformance.
-check_listeners() {
+check_listeners() {  # <node> <count> <ports> <diag-url>
   local node="$1" count="$2" ports="$3" diag_url="$4"
   if ! present "$node" listeners; then
-    row_warn "A9 $node listener count not evaluated -- the node did not report a listener list; run: curl -s $diag_url/api/diagnostics"
+    unreadable "A9 $node listener count not evaluated -- the node did not report a listener list" "curl -s $diag_url/api/diagnostics"
   elif [ "$count" -eq 0 ]; then
-    row_warn "A9 $node reported an empty listener list, so it can accept no connection; run: curl -s $diag_url/api/diagnostics"
+    unreadable "A9 $node reported an empty listener list, so it can accept no connection" "curl -s $diag_url/api/diagnostics"
   elif [ "$count" -gt "$LISTENER_WARN_THRESHOLD" ]; then
     row_warn "A9 $node binds $count listeners (> $LISTENER_WARN_THRESHOLD): $ports (issue I-12)"
   else
@@ -768,13 +760,13 @@ fi
 # one because the mtime is in the future, is not liveness evidence: [WARNING]
 # with the command, never [OK].
 if [ ! -f "$WATCHER_LOG" ]; then
-  row_warn "A10 watcher log not present at $WATCHER_LOG -- no liveness evidence either way; run: ls -l $WATCHER_LOG"
+  unreadable "A10 watcher log not present at $WATCHER_LOG -- no liveness evidence either way" "ls -l $WATCHER_LOG"
 else
   WATCHER_AGE="$(age_minutes "$WATCHER_LOG")"
   if ! is_number "$WATCHER_AGE"; then
-    row_warn "A10 watcher log age unreadable at $WATCHER_LOG -- run: ls -l $WATCHER_LOG"
+    unreadable "A10 watcher log age unreadable at $WATCHER_LOG" "ls -l $WATCHER_LOG"
   elif [ "$WATCHER_AGE" -lt 0 ]; then
-    row_warn "A10 watcher log mtime is $((0 - WATCHER_AGE)) min in the future, so liveness cannot be judged (clock skew or a bad mtime) -- run: ls -l $WATCHER_LOG"
+    unreadable "A10 watcher log mtime is $((0 - WATCHER_AGE)) min in the future, so liveness cannot be judged (clock skew or a bad mtime)" "ls -l $WATCHER_LOG"
   elif [ "$WATCHER_AGE" -le "$WATCHER_MAX_AGE_MIN" ] 2>/dev/null; then
     row_ok "A10 watcher log written $WATCHER_AGE min ago"
   else
