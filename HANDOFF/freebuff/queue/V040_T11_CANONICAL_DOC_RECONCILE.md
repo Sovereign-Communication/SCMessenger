@@ -1,6 +1,6 @@
 # V040-T11 -- Make the canonical docs self-consistent
 
-Status: PR FILED -- #314 open (branch freebuff/t11-canonical-doc-reconcile); partial increment landed and the ticket text below is otherwise unchanged -- acceptance 1 and 2 are NOT satisfied, see the hand-off appended at the end
+Status: MERGED -- landed as PR #314 (merge commit b63ea13a, 2026-09-19, origin/main). The pre-merge record is kept verbatim below: PR FILED -- #314 open (branch freebuff/t11-canonical-doc-reconcile); partial increment landed and the ticket text below is otherwise unchanged -- acceptance 1 and 2 are NOT satisfied, see the hand-off appended at the end
 Priority: P2 -- blocks nothing, costs every session that reads them
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: canonical documentation only. No code.
