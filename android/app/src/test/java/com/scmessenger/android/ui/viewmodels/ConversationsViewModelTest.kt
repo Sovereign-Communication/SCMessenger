@@ -92,12 +92,22 @@ class ConversationsViewModelTest {
     @Test
     fun `clearConversation delegates to repository and refreshes list`() = runTest {
         testDispatcher.scheduler.advanceUntilIdle()
+        // ConversationsViewModel.loadMessages() dispatches on Dispatchers.IO
+        // (ConversationsViewModel.kt:107), which this test's scheduler cannot
+        // order. The init load can therefore still be in flight when clearMocks()
+        // runs and be recorded AFTER it, inflating the recorded call count
+        // nondeterministically (observed: 3 getRecentMessages where 1 was
+        // expected). Wait for the init load to be recorded first.
+        verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
         clearMocks(mockMeshRepository, answers = false)
         every { mockMeshRepository.getRecentMessages(any(), any()) } returns emptyList()
 
         viewModel.clearConversation("peer-delete")
         testDispatcher.scheduler.advanceUntilIdle()
 
+        // The post-clear refresh also runs on Dispatchers.IO; wait for it to land
+        // so the exact-count assertions below stay deterministic AND strict.
+        verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
         verify(exactly = 1) { mockMeshRepository.clearConversation("peer-delete") }
         verify(exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
     }

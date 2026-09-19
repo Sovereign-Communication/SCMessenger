@@ -1,7 +1,7 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-09T21:35Z (CEO audit: PR279 framing CONFIRMED, E4/A2 closed, adb absent)
+Last updated: 2026-09-14T08:30Z (CEO audit: Multi-transport store-and-forward breakthrough confirmed live; Windows <-> Cellular Pixel verified; BoD 5/5 unanimous approval)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 
 ## Role
@@ -9,14 +9,38 @@ Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 The CEO seat assists the operator and audits the CTO seat. It does not implement
 application source. It verifies CTO claims against disk artifacts and live node
 state, holds the consensus rule, and never bypasses the CTO package's gates.
+Key strategic and architectural alignment is adjudicated by the Board of
+Directors (`/bod`, tracked in `HANDOFF/BOD_STATE.md`).
 
-## Single-owner boundaries
+# ===== RESUME HERE (2026-09-14) =====
 
-- The three-node BLE procedure, checkpoints, and verdicts are owned by
-  `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`. The CEO audits
-  against that package; it never runs a parallel procedure.
-- This file owns CEO-seat state only. Update it immediately on any important
-  change (section 0-rule), not batched to session end.
+## Major Breakthrough Live Audit
+
+[OK] BREAKTHROUGH CONFIRMED: Operator live test demonstrated bidirectional message transit and delivery ACKs between Windows host (WiFi/LAN) and Android Pixel (Cellular WAN, WiFi disconnected) routed through the AWS cloud node.
+- Store-and-forward custody across heterogeneous networks and cellular off-WiFi transport are operating simultaneously for the first time.
+- All core doctrinal invariants held: no centralized relays introduced; all nodes act as sovereign participants with custody store-and-forward behavior.
+
+### Audit of Working Fixes
+
+1. **Relayed Delivery ACK Routing (`cli/src/main.rs`)**:
+   - Resolved sender peer ID lookup ensures ACKs target the originating message author (`resolve_sender_peer_id`) rather than the intermediary relay connection.
+2. **Cooperative Mesh Custody (`core/src/store/relay_custody.rs`, `core/src/transport/swarm.rs`)**:
+   - Handled `CustodyError::NoRegistration` to store and forward packets for peers not directly registered on the intermediate node. Enforced strict 64-hex Blake3 identity validation, device bounds, and payload bounds.
+3. **Mobile Transport Resilience (`core/src/transport/behaviour.rs`, `core/src/transport/swarm.rs`)**:
+   - Connection limit increased (`max_established_per_peer = 4`) and immediate disconnect on ping failure to prevent mobile socket exhaustion during interface handovers.
+4. **Android Mesh Discovery (`MeshRepository.kt`)**:
+   - Replaced manual circuit synthesis with dumb-byte-pipe ledger collection per BoD directive; auto-reset for circuit breakers upon complete candidate exhaustion during network transitions.
+
+### Upstream Alignment & Governance
+- Board of Directors Resolution `bod-9ee86618` APPROVED 5/5 Unanimous + Judge concurrence ($0.003999 cost, well under $0.10 ceiling).
+- Rule 8 adversarial security review recorded in `HANDOFF/review/V040_MULTI_TRANSPORT_STORE_FORWARD_RULE8_REVIEW_2026-09-14.md`.
+
+### Hand-off to Incoming Lanes (Freebuff / Abacus)
+1. CI gates execute on PR against `main`.
+2. Complete final BLE probe / 3-node hardware drop test.
+3. Finalize v0.4.0 tag checklist.
+
+# ===== PREVIOUS RESUME POINT (2026-09-09) =====
 
 ## Current state (2026-09-09T01:45Z)
 
