@@ -1,6 +1,6 @@
 # V040-T12 -- Stop burning the CI queue on superseded and irrelevant runs
 
-Status: IN REVIEW -- PR #319 (platform-relevance half, 2026-09-19). Filed
+Status: MERGED -- landed as PR #319 (merge commit 57a35654, 2026-09-19, origin/main). The pre-merge record is kept verbatim below: IN REVIEW -- PR #319 (platform-relevance half, 2026-09-19). Filed
 2026-08-31 on the operator's CI-pacing directive; acceptance 1 landed on main
 earlier and is not re-verified here, acceptance 2 landed and is extended by
 this pass, acceptance 3-4 are unverified on this branch.

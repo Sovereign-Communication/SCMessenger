@@ -1,6 +1,6 @@
 # V040-T7 -- Stage the Android work so device time is verification, never authoring
 
-Status: PR FILED -- #312 open (branch `freebuff/t7-android-parity-staging`, commit
+Status: MERGED -- landed as PR #312 (merge commit b3018764, 2026-09-19, origin/main). The pre-merge record is kept verbatim below: PR FILED -- #312 open (branch `freebuff/t7-android-parity-staging`, commit
 `4878eab5`); acceptance 1-3 met and exercised without the handset, acceptance 4
 left to CI (shell and markdown only, no Rust or Kotlin). Awaiting review.
 Priority: P1 -- runs whenever the handset is away, which is most of the time
