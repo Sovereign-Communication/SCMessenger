@@ -1,8 +1,359 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-23 (validation pass; four-node execution plan authored)
+Last updated: 2026-08-24 (tag cut; release pipeline building; MacBook lane deploying)
 Entry point: `/CTO`. This file is the whole context load.
+
+# ===== RESUME HERE (2026-08-24, written for a clean restart) =====
+
+Read THIS section and section 0-2026-08-24b. Skip everything else on first
+pass. Operator is token-constrained: **delegate to FREE lanes, use native API
+only to dispatch and to hold verdicts.**
+
+## One-line state
+
+**TAG IS FINAL: v0.4.0-rc.1 @ `134e06d2`** (operator-authorized re-cut from
+`4077bc39` after #231 fixed the release version gate). ALL PRs merged: #221
+P0 fix direct (df0a322c); #227+#219+#229 via integration PR #230 (4077bc39);
+docs + verify-fix via #231 (134e06d2). Release pipeline BUILDING the DRAFT
+release with assets. MacBook lane deploying iOS to Christy's device for a
+3-week trip test. Remaining: assets land, N1-N4 deploy per plan, formal gate.
+
+## Session log 2026-08-24b (CAO validation -> execution)
+
+Interim CAO session at operator direction ("proceed only when 100% confident;
+continue until tag").
+
+DONE this session:
+1. Verified the dispatched subagent's #221 work in `_scm_wt/v2auth`: kill
+   switch fully removed, suite split 0x02/0x03 implemented byte-faithfully,
+   negotiation fallback correct. Committed e2a1474e, pushed, CI green except
+   three suite-literal test assertions -> fixed (1f75e48d: drift_v2_diag +
+   pq_session asserts accept {0x02,0x03}; verified locally 14/14).
+2. FRESH adversarial re-review of the changed tree: VERDICT APPROVE (cold
+   explore agent; every inbound decode path enumerated -- none decrypts or
+   attributes before signature verification). Two MAJOR findings, both
+   dispositioned: verify_bundle unwired = operator-deferred already (bundle-
+   import blocker, NOT an rc.1 item); stale-persisted-0x02-session transitional
+   black hole = availability-only, fail-closed, irrelevant on fresh installs,
+   POST-TAG queue.
+3. Diagnosed BOTH Android JVM red lanes as test defects, not product defects:
+   - isStorageDegraded constructed real MeshRepository -> UniffiLib clinit ->
+     JNA load impossible in the native-free PR gate BY DESIGN -> Assume-guard
+     (Docker suite enforces it with native present).
+   - deep-link confirm raced Dispatchers.IO vs TestScheduler -> polling verify.
+   Fixed in ef58aa66 on #227, verified locally BEFORE push (gradle run: 26
+   tests/1 skip, 5 tests/5 pass).
+4. Four-node plan audit (explore agent): six gaps found; ALL closed in docs --
+   AWS relay image correction applied (9f54b107..., includes #139); N4 redeploy
+   marked PROVEN (SSH key exists); BLOCK-1 annotated RULED option (a); G5
+   liveness scoring rule written INTO the plan (fingerprints + per-leg probe +
+   invalidate-on-hit, before Pass 1); A1 row updated.
+5. U1-U4 dispositioned against main ceabdbd4 (verify pass, evidence in each
+   ticket): U2 self-ratchet reset FIXED+test-pinned; U4 receipt convergence
+   FIXED+test-pinned; U3 CryptoError measurement-pending (code causes absorbed);
+   **U1 finite-retry abandonment STILL-OPEN -> ACCEPTED FOR rc.1** with
+   conditions (fresh installs bound exposure; corrupted-message hit invalidates
+   the leg; ticket stays v0.5.0-BLOCKING; fix must reconcile tests that assert
+   the ceilings). OPERATOR MAY VETO THE U1 ACCEPTANCE.
+6. MERGE SEQUENCE EXECUTED: #221 direct (df0a322c) -> integration PR #230
+   (#227+#219+#229; disjoint scopes; ONE CI cycle instead of three serial
+   up-to-date cycles; 4077bc39) -> #231 (verify_versions.sh prerelease-tag
+   fix + handoff docs; 134e06d2).
+7. TAG-DAY TRAPS CAUGHT AND HANDLED:
+   - release.yml hardcoded draft:false -> rc tag would have PUBLISHED
+     publicly; #229 makes alpha/beta/rc tags draft+prerelease.
+   - verify_versions.sh --require-tag strict-compared 0.4.0-rc.1 vs Cargo
+     0.4.0 and failed the first tag's pipeline; #231 compares numeric cores
+     when a prerelease suffix is present (verified locally against the real
+     tagged commit before push).
+   - 14 stale dependabot runs clogged the 5-runner queue -> all cancelled.
+   - Tag moved 4077bc39 -> 134e06d2 with EXPLICIT OPERATOR AUTHORIZATION
+     (pre-push override is human-only; used as designed). Delta = docs + one
+     shell script; ZERO application-code delta -- the MacBook build already
+     in flight from 4077bc39 is binary-identical.
+8. MAC LANE DISPATCHED: HANDOFF/gpt/CTO_TO_ANTIGRAVITY_2026-08-24_IOS_DEPLOY_EXECUTION.md
+   (install-only mandate, anchor verification, evidence list, peer status).
+   Christy's device = early field-test node; FORMAL gate legs run on the
+   final anchor with all four gate nodes per the plan.
+
+POST-TAG QUEUE additions (do not lose):
+- Wire verify_bundle at contact-bundle ingestion BEFORE any bundle-import
+  feature ships (pre-existing ruling, reconfirmed by re-review).
+- On ratchet decrypt failure, drop + renegotiate stale persisted sessions
+  (transitional 0x02 black hole).
+- swarm.rs: gate build_mdns_dial_addr with the same cfg as its call site
+  (:4753) to silence the Android-target dead-code warning (perimeter file --
+  needs the crypto gate whenever touched).
+- MainViewModelTest/MeshRepositoryTest package/path mismatch (file under
+  .../test/, package .../data) breaks --tests filters locally; cosmetic.
+- #228 merge AFTER #221 lands (check fails on main today by design).
+- Dependabot action-bump PRs keep re-clogging the 5-runner queue; cancel or
+  batch-merge them around gate work rather than letting them queue-block.
+
+## The critical path, in order (remaining)
+
+1. **Release pipeline completes** on v0.4.0-rc.1 @ 134e06d2 -> DRAFT release
+   with signed APK/AAB, scm-windows-amd64.exe, WASM, SHA256SUMS. Verify
+   draft=true + prerelease=true + asset list when it lands.
+2. **N4 rebuild at tag SHA** -- proven path: ssh -i ~/.ssh/scm-node-key.pem
+   ec2-user@54.226.67.101, container scm-node, identity persists at
+   /opt/scm-relay-data; update AWS_RELAY_CURRENT_ADDRESS.md after.
+3. **N3 rebuild** from the tag checkout (Windows host, cargo build --release).
+4. **N1/N2** install signed APK/AAB from the release assets when ready
+   (in-place on the Pixel per plan; CI-signature upgrade caveat noted there).
+5. **Christy/Mac**: build already dispatched; if rebuilt after the tag move,
+   confirm anchor SHA 134e06d2 via git rev-parse before handoff.
+6. **Gate matrix** per HANDOFF/plans/FOUR_NODE_GATE_EXECUTION_PLAN_2026-08-23.md
+   -- G5 liveness scoring rule is IN the plan (write scoring BEFORE Pass 1);
+   every node reports the tag hash first; N3 stderr captured separately.
+7. Apple joins as N5 via AW-BILAT-0003 (Mac-lane install packet exists in
+   HANDOFF/gpt/CTO_TO_OPERATOR_2026-08-24_APPLE_INSTALL_PACKET.md).
+
+## Apple / iOS / macOS -- CAO answer
+
+**Apple CODE is ready. Apple INSTALL is not, and the blocker is the tag, not
+the code.** iOS Build, iOS Build & Simulator Test, macOS Native Tests and
+Swift Linting are all GREEN. But `AW-BILAT-0003` step 2 says build from the
+TAG, and the freeze rule is one exact SHA on every node. Installing from a
+branch produces a node that is not running the frozen commit, which
+invalidates the gate's entire premise.
+
+**Apple therefore CANNOT deploy ahead of Android.** The tag is the shared
+anchor; there is nothing to install until it exists.
+
+**What CAN be done before the tag, and is worth doing:** a dry run of the
+Apple install path on the MacBook -- toolchain present, signing/provisioning
+working, the build command succeeding from current main -- so that tag day is
+minutes, not hours. That is rehearsal, not deployment; the resulting build is
+NOT a gate node and must be discarded.
+
+Install packet, ready to hand to the antigravity lane the moment the tag
+exists: `HANDOFF/gpt/CTO_TO_OPERATOR_2026-08-24_APPLE_INSTALL_PACKET.md`
+(install-only mandate, 8 prohibitions, source-scoped tripwire, abort
+conditions, and the log-exchange protocol: full logs over SCMessenger,
+redacted summaries only in PRs).
+
+## Standing operator directives (2026-08-24)
+
+- **agy is DE-AUTHORIZED.** No agy spend, none.
+- **Native API is scarce.** Use it to dispatch and to hold verdicts. Push the
+  reading, tracing and implementing to free lanes.
+- Free lane to try next for #221: **NVIDIA NIM (nemotron ultra)**. Re-derive
+  the roster from `scripts/lanes.json` -- do NOT route from memory, lanes die
+  without notice.
+- HTTP lanes cannot run commands, so they cannot verify anything they claim.
+  Only shell-capable lanes may assert a build or test result.
+- All project scheduled tasks are DELETED. Do not re-arm one.
+
+## Traps that have already cost time this session
+
+- **Free-lane verdicts are raw material, not conclusions.** One fabricated an
+  infrastructure `PROVEN` verdict having executed nothing. One raised a
+  tag-blocking P0 that was a phantom (it read pre-#221 code). Verify every
+  "BLOCKS THE TAG" claim against the diff yourself before acting.
+- **Several agents finish the work and never write the report.** Check the
+  repo state before re-dispatching -- the work is usually done.
+- **CRLF: every worktree shows ~110 modified .md files and `git merge`
+  refuses.** Known, documented, deferred to post-tag. Do not clean it up.
+  You do not need a local merge -- GitHub runs PR CI against the merge result.
+- **The preflight hook will block `git checkout -- .` even in a worktree you
+  just created.** It is right; do not use SCM_ALLOW_DESTRUCTIVE. Take a
+  forward path (fresh worktree, explicit-path commits).
+- **Branch protection demands up-to-date branches AND PRs**: merging one PR
+  makes the siblings stale -> serial re-run cycles. Disjoint-scope PRs:
+  integrate into ONE PR (#230 pattern) to collapse N cycles into 1; verify
+  disjointness via scripts/pr_scope.sh first.
+- **Workflow assumptions are unproven until a real tag fires**: the draft
+  flag AND the version gate were both wrong in ways PR CI could never catch
+  (release workflows do not run on PRs). Budget one fix-forward cycle on
+  tag day.
+- **Tag deletion/move is hook-blocked**; the override (SCM_ALLOW_FORCE_PUSH)
+  is an OPERATOR decision only -- ask, never assume.
+- **PowerShell mangles git's ^{commit}** in rev-parse -- quote the argument
+  or use `git cat-file -p <tag>`.
+
+
+## 0-2026-08-24b. #221 REJECTED BY ADVERSARIAL REVIEW -- the hole MOVED
+
+Verified by the CTO against source, not taken on the reviewer's word.
+
+**The P0 was not closed. It moved to the `SCM_RATCHET_DISABLE` kill switch.**
+
+`core/src/iron_core.rs:3353` -- `receive_message` branches on
+`ratchet_disabled()`. The TRUE branch is a LEGACY PATH calling
+`decode_envelope` then `decrypt_message`, which bypasses #221's entire ingress
+verification. `core/src/message/codec.rs:112` falls through to
+`bincode::deserialize` with NO signature check, and `decrypt_message`
+authenticates nothing (sender public key is AAD only, which binds but does not
+authenticate). Setting one env var reproduces the original forgery byte for
+byte -- the same construction `test_v1_bincode_downgrade_forgery.rs` proves is
+closed on the OTHER branch. Zero tests reference `SCM_RATCHET_DISABLE`.
+
+**The chain that makes it operationally likely, not theoretical:** #221 moved
+the root-key domain from v2 to v3 but did NOT bump the suite ID
+(`core/src/identity/keys.rs:401` still advertises `[0x01, 0x02]`). A post-#221
+node and a current-release node both negotiate 0x02, derive different root
+keys, and fail PERMANENTLY and SILENTLY -- the session is cached on first use
+and the sender receives no error at all. An operator hitting that has a
+documented "zero plumbing" fix sitting right there: set `SCM_RATCHET_DISABLE`.
+Which reopens the forgery hole fleet-wide. The PR creates the pressure that
+leads to the switch being used.
+
+**OPERATOR RULING 2026-08-24: option A -- REMOVE the kill switch.** Not gate
+it. Justification the CTO verified: NOTHING in the repo sets that variable (no
+script, CI job, Dockerfile, Kotlin, Swift, or config), and the last public
+release is v0.1.9 (March 2026), which predates this entire ratchet subsystem.
+The switch guards a mixed fleet THAT DOES NOT EXIST while carrying a P0.
+Deleting the path beats gating it -- a gated legacy branch is still a second
+decode path someone can reach.
+
+Also ordered before the tag: bump the suite ID 0x02 -> 0x03 so a mismatched
+peer negotiates 0x01 and still works, instead of silently redefining what
+0x02 means.
+
+**DEFERRED to post-tag, but BLOCKING for any bundle-import feature:**
+`verify_bundle` (`core/src/identity/keys.rs:435`) has ZERO production callers,
+and `save_contact_bundle` performs no signature check before persisting. Latent
+today because `save_contact_bundle` itself has no production caller. The moment
+bundle exchange ships (QR scan, deep link, peer exchange) without
+`verify_bundle` wired in, an attacker can plant a bundle pairing a victim's
+real ed25519 key with attacker-controlled x25519/mlkem keys -- which makes
+#221's whole static-static-DH sender authentication meaningless for that
+victim. The new fix silently DEPENDS on this trust anchor. Wire it before
+bundle import ships.
+
+**What the review DID certify as sound:** the ingress Ed25519 verification
+(`DriftEnvelope.sign`/`.verify` and the reject-unsigned gate) is fail-closed
+and correctly binds the verified identity to the identity used downstream --
+on the non-kill-switch path. Do NOT revert #221; it is a real fix. Fix forward.
+
+## 0-2026-08-24a. OPERATOR RULINGS + CORRECTIONS -- READ BEFORE THE GATE
+
+Claude CTO seat, 2026-08-24. Operator present and ruling live.
+
+### A4 / #220 -- ACCEPTED by the operator (2026-08-24)
+
+Accepted, do not fix. **Record the real reason, not "alpha tolerance":**
+wiring `SecurityUtils` back in would REINTRODUCE a device-transfer data-loss
+regression -- `getEncryptedSharedPreferences()` uses `deleteSharedPreferences()`
+as its KeyStore-recovery path, and `scmessenger_secure_prefs.xml` is not
+excluded from `<device-transfer>`. Transfer -> hardware key absent -> decrypt
+throws -> store deleted -> identity backup permanently orphaned. The current
+build survives that transfer; the "fix" breaks it.
+
+The residual 2 wiring findings are ONE 52-line object counted twice. User-facing
+functionality affected: ZERO. Meanwhile #220 collapses the wiring gate from
+**32 findings to 2** and restores the diagnostics/log viewer, QR join-mesh, and
+APK sharing -- it is a gate ENABLER, not a nice-to-have. Without the diagnostics
+viewer we are half-blind on N1/N2 during the run.
+
+Conditions attached:
+1. Pin the Android Wiring Gate to an ALLOWLIST keyed on `SecurityUtils` --
+   NOT a raised numeric threshold. A threshold lets the next orphan hide.
+2. Open a v0.5.0-blocking ticket for the `data_extraction_rules.xml` exclusion
+   + KeyStore recovery redesign. Do not fix now.
+3. Do not delete the file to zero the counter -- it is the raw material for
+   the v0.5.0 fix.
+
+### Corrections to this file and to the four-node plan (verified 2026-08-24)
+
+- **"No SSH key exists" for N4 is STALE AND WRONG.** `~/.ssh/scm-node-key.pem`
+  has existed since 2026-08-01. SSH as `ec2-user@54.226.67.101` succeeds.
+  N4 tag-day redeploy is **PROVEN**, not a risk: container `scm-node`, identity
+  persists at host path `/opt/scm-relay-data`, 16 GB free.
+- **The relay image is NEWER than documented.** `AWS_RELAY_CURRENT_ADDRESS.md`
+  claims commit `6b2573fa` (PR 136+137+138). It is actually running
+  `9f54b1078ad512c895b68029c9e79a1870d7f286`, label
+  `gpt-pr139-receipt-filter-20260811` -- verified to exist and to be an
+  ancestor of main. It already includes PR #139. Fix that doc.
+- **BLOCK-1 was scoped to N3 and that scope is WRONG.** `request-response` is
+  in the WORKSPACE-level libp2p features (root `Cargo.toml:33`) and again in
+  the Android target block, so the panicking crate is on the delivery path of
+  EVERY node. Confirmed by compile: `libp2p-request-response v0.29.0` builds
+  for the desktop target too. Panic sites: `on_address_change` (:649, :654)
+  and `on_connection_closed` (:670, :676); the `debug_assert_eq!` at :678 is
+  compiled out of release. Address change IS NAT rebinding and WiFi<->cellular
+  handover -- normal phone behaviour, not an edge case.
+- **But the mitigation is far cheaper than the plan assumes -- it already
+  half exists.** `cli/src/main.rs:2160` already runs a watchdog that polls
+  `is_event_loop_alive()` every 10s and, on death, logs `swarm_event_loop_died`,
+  prints `[FAIL]` to STDERR, and exits 1. N3 does NOT silently zombie.
+  On Android a `SwarmTaskLivenessGuard` Drop impl flips the same flag and
+  `clear_handle_if_unhealthy()` logs `Clearing stale swarm handle after swarm
+  event loop exit`. THE GAP: Android checks this only on API entry points
+  (`get_peers`, `get_listeners`, `get_topics`, `shutdown`) -- there is NO timer,
+  so a dead swarm is noticed only when the UI happens to ask.
+- Gate-day requirement, zero code: grep both logcat buffers per matrix leg for
+  `swarm_event_loop_died` and `Clearing stale swarm handle`, plus a per-leg
+  liveness assertion so a silently dead swarm is distinguishable from no
+  traffic. Write the scoring rule BEFORE Pass 1: any fingerprint hit
+  invalidates the pass in progress and resets the soak clock. A restart is
+  never silently absorbed -- the restart LOG is the deliverable, not the restart.
+
+### "Test it and if it does not panic we are fine" -- ruled UNSOUND for evidence
+
+Sound for USER risk (alpha, draft release, worst case a dead mesh until
+restart). Unsound for EVIDENCE risk. Two matrix passes plus a soak generate on
+the order of 30 address-change events; zero failures across ~30 exposures bounds
+the per-event rate near 10%, not zero. A clean run entitles us to say only
+"we did not hit it in ~30 tries". Field users accumulate more handovers in one
+afternoon than the whole gate does. Keep these two risks separate in the
+manifest -- they do not get the same answer.
+
+### Scheduled tasks -- ALL PROJECT TASKS REMOVED (operator directive)
+
+`SCM_4NodeWakeup` (30-min heartbeat armed 2026-08-23) DELETED and verified
+gone; every tick had been a no-op (`[IDLE] opencode not on PATH`).
+`SCMessengerSoak` (at-logon `scripts/soak_boot.cmd`) DELETED. No project
+scheduled tasks remain. The four surviving root tasks are Microsoft OneDrive
+and Git-for-Windows system tasks -- deliberately left alone.
+**Do not re-arm a wakeup task without an explicit operator request.**
+
+### Lane spend: agy is DE-AUTHORIZED (operator, 2026-08-24)
+
+No further agy spend. Of 7 dispatches this session: one FABRICATED an
+infrastructure verdict (`PROVEN` with zero commands executed), one raised a
+false tag-blocking P0, one over-classified cosmetic findings as true positives,
+and two died with `[RESULT] ERROR` returning nothing. Free lanes are usable for
+GATHERING and unreliable at CONCLUDING. Verify every "BLOCKS THE TAG" claim
+against the diff yourself before acting on it.
+
+### CRLF: repo-wide dirty tree -- DEFERRED until after the tag (ruling 2026-08-24)
+
+**Symptom:** every checkout and every worktree of this repo -- including a
+brand-new one -- reports roughly 110-190 modified `.md` files immediately,
+and `git merge` refuses to run with "your local changes would be overwritten".
+This blocked a worker mid-task and cost real time.
+
+**Cause (diagnosed, not guessed):** those `.md` files are COMMITTED with CRLF
+while `.gitattributes` declares `*.md text eol=lf`. Git normalizes to LF on
+checkout, so the working tree permanently disagrees with the stored blobs.
+It is NOT `core.autocrlf` -- proven by creating a worktree with
+`git -c core.autocrlf=false worktree add`, which came out dirty anyway.
+`git update-index --refresh` reports "needs update", so these are real byte
+differences, not a stale stat cache.
+
+**Blast radius: DOCUMENTATION ONLY.** Verified 2026-08-24: zero `.rs`, `.kt`,
+`.kts`, `.swift`, `.toml`, `.py`, `.sh` files affected, and
+`git diff --ignore-cr-at-eol` reports 0 insertions / 0 deletions. Builds,
+CI, the tag, the binaries and every node are unaffected.
+
+**RULING: do NOT fix before the tag.** A repo-wide renormalization rewrites
+110+ files and would conflict with EVERY open PR at once (#221, #227, #219,
+#228) -- including the crypto PR mid-adversarial-review. The risk of doing it
+now is far larger than the agent-time tax of leaving it. Land it right after
+the tag, on a quiet tree, via `cto/crlf-root-fix-2026-08-22`.
+
+**Until then, work around it, do not clean it up:**
+- A local `git merge` is NOT required to land a PR -- GitHub runs PR CI
+  against the merge result. Commit with explicit paths and push.
+- Stage explicit paths only, so the `.md` noise can never enter a commit.
+- Do NOT `git checkout`/`restore`/`stash`/`add --renormalize` those files.
+- The Apple install packet tripwire is scoped to SOURCE extensions for
+  exactly this reason -- a bare `git status --porcelain` would abort every
+  Apple install on benign `.md` noise.
+
 
 ## 0-2026-08-23y. VALIDATION PASS -- two handoff files authored, timer armed
 

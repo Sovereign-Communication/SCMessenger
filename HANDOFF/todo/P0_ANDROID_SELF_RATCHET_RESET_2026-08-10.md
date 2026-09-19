@@ -1,6 +1,13 @@
 # P0 -- Android resets its OWN ratchet session on mDNS service loss
 
-Status: Active
+Status: FIXED -- dispositioned 2026-08-24 against main ceabdbd4
+Disposition: MdnsServiceDiscovery.kt:211-215 now guards `onServiceLost` with
+the same self-peer check as `onServiceResolved` (early return before
+`onPeerDisconnected?.invoke`). Chain verified: TransportManager.kt:162 ->
+MeshRepository.kt:1030-1031, dedup at :1749-1757. All three acceptance
+criteria pinned by MdnsServiceDiscoveryTest.kt:234-272 (self -> exactly 0),
+:276-314 (remote -> exactly 1), :318-356 (invalid id -> exactly 0). Move to
+HANDOFF/done/ at next HANDOFF sweep.
 Severity: P0 (crypto state corruption; corrupts inbound decrypt for all peers)
 Filed: 2026-08-10
 Gate mapping: PF-11 (BLE/liveness + evidence), G3 delivery truth
