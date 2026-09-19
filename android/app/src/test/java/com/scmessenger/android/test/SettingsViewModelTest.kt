@@ -12,6 +12,8 @@ import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -158,9 +160,18 @@ class SettingsViewModelTest {
         viewModel.refreshInfoCounts()
         advanceUntilIdle()
 
-        assertEquals(7u, viewModel.infoCounts.value.contactCount)
-        assertEquals(42u, viewModel.infoCounts.value.messageCount)
-        assertEquals("core-abc1234", viewModel.infoCounts.value.buildProvenance)
+        // The init-time refresh runs on real Dispatchers.IO, which
+        // advanceUntilIdle cannot drain; its late write races this
+        // assertion under CI load. Await the first matching emission
+        // instead of polling a snapshot, so the wait is deterministic
+        // no matter which refresh lands first or last.
+        val counts = viewModel.infoCounts
+            .filter { it.contactCount == 7u && it.messageCount == 42u }
+            .first()
+
+        assertEquals(7u, counts.contactCount)
+        assertEquals(42u, counts.messageCount)
+        assertEquals("core-abc1234", counts.buildProvenance)
     }
 
     @Test

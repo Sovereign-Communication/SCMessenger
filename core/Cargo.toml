@@ -68,6 +68,12 @@ wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 rexie = "0.6"
 
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+# Only the mobile-gated DNS transport in transport/swarm.rs uses hickory
+# directly (ResolverConfig::google() preset removal in 0.26); gating it here
+# keeps hickory out of the native and wasm32 graphs.
+hickory-resolver = { workspace = true }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
 libp2p = { workspace = true, features = [

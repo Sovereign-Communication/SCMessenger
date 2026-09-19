@@ -53,27 +53,24 @@ fun PeerListScreen(
         viewModel.refreshData()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.peer_list_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_action_dismiss))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.refreshData() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.diagnostics_action_refresh))
-                    }
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        TopAppBar(
+            title = { Text(stringResource(R.string.peer_list_title)) },
+            navigationIcon = {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_action_dismiss))
                 }
-            )
-        }
-    ) { paddingValues ->
+            },
+            actions = {
+                IconButton(onClick = { viewModel.refreshData() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.diagnostics_action_refresh))
+                }
+            }
+        )
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
+            modifier = Modifier.fillMaxSize()
         ) {
             when {
                 isLoading -> {
@@ -164,13 +161,15 @@ fun PeerListScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            // FIX(Compose-crash): stable key per peerId prevents SlotTable corruption
-                            // on rapid peer churn; displayPeers already distinctBy peerId, key() ensures
-                            // Compose retains correct slot identity without LazyColumn keys/contentType.
+                            // CHURN-001 (RCA-COMPOSE-TEARDOWN-2026-09-16): plain Column,
+                            // not a LazyColumn. PeerCard holds no per-item remembered
+                            // state, so per-peerId key() bought nothing and cost a
+                            // dispose+insert per re-ordered position on every
+                            // online/offline re-sort (the remove+insert change-list
+                            // shape implicated in crash_1789526624102.log). Positional
+                            // composition updates content in place instead.
                             displayPeers.forEach { peer ->
-                                key(peer.peerId) {
-                                    PeerCard(peer = peer, onClick = { onPeerClick(peer) })
-                                }
+                                PeerCard(peer = peer, onClick = { onPeerClick(peer) })
                             }
                         }
                     }
