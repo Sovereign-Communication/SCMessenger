@@ -473,7 +473,7 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::new();
+        let outbox = Outbox::persistent(backend.clone());
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -3839,15 +3839,15 @@ impl IronCore {
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
             local_identity_id,
-            Some(canonical_peer_id),
+            Some(canonical_peer_id.clone()),
             None,
         );
 
-        // Notify delegate
+        // Notify delegate with verified canonical identity and authenticated public key hex
         if let Some(delegate) = self.delegate.read().as_ref() {
             delegate.on_message_received(
-                message.sender_id.clone(),
-                message.sender_id.clone(),
+                canonical_peer_id,
+                sender_public_key_hex,
                 message.id.clone(),
                 message.timestamp,
                 message.payload.clone(),
@@ -4353,6 +4353,23 @@ impl IronCore {
         &self,
     ) -> Option<crate::store::relay_custody::StoragePressureState> {
         self.relay_custody_store.read().storage_pressure_state()
+    }
+
+    /// TRN-04: run the custody retention sweep on demand.
+    ///
+    /// Removes undelivered custody records whose accepted-at time is older than
+    /// `max_age_ms` and returns a report. `max_age_ms == 0` disables retention
+    /// for the call. The swarm runs this on its 5-minute prune tick; this
+    /// entry point exists so a node operator (CLI, diagnostics) can run it
+    /// explicitly against a live node.
+    pub fn purge_expired_custody(
+        &self,
+        max_age_ms: u64,
+    ) -> Option<crate::store::relay_custody::CustodyRetentionReport> {
+        self.relay_custody_store
+            .read()
+            .purge_expired_custody(max_age_ms)
+            .ok()
     }
 
     /// Create a persistent relay custody store for the given peer ID.

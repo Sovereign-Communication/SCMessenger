@@ -387,6 +387,7 @@ public func isContentSuspicious(envelopeData: Data) -> Bool  {
 public func isDeviceBlocked(peerId: String, deviceId: String) -> Bool  {
 public func isPeerAbusive(peerId: String) -> Bool  {
 public func isPeerSuspicious(peerId: String) -> Bool  {
+public func isValidPublicKey(hexStr: String) -> Bool  {
 public func pruneStaleSpamPeers(maxEntries: UInt32) -> UInt32  {
 public func recommendedTransport(peerId: String) -> ProximityTransport  {
 public func registerDeviceId(peerId: String, deviceId: String) -> Bool  {

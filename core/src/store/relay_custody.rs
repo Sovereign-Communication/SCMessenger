@@ -8,6 +8,7 @@ use crate::dspy::modules::DSPyModule;
 use crate::store::backend::SledStorage;
 use crate::store::backend::{MemoryStorage, StorageBackend};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 #[cfg(all(not(target_arch = "wasm32"), unix))]
 use std::ffi::CString;
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +26,38 @@ const DEVICE_USAGE_CEILING_PERCENT: u64 = 90;
 const FALLBACK_STORAGE_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const REGISTRATION_STALE_TAKEOVER_MS: u64 = 15 * 24 * 60 * 60 * 1000;
 const HANDOVER_STALE_COLLAPSE_MS: u64 = 15 * 24 * 60 * 60 * 1000;
+
+// --- TRN-04: custody retention + ingestion admission control ---
+
+/// Default maximum age of an undelivered custody record. TRN-04: custody had
+/// infinite retention, so a peer that never collected its mail pinned relay
+/// storage forever and the only reclamation was size-based pressure eviction
+/// (`enforce_storage_pressure`). Seven days is generous for a store-and-forward
+/// mesh and is the outer bound on how long a peer can park bytes on a node.
+pub const CUSTODY_DEFAULT_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Rule-8 review of PR #305, c6: the floor for the AUDIT window.
+///
+/// The message window is a knob an operator (or a test) may narrow to reclaim
+/// space quickly. The transition trail must not narrow with it: a caller asking
+/// for a one-millisecond message window is asking to drop custody, not to erase
+/// the record of what was dropped -- and pruning the trail on a window that
+/// short makes retention flip on microsecond timing, because the row explaining
+/// a delivery can already be "older than the window" by the time the sweep runs.
+/// So the audit window never falls below the default custody window.
+pub const CUSTODY_MIN_AUDIT_RETENTION_MS: u64 = CUSTODY_DEFAULT_MAX_AGE_MS;
+
+/// Maximum accepted length of a custody peer identifier. libp2p base58 peer
+/// ids are ~52 chars and 64-hex keys are 64, so 128 is generous headroom; the
+/// bound is what stops a peer from growing an unbounded storage key.
+const CUSTODY_MAX_IDENTIFIER_CHARS: usize = 128;
+
+/// `relay_custody_msg_<destination>_<custody_id>` is the key layout, so this
+/// character must not appear inside either key component. If it does, two
+/// distinct destinations can alias onto the same storage key and onto each
+/// other's `destination_prefix` scan -- see
+/// `custody_destination_prefix_must_not_alias_across_destinations`.
+const CUSTODY_KEY_SEPARATOR: char = '_';
 
 static CUSTODY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -50,6 +83,81 @@ pub struct StoragePressureState {
     pub hard_ceiling_bytes: u64,
     pub target_quota_bytes: u64,
     pub scm_bytes: u64,
+}
+
+/// TRN-04: outcome of one age-based retention sweep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CustodyRetentionReport {
+    /// Records examined by the sweep.
+    pub scanned: usize,
+    /// Records found past the retention window.
+    pub expired: usize,
+    /// Records actually removed from storage.
+    pub purged_records: usize,
+    pub purged_bytes: u64,
+    /// Rule-8 review of PR #305, c2: records skipped because a dispatch moved
+    /// them between the scan and the delete, or because they are in mid-dispatch
+    /// inside the retention window. Non-zero means the sweep deferred to a live
+    /// delivery instead of racing it.
+    pub skipped_recently_dispatched: usize,
+    /// Rule-8 review c2: records whose stored state changed after the candidate
+    /// scan, so the delete was abandoned rather than applied to a stale read.
+    pub skipped_changed: usize,
+    /// Rule-8 review c6: custody transition rows dropped by the same sweep, so
+    /// the audit trail is bounded by the retention window too rather than growing
+    /// for the life of the node.
+    pub purged_transitions: usize,
+    /// The retention window the sweep ran with.
+    pub max_age_ms: u64,
+}
+
+/// Rule-8 review of PR #305, c2: what the sweep may do with one candidate.
+///
+/// One pure function decides, so the TOCTOU rule is testable rather than argued:
+/// the snapshot is only a candidate list, and `current` is what the store holds
+/// now (None when the record is already gone).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetentionDecision {
+    /// Aged out and unchanged since the scan: delete it.
+    Purge,
+    /// Already delivered; a stored Delivered row is a crashed handover, and
+    /// leaving its one trace alone is the safer default.
+    KeepDelivered,
+    /// In mid-dispatch with a state change inside the retention window: this is
+    /// custody being delivered right now, not expired custody.
+    KeepRecentlyDispatched,
+    /// Inside the retention window; nothing to do.
+    KeepWithinWindow,
+    /// Changed (or vanished) between the scan and the delete, so the delete was
+    /// abandoned rather than applied to a stale read of a record being moved.
+    KeepChanged,
+}
+
+fn retention_decision(
+    snapshot: &CustodyMessage,
+    current: Option<&CustodyMessage>,
+    now_ms: u64,
+    max_age_ms: u64,
+) -> RetentionDecision {
+    if snapshot.state == CustodyState::Delivered {
+        return RetentionDecision::KeepDelivered;
+    }
+    if snapshot.state == CustodyState::Dispatching
+        && now_ms.saturating_sub(snapshot.updated_at_ms) < max_age_ms
+    {
+        return RetentionDecision::KeepRecentlyDispatched;
+    }
+    if now_ms.saturating_sub(snapshot.accepted_at_ms) < max_age_ms {
+        return RetentionDecision::KeepWithinWindow;
+    }
+    match current {
+        Some(current)
+            if current.state == snapshot.state
+                && current.updated_at_ms == snapshot.updated_at_ms
+                && current.delivery_attempts == snapshot.delivery_attempts => {}
+        _ => return RetentionDecision::KeepChanged,
+    }
+    RetentionDecision::Purge
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -286,6 +394,12 @@ pub enum CustodyState {
     Accepted,
     Dispatching,
     Delivered,
+    /// TRN-04: the record aged out of the retention window without being
+    /// delivered. Recorded in the audit trail so an operator can tell a
+    /// dropped-by-policy message apart from a delivered one; the record itself
+    /// is removed from storage. Appended last so existing bincode variants
+    /// (Accepted=0, Dispatching=1, Delivered=2) keep their encoding.
+    Expired,
 }
 
 impl CustodyState {
@@ -294,6 +408,7 @@ impl CustodyState {
             CustodyState::Accepted => "accepted",
             CustodyState::Dispatching => "dispatching",
             CustodyState::Delivered => "delivered",
+            CustodyState::Expired => "expired",
         }
     }
 }
@@ -593,8 +708,51 @@ impl RelayCustodyStore {
         recipient_identity_id: Option<String>,
         intended_device_id: Option<String>,
     ) -> Result<CustodyMessage, String> {
+        // TRN-04: admission control for the identifiers that become storage-key
+        // components. This runs BEFORE `find_existing`, which already builds a
+        // scan prefix out of `destination_peer_id` -- so an unvalidated
+        // destination is not merely stored, it is scanned for on the very first
+        // line of custody ingestion.
+        validate_custody_token(
+            "source_peer_id",
+            &source_peer_id,
+            CUSTODY_MAX_IDENTIFIER_CHARS,
+        )?;
+        validate_custody_destination_identifier(&destination_peer_id)?;
+        if source_peer_id == destination_peer_id {
+            // A custody hop from X to X cannot deliver anything the node itself
+            // is not already the endpoint for; its only effect is to consume
+            // storage under a key the sender also controls. Refuse it.
+            return Err("custody self-relay rejected (source == destination)".to_string());
+        }
+
+        // Dedup: an identical (destination, relay_message_id) pair is the same
+        // custody record, so return the existing one rather than storing a
+        // second copy under a fresh custody_id.
         if let Some(existing) = self.find_existing(&destination_peer_id, &relay_message_id)? {
             return Ok(existing);
+        }
+
+        // Strict cryptographic bounds and payload validation for all custody acceptance
+        if envelope_data.is_empty() || envelope_data.len() > 65_536 {
+            return Err("envelope data outside allowed bounds (1..=65536)".to_string());
+        }
+        if relay_message_id.is_empty() || relay_message_id.len() > 128 {
+            return Err("invalid relay message id".to_string());
+        }
+        validate_custody_token("relay_message_id", &relay_message_id, 128)?;
+        if let Some(ref raw_id) = recipient_identity_id {
+            if raw_id.len() != 64 || !raw_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "invalid recipient identity id format for cooperative custody: {}",
+                    raw_id
+                ));
+            }
+        }
+        if let Some(ref dev_id) = intended_device_id {
+            if dev_id.is_empty() || dev_id.len() > 128 {
+                return Err("invalid device id format for cooperative custody".to_string());
+            }
         }
 
         let normalized_recipient_identity_id =
@@ -624,6 +782,42 @@ impl RelayCustodyStore {
                         // The redirect is already handled at the transport layer by
                         // resolve_custody_metadata; here we just allow it through.
                         let _ = to_device_id;
+                    }
+                    Err(CustodyError::NoRegistration) => {
+                        // Cooperative mesh: recipient has no direct registration on this node,
+                        // accept custody for store-and-forward while strictly enforcing cryptographic
+                        // and payload invariants:
+                        // 1. Recipient identity must be a valid 64-character hex Blake3 hash.
+                        if identity_id.len() != 64
+                            || !identity_id.chars().all(|c| c.is_ascii_hexdigit())
+                        {
+                            return Err(format!(
+                                "invalid recipient identity id format for cooperative custody: {}",
+                                identity_id
+                            ));
+                        }
+                        // 2. Intended device ID must be non-empty and bounded.
+                        if device_id.is_empty() || device_id.len() > 128 {
+                            return Err(
+                                "invalid device id format for cooperative custody".to_string()
+                            );
+                        }
+                        // 3. Envelope payload must be bounded (1..=65536 bytes).
+                        if envelope_data.is_empty() || envelope_data.len() > 65_536 {
+                            return Err(
+                                "envelope data outside allowed bounds (1..=65536)".to_string()
+                            );
+                        }
+                        // 4. Relay message ID must be bounded.
+                        if relay_message_id.is_empty() || relay_message_id.len() > 128 {
+                            return Err("invalid relay message id".to_string());
+                        }
+
+                        tracing::debug!(
+                            identity_id,
+                            device_id,
+                            "node custody accepted in cooperative mesh mode (unregistered identity)"
+                        );
                     }
                     Err(error) => {
                         return Err(error.to_string());
@@ -711,11 +905,183 @@ impl RelayCustodyStore {
         self.enforce_storage_pressure_internal(None)
     }
 
+    /// TRN-04: age-based retention sweep for custody records.
+    ///
+    /// Removes every non-delivered record whose `accepted_at_ms` is older than
+    /// `max_age_ms`, recording an `expired` transition for each so the drop is
+    /// attributable in the audit trail rather than silent.
+    ///
+    /// A record still marked `Delivered` is skipped. That is defensive, not
+    /// load-bearing: `mark_delivered` writes the transition and then REMOVES the
+    /// record, so delivery normally leaves no row behind. A stored `Delivered`
+    /// record therefore means a crash between that write and its removal, or
+    /// data from an older build -- and in that case leaving the one trace of it
+    /// alone is the safer default. The delivery trail proper is the transition
+    /// log, which this sweep never touches.
+    ///
+    /// `max_age_ms == 0` disables retention and returns an empty report; it does
+    /// not mean "expire everything".
+    pub fn purge_expired_custody(&self, max_age_ms: u64) -> Result<CustodyRetentionReport, String> {
+        let mut report = CustodyRetentionReport {
+            max_age_ms,
+            ..Default::default()
+        };
+        if max_age_ms == 0 {
+            return Ok(report);
+        }
+
+        let now = now_ms();
+        let records = self.load_stored_records()?;
+        report.scanned = records.len();
+
+        for stored in records {
+            let record = stored.record;
+            // Rule-8 review of PR #305, c2: the scan above produces CANDIDATES.
+            // Re-read each one and let one pure decision function say whether it
+            // may be deleted, so a dispatcher that moved it between the scan and
+            // this delete keeps its record and its transition instead of having
+            // the sweep remove them underneath it. The re-read costs one get per
+            // scanned record; the sweep is a 5-minute single pass, and the v0.4.0
+            // fleet holds tens of records, not millions.
+            let current = self
+                .require_record(&record.destination_peer_id, &record.custody_id)
+                .ok();
+            match retention_decision(&record, current.as_ref(), now, max_age_ms) {
+                RetentionDecision::Purge => {}
+                RetentionDecision::KeepRecentlyDispatched => {
+                    report.skipped_recently_dispatched += 1;
+                    continue;
+                }
+                RetentionDecision::KeepChanged => {
+                    report.skipped_changed += 1;
+                    continue;
+                }
+                // Delivered-within-window and still-fresh records are routine,
+                // not deferrals, so they are not counted as skips.
+                RetentionDecision::KeepDelivered | RetentionDecision::KeepWithinWindow => {
+                    continue;
+                }
+            }
+
+            report.expired += 1;
+            self.record_transition(
+                &record,
+                Some(record.state),
+                CustodyState::Expired,
+                "custody_expired",
+            )?;
+            self.remove_message(&record.destination_peer_id, &record.custody_id)?;
+            report.purged_records += 1;
+            report.purged_bytes = report.purged_bytes.saturating_add(stored.serialized_bytes);
+        }
+
+        // Rule-8 review c6: the loop above deletes message rows, but every
+        // expiry also appended a transition row, so without this the trail grows
+        // for the life of the node and the storage growth the retention window
+        // was filed against continues. Bound the trail, with the audit window
+        // floored at the default (see CUSTODY_MIN_AUDIT_RETENTION_MS) so a
+        // narrowed message window cannot erase the record of what it dropped.
+        // This is the operator-authorized trade-off: the trail is retained for
+        // the retention window, not forever, and the count dropped is reported.
+        let audit_window = max_age_ms.max(CUSTODY_MIN_AUDIT_RETENTION_MS);
+        report.purged_transitions = self.purge_expired_custody_transitions(audit_window)?;
+
+        if report.purged_records > 0 || report.purged_transitions > 0 {
+            tracing::warn!(
+                "Custody retention sweep: expired {} of {} record(s), {} bytes reclaimed, {} transition row(s) dropped (window {}ms); deferred {} in-flight, {} changed",
+                report.purged_records,
+                report.scanned,
+                report.purged_bytes,
+                report.purged_transitions,
+                max_age_ms,
+                report.skipped_recently_dispatched,
+                report.skipped_changed
+            );
+        } else {
+            tracing::debug!(
+                "Custody retention sweep: {} record(s) scanned, none past the {}-ms window",
+                report.scanned,
+                max_age_ms
+            );
+        }
+
+        Ok(report)
+    }
+
+    /// TRN-04 / rule-8 review of PR #305, c6: bound the custody transition trail.
+    ///
+    /// Every lifecycle event appends a row under `relay_custody_audit_`, and
+    /// nothing used to remove them, so a node that only ever receives traffic it
+    /// later expires still accumulated one permanent row per event. The row key
+    /// is `relay_custody_audit_<at_ms:020>_...`, zero-padded so lexical order is
+    /// chronological: a row is past the window exactly when its embedded
+    /// timestamp is below the cut-off, which makes this a bounded sweep.
+    ///    /// Retention policy, and why it is not "delete rows older than the window":
+    ///
+    ///  * Custody that still EXISTS keeps its whole trail. Trimming a live
+    ///    record's earlier states would leave a trail that says "expired" about
+    ///    custody the node is still holding.
+    ///  * A finished custody is dropped WHOLE, once its LAST event is past the
+    ///    window. Deleting row-by-row would keep the newest row and lose the
+    ///    states that explain it -- a partial trail misattributes what happened,
+    ///    which is worse than a bounded one.
+    ///
+    /// So the audit window is measured from the end of a custody's life, and the
+    /// trail is retained for the same window as the custody it describes rather
+    /// than forever. That trade (long-horizon auditability for bounded storage)
+    /// is authorized by the operator with this rule-8 pass, and the number of
+    /// rows dropped is reported on every sweep.
+    pub fn purge_expired_custody_transitions(&self, max_age_ms: u64) -> Result<usize, String> {
+        if max_age_ms == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms().saturating_sub(max_age_ms);
+
+        let live: HashSet<String> = self
+            .load_stored_records()?
+            .into_iter()
+            .map(|stored| stored.record.custody_id)
+            .collect();
+
+        let mut groups: HashMap<String, (u64, Vec<Vec<u8>>)> = HashMap::new();
+        for (key, value) in self.backend.scan_prefix(CUSTODY_AUDIT_PREFIX.as_bytes())? {
+            let Ok(transition) = bincode::deserialize::<CustodyTransition>(&value) else {
+                continue;
+            };
+            let group = groups
+                .entry(transition.custody_id.clone())
+                .or_insert((0, Vec::new()));
+            group.0 = group.0.max(transition.at_ms);
+            group.1.push(key);
+        }
+
+        let mut purged = 0usize;
+        for (custody_id, (newest_at_ms, keys)) in groups {
+            if live.contains(&custody_id) || newest_at_ms >= cutoff {
+                continue;
+            }
+            for key in keys {
+                self.backend.remove(key.as_slice())?;
+                purged += 1;
+            }
+        }
+        if purged > 0 {
+            self.backend.flush()?;
+        }
+        Ok(purged)
+    }
+
     pub fn pending_for_destination(
         &self,
         destination_peer_id: &str,
         limit: usize,
     ) -> Vec<CustodyMessage> {
+        // Rule-8 review of PR #305, c5: this is a PREFIX scan, and
+        // `relay_custody_msg_<dest>_` is also a prefix of the keys of any
+        // destination that continues with `<dest>_`. Rows written by a build that
+        // predates the separator ban can therefore sit under this destination's
+        // prefix, and serving them here hands a message to the wrong destination.
+        // Match the record's OWN destination exactly, whatever the key says.
         let prefix = destination_prefix(destination_peer_id);
         let mut records: Vec<CustodyMessage> = self
             .backend
@@ -723,6 +1089,7 @@ impl RelayCustodyStore {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(_, value)| bincode::deserialize::<CustodyMessage>(&value).ok())
+            .filter(|record| record.destination_peer_id == destination_peer_id)
             .filter(|record| record.state == CustodyState::Accepted)
             .collect();
         records.sort_by_key(|record| (record.accepted_at_ms, record.custody_id.clone()));
@@ -1832,6 +2199,52 @@ fn destination_prefix(destination_peer_id: &str) -> String {
     format!("{}{}_", CUSTODY_MSG_PREFIX, destination_peer_id)
 }
 
+/// TRN-04: admission control for a custody ingestion field.
+///
+/// The store boundary has always accepted opaque caller-supplied strings -- the
+/// swarm passes `peer.to_string()`, integration tests pass placeholder tokens
+/// such as `"source-peer"` -- so this deliberately does NOT require a parseable
+/// `libp2p::PeerId`. It requires a *bounded, printable* token, which is what
+/// removes unbounded key growth without breaking opaque-token callers.
+fn validate_custody_token(label: &str, value: &str, max_chars: usize) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{} must not be empty", label));
+    }
+    if value.len() > max_chars {
+        return Err(format!(
+            "{} exceeds {} characters ({} given)",
+            label,
+            max_chars,
+            value.len()
+        ));
+    }
+    if !value.is_ascii() {
+        return Err(format!("{} must be ASCII", label));
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(format!("{} must not contain control characters", label));
+    }
+    Ok(())
+}
+
+/// TRN-04: `destination_peer_id` is the one ingestion field that is a *storage
+/// key component* -- `destination_prefix` and `message_key` are built from it --
+/// so it carries a stricter rule than the other fields: it must additionally be
+/// free of [`CUSTODY_KEY_SEPARATOR`]. Without that, destination `"a"` scans the
+/// prefix `relay_custody_msg_a_`, which is also a prefix of destination
+/// `"a_b"`'s keys, and `message_key("a", "b_c")` equals
+/// `message_key("a_b", "c")` exactly.
+fn validate_custody_destination_identifier(value: &str) -> Result<(), String> {
+    validate_custody_token("destination_peer_id", value, CUSTODY_MAX_IDENTIFIER_CHARS)?;
+    if value.contains(CUSTODY_KEY_SEPARATOR) {
+        return Err(format!(
+            "destination_peer_id must not contain the '{}' key separator",
+            CUSTODY_KEY_SEPARATOR
+        ));
+    }
+    Ok(())
+}
+
 fn message_key(destination_peer_id: &str, custody_id: &str) -> String {
     format!("{}{}", destination_prefix(destination_peer_id), custody_id)
 }
@@ -2827,6 +3240,564 @@ mod tests {
             (pct - 75.0).abs() < f64::EPSILON,
             "adoption_pct should be 75.0, got {}",
             pct
+        );
+    }
+
+    #[test]
+    fn accept_custody_accepts_unregistered_identity_in_cooperative_mesh() {
+        let store = RelayCustodyStore::in_memory();
+        let identity_id = "e".repeat(64);
+        let device_id = Uuid::new_v4().to_string();
+
+        // No prior registration exists for this identity.
+        // In a cooperative mesh, nodes relay custody for communicating peers
+        // even if the recipient has not directly registered with this node.
+        let result = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-cooperative-unregistered".to_string(),
+            vec![1, 2, 3],
+            Some(identity_id.clone()),
+            Some(device_id.clone()),
+        );
+
+        assert!(
+            result.is_ok(),
+            "Cooperative mesh must accept custody for unregistered recipients"
+        );
+        let msg = result.unwrap();
+        assert_eq!(
+            msg.recipient_identity_id.as_deref(),
+            Some(identity_id.as_str())
+        );
+        assert_eq!(msg.intended_device_id.as_deref(), Some(device_id.as_str()));
+    }
+
+    #[test]
+    fn accept_custody_rejects_invalid_unregistered_identity_or_payload() {
+        let store = RelayCustodyStore::in_memory();
+        let valid_identity_id = "a".repeat(64);
+        let valid_device_id = Uuid::new_v4().to_string();
+
+        // 1. Invalid identity ID format (short length)
+        let res_short = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-1".to_string(),
+            vec![1, 2, 3],
+            Some("short_id".to_string()),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_short.is_err(), "Short identity ID must be rejected");
+
+        // 2. Invalid identity ID format (non-hex chars)
+        let res_nonhex = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-2".to_string(),
+            vec![1, 2, 3],
+            Some("z".repeat(64)),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_nonhex.is_err(), "Non-hex identity ID must be rejected");
+
+        // 3. Empty envelope payload
+        let res_empty = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-3".to_string(),
+            vec![],
+            Some(valid_identity_id.clone()),
+            Some(valid_device_id.clone()),
+        );
+        assert!(res_empty.is_err(), "Empty payload must be rejected");
+
+        // 4. Oversized envelope payload (> 65536 bytes)
+        let res_oversized = store.accept_custody(
+            "source-peer".to_string(),
+            "dest-peer".to_string(),
+            "msg-invalid-4".to_string(),
+            vec![0u8; 65_537],
+            Some(valid_identity_id),
+            Some(valid_device_id),
+        );
+        assert!(res_oversized.is_err(), "Oversized payload must be rejected");
+    }
+
+    // --- TRN-04: custody ingestion admission control ---
+
+    #[test]
+    fn custody_ingestion_rejects_unbounded_and_malformed_identifiers() {
+        let store = RelayCustodyStore::in_memory();
+
+        // An unbounded destination is an unbounded storage key: 4 KiB of
+        // identifier became 4 KiB of key, and the store indexed it.
+        let oversized = "d".repeat(CUSTODY_MAX_IDENTIFIER_CHARS + 1);
+        let err = store
+            .accept_custody(
+                "source-peer".to_string(),
+                oversized,
+                "msg-bounded-1".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .expect_err("oversized destination must be rejected");
+        assert!(err.contains("exceeds"), "unexpected error: {}", err);
+
+        // Empty identifiers compact two different senders onto one key space.
+        assert!(store
+            .accept_custody(
+                String::new(),
+                "dest-peer".to_string(),
+                "msg-bounded-2".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .is_err());
+        assert!(store
+            .accept_custody(
+                "source-peer".to_string(),
+                String::new(),
+                "msg-bounded-3".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .is_err());
+
+        // A control character lets a caller forge structured log and audit lines.
+        assert!(store
+            .accept_custody(
+                "source\npeer".to_string(),
+                "dest-peer".to_string(),
+                "msg-bounded-4".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .is_err());
+
+        // Non-ASCII is refused for the same reason.
+        assert!(store
+            .accept_custody(
+                "source-peer".to_string(),
+                "dest\u{202e}peer".to_string(),
+                "msg-bounded-5".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .is_err());
+
+        // The opaque-token contract is preserved: a placeholder token that is
+        // bounded and printable is still accepted (integration tests rely on it).
+        assert!(store
+            .accept_custody(
+                "source-peer".to_string(),
+                "dest-peer".to_string(),
+                "msg-bounded-ok".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn custody_ingestion_rejects_self_relay() {
+        let store = RelayCustodyStore::in_memory();
+        let err = store
+            .accept_custody(
+                "dest-peer".to_string(),
+                "dest-peer".to_string(),
+                "msg-self-1".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .expect_err("a custody hop from X to X must be refused");
+        assert!(err.contains("self-relay"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn custody_destination_prefix_must_not_alias_across_destinations() {
+        // The hazard the destination rule exists to prevent, stated as
+        // arithmetic rather than as prose. Both keys are byte-identical...
+        assert_eq!(message_key("a", "b_c"), message_key("a_b", "c"));
+        // ...and destination "a"'s scan prefix is a byte prefix of destination
+        // "a_b"'s keys, so `pending_for_destination("a")` would also return
+        // records addressed to "a_b".
+        assert!(message_key("a_b", "c").starts_with(&destination_prefix("a")));
+
+        // Therefore a destination carrying the separator is refused at ingestion.
+        let store = RelayCustodyStore::in_memory();
+        let err = store
+            .accept_custody(
+                "source-peer".to_string(),
+                "a_b".to_string(),
+                "msg-alias-1".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .expect_err("a destination containing the key separator must be rejected");
+        assert!(err.contains("key separator"), "unexpected error: {}", err);
+    }
+
+    fn aged_custody_record(
+        destination: &str,
+        relay_message_id: &str,
+        accepted_at_ms: u64,
+        state: CustodyState,
+    ) -> CustodyMessage {
+        CustodyMessage {
+            custody_id: format!("{}-custody", relay_message_id),
+            relay_message_id: relay_message_id.to_string(),
+            source_peer_id: "source-peer".to_string(),
+            destination_peer_id: destination.to_string(),
+            recipient_identity_id: None,
+            intended_device_id: None,
+            envelope_data: vec![1, 2, 3],
+            state,
+            accepted_at_ms,
+            updated_at_ms: accepted_at_ms,
+            delivery_attempts: 0,
+        }
+    }
+
+    #[test]
+    fn custody_retention_expires_only_undelivered_records_past_the_window() {
+        let store = RelayCustodyStore::in_memory();
+        let now = now_ms();
+        let stale = now.saturating_sub(CUSTODY_DEFAULT_MAX_AGE_MS + 60_000);
+        let fresh = now.saturating_sub(60_000);
+
+        store
+            .put_message(&aged_custody_record(
+                "dest-expire",
+                "msg-expire",
+                stale,
+                CustodyState::Accepted,
+            ))
+            .expect("seed expired record");
+        store
+            .put_message(&aged_custody_record(
+                "dest-fresh",
+                "msg-fresh",
+                fresh,
+                CustodyState::Accepted,
+            ))
+            .expect("seed fresh record");
+        // Seeded directly because the real delivery path (mark_delivered)
+        // removes the record; this row stands in for the crash/legacy leftover
+        // the sweep's Delivered guard exists for.
+        store
+            .put_message(&aged_custody_record(
+                "dest-delivered",
+                "msg-delivered",
+                stale,
+                CustodyState::Delivered,
+            ))
+            .expect("seed delivered record");
+
+        let report = store
+            .purge_expired_custody(CUSTODY_DEFAULT_MAX_AGE_MS)
+            .expect("retention sweep must succeed");
+        assert_eq!(report.scanned, 3, "the sweep must see all three records");
+        assert_eq!(report.expired, 1);
+        assert_eq!(report.purged_records, 1);
+        assert!(report.purged_bytes > 0, "reclaimed bytes must be reported");
+        assert_eq!(report.max_age_ms, CUSTODY_DEFAULT_MAX_AGE_MS);
+
+        // Expired: gone from the pending set.
+        assert!(store.pending_for_destination("dest-expire", 10).is_empty());
+        // Fresh: retained, because the window has not elapsed.
+        assert_eq!(store.pending_for_destination("dest-fresh", 10).len(), 1);
+        // A stored Delivered row is a crashed-handover leftover; the sweep
+        // leaves it rather than deleting the only trace of it. The delivery
+        // trail itself is the transition log, which this sweep never touches.
+        assert!(store.has_message_for_destination("dest-delivered", "msg-delivered"));
+
+        // The drop is attributable, not silent.
+        let transitions = store.transitions_for_custody("msg-expire-custody");
+        assert_eq!(
+            transitions.len(),
+            1,
+            "expiry must write exactly one transition"
+        );
+        assert_eq!(transitions[0].from_state, Some(CustodyState::Accepted));
+        assert_eq!(transitions[0].to_state, CustodyState::Expired);
+        assert_eq!(transitions[0].reason, "custody_expired");
+
+        // max_age_ms == 0 disables retention rather than expiring everything.
+        let disabled = store.purge_expired_custody(0).expect("disabled sweep");
+        assert_eq!(disabled.purged_records, 0);
+        assert_eq!(disabled.scanned, 0);
+        assert_eq!(store.pending_for_destination("dest-fresh", 10).len(), 1);
+    }
+
+    // --- rule-8 review of PR #305: one regression test per confirmed defect ---
+
+    #[test]
+    fn retention_decision_defers_to_a_live_dispatch_and_to_a_changed_record() {
+        // c2. The sweep used to decide from its own snapshot alone, so a record a
+        // dispatcher had just moved -- or was about to move -- was deleted
+        // underneath it. The decision is one pure function, so every branch of
+        // that rule is pinned here.
+        let now = now_ms();
+        let window = CUSTODY_DEFAULT_MAX_AGE_MS;
+        let stale = now.saturating_sub(window + 60_000);
+
+        let candidate = aged_custody_record("dest-a", "msg-a", stale, CustodyState::Accepted);
+        assert_eq!(
+            retention_decision(&candidate, Some(&candidate), now, window),
+            RetentionDecision::Purge,
+            "an aged record nobody is touching is the case the sweep exists for"
+        );
+
+        // Aged, but in mid-dispatch with a fresh state change: this is custody
+        // being delivered right now. Without the mid-dispatch guard the sweep
+        // deletes it mid-flight.
+        let mut dispatching = candidate.clone();
+        dispatching.state = CustodyState::Dispatching;
+        dispatching.updated_at_ms = now.saturating_sub(1_000);
+        assert_eq!(
+            retention_decision(&dispatching, Some(&dispatching), now, window),
+            RetentionDecision::KeepRecentlyDispatched
+        );
+
+        // A dispatch stuck past the window is still reclaimed, or a crashed
+        // dispatch would pin the record forever.
+        let mut stuck = dispatching.clone();
+        stuck.updated_at_ms = stale;
+        assert_eq!(
+            retention_decision(&stuck, Some(&stuck), now, window),
+            RetentionDecision::Purge
+        );
+
+        // Aged, and the stored record moved on after the scan: deleting a stale
+        // read is exactly how a live delivery loses its record and its trail.
+        let mut moved = candidate.clone();
+        moved.state = CustodyState::Dispatching;
+        moved.updated_at_ms = now.saturating_sub(window / 2);
+        assert_eq!(
+            retention_decision(&candidate, Some(&moved), now, window),
+            RetentionDecision::KeepChanged
+        );
+        // Vanished between the scan and the delete: nothing to delete, and the
+        // sweep must not treat a missing record as a successful expiry.
+        assert_eq!(
+            retention_decision(&candidate, None, now, window),
+            RetentionDecision::KeepChanged
+        );
+
+        // Inside the window: untouched by retention.
+        let fresh = aged_custody_record(
+            "dest-b",
+            "msg-b",
+            now.saturating_sub(60_000),
+            CustodyState::Accepted,
+        );
+        assert_eq!(
+            retention_decision(&fresh, Some(&fresh), now, window),
+            RetentionDecision::KeepWithinWindow
+        );
+
+        // A stored Delivered row is a crashed handover, not a live obligation.
+        let delivered = aged_custody_record("dest-c", "msg-c", stale, CustodyState::Delivered);
+        assert_eq!(
+            retention_decision(&delivered, Some(&delivered), now, window),
+            RetentionDecision::KeepDelivered
+        );
+    }
+
+    #[test]
+    fn sweep_does_not_delete_a_record_that_is_mid_dispatch() {
+        // c2, end to end through the real state machine rather than the pure
+        // decision: mark_dispatching moves the record and refreshes updated_at,
+        // and the sweep must leave it alone even though accepted_at is past the
+        // window.
+        let store = RelayCustodyStore::in_memory();
+        let stale = now_ms().saturating_sub(CUSTODY_DEFAULT_MAX_AGE_MS + 60_000);
+        store
+            .put_message(&aged_custody_record(
+                "dest-live",
+                "msg-live",
+                stale,
+                CustodyState::Accepted,
+            ))
+            .expect("seed aged record");
+        store
+            .mark_dispatching("dest-live", "msg-live-custody", "regression-test")
+            .expect("enter dispatch");
+
+        let report = store
+            .purge_expired_custody(CUSTODY_DEFAULT_MAX_AGE_MS)
+            .expect("retention sweep must succeed");
+        assert_eq!(
+            report.purged_records, 0,
+            "a record being delivered must not be expired"
+        );
+        assert_eq!(report.skipped_recently_dispatched, 1);
+        assert!(
+            store.has_message_for_destination("dest-live", "msg-live"),
+            "the in-flight record must still be there"
+        );
+    }
+
+    #[test]
+    fn a_legacy_record_with_a_separator_is_not_served_to_another_destination() {
+        // c5. The separator ban stops NEW aliased keys, but rows written before
+        // the ban still sit under a shorter destination's scan prefix. Serving
+        // by prefix alone hands them to the wrong destination.
+        let store = RelayCustodyStore::in_memory();
+        let mut legacy = aged_custody_record(
+            "des_tination",
+            "msg-legacy",
+            now_ms(),
+            CustodyState::Accepted,
+        );
+        legacy.destination_peer_id = "des_tination".to_string();
+        store.put_message(&legacy).expect("seed legacy row");
+
+        assert!(
+            store.pending_for_destination("des", 10).is_empty(),
+            "a row addressed to another destination must never be served to this one"
+        );
+        assert_eq!(
+            store.pending_for_destination("des_tination", 10).len(),
+            1,
+            "the row is still served to the destination it is actually addressed to"
+        );
+    }
+
+    #[test]
+    fn retention_bounds_the_transition_trail_too() {
+        // c6. Bounding the message rows while every expiry appends a permanent
+        // transition row only half-bounds storage, which is the finding this
+        // closes. The trail is retained for the same window as the custody it
+        // describes.
+        let store = RelayCustodyStore::in_memory();
+        let stale = now_ms().saturating_sub(CUSTODY_DEFAULT_MAX_AGE_MS + 60_000);
+        store
+            .put_message(&aged_custody_record(
+                "dest-trail",
+                "msg-trail",
+                stale,
+                CustodyState::Accepted,
+            ))
+            .expect("seed aged record");
+
+        let first = store
+            .purge_expired_custody(CUSTODY_DEFAULT_MAX_AGE_MS)
+            .expect("retention sweep must succeed");
+        assert_eq!(first.purged_records, 1);
+        assert_eq!(
+            first.purged_transitions, 0,
+            "the expiry row just written is inside the window"
+        );
+        assert_eq!(
+            store.audit_count(),
+            1,
+            "the drop is attributable while it is inside the window"
+        );
+
+        // A narrowed MESSAGE window must not narrow the audit window: sweeping
+        // with 1 ms keeps the trail, because the trail is what explains a drop.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let narrowed = store
+            .purge_expired_custody(1)
+            .expect("tight-window sweep must succeed");
+        assert_eq!(
+            narrowed.purged_transitions, 0,
+            "the audit window is floored at the default custody window"
+        );
+        assert_eq!(store.audit_count(), 1);
+
+        // The raw mechanism, called directly, drops a FINISHED custody's trail
+        // whole once its last event is past the window. Waiting the default
+        // window out is not an option in a unit test, so the window is passed in.
+        let dropped = store
+            .purge_expired_custody_transitions(1)
+            .expect("trail sweep must succeed");
+        assert_eq!(dropped, 1, "the finished custody's trail must be dropped");
+        assert_eq!(store.audit_count(), 0);
+    }
+
+    #[test]
+    fn trail_of_custody_that_still_exists_is_never_truncated() {
+        // c6's collateral-damage guard: bounding the trail must not orphan the
+        // history of custody the node is still holding. A live record's trail
+        // survives even an absurdly narrow audit window.
+        let store = RelayCustodyStore::in_memory();
+        let stale = now_ms().saturating_sub(CUSTODY_DEFAULT_MAX_AGE_MS + 60_000);
+        store
+            .put_message(&aged_custody_record(
+                "dest-held",
+                "msg-held",
+                stale,
+                CustodyState::Accepted,
+            ))
+            .expect("seed held record");
+        store
+            .record_transition(
+                &aged_custody_record("dest-held", "msg-held", stale, CustodyState::Accepted),
+                None,
+                CustodyState::Accepted,
+                "seeded",
+            )
+            .expect("seed transition");
+        assert_eq!(store.audit_count(), 1);
+
+        let dropped = store
+            .purge_expired_custody_transitions(1)
+            .expect("trail sweep must succeed");
+        assert_eq!(
+            dropped, 0,
+            "a live record's trail must never be truncated, whatever the window"
+        );
+        assert_eq!(store.audit_count(), 1);
+    }
+
+    #[test]
+    fn a_delivered_trail_survives_a_zero_tolerance_message_sweep() {
+        // The case that made this policy flap on timing: a delivered record is
+        // gone (mark_delivered removes it), so its trail is the only trace. A
+        // sweep with a 1 ms message window must not delete it seconds later.
+        let store = RelayCustodyStore::in_memory();
+        store
+            .accept_custody(
+                "source-peer".to_string(),
+                "dest-done".to_string(),
+                "msg-done".to_string(),
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .expect("accept");
+        let custody_id = store
+            .pending_for_destination("dest-done", 1)
+            .first()
+            .map(|record| record.custody_id.clone())
+            .expect("pending record");
+        store
+            .mark_dispatching("dest-done", &custody_id, "dispatch")
+            .expect("dispatch");
+        store
+            .mark_delivered("dest-done", &custody_id, "delivered")
+            .expect("deliver");
+        assert_eq!(store.transitions_for_custody(&custody_id).len(), 3);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let report = store.purge_expired_custody(1).expect("tight-window sweep");
+        assert_eq!(report.purged_records, 0);
+        assert_eq!(report.purged_transitions, 0);
+        assert_eq!(
+            store.transitions_for_custody(&custody_id).len(),
+            3,
+            "the trail explaining a delivery must outlive the delivery sweep"
         );
     }
 }
