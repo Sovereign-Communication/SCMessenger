@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.scmessenger.android.MainActivity
 import com.scmessenger.android.util.AppRestartHelper
+import com.scmessenger.android.utils.inCausalOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -125,6 +126,12 @@ class MeshRepositoryHistoryTest {
      * rendered a reply above its trigger. It would have passed on either
      * behaviour. This drives the real store instead: two rows in one local
      * second written in causal order, read back through a fresh handle.
+     *
+     * Expected orders are not eyeballed. They are the store's four keys and this
+     * module's `inCausalOrder()` comparator, both applied offline to exactly the
+     * rows written below. No workflow compiles or starts this source set
+     * (`mobile.yml` runs `:app:testDebugUnitTest` and `:app:assembleDebug` only),
+     * so that simulation is the strongest verification this test can have.
      */
     @Test
     fun messageHistory_orderingPreservedAcrossRestart() {
@@ -136,30 +143,28 @@ class MeshRepositoryHistoryTest {
         val path = dir.absolutePath
 
         // The store owns the insertion fact: a row added without one is stamped.
+        // It is written under its OWN peer, so the conversation read below holds
+        // exactly the two rows this test asserts on.
         val first = HistoryManager(path)
-        first.add(row("stamped-1", 1_789_841_591uL, 1_789_841_591uL, 0uL))
+        first.add(row("stamped-1", STAMP_PEER_ID, SECOND, SECOND, 0uL))
         val stamped = first.get("stamped-1")
-        assertNotNull("the trigger must be stored", stamped)
+        assertNotNull("the row must be stored", stamped)
         assertTrue("the store must stamp an insertion fact", stamped!!.storedAtMillis > 0uL)
         first.close()
 
         // Restart: a fresh handle re-reads the same store from disk.
-        val second = HistoryManager(path)
-        second.add(row("zz-trigger", 1_789_841_591uL, 1_789_841_591uL, 1_000uL))
-        second.add(row("aa-reply", 1_789_841_591uL, 1_789_841_590uL, 1_270uL))
-        second.flush()
-        val reloaded = second.conversation(PEER_ID, 10u)
-        second.close()
+        val reopened = HistoryManager(path)
+        reopened.add(row("zz-trigger", PEER_ID, SECOND, SECOND, SECOND * 1_000uL))
+        reopened.add(row("aa-reply", PEER_ID, SECOND, SECOND - 1uL, SECOND * 1_000uL + 270uL))
+        reopened.flush()
+        val reloaded = reopened.conversation(PEER_ID, 10u)
+        reopened.close()
 
-        // The store hands the conversation over newest first, keyed on the
-        // insertion fact rather than the message id.
+        // The store hands the conversation over newest first.
         assertEquals(listOf("aa-reply", "zz-trigger"), reloaded.map { it.id })
-        // The UI's key is that same pair ascending, so the trigger renders
-        // first even though the store listed the reply first.
-        assertEquals(
-            listOf("zz-trigger", "aa-reply"),
-            reloaded.sortedWith(compareBy({ it.timestamp }, { it.storedAtMillis })).map { it.id }
-        )
+        // The display order, through the comparator this module ships: the
+        // trigger first, its reply 270 ms of insertion fact later.
+        assertEquals(listOf("zz-trigger", "aa-reply"), reloaded.inCausalOrder().map { it.id })
         // The pre-#309 key inverts the pair: the reply's sender clock is one
         // second BEHIND its trigger's, which is the defect this test pins.
         assertEquals(
@@ -170,13 +175,14 @@ class MeshRepositoryHistoryTest {
 
     private fun row(
         id: String,
+        peerId: String,
         timestamp: ULong,
         senderTimestamp: ULong,
         storedAtMillis: ULong
     ) = MessageRecord(
         id = id,
         direction = MessageDirection.RECEIVED,
-        peerId = PEER_ID,
+        peerId = peerId,
         content = id,
         timestamp = timestamp,
         senderTimestamp = senderTimestamp,
@@ -188,5 +194,7 @@ class MeshRepositoryHistoryTest {
 
     private companion object {
         const val PEER_ID = "peer-order-test"
+        const val STAMP_PEER_ID = "peer-stamp-test"
+        const val SECOND = 1_789_841_591uL
     }
 }

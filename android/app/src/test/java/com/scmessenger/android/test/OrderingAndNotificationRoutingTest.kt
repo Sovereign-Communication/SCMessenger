@@ -85,6 +85,24 @@ class OrderingAndNotificationRoutingTest {
     }
 
     @Test
+    fun `a full tie is decided by id, not by the order the list was built in`() {
+        // The last key makes the ordering total, so two rows nothing can separate
+        // (same second, same direction, no insertion fact, same sender stamp)
+        // display in one deterministic order whatever the input looked like.
+        val a = record(
+            "a-dupe", MessageDirection.RECEIVED,
+            timestamp = 1_789_841_592uL, senderTimestamp = 1_789_841_592uL
+        )
+        val b = record(
+            "b-dupe", MessageDirection.RECEIVED,
+            timestamp = 1_789_841_592uL, senderTimestamp = 1_789_841_592uL
+        )
+
+        assertEquals(listOf("a-dupe", "b-dupe"), listOf(a, b).inCausalOrder().map { it.id })
+        assertEquals(listOf("a-dupe", "b-dupe"), listOf(b, a).inCausalOrder().map { it.id })
+    }
+
+    @Test
     fun `legacy rows without an insertion fact still render the trigger first`() {
         // Rows written before the store recorded an insertion fact (storedAtMillis
         // is 0 on both) still have to put a same-second reply below its trigger.

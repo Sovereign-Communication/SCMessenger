@@ -3168,8 +3168,8 @@ fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Opt
     false
 }
 
-/// MSG-ORDER-003: the conversation order the store and the UI share. Every key
-/// is either a recorded fact or a direction that cannot contradict causality:
+/// MSG-ORDER-003: the conversation order the store and the UI share. Every key is
+/// either a recorded fact or a direction that cannot contradict causality:
 ///
 /// 1. `timestamp` -- the local second, which is what ties in the first place.
 /// 2. `stored_at_millis` -- the recorded insertion fact. Two rows cannot be
@@ -3181,16 +3181,19 @@ fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Opt
 ///    contradict causality: an auto-reply cannot be generated before the message
 ///    it answers, so ranking our sent row first is safe, while the id order that
 ///    shipped is not -- 24 of 332 real auto-reply pairs on the operator's Pixel
-///    reloaded with the reply above its trigger that way. A reply to a message
-///    the peer sent (both rows Received) is untouched by this key.
-/// 4. `sender_timestamp` -- the sender's own clock. It is only consulted when
-///    both rows share a direction, which means both stamps come from one clock,
-///    and then it is that sender's real send order (the 4 Received-trigger
-///    pairs in the corpus).
-/// 5. `id` -- arbitrary, and last: a deterministic tie-break, nothing more.
+///    reloaded with the reply above its trigger that way.
+/// 4. `id` -- arbitrary, and last: a deterministic tie-break, nothing more. It is
+///    what makes this a total order, so no caller inherits the iteration order.
 ///
-/// The Android side sorts the same keys ascending (`utils/MessageOrder.kt`), so
-/// the store's list and the rendered thread agree.
+/// A tie between two rows the peer sent (both Received, so the rank cannot
+/// separate them) therefore falls to `id`. The corpus has four such trigger
+/// pairs and none of them tied, so the sender-clock key that used to cover that
+/// shape was carrying a rule no case exercised; it is gone.
+///
+/// These are the same four keys as `utils/MessageOrder.kt`, in reverse -- the UI
+/// sorts ascending for display, the store descending so callers get newest
+/// first. Nothing checks the two lists against each other: change one, change
+/// both.
 fn direction_rank(direction: MessageDirection) -> u8 {
     match direction {
         MessageDirection::Sent => 0,
@@ -3203,7 +3206,6 @@ fn newest_first(a: &MessageRecord, b: &MessageRecord) -> std::cmp::Ordering {
         .cmp(&a.timestamp)
         .then_with(|| b.stored_at_millis.cmp(&a.stored_at_millis))
         .then_with(|| direction_rank(b.direction).cmp(&direction_rank(a.direction)))
-        .then_with(|| b.sender_timestamp.cmp(&a.sender_timestamp))
         .then_with(|| b.id.cmp(&a.id))
 }
 
