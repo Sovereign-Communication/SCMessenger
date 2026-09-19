@@ -18,16 +18,28 @@
 #   SCM_SSH_KEY            SSH key for the cloud node (default ~/.ssh/scm-node-key.pem)
 #   SCMESSENGER_DATA_DIR   Windows node data dir (default %LOCALAPPDATA%/scmessenger)
 #   SCM_SKIP_REMOTE_SUDO=1 skip the remote probes that need sudo (A2 SHA)
+#   SCM_RESAMPLE_ATTEMPTS  reads of a transient mesh state before it is called a
+#                          regression (default 2: the first sample plus one
+#                          re-sample). Raise it to chase a longer blip.
+#   SCM_RESAMPLE_DELAY     seconds between those reads (default 1)
 #
 # Row verdicts:
 #   [OK]      the criterion was measured and holds
 #   [FAIL]    the criterion was measured and does not hold -- exit 1
-#   [WARNING] measured, but outside its own pass condition, or below a threshold
+#   [WARNING] measured, but outside its own pass condition, or below a threshold,
+#             or a transient state that did not persist across re-samples
 #   [SKIP]    NOT measured, so no verdict is available; the reason is printed
 #
 # A [SKIP] never substitutes for a verdict. It is what stops an unreachable node
 # or a missing baseline from being reported as a failure of the thing it was
 # supposed to compare.
+#
+# Measured-ness has exactly ONE definition in this script (measured(), below):
+# json_field removes the placeholder that a key the node never sent evaluates to,
+# every row asks measured(), and state_arg -- the only thing that feeds the state
+# writer -- blanks anything that is not a measurement. So an absent field can
+# never be stored as a value, and the record can never claim an observation that
+# did not happen.
 #
 # Cross-run state (scratch/driver/tier_a_conformance.json):
 #   Each run records what it measured, and CARRIES FORWARD the last value it did
@@ -88,8 +100,15 @@ http_body() { curl -s -m 8 "$1" 2>/dev/null; }
 json_has() { printf '%s' "$1" | tr -d ' \t\r\n' | grep -q "\"$2\":\"$3\""; }
 
 # json_field <json> <python-expression reading `d`>
+#
+# A key the node did not send evaluates to the literal None, and a JSON null
+# evaluates to the same thing. Neither is a measurement, so neither leaves this
+# function as text: mapping them to nothing here is what makes a placeholder
+# impossible downstream, and is what lets measured() be the only definition of
+# measured-ness in this script.
 json_field() {
-  printf '%s' "$1" | python3 -c "
+  local out
+  out="$(printf '%s' "$1" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -100,7 +119,11 @@ if not isinstance(d, dict):
     print('')
     raise SystemExit(0)
 print($2)
-"
+")"
+  case "$out" in
+    None|null) out="" ;;
+  esac
+  printf '%s' "$out"
 }
 
 sha_from_provenance() {
@@ -307,8 +330,101 @@ $(json_field "$AWS_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get
 EOF
 
 # "Empty" and "not observed" are different facts, and every row below has to say
-# which one it is looking at.
-measured() { [ -n "$1" ] && [ "$1" != "None" ]; }
+# which one it is looking at. This is the only definition of measured-ness in
+# the script: json_field has already turned the placeholder for a missing key
+# into nothing, and state_arg (below) is the only path into the state writer.
+measured() { [ -n "${1:-}" ] && [ "$1" != "None" ] && [ "$1" != "null" ]; }
+
+# state_arg <node> <field> <value> -- one "<node>.<field>=<value>" argument for
+# the state writer, BLANK when the value is not a measurement. This is where a
+# field's measured-ness is decided for the record; the writer stores what it is
+# given and has no second opinion, so an absent field is stored as not-measured
+# (observed false, value null) and no placeholder string can ever be written.
+state_arg() {
+  if measured "${3:-}"; then
+    printf '%s.%s=%s\n' "$1" "$2" "$3"
+  else
+    printf '%s.%s=\n' "$1" "$2"
+  fi
+}
+
+# ----------------------------------------------------------------------------
+# Transient mesh state.
+#
+# connection_path_state and the peer list are outputs of a state machine, not
+# counters: a node that has just (re)connected reports Bootstrapping and no
+# peers for a few seconds. One sample of that is not a regression -- observed
+# live on 2026-09-19, the cloud node reported Bootstrapping with zero peers and
+# was back to DirectPreferred with a peer present within 15 minutes, and a
+# single-sample [FAIL] there was the harness crying wolf. The failing path of A4
+# and A5 is therefore re-sampled, and only a condition that persists across
+# every sample is a [FAIL]; one that clears is reported as [WARNING] carrying
+# both readings. A healthy run never re-samples, so it pays nothing for this.
+#
+# The default budget is deliberately small (the first sample plus one a second
+# later) so that a rig with a persistently failing row still runs in about the
+# same time as before; raise SCM_RESAMPLE_ATTEMPTS to chase a longer blip. A
+# [FAIL] here prints every sample it took, so a condition that outlasted the
+# budget is visible as evidence rather than asserted from one reading.
+RESAMPLE_ATTEMPTS="${SCM_RESAMPLE_ATTEMPTS:-2}"
+RESAMPLE_DELAY="${SCM_RESAMPLE_DELAY:-1}"
+
+# resample_mesh <windows|cloud> -- the node's current "<path>|<peers>", fetched
+# now (not the cached first sample). Empty on no response.
+resample_mesh() {
+  local diag=""
+  case "$1" in
+    windows) diag="$(http_body "$WIN_URL/api/diagnostics")" ;;
+    cloud)
+      [ -n "$AWS_HOST" ] || return 1
+      diag="$(http_body "$AWS_URL/api/diagnostics")"
+      ;;
+    *) return 1 ;;
+  esac
+  json_field "$diag" "'|'.join([str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or []))])"
+}
+
+# retry_until <attempts> <delay> <predicate...> -- true as soon as the predicate
+# holds. The cadence lives here; what "ready" means stays with the row that owns
+# the criterion.
+retry_until() {
+  local attempts="$1" delay="$2" attempt=0
+  shift 2
+  while [ "$attempt" -lt "$attempts" ]; do
+    attempt=$((attempt + 1))
+    sleep "$delay"
+    if "$@"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# A re-sampled row records what its re-samples saw, so a transient verdict
+# prints its evidence instead of asserting itself.
+RESAMPLE_TRACE=""
+trace_sample() { RESAMPLE_TRACE="$RESAMPLE_TRACE; $1"; }
+
+# A4's predicate: both nodes now list each other.
+a4_mutual_now() {
+  local win aws
+  win="$(resample_mesh windows | cut -d'|' -f2)"
+  aws="$(resample_mesh cloud | cut -d'|' -f2)"
+  trace_sample "windows peers=[${win:-<none>}] cloud peers=[${aws:-<none>}]"
+  case ",$win," in *",$AWS_PEERID,"*) ;; *) return 1 ;; esac
+  case ",$aws," in *",$WIN_PEERID,"*) ;; *) return 1 ;; esac
+  return 0
+}
+
+# A5's predicate: neither node is still bootstrapping.
+a5_ready_now() {
+  local win aws
+  win="$(resample_mesh windows | cut -d'|' -f1)"
+  aws="$(resample_mesh cloud | cut -d'|' -f1)"
+  trace_sample "windows=${win:-<no response>} cloud=${aws:-<no response>}"
+  [ "$win" != "Bootstrapping" ] && [ "$aws" != "Bootstrapping" ] \
+    && measured "$win" && measured "$aws"
+}
 
 section 'Rows'
 
@@ -373,7 +489,9 @@ else
   row_fail "A3 identity CHANGED: windows ${PREV_WIN_ID:0:12} -> ${WIN_IDENTITY:0:12}; cloud ${PREV_AWS_ID:0:12} -> ${AWS_IDENTITY:0:12} (persistence regression, issue I-01)"
 fi
 
-# A4 -- mesh formed: each node lists the other as a direct peer.
+# A4 -- mesh formed: each node lists the other as a direct peer. A peer list is
+# transient state too, so the failing path is re-sampled before it is called a
+# regression (see the transient-resample note above).
 if [ -z "$AWS_HOST" ] || [ -z "$AWS_PEERID" ] || [ -z "$WIN_PEERID" ]; then
   row_warn "A4 mutual peer listing unproven (cloud node unresolved or an identity payload was empty)"
 else
@@ -388,18 +506,33 @@ else
   if [ "$WIN_HAS_AWS" = "yes" ] && [ "$AWS_HAS_WIN" = "yes" ]; then
     row_ok "A4 mesh formed: each node lists the other"
   else
-    row_fail "A4 mesh NOT formed: windows lists cloud=$WIN_HAS_AWS, cloud lists windows=$AWS_HAS_WIN (windows peers: ${WIN_PEERS:-none}; cloud peers: ${AWS_PEERS:-none})"
+    RESAMPLE_TRACE=""
+    if retry_until "$((RESAMPLE_ATTEMPTS - 1))" "$RESAMPLE_DELAY" a4_mutual_now; then
+      row_warn "A4 mutual peer listing was absent on the first of $RESAMPLE_ATTEMPTS samples and present on re-sample, so this is reported not failed (windows peers: ${WIN_PEERS:-none}; cloud peers: ${AWS_PEERS:-none})$RESAMPLE_TRACE"
+    else
+      row_fail "A4 mesh NOT formed: windows lists cloud=$WIN_HAS_AWS, cloud lists windows=$AWS_HAS_WIN (windows peers: ${WIN_PEERS:-none}; cloud peers: ${AWS_PEERS:-none})$RESAMPLE_TRACE"
+    fi
   fi
 fi
 
 # A5 -- connection path is not stuck bootstrapping. An unmeasured path state is
-# not a stuck one.
+# not a stuck one, and neither is a single Bootstrapping sample: the failing path
+# is re-sampled, and only a path that is still Bootstrapping across every sample
+# is a [FAIL].
 if ! measured "$WIN_PATH" || ! measured "$AWS_PATH"; then
   row_skip "A5 connection path not evaluated -- not measured (windows='${WIN_PATH}' cloud='${AWS_PATH}')"
 elif [ "$WIN_PATH" != "Bootstrapping" ] && [ "$AWS_PATH" != "Bootstrapping" ]; then
   row_ok "A5 connection path: windows=$WIN_PATH cloud=$AWS_PATH"
 else
-  row_fail "A5 connection path stuck: windows=${WIN_PATH:-<unknown>} cloud=${AWS_PATH:-<unknown>}"
+  A5_STUCK=""
+  [ "$WIN_PATH" = "Bootstrapping" ] && A5_STUCK="windows"
+  [ "$AWS_PATH" = "Bootstrapping" ] && A5_STUCK="${A5_STUCK:+$A5_STUCK }cloud"
+  RESAMPLE_TRACE=""
+  if retry_until "$((RESAMPLE_ATTEMPTS - 1))" "$RESAMPLE_DELAY" a5_ready_now; then
+    row_warn "A5 connection path was Bootstrapping on the first of $RESAMPLE_ATTEMPTS samples ($A5_STUCK) and is not on re-sample, so this is reported not failed (windows=$WIN_PATH cloud=$AWS_PATH)$RESAMPLE_TRACE"
+  else
+    row_fail "A5 connection path stuck Bootstrapping across $RESAMPLE_ATTEMPTS samples ($A5_STUCK): windows=${WIN_PATH:-<unknown>} cloud=${AWS_PATH:-<unknown>}$RESAMPLE_TRACE"
+  fi
 fi
 
 # A6 -- custody live. The ticket words this as "present and non-decreasing", but
@@ -559,19 +692,21 @@ row_skip "Tier A churn re-measure (SHIP_PLAN G3-0): needs a redeploy, not read-o
 # ----------------------------------------------------------------------------
 # Record this run: measured values replace the record, unmeasured ones carry the
 # last known good value forward so a degraded run cannot erase the baseline.
+# Every argument below goes through state_arg, which decided measured-ness --
+# so a blank value here means "not measured", never "the value was empty".
 # ----------------------------------------------------------------------------
 mkdir -p "$(dirname "$RESULTS_FILE")"
 STATE_NOTE="$(python3 - "$RESULTS_FILE" \
-  "windows.identity_id=$WIN_IDENTITY" \
-  "windows.libp2p_peer_id=$WIN_PEERID" \
-  "windows.git_sha=$WIN_SHA" \
-  "windows.custody_audit_count=$WIN_CUSTODY" \
-  "windows.ledger_entries=$WIN_LEDGER_COUNT" \
-  "aws.identity_id=$AWS_IDENTITY" \
-  "aws.libp2p_peer_id=$AWS_PEERID" \
-  "aws.git_sha=$AWS_SHA" \
-  "aws.custody_audit_count=$AWS_CUSTODY" \
-  "aws.ledger_entries=$AWS_LEDGER_COUNT" <<'PY'
+  "$(state_arg windows identity_id "$WIN_IDENTITY")" \
+  "$(state_arg windows libp2p_peer_id "$WIN_PEERID")" \
+  "$(state_arg windows git_sha "$WIN_SHA")" \
+  "$(state_arg windows custody_audit_count "$WIN_CUSTODY")" \
+  "$(state_arg windows ledger_entries "$WIN_LEDGER_COUNT")" \
+  "$(state_arg aws identity_id "$AWS_IDENTITY")" \
+  "$(state_arg aws libp2p_peer_id "$AWS_PEERID")" \
+  "$(state_arg aws git_sha "$AWS_SHA")" \
+  "$(state_arg aws custody_audit_count "$AWS_CUSTODY")" \
+  "$(state_arg aws ledger_entries "$AWS_LEDGER_COUNT")" <<'PY'
 import json
 import sys
 import time
@@ -579,10 +714,16 @@ import time
 path = sys.argv[1]
 NODES = ("windows", "aws")
 FIELDS = ("identity_id", "libp2p_peer_id", "git_sha", "custody_audit_count", "ledger_entries")
+# A key that was never sent evaluates to these in a shell; state_arg blanks them
+# before they reach us. This guard is the invariant that no placeholder can be
+# stored, not a second definition of measured-ness (state_arg owns that).
+PLACEHOLDERS = ("None", "null")
 
 measured = {}
 for arg in sys.argv[2:]:
     key, _, value = arg.partition("=")
+    if value in PLACEHOLDERS:
+        value = ""
     measured[key] = value
 
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -608,6 +749,7 @@ for node in NODES:
     for field in FIELDS:
         value = measured.get("%s.%s" % (node, field), "")
         if value != "":
+            # Measured this run, by the one definition of measured (state_arg).
             entry[field] = value
             fresh_here = True
         elif known.get(field) not in (None, ""):
@@ -615,7 +757,7 @@ for node in NODES:
             entry[field] = known[field]
             carried_here.append(field)
         else:
-            # Never measured: an unknown, not an empty fact.
+            # Never measured: an unknown, not an empty fact, and not a value.
             entry[field] = None
     entry["observed"] = {field: (measured.get("%s.%s" % (node, field), "") != "") for field in FIELDS}
     entry["observed_at"] = now if fresh_here else known.get("observed_at")
