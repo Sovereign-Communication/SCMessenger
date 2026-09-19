@@ -38,6 +38,14 @@ object NotificationHelper {
     // Channel IDs
     const val CHANNEL_MESSAGES = "messages"
     const val CHANNEL_MESSAGE_REQUESTS = "message_requests"
+    // NOTIF-SOUND-001: muted twins of the two message channels. On API 26+ the
+    // CHANNEL decides sound/vibration and per-notification setDefaults() is
+    // ignored, which is why the in-app sound toggle previously kept buzzing:
+    // the toggle flipped a no-op flag while the channel's default sound kept
+    // playing. The in-app toggle now routes each notification to the normal or
+    // muted twin channel, so the OS-applied behavior matches the setting.
+    const val CHANNEL_MESSAGES_MUTED = "messages_muted"
+    const val CHANNEL_MESSAGE_REQUESTS_MUTED = "message_requests_muted"
     const val CHANNEL_MESH_STATUS = "mesh_status"
     const val CHANNEL_PEER_EVENTS = "peer_events"
     const val CHANNEL_SYSTEM = "system"
@@ -89,22 +97,6 @@ object NotificationHelper {
     // Message grouping
     private val messageGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
     private val requestGroups = mutableMapOf<String, MutableList<NotificationMessage>>()
-
-    private data class PendingMessageNotification(
-        val context: Context,
-        val peerId: String,
-        val messageId: String,
-        val content: String,
-        val nickname: String?,
-        val timestamp: Long,
-        val isKnownContact: Boolean,
-        val hasExistingConversation: Boolean,
-        val appInForeground: Boolean,
-        val activeConversationId: String?,
-        val explicitDmRequest: Boolean?
-    )
-
-    private val startupNotificationQueue = mutableListOf<PendingMessageNotification>()
 
     // Notification settings (defaults per WS14 spec).
     // Null = not yet hydrated from DataStore; any message arriving before
@@ -199,8 +191,37 @@ object NotificationHelper {
             setShowBadge(false)
         }
 
+        // NOTIF-SOUND-001: muted twins — same importance/badge behavior as
+        // their normal pair but with sound and vibration explicitly removed.
+        // They are created up front alongside the normal channels so the first
+        // notification after a cold start can already route to them.
+        val messagesMutedChannel = NotificationChannel(
+            CHANNEL_MESSAGES_MUTED,
+            context.getString(R.string.notification_channel_messages) + " (muted)",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.notification_channel_messages_description)
+            group = GROUP_MESH
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(true)
+            setShowBadge(true)
+        }
+        val messageRequestsMutedChannel = NotificationChannel(
+            CHANNEL_MESSAGE_REQUESTS_MUTED,
+            context.getString(R.string.notification_channel_message_requests) + " (muted)",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.notification_channel_message_requests_description)
+            group = GROUP_MESH
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(true)
+            setShowBadge(true)
+        }
+
         notificationManager.createNotificationChannels(
-            listOf(messagesChannel, messageRequestsChannel, meshStatusChannel, peerEventsChannel, systemChannel)
+            listOf(messagesChannel, messageRequestsChannel, messagesMutedChannel, messageRequestsMutedChannel, meshStatusChannel, peerEventsChannel, systemChannel)
         )
 
         Timber.d("Notification channels created (WS14: with Message Requests channel)")
@@ -274,36 +295,9 @@ object NotificationHelper {
         Timber.i("Processing notification - peerId=$peerId, messageId=$messageId, isKnownContact=$isKnownContact, hasExistingConversation=$hasExistingConversation, explicitDmRequest=$explicitDmRequest, appInForeground=$appInForeground")
 
         // Check global notifications enabled. Null means not yet hydrated
-        // from DataStore — buffer inbound messages until hydrated rather than
-        // permanently dropping them.
-        if (notificationsEnabled == null) {
-            trackNotificationEvent("suppressed_settings")
-            synchronized(startupNotificationQueue) {
-                if (startupNotificationQueue.size < 50) {
-                    startupNotificationQueue.add(
-                        PendingMessageNotification(
-                            context = context.applicationContext,
-                            peerId = peerId,
-                            messageId = messageId,
-                            content = content,
-                            nickname = nickname,
-                            timestamp = timestamp,
-                            isKnownContact = isKnownContact,
-                            hasExistingConversation = hasExistingConversation,
-                            appInForeground = appInForeground,
-                            activeConversationId = activeConversationId,
-                            explicitDmRequest = explicitDmRequest
-                        )
-                    )
-                    Timber.i("Queued notification for peerId=$peerId during cold-start hydration (queue size=${startupNotificationQueue.size})")
-                } else {
-                    Timber.w("Cold-start notification queue full (50), dropping message for peerId=$peerId")
-                }
-            }
-            return
-        }
-
-        if (notificationsEnabled == false) {
+        // from DataStore — treat as disabled (fail closed) rather than the
+        // old default-true which let one cold-start message through.
+        if (notificationsEnabled == false || notificationsEnabled == null) {
             trackNotificationEvent("suppressed_settings")
             Timber.w("Notifications disabled (gate=$notificationsEnabled), skipping notification for peerId=$peerId")
             return
@@ -458,8 +452,10 @@ object NotificationHelper {
             null
         }
 
-        // WS14: Use appropriate channel
-        val channelId = if (isDmRequest) CHANNEL_MESSAGE_REQUESTS else CHANNEL_MESSAGES
+        // WS14: Use appropriate channel. NOTIF-SOUND-001: when sound is off the
+        // notification is posted to the muted twin channel because on API 26+
+        // the channel — not the builder — decides audibility.
+        val channelId = channelForMessage(isDmRequest, soundEnabled)
         val category = if (isDmRequest) NotificationCompat.CATEGORY_MESSAGE else NotificationCompat.CATEGORY_MESSAGE
         val title = if (isDmRequest) context.getString(R.string.notification_message_request_title, displayName) else null
 
@@ -473,7 +469,10 @@ object NotificationHelper {
             .apply {
                 actions.forEach { addAction(it) }
                 if (title != null) setContentTitle(title)
-                if (soundEnabled) setDefaults(NotificationCompat.DEFAULT_SOUND)
+                // NOTIF-SOUND-001: on API 26+ setDefaults() is ignored and sound
+                // is carried by the channel (selected above). Pre-26 devices have
+                // no channel sound, so setDefaults still honors the toggle.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundEnabled) setDefaults(NotificationCompat.DEFAULT_SOUND)
                 if (badgeEnabled) setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
             }
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -616,11 +615,23 @@ object NotificationHelper {
         }
         if (isDndEnabled(context)) return
 
+        // NOTIF-TAP-002: peer-event cards previously had no contentIntent and
+        // could not be tapped at all — one of the "some won't click" types.
+        val tapIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        val tapPendingIntent = tapIntent?.let {
+            PendingIntent.getActivity(
+                context,
+                peerId.hashCode() + 3,
+                it,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
         val notification = NotificationCompat.Builder(context, CHANNEL_PEER_EVENTS)
             .setContentTitle(context.getString(R.string.notification_peer_discovered_title))
             .setContentText(context.getString(R.string.notification_peer_discovered_format, peerId, transport))
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
+            .setContentIntent(tapPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
@@ -664,6 +675,50 @@ object NotificationHelper {
     }
 
     /**
+     * NOTIF-SOUND-001: re-point the normal message channels at the OS default
+     * sound or silence according to the in-app toggle. Channel sound changes
+     * are allowed programmatically (only user edits are blocked), so flipping
+     * the toggle takes effect immediately on the normal channels too; the muted
+     * twins are the catch-all for notifications posted between the flip and a
+     * channel update. Safe to call repeatedly; no-op below API 26 where
+     * setDefaults() already works.
+     */
+    fun applySoundPreference(context: Context, soundOn: Boolean) {
+        soundEnabled = soundOn
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        for (channelId in listOf(CHANNEL_MESSAGES, CHANNEL_MESSAGE_REQUESTS)) {
+            val channel = notificationManager.getNotificationChannel(channelId) ?: continue
+            if (soundOn) {
+                channel.setSound(
+                    android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                channel.enableVibration(true)
+            } else {
+                channel.setSound(null, null)
+                channel.enableVibration(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+        Timber.i("NOTIF-SOUND-001: channel sound re-pointed: soundOn=$soundOn")
+    }
+
+    /**
+     * NOTIF-SOUND-001: pure channel routing so the toggle's observable behavior
+     * is unit-testable without the Android notification service.
+     */
+    fun channelForMessage(isDmRequest: Boolean, soundOn: Boolean): String = when {
+        isDmRequest && !soundOn -> CHANNEL_MESSAGE_REQUESTS_MUTED
+        isDmRequest -> CHANNEL_MESSAGE_REQUESTS
+        !soundOn -> CHANNEL_MESSAGES_MUTED
+        else -> CHANNEL_MESSAGES
+    }
+
+    /**
      * WS14: Update notification settings.
      */
     fun updateSettings(
@@ -675,58 +730,19 @@ object NotificationHelper {
         sound: Boolean? = null,
         badge: Boolean? = null
     ) {
+        enabled?.let { notificationsEnabled = it }
         dmEnabled?.let { notifyDmEnabled = it }
         dmRequestEnabled?.let { notifyDmRequestEnabled = it }
         dmInForeground?.let { notifyDmInForeground = it }
         dmRequestInForeground?.let { notifyDmRequestInForeground = it }
         sound?.let { soundEnabled = it }
         badge?.let { badgeEnabled = it }
-
-        enabled?.let { newEnabled ->
-            val wasUninitialized = (notificationsEnabled == null)
-            notificationsEnabled = newEnabled
-            if (wasUninitialized) {
-                val pendingToReplay = synchronized(startupNotificationQueue) {
-                    val list = startupNotificationQueue.toList()
-                    startupNotificationQueue.clear()
-                    list
-                }
-                if (newEnabled) {
-                    Timber.i("Replaying ${pendingToReplay.size} cold-start notifications after DataStore hydration")
-                    for (pending in pendingToReplay) {
-                        showMessageNotification(
-                            context = pending.context,
-                            peerId = pending.peerId,
-                            messageId = pending.messageId,
-                            content = pending.content,
-                            nickname = pending.nickname,
-                            timestamp = pending.timestamp,
-                            isKnownContact = pending.isKnownContact,
-                            hasExistingConversation = pending.hasExistingConversation,
-                            appInForeground = pending.appInForeground,
-                            activeConversationId = pending.activeConversationId,
-                            explicitDmRequest = pending.explicitDmRequest
-                        )
-                    }
-                } else {
-                    Timber.i("Discarded ${pendingToReplay.size} cold-start notifications because notifications are disabled")
-                }
-            }
-        }
         Timber.d("Notification settings updated")
     }
 
     private fun isDndEnabled(context: Context): Boolean {
-        val notificationManager = try {
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        } catch (_: Exception) {
-            null
-        } ?: return false
-        return try {
-            notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
-        } catch (_: Exception) {
-            false
-        }
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        return notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
     }
     
     /**
@@ -749,9 +765,6 @@ object NotificationHelper {
      */
     fun resetNotificationStats() {
         notificationStats.keys.forEach { notificationStats[it] = 0 }
-        synchronized(startupNotificationQueue) {
-            startupNotificationQueue.clear()
-        }
         Timber.d("Notification statistics reset")
     }
 
