@@ -32,7 +32,8 @@
 #
 # A row whose source cannot be read prints [WARNING] or [SKIP] and names the
 # command that would evaluate it -- never [OK], and never a [FAIL] for a value
-# that was never read.
+# that was never read. One exception is deliberate: reaching the node IS A1's
+# criterion, so a node that does not answer is the finding and A1 [FAIL]s.
 #
 # Measured-ness has exactly ONE definition in this script (measured(), below):
 # json_field removes the placeholder that a key the node never sent evaluates to,
@@ -40,6 +41,13 @@
 # writer -- blanks anything that is not a measurement. So an absent field can
 # never be stored as a value, and the record can never claim an observation that
 # did not happen.
+#
+# Absent is not the same fact as empty, and the two collapse the moment a body is
+# reduced to text. Presence is therefore recorded at the parse boundary, where
+# the key set is still visible (mark_present), and asked for by name afterwards
+# (present / reported). A row decides "can I judge my criterion?" from that,
+# never from an empty string -- which is what stops "sent an empty list" and
+# "never sent the field" from producing the same verdict.
 #
 # Cross-run state (scratch/driver/tier_a_conformance.json):
 #   Each run records what it measured, and CARRIES FORWARD the last value it did
@@ -301,6 +309,12 @@ fi
 
 # ----------------------------------------------------------------------------
 # Probes. Each body is fetched once and reused by the rows that need it.
+#
+# The parse records TWO things per body: the values every row reads, and the set
+# of keys the node actually sent. Presence is read here, in the same expression
+# as the values, because this is the last place the key set is still visible --
+# once a body has been reduced to text, "sent an empty list" and "never sent the
+# field" are the same characters. It costs no extra process.
 # ----------------------------------------------------------------------------
 AWS_HEALTH=""; AWS_ID=""; AWS_DIAG=""
 if [ -n "$AWS_HOST" ]; then
@@ -312,21 +326,21 @@ WIN_HEALTH="$(http_body "$WIN_URL/health")"
 WIN_ID="$(http_body "$WIN_URL/api/identity")"
 WIN_DIAG="$(http_body "$WIN_URL/api/diagnostics")"
 
-# One parse per body, fields '|'-joined: a non-whitespace delimiter keeps an
-# empty field empty instead of letting `read` shift every later field up by one.
-IFS='|' read -r WIN_IDENTITY WIN_PUBKEY WIN_PEERID <<EOF
-$(json_field "$WIN_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id',''))])")
+# identity: identity_id | public_key_hex | libp2p_peer_id | <keys the node sent>
+IFS='|' read -r WIN_IDENTITY WIN_PUBKEY WIN_PEERID WIN_IDENT_KEYS <<EOF
+$(json_field "$WIN_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id','')), ' '.join(k for k in ('identity_id','public_key_hex','libp2p_peer_id') if k in d)])")
 EOF
-IFS='|' read -r AWS_IDENTITY AWS_PUBKEY AWS_PEERID <<EOF
-$(json_field "$AWS_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id',''))])")
+IFS='|' read -r AWS_IDENTITY AWS_PUBKEY AWS_PEERID AWS_IDENT_KEYS <<EOF
+$(json_field "$AWS_ID" "'|'.join([str(d.get('identity_id','')), str(d.get('public_key_hex','')), str(d.get('libp2p_peer_id','')), ' '.join(k for k in ('identity_id','public_key_hex','libp2p_peer_id') if k in d)])")
 EOF
 
-# diagnostics: custody | path | peers | listener count | listener ports | external addrs
-IFS='|' read -r WIN_CUSTODY WIN_PATH WIN_PEERS WIN_LISTENERS WIN_PORTS WIN_EXT <<EOF
-$(json_field "$WIN_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or []))])")
+# diagnostics: custody | path | peers | listener count | listener ports |
+#              external addrs | <keys the node sent>
+IFS='|' read -r WIN_CUSTODY WIN_PATH WIN_PEERS WIN_LISTENERS WIN_PORTS WIN_EXT WIN_DIAG_KEYS <<EOF
+$(json_field "$WIN_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or [])), ' '.join(k for k in ('custody_audit_count','connection_path_state','peers','listeners','external_addrs') if k in d)])")
 EOF
-IFS='|' read -r AWS_CUSTODY AWS_PATH AWS_PEERS AWS_LISTENERS AWS_PORTS AWS_EXT <<EOF
-$(json_field "$AWS_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or []))])")
+IFS='|' read -r AWS_CUSTODY AWS_PATH AWS_PEERS AWS_LISTENERS AWS_PORTS AWS_EXT AWS_DIAG_KEYS <<EOF
+$(json_field "$AWS_DIAG" "'|'.join([str(d.get('custody_audit_count')), str(d.get('connection_path_state','')), ','.join(str(p) for p in (d.get('peers') or [])), str(len(d.get('listeners') or [])), ','.join(sorted({(l.split('/tcp/')[-1] if '/tcp/' in str(l) else str(l)) for l in (d.get('listeners') or [])})), ' '.join(str(a) for a in (d.get('external_addrs') or [])), ' '.join(k for k in ('custody_audit_count','connection_path_state','peers','listeners','external_addrs') if k in d)])")
 EOF
 
 # "Empty" and "not observed" are different facts, and every row below has to say
@@ -347,6 +361,37 @@ state_arg() {
     printf '%s.%s=\n' "$1" "$2"
   fi
 }
+
+# ----------------------------------------------------------------------------
+# Presence: did the node send this key at all?
+#
+# The single owner of that question. `present` answers it for one key; `reported`
+# adds "and is the value usable", which is what a row actually needs before it
+# can judge a criterion. Node names here are the ones the rows use (windows,
+# cloud); the state file's own names (windows, aws) are a separate concern.
+declare -A PRESENT=()
+
+mark_present() {
+  local node="$1" keys=" ${2:-} "
+  shift 2
+  local key
+  for key in "$@"; do
+    case "$keys" in
+      *" $key "*) PRESENT["$node.$key"]=yes ;;
+      *) PRESENT["$node.$key"]=no ;;
+    esac
+  done
+}
+
+present() { [ "${PRESENT["$1.$2"]:-no}" = "yes" ]; }
+
+# reported <node> <key> <value> -- the node sent the key AND the value is usable.
+reported() { present "$1" "$2" && measured "${3:-}"; }
+
+mark_present windows "$WIN_IDENT_KEYS" identity_id public_key_hex libp2p_peer_id
+mark_present windows "$WIN_DIAG_KEYS" custody_audit_count connection_path_state peers listeners external_addrs
+mark_present cloud "$AWS_IDENT_KEYS" identity_id public_key_hex libp2p_peer_id
+mark_present cloud "$AWS_DIAG_KEYS" custody_audit_count connection_path_state peers listeners external_addrs
 
 # ----------------------------------------------------------------------------
 # Transient mesh state.
@@ -476,16 +521,16 @@ fi
 info "A2 windows provenance: ${WIN_PROV:-<none>}"
 info "A2 cloud provenance  : ${AWS_PROV:-<none>}"
 
-# A3 -- identity stable against the last recorded value. Both sides must be
-# measured this run and have a recorded value; anything less is [SKIP], because
-# an unmeasured identity is not evidence of a changed one.
+# A3 -- identity stable against the last recorded value. Both sides must have
+# reported a usable identity this run and have a recorded value; anything less is
+# [SKIP], because an unmeasured identity is not evidence of a changed one.
 load_previous_state
 PREV_WIN_ID="$(previous_value windows identity_id)"
 PREV_AWS_ID="$(previous_value aws identity_id)"
-if ! measured "$WIN_IDENTITY" && ! measured "$AWS_IDENTITY"; then
-  row_skip "A3 identity stability not evaluated -- no identity measured this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
-elif ! measured "$WIN_IDENTITY" || ! measured "$AWS_IDENTITY"; then
-  row_skip "A3 identity stability not evaluated -- one node's identity was not measured this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
+if ! reported windows identity_id "$WIN_IDENTITY" && ! reported cloud identity_id "$AWS_IDENTITY"; then
+  row_skip "A3 identity stability not evaluated -- no identity reported this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
+elif ! reported windows identity_id "$WIN_IDENTITY" || ! reported cloud identity_id "$AWS_IDENTITY"; then
+  row_skip "A3 identity stability not evaluated -- one node's identity was not reported this run (windows='${WIN_IDENTITY}' cloud='${AWS_IDENTITY}')"
 elif [ -z "$PREV_WIN_ID" ] || [ -z "$PREV_AWS_ID" ]; then
   row_skip "A3 identity stability not evaluated -- no recorded identity to compare against (windows='${PREV_WIN_ID}' cloud='${PREV_AWS_ID}'); this run seeds the baseline"
 elif [ "$PREV_WIN_ID" = "$WIN_IDENTITY" ] && [ "$PREV_AWS_ID" = "$AWS_IDENTITY" ]; then
@@ -494,11 +539,20 @@ else
   row_fail "A3 identity CHANGED: windows ${PREV_WIN_ID:0:12} -> ${WIN_IDENTITY:0:12}; cloud ${PREV_AWS_ID:0:12} -> ${AWS_IDENTITY:0:12} (persistence regression, issue I-01)"
 fi
 
-# A4 -- mesh formed: each node lists the other as a direct peer. A peer list is
-# transient state too, so the failing path is re-sampled before it is called a
-# regression (see the transient-resample note above).
+# A4 -- mesh formed: each node lists the other as a direct peer.
+#
+# A peer list is transient state, so the failing path is re-sampled before it is
+# called a regression. And a list the node never sent is a different fact from a
+# list it sent empty: an unreported list is [WARNING] naming the command, because
+# a mesh cannot be judged from a field that was not there, while an empty list the
+# node did send is a judgement it can and does lose.
 if [ -z "$AWS_HOST" ] || [ -z "$AWS_PEERID" ] || [ -z "$WIN_PEERID" ]; then
   row_warn "A4 mutual peer listing unproven (cloud node unresolved or an identity payload was empty)"
+elif ! present windows peers || ! present cloud peers; then
+  A4_UNREPORTED=""
+  present windows peers || A4_UNREPORTED="windows"
+  present cloud peers || A4_UNREPORTED="${A4_UNREPORTED:+$A4_UNREPORTED }cloud"
+  row_warn "A4 mutual peer listing not evaluated -- $A4_UNREPORTED did not report a peers list, so an empty mesh and an unreported one cannot be told apart; run: curl -s $WIN_URL/api/diagnostics and curl -s $AWS_URL/api/diagnostics"
 else
   case ",$WIN_PEERS," in
     *",$AWS_PEERID,"*) WIN_HAS_AWS=yes ;;
@@ -520,12 +574,12 @@ else
   fi
 fi
 
-# A5 -- connection path is not stuck bootstrapping. An unmeasured path state is
-# not a stuck one, and neither is a single Bootstrapping sample: the failing path
-# is re-sampled, and only a path that is still Bootstrapping across every sample
-# is a [FAIL].
-if ! measured "$WIN_PATH" || ! measured "$AWS_PATH"; then
-  row_skip "A5 connection path not evaluated -- not measured (windows='${WIN_PATH}' cloud='${AWS_PATH}')"
+# A5 -- connection path is not stuck bootstrapping. A path state the node did not
+# report is not a stuck one, and neither is a single Bootstrapping sample: the
+# failing path is re-sampled, and only a path that is still Bootstrapping across
+# every sample is a [FAIL].
+if ! reported windows connection_path_state "$WIN_PATH" || ! reported cloud connection_path_state "$AWS_PATH"; then
+  row_skip "A5 connection path not evaluated -- not reported (windows='${WIN_PATH}' cloud='${AWS_PATH}')"
 elif [ "$WIN_PATH" != "Bootstrapping" ] && [ "$AWS_PATH" != "Bootstrapping" ]; then
   row_ok "A5 connection path: windows=$WIN_PATH cloud=$AWS_PATH"
 else
@@ -594,9 +648,11 @@ else
 fi
 
 # A7 -- ledger sanity: the gossiped ledger must carry entries on both nodes. A
-# missing file, an unreadable one (bad JSON, wrong shape, permissions) or a
-# count that did not parse all leave the count empty and are [WARNING] naming
-# the command; entries=0 is the only count that is a finding, and it is [FAIL].
+# missing file or an unreadable one (bad JSON, wrong shape, permissions) leaves
+# the count empty, which is [WARNING] naming the command; entries=0 is the only
+# count that is a finding, and it is [FAIL]. ledger_stats prints entries=<int> or
+# error=<reason>, so the count is numeric whenever it is present -- there is no
+# third case to guard.
 if [ -f "$WIN_LEDGER" ]; then
   WIN_LEDGER_OUT="$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "")"
   WIN_LEDGER_COUNT="$(stat_field "$WIN_LEDGER_OUT" entries)"
@@ -604,8 +660,8 @@ else
   WIN_LEDGER_OUT="error=missing"
   WIN_LEDGER_COUNT=""
 fi
-if ! is_number "$WIN_LEDGER_COUNT"; then
-  row_warn "A7 windows ledger count unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown}) -- run: python3 -c \"import json;print(len(json.load(open(r'$WIN_LEDGER'))))\""
+if [ -z "$WIN_LEDGER_COUNT" ]; then
+  row_warn "A7 windows ledger unreadable at $WIN_LEDGER (${WIN_LEDGER_OUT:-error=unknown}) -- run: python3 -c \"import json;print(len(json.load(open(r'$WIN_LEDGER'))))\""
 elif [ "$WIN_LEDGER_COUNT" -gt 0 ]; then
   row_ok "A7 windows ledger entries=$WIN_LEDGER_COUNT ($WIN_LEDGER)"
 else
@@ -618,8 +674,8 @@ if [ -z "$AWS_HOST" ]; then
 elif fetch_remote_ledger; then
   AWS_LEDGER_OUT="$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "")"
   AWS_LEDGER_COUNT="$(stat_field "$AWS_LEDGER_OUT" entries)"
-  if ! is_number "$AWS_LEDGER_COUNT"; then
-    row_warn "A7 cloud ledger count unreadable after fetch ($AWS_LEDGER_OUT) -- run: ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
+  if [ -z "$AWS_LEDGER_COUNT" ]; then
+    row_warn "A7 cloud ledger unreadable after fetch ($AWS_LEDGER_OUT) -- run: ssh -i $SSH_KEY ec2-user@$AWS_HOST \"cat $AWS_LEDGER\" > $AWS_LEDGER_LOCAL"
   elif [ "$AWS_LEDGER_COUNT" -gt 0 ]; then
     row_ok "A7 cloud ledger entries=$AWS_LEDGER_COUNT ($AWS_LEDGER)"
   else
@@ -632,17 +688,17 @@ fi
 # A8 -- no self-entries in either peer store (issue I-06).
 #
 # This check needs the node's own identity to know what "itself" is. With no
-# public key, no peer id and no external address, nothing can match, so a store
-# that was never identified and a clean store look identical -- and the row
-# would print [OK] from a source it never read. Any identity input the node did
-# not report makes the row [WARNING] (naming what is missing and the command
-# that reads it), never [OK]. The inputs come through measured(), the same
-# contract every other row uses.
+# public key and no peer id, nothing can match, so a store that was never
+# identified and a clean store look identical -- and the row would print [OK]
+# from a source it never read. Those two inputs must therefore be REPORTED and
+# usable. The external-address list is different: an empty list is a legitimate
+# answer (a node behind NAT reports no external address) and makes the
+# own-address half vacuous, so only the key being absent is unproven.
 own_identity_note() {
-  local url="$1" pubkey="$2" peer="$3" addrs="$4" missing=""
-  measured "$pubkey" || missing="$missing public_key_hex"
-  measured "$peer" || missing="$missing libp2p_peer_id"
-  measured "$addrs" || missing="$missing external_addrs"
+  local node="$1" url="$2" pubkey="$3" peer="$4" missing=""
+  reported "$node" public_key_hex "$pubkey" || missing="$missing public_key_hex"
+  reported "$node" libp2p_peer_id "$peer" || missing="$missing libp2p_peer_id"
+  present "$node" external_addrs || missing="$missing external_addrs"
   if [ -n "$missing" ]; then
     printf 'the node did not report%s, so its own entries cannot be identified; run: curl -s %s/api/identity and curl -s %s/api/diagnostics' \
       "$missing" "$url" "$url"
@@ -669,31 +725,32 @@ check_self_entries() {
 if [ -f "$WIN_LEDGER" ]; then
   check_self_entries "windows" \
     "$(ledger_stats "$WIN_LEDGER" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")" "$WIN_LEDGER" \
-    "$(own_identity_note "$WIN_URL" "$WIN_PUBKEY" "$WIN_PEERID" "$WIN_EXT")"
+    "$(own_identity_note windows "$WIN_URL" "$WIN_PUBKEY" "$WIN_PEERID")"
 else
   row_warn "A8 windows peer store unreadable at $WIN_LEDGER -- run: ls -l $WIN_LEDGER"
 fi
 if [ -n "$AWS_LEDGER_COUNT" ]; then
   check_self_entries "cloud" \
     "$(ledger_stats "$AWS_LEDGER_LOCAL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")" "$AWS_LEDGER" \
-    "$(own_identity_note "$AWS_URL" "$AWS_PUBKEY" "$AWS_PEERID" "$AWS_EXT")"
+    "$(own_identity_note cloud "$AWS_URL" "$AWS_PUBKEY" "$AWS_PEERID")"
 elif [ -n "$AWS_HOST" ]; then
   row_warn "A8 cloud peer store unproven -- see the A7 cloud command"
 else
   row_skip "A8 cloud peer store not evaluated (cloud node unresolved)"
 fi
 
-# A9 -- listener surface sane. A node listening on nothing accepts no
-# connection, and a count of zero is also what the diagnostics parse yields when
-# the node never sent a listener list at all -- so zero is unproven rather than a
-# passing count, and never [OK]. A non-numeric count is unproven too.
+# A9 -- listener surface sane. The parse reduces the listener list to its length,
+# so absent and empty both arrive as 0 -- which is why presence decides first.
+# A node that reported no list is not judged; a node that sent an empty list has
+# told us it accepts no connection, and neither is conformance. Above the
+# threshold the count is reported as noise rather than conformance.
 check_listeners() {
   local node="$1" count="$2" ports="$3" diag_url="$4"
-  if ! measured "$count" || ! is_number "$count"; then
-    row_warn "A9 $node listener count unproven -- run: curl -s $diag_url/api/diagnostics"
+  if ! present "$node" listeners; then
+    row_warn "A9 $node listener count not evaluated -- the node did not report a listener list; run: curl -s $diag_url/api/diagnostics"
   elif [ "$count" -eq 0 ]; then
-    row_warn "A9 $node reported no listeners (or no listener list), which cannot accept a connection -- run: curl -s $diag_url/api/diagnostics"
-  elif [ "$count" -gt "$LISTENER_WARN_THRESHOLD" ] 2>/dev/null; then
+    row_warn "A9 $node reported an empty listener list, so it can accept no connection; run: curl -s $diag_url/api/diagnostics"
+  elif [ "$count" -gt "$LISTENER_WARN_THRESHOLD" ]; then
     row_warn "A9 $node binds $count listeners (> $LISTENER_WARN_THRESHOLD): $ports (issue I-12)"
   else
     row_ok "A9 $node binds $count listeners"
