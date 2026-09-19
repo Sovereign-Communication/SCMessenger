@@ -155,19 +155,36 @@ jobs:
   ios:
     name: iOS Build
     runs-on: macos-latest
+    # WHY THE STEPS ARE GATED AND THE JOB IS NOT
+    # -----------------------------------------
+    # This workflow triggers on the union of the Android and iOS path sets,
+    # because it owns jobs for both platforms, so an Android-only diff starts
+    # this macOS job. The job is kept so its check still reports -- a skipped
+    # check is not a passed one, and T12 section 3 records what that costs --
+    # while its expensive steps are short-circuited by detect-platform-change,
+    # which fails open: an uncomputable or unrecognised diff runs the build.
     steps:
       - uses: actions/checkout@v7
+
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
+        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           key: ios-build
       - name: Build XCFramework and Swift bindings
+        if: steps.platform.outputs.ios_relevant == 'true'
         run: |
           chmod +x scripts/build_xcframework.sh
           scripts/build_xcframework.sh
       - name: Build Xcode project
+        if: steps.platform.outputs.ios_relevant == 'true'
         working-directory: iOS
         run: |
           xcodebuild build \

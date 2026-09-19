@@ -125,8 +125,14 @@ class ChatViewModel @Inject constructor(
                     }
                 }
 
-                // MSG-ORDER-001: Sort strictly by sender-assigned timestamp to ensure consistent ordering across platforms
-                _messages.value = mergedMessages.sortedBy { it.senderTimestamp }
+                // MSG-ORDER-002: Sort by the locally-assigned timestamp. Inbound
+                // rows are stamped with THIS device's receive clock (core and
+                // MeshRepository), outbound rows with this device's send clock,
+                // so the merged list orders causally even when peers' clocks
+                // disagree. senderTimestamp is sender provenance, never a sort key
+                // (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK: a reply rendered before the
+                // message that caused it under the old senderTimestamp sort).
+                _messages.value = mergedMessages.sortedBy { it.timestamp }
 
                 Timber.d("Loaded ${messageList.size} messages for $currentPeer (merged with ${currentMessages.size} existing)")
             } catch (e: Exception) {
@@ -201,7 +207,7 @@ class ChatViewModel @Inject constructor(
                 // Add to UI immediately
                 val currentMessages = _messages.value.toMutableList()
                 currentMessages.add(tempMessage)
-                _messages.value = currentMessages.sortedBy { it.senderTimestamp }
+                _messages.value = currentMessages.sortedBy { it.timestamp }
 
                 meshRepository.sendMessage(normalizedPeerId, content)
 
@@ -337,7 +343,7 @@ class ChatViewModel @Inject constructor(
                     }
 
                     if (!viewModelScope.isActive) return@collect
-                    _messages.value = currentMessages.sortedBy { it.senderTimestamp }
+                    _messages.value = currentMessages.sortedBy { it.timestamp }
                 }
             }
         }
