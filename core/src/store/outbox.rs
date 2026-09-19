@@ -329,11 +329,8 @@ impl Outbox {
                 }
 
                 // Check per-peer limit
-                let peer_prefix = format!(
-                    "{}{}_",
-                    String::from_utf8_lossy(QUEUE_PREFIX),
-                    queue_key
-                );
+                let peer_prefix =
+                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), queue_key);
                 let peer_count = db.count_prefix(peer_prefix.as_bytes()).unwrap_or(0);
                 if peer_count >= MAX_QUEUE_PER_PEER {
                     return Err(format!(
@@ -1136,7 +1133,10 @@ mod tests {
         assert_eq!(canonical_peer_key(HEX_PEER), HEX_PEER);
         assert_eq!(canonical_peer_key(&HEX_PEER.to_uppercase()), HEX_PEER);
         // Two different keys stay different: this is not an identity guess.
-        assert_ne!(canonical_peer_key(OTHER_HEX_PEER), canonical_peer_key(HEX_PEER));
+        assert_ne!(
+            canonical_peer_key(OTHER_HEX_PEER),
+            canonical_peer_key(HEX_PEER)
+        );
         // A value whose key is not recoverable passes through untouched.
         assert_eq!(canonical_peer_key("peer_a"), "peer_a");
     }
@@ -1169,7 +1169,11 @@ mod tests {
         }
 
         let flushed = outbox.flush_peer_messages(HEX_PEER);
-        assert_eq!(flushed.len(), 1, "the pre-canonicalization entry must still go out");
+        assert_eq!(
+            flushed.len(),
+            1,
+            "the pre-canonicalization entry must still go out"
+        );
     }
 
     #[test]
