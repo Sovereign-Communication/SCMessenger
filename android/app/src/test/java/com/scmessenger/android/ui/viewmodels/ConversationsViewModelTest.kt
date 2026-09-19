@@ -61,6 +61,11 @@ class ConversationsViewModelTest {
     fun `viewModel reloads messages when a new message update is received`() = runTest {
         // Given viewModel is initialized
         testDispatcher.scheduler.advanceUntilIdle()
+        // The init load runs on Dispatchers.IO (ConversationsViewModel.kt:107),
+        // which this test scheduler cannot order; without waiting for it to
+        // land, the late-recorded init call inflates the exact-count verify
+        // below nondeterministically (CI run 35410042169, 2026-09-19).
+        verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
         clearMocks(mockMeshRepository, answers = false) // Clear previous calls but keep mocks
 
         // Setup mock to return a message now
