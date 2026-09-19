@@ -291,6 +291,27 @@ impl TransportManager {
         info!("Transport registered: {}", transport_type);
     }
 
+    /// Register a transport only if it is not already registered.
+    ///
+    /// Unlike `register_transport`, this never replaces an existing
+    /// `TransportState`, so re-registering on every swarm connect does not
+    /// wipe the connected_peers set of peers registered earlier (R1-A4:
+    /// peer B connecting used to make peer A read as disconnected).
+    pub fn ensure_transport_registered(
+        &self,
+        transport_type: TransportType,
+        capabilities: TransportCapabilities,
+    ) {
+        let mut transports = self.transports.write();
+        // R3-C4: log only when this call actually registers something --
+        // this runs on every swarm connect, so unconditional info-level
+        // logging would spam under reconnect churn.
+        if let std::collections::hash_map::Entry::Vacant(e) = transports.entry(transport_type) {
+            e.insert(TransportState::new(capabilities));
+            debug!("Transport registered: {}", transport_type);
+        }
+    }
+
     /// Handle a transport event
     pub fn handle_event(&self, event: TransportEvent) {
         match event {

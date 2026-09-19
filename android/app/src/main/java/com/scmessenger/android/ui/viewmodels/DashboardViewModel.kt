@@ -19,61 +19,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
-import java.math.BigInteger
 import javax.inject.Inject
+import com.scmessenger.android.utils.PeerIdValidator
 
-// UNIFICATION P1-1: Ed25519 field constants for curve-point validation.
-// Roughly 50% of blake3 identity_id hashes are valid 64-hex but not valid curve points;
-// Rust's is_valid_public_key checks VerifyingKey::from_bytes. We mirror that here.
-private val ED25519_P: BigInteger = BigInteger("57896044618658097711785492504343953926634992332820282019728792003956564819949")
-private val ED25519_D: BigInteger by lazy {
-    val p = ED25519_P
-    val inv121666 = BigInteger.valueOf(121666).modInverse(p)
-    BigInteger.valueOf(121665).negate().mod(p).multiply(inv121666).mod(p)
-}
-private val ED25519_SQRT_M1: BigInteger by lazy {
-    BigInteger.valueOf(2).modPow(ED25519_P.subtract(BigInteger.ONE).divide(BigInteger.valueOf(4)), ED25519_P)
-}
-private val ED25519_P_PLUS3_OVER8: BigInteger by lazy {
-    ED25519_P.add(BigInteger.valueOf(3)).divide(BigInteger.valueOf(8))
-}
-
-private fun isValidEd25519Point(hex: String): Boolean {
-    try {
-        if (hex.length != 64) return false
-        val bytes = ByteArray(32)
-        for (i in 0 until 32) {
-            val hi = Character.digit(hex[i * 2], 16)
-            val lo = Character.digit(hex[i * 2 + 1], 16)
-            if (hi == -1 || lo == -1) return false
-            bytes[i] = ((hi shl 4) or lo).toByte()
-        }
-        val yBytes = bytes.clone()
-        val signBit = (yBytes[31].toInt() and 0x80) != 0
-        yBytes[31] = (yBytes[31].toInt() and 0x7F).toByte()
-        // little-endian -> BigInteger (big-endian)
-        val be = yBytes.reversedArray()
-        val y = BigInteger(1, be)
-        if (y >= ED25519_P) return false
-        val yy = y.multiply(y).mod(ED25519_P)
-        val u = yy.subtract(BigInteger.ONE).mod(ED25519_P)
-        val v = ED25519_D.multiply(yy).add(BigInteger.ONE).mod(ED25519_P)
-        if (v == BigInteger.ZERO) return false
-        val vInv = try { v.modInverse(ED25519_P) } catch (_: ArithmeticException) { return false }
-        val x2 = u.multiply(vInv).mod(ED25519_P)
-        if (x2 == BigInteger.ZERO) return !signBit
-        var x = x2.modPow(ED25519_P_PLUS3_OVER8, ED25519_P)
-        var check = x.multiply(x).mod(ED25519_P)
-        if (check != x2) {
-            x = x.multiply(ED25519_SQRT_M1).mod(ED25519_P)
-            check = x.multiply(x).mod(ED25519_P)
-            if (check != x2) return false
-        }
-        return true
-    } catch (_: Exception) {
-        return false
-    }
-}
+// UNIFICATION P1: Ed25519 curve-point validation consolidated into
+// PeerIdValidator.isValidEd25519Point (single authoritative Kotlin copy,
+// pinned to Rust is_valid_public_key by shared dalek-derived test vectors).
 
 /**
  * ViewModel for the dashboard screen.
@@ -214,7 +165,11 @@ class DashboardViewModel @Inject constructor(
             val dialable = meshRepository.getDialableAddresses()
             val seed = meshRepository.getSeedAddresses(16u)
             val deadRecent = meshRepository.getRecentlyDeadAddresses(7)
-            val ledgerEntries = (dialable + seed + deadRecent).distinctBy { it.multiaddr }
+            // GHOST-IDENTITY-001: seed/dead already filtered in MeshRepository; double-check here
+            // so a future caller that skips those helpers cannot resurrect PK:577fd171-class ghosts.
+            val ledgerEntries = (dialable + seed + deadRecent)
+                .distinctBy { it.multiaddr }
+                .filterNot { meshRepository.isGhostLedgerEntry(it) }
             val relayHops = meshRepository.getRelayHopPeerIds()
             val routeAliasToCanonical = discoveredSnapshot
                 .mapNotNull { (routeKey, info) ->
@@ -657,8 +612,12 @@ class DashboardViewModel @Inject constructor(
                 val authoritativeNick = selectAuthoritativeNickname(existing.nickname, info.nickname)
                     ?: selectAuthoritativeNickname(info.nickname, existing.nickname)
                     ?: existing.nickname
-                val authoritativeLocal = selectAuthoritativeNickname(existing.localNickname, info.localNickname)
-                    ?: existing.localNickname ?: info.localNickname
+                // NICKNAME-AUTHORITY: preserve user-defined localNickname; only fill
+                // when existing is blank/synthetic. Mirrors MeshRepository merge.
+                val authoritativeLocal = com.scmessenger.android.utils.resolveLocalNickname(
+                    incoming = info.localNickname,
+                    existing = existing.localNickname
+                )
                 merged[mapKey] = existing.copy(
                     peerId = canonicalPeerId,
                     publicKey = existing.publicKey ?: info.publicKey,
@@ -694,16 +653,11 @@ class DashboardViewModel @Inject constructor(
         )
     }
 
-    // UNIFICATION P1-1: Validate Ed25519 curve point — roughly 50% of blake3 identity_id hashes are valid 64-hex
-    // but NOT valid curve points. Rust's is_valid_public_key checks VerifyingKey::from_bytes; Kotlin previously
-    // treated any 64-hex as canonical pubkey, so identity_id was accepted as pubkey and failed to merge with 30d0fa.
-    // We replicate the Rust check via pure Kotlin (BigInteger decompression). If not a valid point, return null
-    // so caller treats it as identity_id, not pubkey.
     private fun normalizePublicKey(value: String?): String? {
         val trimmed = value?.trim() ?: return null
         if (trimmed.length != 64) return null
         if (!trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
-        if (!isValidEd25519Point(trimmed)) return null
+        if (!PeerIdValidator.isValidEd25519Point(trimmed)) return null
         return trimmed.lowercase()
     }
 
@@ -924,7 +878,9 @@ class DashboardViewModel @Inject constructor(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> keep existing.
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
     }
 

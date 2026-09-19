@@ -1,6 +1,6 @@
 # V040-T10 -- The FFI surface gate passes when it checks nothing
 
-Status: OPEN (filed 2026-08-31)
+Status: RESOLVED ON MAIN -- core defect already fixed (verified 2026-09-01); see resolution note at bottom
 Priority: P1 -- a CI gate that cannot fail when it matters most
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `scripts/ffi_surface.sh`. Small change, high leverage.
@@ -84,3 +84,28 @@ the gate must be honest about what it did or did not check.
 - CI-only work, no handset required -- valid never-idle work under
   `docs/rules/CONTINUOUS_EXECUTION.md`.
 - Shared checkout: touch only what this task requires.
+
+
+---
+
+## Resolution note (2026-09-01, Freebuff)
+
+Empirically verified at main head 67d19d3c in a fresh worktree (no
+`core/target`):
+
+- Missing bindings: script exits **1** with `WARN: <lang> bindings not generated
+  yet. Skipping.` -- no longer a vacuous pass. The guard was landed by commit
+  66a921cf (`[DONE] fix(core): restore original swarm.rs and repair
+  FFI/UniFFI compilation...`) and last touched by 1950c374, both on main.
+- `--update` with bindings absent: exits 1, writes no snapshot
+  (snapshots dir byte-identical before/after).
+- Kotlin/Swift sides fail independently (symmetric else branches).
+
+Residual deltas vs this ticket's literal acceptance wording, cosmetic only:
+- Message is `WARN ... Skipping.` rather than a `[FAIL]` naming the regenerate
+  step (it does fail, but the wording understates it).
+- No explicit "--update refused" message (it does refuse via exit 1).
+
+Not filing a PR for the wording: the premise of this ticket (gate passes when
+it checks nothing) no longer survives contact with the code. If the operator
+wants the message polished, that is a one-line-per-branch change; say the word.

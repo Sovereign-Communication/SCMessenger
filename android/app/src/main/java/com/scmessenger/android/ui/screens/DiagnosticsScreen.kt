@@ -1,7 +1,5 @@
 package com.scmessenger.android.ui.screens
 
-import android.content.Context
-import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +23,7 @@ import com.scmessenger.android.ui.diagnostics.DiagnosticsBundleFormatter
 import com.scmessenger.android.ui.diagnostics.DiagnosticsBundleInput
 import com.scmessenger.android.ui.dialogs.NetworkStatusDialog
 import com.scmessenger.android.ui.viewmodels.SettingsViewModel
+import com.scmessenger.android.utils.DiagnosticsShareController
 import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.service.PerformanceMonitor
 import com.scmessenger.android.service.ServiceHealthMonitor
@@ -32,9 +31,7 @@ import com.scmessenger.android.service.AnrEvent
 import com.scmessenger.android.ui.components.WarningBanner
 import com.scmessenger.android.ui.components.InfoBanner
 import com.scmessenger.android.ui.components.ErrorState
-import androidx.core.content.FileProvider
 import timber.log.Timber
-import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -142,7 +139,18 @@ fun DiagnosticsScreen(
                     }
                     IconButton(onClick = {
                         scope.launch {
-                            shareDiagnosticsBundle(context, viewModel.buildTesterDiagnosticsBundle())
+                            // ANR-2026-09-09 recurrence fix: bundle write + URI
+                            // resolution run on IO inside the controller; failures
+                            // come back as a result value instead of an uncaught
+                            // IllegalArgumentException on the main thread.
+                            when (val result = DiagnosticsShareController.shareDiagnosticsBundle(
+                                context,
+                                viewModel.buildTesterDiagnosticsBundle()
+                            )) {
+                                is DiagnosticsShareController.DiagnosticsShareResult.Started -> Unit
+                                is DiagnosticsShareController.DiagnosticsShareResult.Failed ->
+                                    Timber.w("Diagnostics share failed: %s", result.reason)
+                            }
                         }
                     }) {
                         Icon(Icons.Default.Share, contentDescription = stringResource(R.string.diagnostics_action_share))
@@ -429,23 +437,4 @@ fun DiagnosticsScreen(
             )
         }
     }
-}
-
-private fun shareDiagnosticsBundle(context: Context, bundleText: String) {
-    val bundleFile = File(context.cacheDir, "scmessenger_diagnostics_bundle.txt")
-    bundleFile.writeText(bundleText)
-
-    val uri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        bundleFile
-    )
-
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        putExtra(Intent.EXTRA_SUBJECT, "SCMessenger Diagnostics Bundle")
-    }
-    context.startActivity(Intent.createChooser(intent, "Share Diagnostics Bundle"))
 }

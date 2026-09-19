@@ -21,7 +21,8 @@ use super::api::{
     AddContactRequest, AddContactResponse, ConnectionPathStateResponse, DiscoveredPeer,
     DiscoveryPeersResponse, DiscoveryStatusResponse, DriftStatusResponse,
     GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse, GetListenersResponse,
-    GetPeersResponse, HistoryMessage, PeerEntry, SendMessageRequest, SendMessageResponse, API_PORT,
+    GetPeersResponse, HistoryMessage, PeerEntry, PeerIdTriadDto, PeerResolveResponse,
+    SendMessageRequest, SendMessageResponse, API_PORT, triad_dto,
 };
 
 /// Default number of messages `/api/history` returns when `limit` is
@@ -63,6 +64,8 @@ pub struct IdentityResponse {
     pub initialized: bool,
     pub nickname: Option<String>,
     pub libp2p_peer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triad: Option<PeerIdTriadDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,6 +343,16 @@ async fn handle_add_contact(
     }))
 }
 
+fn triad_dto(t: scmessenger_core::identity::PeerIdTriad) -> PeerIdTriadDto {
+    PeerIdTriadDto {
+        libp2p_peer_id: t.libp2p_peer_id,
+        public_key_hex: t.public_key_hex,
+        identity_id: t.identity_id,
+        input_kind: t.input_kind,
+        self_certifying: t.self_certifying,
+    }
+}
+
 async fn handle_get_peers(
     State(ctx): State<Arc<ApiContext>>,
 ) -> Result<AxumJson<GetPeersResponse>, (StatusCode, String)> {
@@ -352,9 +365,11 @@ async fn handle_get_peers(
         .map(|p| {
             let pid = p.to_string();
             let reputation = ctx.core.get_peer_reputation(pid.clone());
+            let triad = scmessenger_core::identity::PeerIdTriad::resolve(&pid).map(triad_dto);
             PeerEntry {
                 peer_id: pid,
                 reputation,
+                triad,
             }
         })
         .collect();
@@ -366,6 +381,13 @@ async fn handle_get_identity(
     State(ctx): State<Arc<ApiContext>>,
 ) -> Result<AxumJson<IdentityResponse>, (StatusCode, String)> {
     let info = ctx.core.get_identity_info();
+    // Prefer peer id, then pubkey — PeerIdTriad fills the rest.
+    let triad = info
+        .libp2p_peer_id
+        .as_deref()
+        .or(info.public_key_hex.as_deref())
+        .and_then(scmessenger_core::identity::PeerIdTriad::resolve)
+        .map(triad_dto);
     Ok(AxumJson(IdentityResponse {
         identity_id: info.identity_id,
         public_key_hex: info.public_key_hex,
@@ -374,7 +396,36 @@ async fn handle_get_identity(
         initialized: info.initialized,
         nickname: info.nickname,
         libp2p_peer_id: info.libp2p_peer_id,
+        triad,
     }))
+}
+
+/// GET /api/peer-resolve?input=<any of the three identifier flavors>
+async fn handle_peer_resolve(
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<AxumJson<PeerResolveResponse>, (StatusCode, String)> {
+    let input = q
+        .get("input")
+        .or_else(|| q.get("id"))
+        .or_else(|| q.get("peer_id"))
+        .cloned()
+        .unwrap_or_default();
+    match scmessenger_core::identity::PeerIdTriad::resolve(&input) {
+        Some(t) => Ok(AxumJson(PeerResolveResponse {
+            success: true,
+            input,
+            triad: Some(triad_dto(t)),
+            error: None,
+        })),
+        None => Ok(AxumJson(PeerResolveResponse {
+            success: false,
+            input,
+            triad: None,
+            error: Some(
+                "unrecognized identifier: expected libp2p peer id (12D3…), 64-hex public key, or 64-hex identity_id".into(),
+            ),
+        })),
+    }
 }
 
 async fn handle_get_listeners(

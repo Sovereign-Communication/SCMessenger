@@ -84,6 +84,59 @@ class PeerIdValidatorTest {
         )
     }
 
+    @Test
+    fun `isBlePeerId correctly identifies UUID format`() {
+        val validUuid = java.util.UUID.randomUUID().toString()
+        assertTrue(PeerIdValidator.isBlePeerId(validUuid))
+        assertFalse(PeerIdValidator.isBlePeerId(ed25519StylePeerId))
+        assertFalse(PeerIdValidator.isBlePeerId(hexLower()))
+        assertFalse(PeerIdValidator.isBlePeerId(null))
+        assertFalse(PeerIdValidator.isBlePeerId(""))
+    }
+
+    @Test
+    fun `isTransportPeerId returns true for libp2p and ble but false for sovereign hashes`() {
+        val validUuid = java.util.UUID.randomUUID().toString()
+        // Transport addresses
+        assertTrue("libp2p ed25519 peer ID is transport", PeerIdValidator.isTransportPeerId(ed25519StylePeerId))
+        assertTrue("libp2p rsa peer ID is transport", PeerIdValidator.isTransportPeerId(rsaStylePeerId))
+        assertTrue("BLE UUID peer ID is transport", PeerIdValidator.isTransportPeerId(validUuid))
+
+        // Sovereign hashes / keys must NOT be identified as transport IDs
+        val valid64Hex = "30d0fa678c218b225bd9c20c262b2aededc9e8cd5cd44c45187f8d71bf05967e"
+        assertFalse("64-hex public key is not transport", PeerIdValidator.isTransportPeerId(valid64Hex))
+
+        val blake3IdentityId = "985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826"
+        assertFalse("64-hex identity hash is not transport", PeerIdValidator.isTransportPeerId(blake3IdentityId))
+
+        assertFalse("empty id is not transport", PeerIdValidator.isTransportPeerId(""))
+        assertFalse("null id is not transport", PeerIdValidator.isTransportPeerId(null))
+    }
+
+    @Test
+    fun `identity triad strictly categorizes identity hash, public key, and peer id`() {
+        val pubKey = "30d0fa678c218b225bd9c20c262b2aededc9e8cd5cd44c45187f8d71bf05967e"
+        val identityHash = "985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826"
+        val peerId = ed25519StylePeerId
+
+        // 1. Identity Hash (Blake3): 64 hex chars, used for sovereign identity
+        assertTrue(PeerIdValidator.isIdentityId(identityHash))
+        assertTrue(PeerIdValidator.isIdentityHash(identityHash))
+        assertFalse(PeerIdValidator.isTransportPeerId(identityHash))
+
+        // 2. Public Key: 64 hex chars, valid Edwards curve point
+        assertTrue(PeerIdValidator.isIdentityId(pubKey))
+        assertTrue(PeerIdValidator.isPublicKeyHex(pubKey))
+        assertFalse(PeerIdValidator.isTransportPeerId(pubKey))
+
+        // 3. Peer ID: Libp2p Base58 multihash, transport only
+        assertTrue(PeerIdValidator.isLibp2pPeerId(peerId))
+        assertTrue(PeerIdValidator.isTransportPeerId(peerId))
+        assertFalse(PeerIdValidator.isIdentityId(peerId))
+        assertFalse(PeerIdValidator.isIdentityHash(peerId))
+        assertFalse(PeerIdValidator.isPublicKeyHex(peerId))
+    }
+
     private fun hexUpper() = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
     private fun hexLower() = hexUpper().lowercase()
 }

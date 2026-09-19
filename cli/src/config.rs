@@ -17,6 +17,13 @@ pub struct Config {
     #[serde(default)]
     pub listen_port: u16,
 
+    /// Operator-configured external address advertised to peers (host:port).
+    /// When set, it wins over every peer-observed address (T14): the swarm
+    /// pins it as the primary external address instead of an ephemeral or
+    /// NAT-mangled observed port.
+    #[serde(default)]
+    pub external_addr: Option<String>,
+
     /// Enable mDNS for local network discovery
     #[serde(alias = "mdns", default)]
     pub enable_mdns: bool,
@@ -79,6 +86,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             listen_port: 9000, // Default to 9000 instead of random
+            external_addr: None,
             enable_mdns: true,
             enable_ble: true,
             enable_wifi_aware: true,
@@ -119,6 +127,11 @@ impl Config {
     /// Honors SCMESSENGER_DATA_DIR env var (absolute path) for running isolated
     /// instances side by side, e.g. local multi-node discovery testing.
     pub fn data_dir() -> Result<PathBuf> {
+        if let Ok(env_path) = std::env::var("SCMESSENGER_DATA_DIR") {
+            let path = PathBuf::from(env_path);
+            std::fs::create_dir_all(&path).context("Failed to create data directory")?;
+            return Ok(path);
+        }
         if let Ok(env_path) = std::env::var("SCMESSENGER_DATA_DIR") {
             let path = PathBuf::from(env_path);
             std::fs::create_dir_all(&path).context("Failed to create data directory")?;
@@ -183,6 +196,18 @@ impl Config {
             "listen_port" => {
                 self.listen_port = value.parse().context("Invalid port number")?;
             }
+            "external_addr" => {
+                if value.is_empty() {
+                    self.external_addr = None;
+                } else {
+                    // Fail fast on malformed values so a typo cannot silently
+                    // leave the node advertising an unparseable address.
+                    value
+                        .parse::<std::net::SocketAddr>()
+                        .context("Invalid external address (expected host:port)")?;
+                    self.external_addr = Some(value.to_string());
+                }
+            }
             "enable_mdns" => {
                 self.enable_mdns = value.parse().context("Invalid boolean value")?;
             }
@@ -238,6 +263,7 @@ impl Config {
     pub fn get(&self, key: &str) -> Option<String> {
         match key {
             "listen_port" => Some(self.listen_port.to_string()),
+            "external_addr" => self.external_addr.clone(),
             "enable_mdns" => Some(self.enable_mdns.to_string()),
             "enable_ble" => Some(self.enable_ble.to_string()),
             "enable_wifi_aware" => Some(self.enable_wifi_aware.to_string()),
@@ -257,6 +283,12 @@ impl Config {
     pub fn list(&self) -> Vec<(String, String)> {
         vec![
             ("listen_port".to_string(), self.listen_port.to_string()),
+            (
+                "external_addr".to_string(),
+                self.external_addr
+                    .clone()
+                    .unwrap_or_else(|| "(observed)".to_string()),
+            ),
             ("enable_mdns".to_string(), self.enable_mdns.to_string()),
             ("enable_ble".to_string(), self.enable_ble.to_string()),
             (
@@ -331,13 +363,59 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes every test that points SCMESSENGER_CONFIG at a temp file.
+    /// The env var is process-global: without this lock, a concurrent
+    /// set/remove race can leave a save() running against the REAL user
+    /// config — this exact hazard nulled the live external_addr pin during
+    /// the 2026-09-10 gate battery (mtime 00:11:40Z, between test starts and
+    /// battery end; proven by running the unfixed culprit test and watching
+    /// %APPDATA%\scmessenger\config.json change under it).
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.listen_port, 9000);
+        assert!(config.external_addr.is_none());
         assert!(config.enable_mdns);
         assert!(config.enable_dht);
+    }
+
+    #[test]
+    fn test_external_addr_config_roundtrip_and_validation() {
+        // HERMETIC: set()/save() persist to SCMESSENGER_CONFIG — point that
+        // at a temp file so this test can never write the real user config
+        // again (before this fix it nulled the live T14 external_addr pin).
+        let _env_guard = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("SCMESSENGER_CONFIG", tmp.path().join("config.json"));
+
+        let mut config = Config::default();
+
+        // Valid host:port is accepted and survives serialization.
+        config.set("external_addr", "147.81.41.188:9001").unwrap();
+        assert_eq!(config.external_addr.as_deref(), Some("147.81.41.188:9001"));
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.external_addr.as_deref(),
+            Some("147.81.41.188:9001")
+        );
+        assert_eq!(
+            config.get("external_addr").as_deref(),
+            Some("147.81.41.188:9001")
+        );
+
+        // Malformed values fail closed.
+        assert!(config.set("external_addr", "not-an-addr").is_err());
+
+        // Empty value clears the knob.
+        config.set("external_addr", "").unwrap();
+        assert!(config.external_addr.is_none());
+
+        std::env::remove_var("SCMESSENGER_CONFIG");
     }
 
     #[test]
@@ -350,6 +428,7 @@ mod tests {
 
     #[test]
     fn test_add_bootstrap_node_circuit_relay_dedup() {
+        let _env_guard = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let config_file = tmp.path().join("config.json");
         std::env::set_var("SCMESSENGER_CONFIG", &config_file);
@@ -385,5 +464,249 @@ mod tests {
             .is_err());
 
         std::env::remove_var("SCMESSENGER_CONFIG");
+    }
+}
+
+/// Detects whether `log_dir` shows recent write activity and returns the age
+/// in seconds of the last OBSERVED activity, or `None` when the directory is
+/// missing or contains no files.
+///
+/// Two independent signals, OR-ed, so one metadata quirk cannot fake
+/// "silence" on a healthy, actively-written log:
+///
+/// 1. Direct per-file `fs::metadata` mtime. Deliberately NOT
+///    `read_dir`'s `entry.metadata()`: on Windows, directory enumeration
+///    can serve stale attribute data for a file being appended
+///    concurrently. Observed live 2026-09-15: the newest mtime seen by
+///    enumeration froze ~10 minutes behind real writes (custody audit
+///    lines were being written every 60s), and the watchdog misread that
+///    as 659s of silence and killed a healthy node.
+/// 2. Size growth against the largest size seen by this process: a growing
+///    log is activity by definition, even if every mtime in the directory
+///    were stale. The first call only establishes the baseline.
+///
+/// Fails open: unreadable entries are skipped, and if the internal baseline
+/// lock is poisoned the function reports no data rather than inventing
+/// silence. Lives here (lib-visible) so the production watchdog (main.rs)
+/// and the `heartbeat-probe` test binary share one implementation.
+///
+/// The watchdog's OWN output is excluded (see
+/// `WATCHDOG_DIAGNOSTICS_SUBDIR` / `WATCHDOG_DIAGNOSTICS_FILE`). Without that
+/// exclusion the measurement feeds on itself: the watchdog's diagnostic was
+/// written through `tracing::warn!`, the appender refreshed the newest mtime
+/// in this directory, the next poll read an age of ~0s, the silence streak
+/// reset to 0, and a genuinely wedged node could never reach the
+/// two-consecutive-readings exit. Proven live 2026-09-16 on the Windows node:
+/// warnings at 04:02:47Z, 04:13:47Z and 04:24:47Z each reported ~660s of
+/// "silence" -- the age of the watchdog's own previous warning -- and the
+/// process never exited.
+/// Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md
+static WATCHDOG_MAX_LOG_SIZE_SEEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+/// Subdirectory, inside the monitored log directory, where the watchdog keeps
+/// its own diagnostics. One level down on purpose: the scan below only
+/// considers regular files directly inside `log_dir`, so anything the watchdog
+/// writes here is structurally invisible to its own liveness measurement while
+/// still sitting with the node's other logs for post-mortem.
+pub const WATCHDOG_DIAGNOSTICS_SUBDIR: &str = "watchdog";
+
+/// File name of the watchdog's own diagnostics log. Also skipped by name,
+/// so the invariant survives the file ever being written one level up.
+pub const WATCHDOG_DIAGNOSTICS_FILE: &str = "watchdog.log";
+
+/// Path of the watchdog's own diagnostics log for `log_dir`.
+pub fn watchdog_diagnostics_path(log_dir: &std::path::Path) -> PathBuf {
+    log_dir
+        .join(WATCHDOG_DIAGNOSTICS_SUBDIR)
+        .join(WATCHDOG_DIAGNOSTICS_FILE)
+}
+
+/// Appends one diagnostic line to the watchdog's OWN log.
+///
+/// Deliberately NOT `tracing::*`: the tracing appender writes into the very
+/// directory `latest_log_age_secs` measures, so a traced warning refreshed the
+/// newest mtime, the next poll read an age of ~0s, the silence streak reset,
+/// and a wedged node never exited (2026-09-16 live incident). Writing here
+/// keeps the operator's audit trail while staying structurally invisible to
+/// the measurement.
+///
+/// Best-effort by contract: the caller reports a failure to stderr but must
+/// never let it stop detection.
+pub fn append_watchdog_diagnostic(
+    log_dir: &std::path::Path,
+    level: &str,
+    message: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let path = watchdog_diagnostics_path(log_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let stamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    writeln!(file, "{}  {} {}", stamp, level, message)
+}
+
+pub fn latest_log_age_secs(log_dir: &std::path::Path) -> Option<u64> {
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    let mut latest_mtime: Option<std::time::SystemTime> = None;
+    let mut max_len: u64 = 0;
+    for entry in entries.flatten() {
+        // The watchdog's own diagnostics are not node liveness. Excluded by
+        // name as well as by location (see the constants above).
+        if entry.file_name().to_str() == Some(WATCHDOG_DIAGNOSTICS_FILE) {
+            continue;
+        }
+        // Direct stat: re-queries the live directory entry instead of
+        // trusting enumeration-cached attributes (see doc comment).
+        let Ok(meta) = std::fs::metadata(entry.path()) else {
+            continue;
+        };
+        // Non-files (including WATCHDOG_DIAGNOSTICS_SUBDIR) are not log lines.
+        if !meta.is_file() {
+            continue;
+        }
+        if let Ok(modified) = meta.modified() {
+            if latest_mtime.is_none_or(|m| modified > m) {
+                latest_mtime = Some(modified);
+            }
+        }
+        max_len = max_len.max(meta.len());
+    }
+    let mtime_age = latest_mtime.map(|m| m.elapsed().unwrap_or_default().as_secs());
+
+    let growth_is_activity = (|| {
+        let mut baseline = WATCHDOG_MAX_LOG_SIZE_SEEN.lock().ok()?;
+        match *baseline {
+            Some(seen) if max_len > seen => {
+                *baseline = Some(max_len);
+                Some(true)
+            }
+            Some(_) => Some(false),
+            None => {
+                *baseline = Some(max_len);
+                Some(false) // baseline established; not activity
+            }
+        }
+    })();
+    if growth_is_activity == Some(true) {
+        return Some(0);
+    }
+    mtime_age
+}
+
+#[cfg(test)]
+mod heartbeat_watchdog_tests {
+    use super::*;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        // Rule 2: temp files stay in the repo-local tmp/, never the system
+        // temp dir. CARGO_MANIFEST_DIR is cli/, so ../tmp is the repo root's.
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tmp")
+            .join(format!(
+                "scm_hb_unit_{}_{}_{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// The regression pin for the 2026-09-16 fail-open: the watchdog's own
+    /// diagnostic must not read back as node activity, while a write to the
+    /// monitored log must.
+    #[test]
+    fn watchdog_own_diagnostics_do_not_count_as_activity() {
+        let dir = scratch_dir("selfreset");
+        let monitored = dir.join("scm.log.0");
+        // Padded so this file dominates the process-global size baseline, and
+        // a throwaway call establishes that baseline (it only ever grows, and
+        // other tests in this binary share it).
+        std::fs::write(&monitored, "x".repeat(4096)).expect("write stale log");
+        let _ = latest_log_age_secs(&dir);
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+
+        let silent_age = latest_log_age_secs(&dir).expect("age of stale log");
+        assert!(
+            silent_age > 2,
+            "expected >2s of silence on an untouched log, measured {silent_age}s"
+        );
+
+        append_watchdog_diagnostic(&dir, "WARNING", "measured silence")
+            .expect("append watchdog diagnostic");
+
+        let age_after_diagnostic =
+            latest_log_age_secs(&dir).expect("age after watchdog diagnostic");
+        assert!(
+            age_after_diagnostic > 2,
+            "the watchdog's own diagnostic reset the silence measurement to \
+             {age_after_diagnostic}s -- a wedged node could never exit"
+        );
+
+        assert!(
+            watchdog_diagnostics_path(&dir).is_file(),
+            "the diagnostic must still be recorded for the operator"
+        );
+
+        // Control: real node output in the monitored log IS activity. This is
+        // exactly what the traced warning used to do to the measurement.
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&monitored)
+                .expect("open monitored log");
+            writeln!(f, "node activity").expect("append activity");
+        }
+        let age_after_activity = latest_log_age_secs(&dir).expect("age after activity");
+        assert!(
+            age_after_activity <= 2,
+            "a fresh write to the monitored log must read as activity, got \
+             {age_after_activity}s"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A node that keeps logging must never be reported as silent, even with
+    /// the size-growth signal unavailable (untouched baseline).
+    #[test]
+    fn fresh_writes_keep_the_measurement_fresh() {
+        let dir = scratch_dir("fresh");
+        let monitored = dir.join("scm.log.0");
+        std::fs::write(&monitored, "x".repeat(4096)).expect("write log");
+        let _ = latest_log_age_secs(&dir);
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        assert!(latest_log_age_secs(&dir).expect("age") > 2);
+
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&monitored)
+                .expect("open log");
+            writeln!(f, "activity").expect("append");
+        }
+
+        let age = latest_log_age_secs(&dir).expect("age after write");
+        assert!(age <= 2, "expected activity, measured {age}s of silence");
+        assert!(
+            !watchdog_diagnostics_path(&dir).exists(),
+            "no silence diagnostic should exist for a node that keeps logging"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

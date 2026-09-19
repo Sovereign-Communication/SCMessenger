@@ -1,7 +1,7 @@
 # Qwen Model Quota Ledger (DashScope)
 
 Status: Active
-Last updated: 2026-08-31 (operator console export; paid lane removed)
+Last updated: 2026-09-04 (operator console export; paid lane removed)
 
 Canonical record of DashScope/Alibaba Qwen free-tier models and their remaining
 quota. This file is the allowlist: **if a model is not listed as having quota
@@ -197,20 +197,21 @@ timeout 75 claude --model <id> --dangerously-skip-permissions \
 Reminder: a model whose quota column shows a dash (`-`) rather than a numeric
 allowance has NO free allowance at all -- do not dispatch to it.
 
-## Quota snapshot -- 2026-08-31 (operator console export, authoritative)
+## Quota snapshot -- 2026-09-04 (operator console export, authoritative)
 
-Supersedes every earlier quota figure in this file. Console totals: **105 models
-listed, 50 carry free quota, 55 carry none.** The 50 below are the **entire
-allowlist**. Anything not on it is off-limits for this lane.
+Supersedes every earlier quota figure in this file. Console export 2026-09-04
+lists **51 models with free quota** (counted from the operator paste); they are
+the **entire allowlist**. Anything not on it is off-limits for this lane.
 
-Console summary line, for cross-checking a future export:
-`42 sufficient + 5 over-50%-used + 3 over-80%-used = 50 with quota`.
+Console summary line, for cross-checking a future export (approx; per-model
+figures below are authoritative):
+`~36 sufficient + ~9 over-50%-used + ~6 over-80%-used = 51 with quota`.
 
 ### THE EXPIRY RULE -- this is how to route, not by model quality alone
 
-Free quota does not roll over. **~40 of the 50 buckets expire 2026-10-06**,
-which is roughly five weeks from this snapshot. The five freshest 1M buckets
-expire in November.
+Free quota does not roll over. **~40 of the 51 buckets expire 2026-10-06** --
+roughly a month from this snapshot. The six freshest buckets expire in
+November (one, `qwen3.8-max-0902`, on 11-30).
 
 So the routing rule is **spend the soonest-expiring bucket that can do the job**,
 not "always reach for the best model". A 1M-token November bucket held in
@@ -218,9 +219,9 @@ reserve while an October bucket expires unused is pure waste.
 
 | Expiry | Models | Posture |
 |---|---|---|
-| **2026-10-06** (~40 models) | the bulk, incl. `qwq-plus` 906k, `qwen3-14b` 881k, `qwen3-30b-a3b` 820k, `qwen3-32b` 766k, `qwen3.5-flash` 762k, `qwen-max` 748k | **Spend these first.** Use-it-or-lose-it |
-| 2026-10-22 | `qwen3.7-flash-2026-07-15` (66k left, 93% used) | Nearly dry, do not plan around it |
-| 2026-11-11 .. 11-24 | `qwen3.8-2.4t-a95b`, `deepseek-v4-pro-0813`, `kimi-k3`, `qwen3.8-27b`, `qwen3.8-flash` -- all at a **full 1,000,000** | The reserve. Newest and strongest; draw on them once the October block is spent or when a task genuinely needs the capability |
+| **2026-10-06** (~40 models) | the bulk, incl. `qwq-plus` 810k, `qwen3-14b` 881k, `qwen3-30b-a3b` 820k, `qwen3-32b` 725k, `qwen3.5-flash` 762k, `qwen-max` 724k | **Spend these first.** Use-it-or-lose-it |
+| 2026-10-22 | `qwen3.7-flash-2026-07-15` (66,376 left, 93% used) | Nearly dry, do not plan around it |
+| 2026-11-11 .. 11-30 | `qwen3.8-2.4t-a95b` 683,320 (11-11) -- 32% used, the standing Rule-8 reviewer; `deepseek-v4-pro-0813` 975,602 (11-12); `kimi-k3` 1,000,000 (11-17); `qwen3.8-27b` 1,000,000 (11-17); `qwen3.8-flash` 999,910 (11-24); `qwen3.8-max-0902` 825,245 (11-30) | The reserve. Newest and strongest; draw on the soonest-expiring that can do the job once the October block is spent |
 
 ### Code-capable models with quota, by tier (use these)
 
@@ -229,25 +230,33 @@ tokens as of this snapshot.
 
 | Tier | Model | Remaining | Expires |
 |---|---|---|---|
-| Reasoning | `qwq-plus` | 906,398 | 10-06 |
-| Reasoning | `qwen3-30b-a3b-thinking-2507` | 373,471 | 10-06 |
-| Reasoning (reserve) | `deepseek-v4-pro-0813` | 1,000,000 | 11-12 |
-| Large general | `qwen-max` | 748,219 | 10-06 |
-| Large general | `qwen3-32b` | 766,099 | 10-06 |
+| Reasoning | `qwq-plus` | 810,302 | 10-06 |
+| Reasoning | `qwen3-30b-a3b-thinking-2507` | 331,284 | 10-06 |
+| Reasoning (reserve) | `deepseek-v4-pro-0813` | 975,602 | 11-12 |
+| Large general | `qwen-max` | 724,471 | 10-06 |
+| Large general | `qwen3-32b` | 724,918 | 10-06 |
 | Large general | `qwen3-235b-a22b` | 366,182 | 10-06 |
-| Large general (reserve) | `qwen3.8-2.4t-a95b` | 1,000,000 | 11-11 |
+| Large general (reserve) | `qwen3.8-2.4t-a95b` | 683,320 | 11-11 |
 | Large general (reserve) | `kimi-k3` | 1,000,000 | 11-17 |
-| Mid mechanical | `qwen3-14b` | 881,528 | 10-06 |
+| Large general (reserve) | `qwen3.8-max-0902` | 825,245 | 11-30 |
+| Mid mechanical | `qwen3-14b` | 881,492 | 10-06 |
 | Mid mechanical | `qwen3-30b-a3b` | 820,041 | 10-06 |
 | Mid mechanical | `qwen3.5-flash` | 761,849 | 10-06 |
 | Mid mechanical | `qwen3.6-27b` | 209,502 | 10-06 |
 | Mid (reserve) | `qwen3.8-27b` | 1,000,000 | 11-17 |
 | Small/fast | `qwen3-8b` | 999,907 | 10-06 |
 | Small/fast | `qwen-flash-2025-07-28` | 996,038 | 10-06 |
-| Small/fast | `qwen-plus-2025-09-11` / `-2025-07-14` / `-2025-04-28` | ~999,980 each | 10-06 |
-| Small/fast | `qwen-plus-2025-07-28` | 534,979 | 10-06 |
+| Small/fast | `qwen-plus-2025-09-11` / `-2025-07-14` / `-2025-04-28` | ~999,979 each | 10-06 |
+| Small/fast | `qwen-plus-2025-07-28` | 469,844 | 10-06 |
 | Small/fast | `qwen-plus-2025-12-01` | 420,578 | 10-06 |
-| Small/fast (reserve) | `qwen3.8-flash` | 1,000,000 | 11-24 |
+| Small/fast (reserve) | `qwen3.8-flash` | 999,910 | 11-24 |
+
+**Rule-8 reviewer model note:** the standing non-author reviewer is
+`qwen3.8-2.4t-a95b` (bucket 11-11), now at 683,320 after the #273 R1-R4 and
+#276 R1 passes. It remains the continuity pick for Rule-8 review rounds while
+it holds quota; if it drains, `qwen3.8-max-0902` (825,245, 11-30) or
+`deepseek-v4-pro-0813` (975,602, 11-12) are the same-tier reviewer-capable
+replacements -- record the reviewer-identity change in the verdict file.
 
 **The coder-specific models are effectively gone. Stop routing to them:**
 

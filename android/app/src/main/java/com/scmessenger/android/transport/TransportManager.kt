@@ -81,9 +81,13 @@ class TransportManager @JvmOverloads constructor(
     ) {
         Timber.i("Initializing TransportManager (BLE=$bleEnabled, Aware=$wifiAwareEnabled, Direct=$wifiDirectEnabled)")
 
-        // Initialize BLE components
-        if (bleEnabled) {
-            initializeBle()
+        // BLE instances are created and lifecycle-managed by MeshRepository. This manager only
+        // receives those instances through setBleComponents() for cross-transport dispatch.
+        // Do not construct a second BLE stack here.
+        if (bleEnabled && bleL2capManager == null) {
+            bleL2capManager = BleL2capManager(context) { peerId, data ->
+                onDataReceived(peerId, data, TransportType.BLE)
+            }
         }
 
         // Initialize WiFi Aware
@@ -108,10 +112,8 @@ class TransportManager @JvmOverloads constructor(
 
         isRunning = true
 
-        // Start BLE
-        scope.launch { bleScanner?.startScanning() }
-        bleAdvertiser?.startAdvertising()
-        bleGattServer?.start()
+        // BLE L2CAP has no corresponding MeshRepository component; this manager owns its
+        // independent socket listener while the GATT stack remains repository-owned.
         bleL2capManager?.startListening()
 
         // Start WiFi Aware
@@ -210,10 +212,6 @@ class TransportManager @JvmOverloads constructor(
 
         isRunning = false
 
-        // Stop BLE
-        scope.launch { bleScanner?.stopScanning() }
-        bleAdvertiser?.stopAdvertising()
-        bleGattServer?.stop()
         bleL2capManager?.stopListening()
 
         // Stop WiFi
@@ -283,7 +281,6 @@ class TransportManager @JvmOverloads constructor(
     private suspend fun sendViaTransport(peerId: String, data: ByteArray, transport: TransportType): Boolean {
         return when (transport) {
             TransportType.BLE -> run {
-                // Prefer connected transport channels before non-targeted advertiser payloads.
                 if (bleL2capManager?.sendData(peerId, data) == true) {
                     return@run true
                 }
@@ -375,54 +372,6 @@ class TransportManager @JvmOverloads constructor(
         return available
     }
 
-    private fun initializeBle() {
-        try {
-            // Scanner
-            bleScanner = BleScanner(
-                context,
-                onPeerDiscovered = { peerId ->
-                    Timber.d("BLE peer discovered: $peerId")
-                    activeTransports[TransportType.BLE] = true
-                    onPeerDiscovered(peerId, TransportType.BLE)
-
-                    // Attempt escalation to higher transports
-                    attemptEscalation(peerId)
-                },
-                onDataReceived = { peerId, data ->
-                    onDataReceived(peerId, data, TransportType.BLE)
-                }
-            )
-
-            // Advertiser
-            bleAdvertiser = BleAdvertiser(context)
-
-            // GATT Server
-            bleGattServer = BleGattServer(context) { peerId, data ->
-                onDataReceived(peerId, data, TransportType.BLE)
-            }
-
-            // GATT Client
-            bleGattClient = BleGattClient(
-                context,
-                onIdentityReceived = { address, identity ->
-                    Timber.d("Identity received from $address: ${identity.size} bytes")
-                },
-                onDataReceived = { address, data ->
-                    onDataReceived(address, data, TransportType.BLE)
-                }
-            )
-
-            // L2CAP Manager (Android 10+)
-            bleL2capManager = BleL2capManager(context) { peerId, data ->
-                onDataReceived(peerId, data, TransportType.BLE)
-            }
-
-            Timber.d("BLE transports initialized")
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to initialize BLE transports")
-        }
-    }
-
     private fun initializeWifiAware() {
         try {
             wifiAware = WifiAwareTransport(
@@ -487,8 +436,8 @@ class TransportManager @JvmOverloads constructor(
     fun enableTransport(transport: TransportType) {
         when (transport) {
             TransportType.BLE -> {
-                scope.launch { bleScanner?.startScanning() }
-                bleAdvertiser?.startAdvertising()
+                bleL2capManager?.startListening()
+                activeTransports[TransportType.BLE] = true
             }
             TransportType.WIFI_AWARE -> {
                 if (wifiAware == null) {
@@ -520,8 +469,7 @@ class TransportManager @JvmOverloads constructor(
     fun disableTransport(transport: TransportType) {
         when (transport) {
             TransportType.BLE -> {
-                scope.launch { bleScanner?.stopScanning() }
-                bleAdvertiser?.stopAdvertising()
+                bleL2capManager?.stopListening()
             }
             TransportType.WIFI_AWARE -> {
                 wifiAware?.stop()
