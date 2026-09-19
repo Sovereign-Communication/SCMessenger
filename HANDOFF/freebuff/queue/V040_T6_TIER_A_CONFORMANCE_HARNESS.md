@@ -1,13 +1,8 @@
 # V040-T6 -- Tier A two-node continuous conformance harness
 
-Status: PR FILED -- #311 open (branch `freebuff/tier-a-conformance`); all four
-acceptance criteria met and exercised, awaiting review. Per-row corrections to
-this ticket's expectations, and the two named extras, are in the Hand-off below.
-Priority: P1 -- this is what makes "never idle" real rather than aspirational
-Lane: Freebuff / DeepSeek V4 Flash
-Scope: new `scripts/tier_a_conformance.sh` plus a results file it writes, and one
-extracted shared lookup (`scripts/aws_node_ip.sh`). No changes to `core/` or
-`cli/` source. Read-only against the live nodes.
+Status: MERGED -- the harness landed as PR #311 (main 1579b049, 2026-09-19), the
+same day this status line was corrected. Status corrected 2026-09-19 by the
+queue-reconcile pass; the ticket body below is unchanged.
 
 ## Hand-off (2026-09-18) -- implemented, in review as PR #311
 
@@ -185,3 +180,18 @@ it or point it at `aws_deploy.sh`.
 - No emojis. `[OK]`, `[FAIL]`, `[WARNING]`, `[INFO]`, `[SKIP]`.
 - Read-only against live nodes. No restarts, no state writes, no redeploys.
 - Shared checkout: touch only what this task requires.
+
+### Status reconciliation (2026-09-19)
+
+The status line still said "PR FILED -- #311 open". It is merged.
+
+```
+gh pr view 311 --json state,mergedAt,headRefOid,files
+#  MERGED  head 3adee565  4 files (tier_a_conformance.sh, aws_node_ip.sh,
+#  aws_deploy.sh, this ticket)
+git show origin/main:scripts/tier_a_conformance.sh | grep -nE "^(measured|state_arg)\\(\\)"
+#  356:measured() { ... }
+#  363:state_arg() {
+git ls-tree --name-only origin/main scripts/ | grep -E 'tier_a_conformance|aws_node_ip|aws_deploy'
+#  all three present
+```
