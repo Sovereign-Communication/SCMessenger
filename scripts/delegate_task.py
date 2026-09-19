@@ -18,6 +18,27 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+
+PROVIDER_URLS = {
+    "qwen": QWEN_URL,
+    "qwenpaid": QWENPAID_URL,
+    "openrouter": OPENROUTER_URL,
+    "openrouter_direct": OPENROUTER_URL,
+    "groq": GROQ_URL,
+    "gemini": GEMINI_URL,
+    "nvidia": NVIDIA_URL,
+    "cerebras": CEREBRAS_URL,
+}
+
+DEFAULT_MODELS = {
+    "groq": "llama-3.3-70b-versatile",
+    "gemini": "gemini-3.7-flash",
+    "openrouter_direct": "deepseek/deepseek-v4-flash-0731",
+    "nvidia": "deepseek-ai/deepseek-v4-flash-0731",
+    "cerebras": "zai-glm-4.7",
+}
 
 # Groq per-minute token limit (free tier). Prompts near this are micro-chunked
 # by the orchestrator before dispatch; this constant is used by lake_route.py.
@@ -72,10 +93,18 @@ MODEL_TOKEN_LIMITS = {
     "llama3-8b-8192": 8192,
     "mixtral-8x7b-32768": 32768,
     "gemma2-9b-it": 8192,
+    # Google Gemini models
+    "gemini-3.7-flash": 8192,
+    "google/gemini-pro-1.5": 8192,
     # OpenRouter models
     "anthropic/claude-3.5-sonnet": 8192,
-    "google/gemini-pro-1.5": 8192,
     "meta-llama/llama-3.1-405b-instruct": 4096,
+    # NVIDIA NIM models
+    "deepseek-ai/deepseek-v4-flash-0731": 8192,
+    # Cerebras fixed-trial backup: cap output to preserve the metered balance.
+    "zai-glm-4.7": 4096,
+    "gemma-4-31b": 4096,
+    "gpt-oss-120b": 4096,
     # Ollama local
     "llama3": 4096,
     "codellama": 4096,
@@ -160,10 +189,13 @@ def get_api_key(provider):
                 or _key_from_env_file("~/.config/scmorc/groq.env",
                                       ("GROQ_API_KEY",)))
     elif provider == "gemini":
-        return (os.environ.get("GEMINI_API_KEY")
+        return (os.environ.get("AISTUDIO_API_KEY")
+                or os.environ.get("GEMINI_API_KEY")
                 or os.environ.get("GOOGLE_API_KEY")
+                or _key_from_env_file("~/.config/scmorc/AIstudio.env",
+                                      ("AISTUDIO_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"))
                 or _key_from_env_file("~/.config/scmorc/gemini.env",
-                                      ("GEMINI_API_KEY", "GOOGLE_API_KEY")))
+                                      ("GEMINI_API_KEY", "GOOGLE_API_KEY", "AISTUDIO_API_KEY")))
     elif provider == "openrouter_direct":
         # Operator-added 2026-08-04: DeepSeek V4 Flash backup lane, USD 1/day
         # cap, dedicated key (NOT the free-models-only openrouter.env key).
@@ -171,6 +203,14 @@ def get_api_key(provider):
                 or os.environ.get("OpenRouter_Paid_Key")
                 or _key_from_env_file("~/.config/scmorc/openrouter_direct.env",
                                       ("OPENROUTER_DIRECT_API_KEY", "OpenRouter_Paid_Key")))
+    elif provider == "nvidia":
+        return (os.environ.get("NVIDIA_API_KEY")
+                or _key_from_env_file("~/.config/scmorc/nvidia.env",
+                                      ("NVIDIA_API_KEY",)))
+    elif provider == "cerebras":
+        return (os.environ.get("CEREBRAS_API_KEY")
+                or _key_from_env_file("~/.config/scmorc/cerebras.env",
+                                      ("CEREBRAS_API_KEY",)))
     return None
 
 def _looks_like_diff(text):
@@ -322,26 +362,66 @@ def _resolve_max_tokens(model_name):
             return limit
     return DEFAULT_MAX_TOKENS
 
+def build_request_payload(provider, resolved_model, max_tokens, system_message, prompt, raw_model_arg=None):
+    """Construct JSON request payload for the specified provider and model."""
+    payload = {
+        "model": resolved_model,
+        "temperature": 0.1,
+    }
+    if provider == "cerebras":
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+
+    if provider == "qwen":
+        # DashScope: hybrid NON-thinking models (qwen3-14b etc.) require
+        # enable_thinking=false for non-streaming calls, while thinking models
+        # (qwen3-235b-a22b-thinking-*) REQUIRE true. Set from the model name.
+        payload["enable_thinking"] = "thinking" in (raw_model_arg or "").lower()
+    elif provider == "qwenpaid":
+        # Paid-plan lane: qwen3.8-*-preview are thinking hybrids and 400
+        # ("restricted to True") when sent false (probe-verified 2026-07-28;
+        # ORCHESTRATION.md Lesson 12 masked-downgrade pattern).
+        _mname = (raw_model_arg or "").lower()
+        payload["enable_thinking"] = ("thinking" in _mname) or _mname.startswith("qwen3.8")
+
+    if provider == "ollama":
+        payload["messages"] = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
+        payload["stream"] = False
+    else:
+        payload["messages"] = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
+    return payload
+
+def extract_response_content(resp, provider=None):
+    """Extract output text from provider response, with reasoning_content fallback."""
+    if provider == "ollama":
+        return resp.get("message", {}).get("content", "")
+    choices = resp.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if not content:
+        # Some reasoning models (e.g. deepseek, hy3) leave `content` null/empty
+        # and put the actual answer in `reasoning` or `reasoning_content`.
+        reasoning = message.get("reasoning") or message.get("reasoning_content")
+        if reasoning:
+            print("[WARN] response had empty content; falling back to the reasoning field")
+            content = reasoning
+        else:
+            content = ""
+    return content
+
 def send_request(args, prompt, resolved_model, display_model, round_num=None):
     # Dynamically resolve max_tokens based on the model being used
     max_tokens = _resolve_max_tokens(resolved_model)
     print(f"[INFO] Using max_tokens={max_tokens} for model {resolved_model}")
-    payload = {
-        "model": resolved_model,
-        "temperature": 0.1,
-        "max_tokens": max_tokens
-    }
-    if args.provider == "qwen":
-        # DashScope: hybrid NON-thinking models (qwen3-14b etc.) require
-        # enable_thinking=false for non-streaming calls, while thinking models
-        # (qwen3-235b-a22b-thinking-*) REQUIRE true. Set from the model name.
-        payload["enable_thinking"] = "thinking" in (args.model or "").lower()
-    elif args.provider == "qwenpaid":
-        # Paid-plan lane: qwen3.8-*-preview are thinking hybrids and 400
-        # ("restricted to True") when sent false (probe-verified 2026-07-28;
-        # ORCHESTRATION.md Lesson 12 masked-downgrade pattern).
-        _mname = (args.model or "").lower()
-        payload["enable_thinking"] = ("thinking" in _mname) or _mname.startswith("qwen3.8")
 
     system_message = ""
     if args.mode == "full":
@@ -349,31 +429,23 @@ def send_request(args, prompt, resolved_model, display_model, round_num=None):
     else:  # diff mode
         system_message = "Return your changes as unified diffs, one fenced ```diff block per file, using standard `--- a/<path>` and `+++ b/<path>` headers with 3 lines of context. Do NOT return full files. For a NEW file, use `--- /dev/null` and `+++ b/<path>`."
 
+    payload = build_request_payload(
+        provider=args.provider,
+        resolved_model=resolved_model,
+        max_tokens=max_tokens,
+        system_message=system_message,
+        prompt=prompt,
+        raw_model_arg=args.model,
+    )
+
     if args.provider == "ollama":
-        payload["messages"] = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt}
-        ]
-        payload["stream"] = False
         req_url = OLLAMA_URL
         headers = {"Content-Type": "application/json"}
     else:
-        payload["messages"] = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt}
-        ]
-        _url_map = {
-            "qwen": QWEN_URL,
-            "qwenpaid": QWENPAID_URL,
-            "openrouter": OPENROUTER_URL,
-            "openrouter_direct": OPENROUTER_URL,
-            "groq": GROQ_URL,
-            "gemini": GEMINI_URL,
-        }
-        if args.provider not in _url_map:
+        if args.provider not in PROVIDER_URLS:
             print(f"Error: unknown provider '{args.provider}'.")
             sys.exit(1)
-        req_url = _url_map[args.provider]
+        req_url = PROVIDER_URLS[args.provider]
         api_key = get_api_key(args.provider)
         if not api_key:
             print(f"Error: API key for {args.provider} is not set.")
@@ -413,21 +485,7 @@ def send_request(args, prompt, resolved_model, display_model, round_num=None):
             with urllib.request.urlopen(req, timeout=(1800 if args.provider == "qwenpaid" else 600)) as r:
                 resp = json.loads(r.read().decode("utf-8"))
 
-            if args.provider == "ollama":
-                content = resp.get("message", {}).get("content", "")
-            else:
-                message = resp["choices"][0]["message"]
-                content = message.get("content")
-                if not content:
-                    # Some reasoning models (e.g. tencent/hy3) leave `content`
-                    # null/empty and put the actual answer in `reasoning` on
-                    # harder/longer prompts. Fall back rather than crash.
-                    reasoning = message.get("reasoning")
-                    if reasoning:
-                        print("[WARN] response had empty content; falling back to the 'reasoning' field")
-                        content = reasoning
-                    else:
-                        content = ""
+            content = extract_response_content(resp, provider=args.provider)
 
             os.makedirs("tmp", exist_ok=True)
             base_name = os.path.basename(args.task).split('.')[0]
@@ -559,7 +617,7 @@ def apply_diff_blocks(diff_blocks, task_base_name, round_num, allowed_files):
 def main():
     parser = argparse.ArgumentParser(description="Universal Swarm Delegate Script")
     parser.add_argument("--task", required=True, help="Task markdown file path (e.g., HANDOFF/todo/PQC_07_PQ_RATCHET.md)")
-    parser.add_argument("--provider", choices=["qwen", "qwenpaid", "openrouter", "openrouter_direct", "ollama", "groq", "gemini"], required=True, help="API provider to use")
+    parser.add_argument("--provider", choices=["qwen", "qwenpaid", "openrouter", "openrouter_direct", "ollama", "groq", "gemini", "nvidia", "cerebras"], required=True, help="API provider to use")
     parser.add_argument("--model", help="Model name override (e.g., qwen-max, anthropic/claude-3.5-sonnet, llama3)")
     parser.add_argument("--tier", choices=["thinking", "max", "standard", "plus", "flash"],
                         help="Qwen tier for auto model selection: thinking > max > standard > plus > flash")
@@ -581,15 +639,9 @@ def main():
     args.files, scope_map = parse_scoped_files(args.files)
 
     # Default model fallbacks
-    if args.provider == "groq" and not args.model:
-        args.model = "llama-3.3-70b-versatile"  # 128k context, 32k output
-        print(f"[INFO] No model specified for Groq, defaulting to {args.model}")
-    elif args.provider == "gemini" and not args.model:
-        args.model = "gemini-2.5-flash"  # large context, balanced cost
-        print(f"[INFO] No model specified for Gemini, defaulting to {args.model}")
-    elif args.provider == "openrouter_direct" and not args.model:
-        args.model = "deepseek/deepseek-v4-flash-0731"  # probe-verified 2026-08-04
-        print(f"[INFO] No model specified for OpenRouter Direct, defaulting to {args.model}")
+    if not args.model and args.provider in DEFAULT_MODELS:
+        args.model = DEFAULT_MODELS[args.provider]
+        print(f"[INFO] No model specified for {args.provider}, defaulting to {args.model}")
 
     if args.verify and not args.apply:
         print("Warning: --verify is only meaningful with --apply; ignoring --verify.")
@@ -660,8 +712,8 @@ Return your changes as unified diffs, one fenced ```diff block per file, using s
             resolved_model = f"qwen-{args.tier}"
         else:
             resolved_model = args.model
-    elif args.provider == "openrouter_direct" and not args.model:
-        resolved_model = "deepseek/deepseek-v4-flash-0731"
+    elif args.provider in DEFAULT_MODELS and not args.model:
+        resolved_model = DEFAULT_MODELS[args.provider]
     else:
         if not args.model:
             print(f"Error: --model is required for provider '{args.provider}'.")
