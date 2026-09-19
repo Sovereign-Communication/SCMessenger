@@ -98,3 +98,7 @@ class FixedDelayBackoff(private val delayMs: Long = 5000L) {
     fun nextDelay(): Long = delayMs
     fun reset() {}
 }
+
+// Throwaway probe: this single comment makes the diff an android-only change,
+// which cannot alter any Rust input. Used to observe which CI lanes the platform
+// gate keeps quiet. Not for merge.
