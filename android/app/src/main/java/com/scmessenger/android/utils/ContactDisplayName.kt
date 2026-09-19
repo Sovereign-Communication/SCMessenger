@@ -41,6 +41,23 @@ fun Contact.displayNames(): ContactDisplayNames {
 }
 
 /**
+ * Resolve user-defined localNickname across merge sources (discovery, ledger,
+ * contact record). A real (non-synthetic) EXISTING value always wins —
+ * discovery/ledger must never replace a user-set name. Only fills when
+ * existing is blank/synthetic. This stops localNickname vs federated-nickname
+ * display flip-flops caused by last-writer-wins merges.
+ */
+fun resolveLocalNickname(incoming: String?, existing: String?): String? {
+    val existingReal = normalizeContactNickname(existing)
+        ?.takeUnless { isSyntheticFallbackNickname(it) }
+    if (existingReal != null) return existingReal
+    val incomingReal = normalizeContactNickname(incoming)
+        ?.takeUnless { isSyntheticFallbackNickname(it) }
+    if (incomingReal != null) return incomingReal
+    return normalizeContactNickname(existing) ?: normalizeContactNickname(incoming)
+}
+
+/**
  * Combined display name for lists/titles:
  * both present -> "primary (secondary)"; either alone; else [fallbackId].
  */

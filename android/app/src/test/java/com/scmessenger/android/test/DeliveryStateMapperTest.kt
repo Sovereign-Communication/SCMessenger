@@ -55,4 +55,39 @@ class DeliveryStateMapperTest {
         assertEquals(DeliveryStateSurface.FORWARDING, state.state)
         assertEquals("forwarding", state.label)
     }
+
+    @Test
+    fun `maps exhausted undelivered send to queued delivering state`() {
+        // A send retained at the retry cap (attemptCount 12, never acked) must
+        // surface as a persistent, visible queued/delivering status - never
+        // as a vanished message (null snapshot / plain pending).
+        val state = DeliveryStateMapper.resolve(
+            delivered = false,
+            pending = PendingDeliverySnapshot(
+                attemptCount = 12,
+                nextAttemptAtEpochSec = 1000,
+                exhausted = true
+            ),
+            nowEpochSec = 1000
+        )
+
+        assertEquals(DeliveryStateSurface.QUEUED_DELIVERING, state.state)
+        assertEquals("queued/delivering", state.label)
+    }
+
+    @Test
+    fun `exhausted flag does not override a delivered receipt`() {
+        val state = DeliveryStateMapper.resolve(
+            delivered = true,
+            pending = PendingDeliverySnapshot(
+                attemptCount = 12,
+                nextAttemptAtEpochSec = 1000,
+                exhausted = true
+            ),
+            nowEpochSec = 1000
+        )
+
+        assertEquals(DeliveryStateSurface.DELIVERED, state.state)
+        assertEquals("delivered", state.label)
+    }
 }

@@ -64,6 +64,9 @@ fun SettingsScreen(
     val isStorageDegraded by serviceViewModel.isStorageDegraded.collectAsState()
     val serviceStats by serviceViewModel.serviceStats.collectAsState()
     val settingsError by settingsViewModel.error.collectAsState()
+    // ANR-2026-09-09 recurrence fix: Info-section counts load on IO in the
+    // ViewModel and arrive as state; never call the FFI getters in composition.
+    val infoCounts by settingsViewModel.infoCounts.collectAsState()
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -249,9 +252,9 @@ fun SettingsScreen(
 
         // Info Section
         InfoSection(
-            contactCount = settingsViewModel.getContactCount(),
-            messageCount = settingsViewModel.getMessageCount(),
-            buildProvenance = settingsViewModel.getBuildProvenance()
+            contactCount = infoCounts.contactCount,
+            messageCount = infoCounts.messageCount,
+            buildProvenance = infoCounts.buildProvenance
         )
 
         Spacer(modifier = Modifier.height(24.dp))

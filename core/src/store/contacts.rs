@@ -1161,8 +1161,11 @@ mod tests {
         let contact = mgr
             .get_by_public_key(&public_key.to_uppercase())
             .unwrap()
-            .expect("public-key lookup should find a PeerId-keyed contact");
-        assert_eq!(contact.peer_id, "peer-keyed");
+            .expect("public-key lookup should find the contact");
+        // V2 canonicalization: a valid 64-hex public key IS the canonical
+        // contact identity, so the stored peer_id is the lowercased public
+        // key, not the arbitrary add-time label.
+        assert_eq!(contact.peer_id, public_key);
     }
 
     #[test]

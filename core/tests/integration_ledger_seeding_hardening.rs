@@ -222,6 +222,11 @@ async fn ledger_exchange_response_is_capped_topic_free_and_address_filtered() {
             failure_count: 0,
             last_seen: Some(1_700_000_000_000),
             topics: vec!["sc-family-chat".to_string()],
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000_000),
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
     }
     // 100 proven, routable peers -- more than the 64 response cap.
@@ -235,6 +240,11 @@ async fn ledger_exchange_response_is_capped_topic_free_and_address_filtered() {
             failure_count: 0,
             last_seen: Some(1_700_000_000_000),
             topics: vec!["sc-family-chat".to_string(), "sc-activists".to_string()],
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000_000),
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
     }
     std::fs::create_dir_all(dir1.path()).expect("create ledger dir");

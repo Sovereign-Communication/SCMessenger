@@ -193,6 +193,7 @@ fun `isRunning`(): kotlin.Boolean
 fun `isRunning`(): kotlin.Boolean
 fun `isStorageDegraded`(): kotlin.Boolean
 fun `isStorageHealthy`(): kotlin.Boolean
+fun `isValidPublicKey`(`hexStr`: kotlin.String): kotlin.Boolean {
 fun `listBlockedPeersBridge`(): List<BlockedIdentity>
 fun `listBlockedPeers`(): List<BlockedIdentity>
 fun `listBlocked`(): List<BlockedIdentity>
@@ -315,6 +316,7 @@ fun `setNickname`(`nickname`: kotlin.String)
 fun `setNickname`(`peerId`: kotlin.String, `nickname`: kotlin.String?)
 fun `setPlatformBridge`(`bridge`: PlatformBridge?)
 fun `setPrivacyConfig`(`json`: kotlin.String)
+fun `setSwarmPeerConnection`(`publicKeyHex`: kotlin.String, `connected`: kotlin.Boolean)
 fun `signData`(`data`: kotlin.ByteArray): SignatureResult
 fun `startSwarm`(`listenAddr`: kotlin.String, `bootstrapAddrs`: List<kotlin.String>)
 fun `start`()

@@ -439,6 +439,88 @@ impl Outbox {
         }
     }
 
+    /// Restore a message removed by `flush_peer_messages` after a delivery
+    /// attempt could not be durably re-enqueued. This is intentionally
+    /// crate-private and bypasses only queue-capacity checks: callers may use it
+    /// only for an item they just drained, so the outbox never silently loses
+    /// ownership when another producer fills the queue in between.
+    pub(crate) fn restore_drained(
+        &mut self,
+        msg: QueuedMessage,
+    ) -> std::result::Result<(), String> {
+        let message_id = msg.message_id.clone();
+        match &mut self.backend {
+            OutboxBackend::Memory { queues, total } => {
+                let queue = queues.entry(msg.recipient_id.clone()).or_default();
+                if let Some(existing) = queue.iter_mut().find(|m| m.message_id == message_id) {
+                    *existing = msg;
+                } else {
+                    queue.push_back(msg);
+                    *total += 1;
+                }
+                Ok(())
+            }
+            OutboxBackend::Persistent(db) => {
+                let key_str = format!(
+                    "{}{}_{}",
+                    String::from_utf8_lossy(QUEUE_PREFIX),
+                    msg.recipient_id,
+                    msg.message_id
+                );
+                let bytes = bincode::serialize(&msg).map_err(|e| e.to_string())?;
+                db.put(key_str.as_bytes(), &bytes)?;
+                db.flush()
+            }
+        }
+    }
+
+    /// Make a queued message eligible for the next reconnect flush.
+    ///
+    /// A transport request can fail after the reconnect flush has already
+    /// restored the entry with its grace timer. Clearing that timer avoids
+    /// waiting for the grace window when the request-response layer has already
+    /// proved that the attempt failed. Custody entries are left alone because
+    /// custody owns their retry lifecycle.
+    pub(crate) fn retry_now(&mut self, message_id: &str) -> bool {
+        match &mut self.backend {
+            OutboxBackend::Memory { queues, .. } => {
+                for queue in queues.values_mut() {
+                    if let Some(msg) = queue.iter_mut().find(|m| m.message_id == message_id) {
+                        if msg.in_custody {
+                            return false;
+                        }
+                        msg.state = MessageState::Enqueued;
+                        msg.next_retry_at = None;
+                        return true;
+                    }
+                }
+            }
+            OutboxBackend::Persistent(db) => {
+                if let Ok(results) = db.scan_prefix(QUEUE_PREFIX) {
+                    for (key, value) in results {
+                        if let Ok(mut msg) = deserialize_queued_message(&value) {
+                            if msg.message_id == message_id {
+                                if msg.in_custody {
+                                    return false;
+                                }
+                                msg.state = MessageState::Enqueued;
+                                msg.next_retry_at = None;
+                                let Ok(bytes) = bincode::serialize(&msg) else {
+                                    return false;
+                                };
+                                if db.put(&key, &bytes).is_err() || db.flush().is_err() {
+                                    return false;
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Flush peer messages that are due for delivery
     pub fn flush_peer_messages(&mut self, recipient_id: &str) -> Vec<QueuedMessage> {
         match &mut self.backend {
@@ -1009,6 +1091,42 @@ mod tests {
     }
 
     #[test]
+    fn test_restore_drained_bypasses_capacity_for_recovery() {
+        let mut outbox = Outbox::new();
+        let drained = make_msg("drained", "peer_a");
+        outbox.enqueue(drained.clone()).unwrap();
+        assert_eq!(outbox.drain_for_peer("peer_a").len(), 1);
+
+        for index in 0..MAX_QUEUE_PER_PEER {
+            outbox
+                .enqueue(make_msg(&format!("existing-{index}"), "peer_a"))
+                .unwrap();
+        }
+        assert_eq!(outbox.total_count(), MAX_QUEUE_PER_PEER);
+
+        outbox.restore_drained(drained).unwrap();
+        assert_eq!(outbox.total_count(), MAX_QUEUE_PER_PEER + 1);
+        assert!(outbox
+            .peek_for_peer("peer_a")
+            .iter()
+            .any(|msg| msg.message_id == "drained"));
+    }
+
+    #[test]
+    fn test_retry_now_clears_deferred_timer() {
+        let mut outbox = Outbox::new();
+        let mut msg = make_msg("retry-now", "peer_a");
+        msg.next_retry_at = Some(u64::MAX);
+        outbox.enqueue(msg).unwrap();
+
+        assert!(outbox.retry_now("retry-now"));
+        let restored = outbox.peek_for_peer("peer_a");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].state, MessageState::Enqueued);
+        assert_eq!(restored[0].next_retry_at, None);
+    }
+
+    #[test]
     fn test_persistent_outbox() {
         use tempfile::tempdir;
 
@@ -1116,6 +1234,14 @@ mod tests {
             outbox.enqueue(make_msg("msg1", "peer_a")).unwrap();
             outbox.record_attempt("msg1");
             outbox.record_attempt("msg1");
+            // Explicit drop (rather than relying on end-of-scope order) makes
+            // the close-then-reopen race this test exercises obvious: the
+            // second block below reopens the same sled path, which can race
+            // the OS releasing the file lock this `Outbox`'s `SledStorage`
+            // holds. `SledStorage::new`'s bounded lock-contention retry is
+            // what actually makes that reopen deterministic; this drop just
+            // documents which handle is being released.
+            drop(outbox);
         }
 
         {

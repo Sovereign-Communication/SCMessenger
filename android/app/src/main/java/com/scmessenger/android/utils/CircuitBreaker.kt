@@ -20,8 +20,19 @@ import javax.inject.Singleton
 class CircuitBreaker @Inject constructor(
     private val config: CircuitBreakerConfig = CircuitBreakerConfig()
 ) {
+    companion object {
+        const val HALF_OPEN_TIMEOUT_MS: Long = 30_000L
+    }
+
     /** Per-relay circuit state entries */
     private val entries = ConcurrentHashMap<String, CircuitEntry>()
+
+    /**
+     * R4-L3: half-open cadence from the ACTIVE config so consumers re-probe
+     * in lockstep with this breaker instance even if a non-default config is
+     * ever injected.
+     */
+    val halfOpenTimeoutMs: Long get() = config.halfOpenTimeoutMs
 
     /** Mutex for state transitions */
     private val mutex = Mutex()
@@ -29,8 +40,11 @@ class CircuitBreaker @Inject constructor(
     /** Circuit breaker configuration */
     data class CircuitBreakerConfig(
         val failureThreshold: Int = 3,
-        val openTimeoutMs: Long = 300_000L, // 5 minutes
-        val halfOpenTimeoutMs: Long = 30_000L, // 30 seconds
+        // Align OPEN recovery with bootstrap re-probe cadence (30s). A 5-minute
+        // open window made every 30s bootstrap pass a no-op while the mesh was
+        // already healthy (R1: all ledger candidates stayed OPEN).
+        val openTimeoutMs: Long = HALF_OPEN_TIMEOUT_MS,
+        val halfOpenTimeoutMs: Long = HALF_OPEN_TIMEOUT_MS,
         val successThreshold: Int = 2,
         val maxHalfOpenProbes: Int = 3
     )

@@ -73,7 +73,7 @@ class ConversationsViewModel @Inject constructor(
         loadInboxCount()
 
         // Listen for message updates (sent or received) to refresh the list
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             meshRepository.messageUpdates.collect {
                 loadMessages()
             }
@@ -81,7 +81,7 @@ class ConversationsViewModel @Inject constructor(
 
         // Receipt/transport events can change delivery state without a new message
         // body; refresh to keep conversation badges and previews accurate.
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             MeshEventBus.messageEvents.collect { event ->
                 when (event) {
                     is MessageEvent.Delivered,
@@ -104,7 +104,7 @@ class ConversationsViewModel @Inject constructor(
             Timber.d("loadMessages skipped — ViewModelScope not active (destroyed)")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
@@ -439,24 +439,21 @@ class ConversationsViewModel @Inject constructor(
         _error.value = null
     }
 
-    /**
-     * Get total message count.
-     */
-    fun getMessageCount(): UInt {
-        return meshRepository.getMessageCount()
-    }
-
     fun resolveDeliveryState(
         message: uniffi.api.MessageRecord,
         nowEpochSec: Long = System.currentTimeMillis() / 1000
     ): DeliveryStatePresentation {
-        val pendingPair = meshRepository.getPendingDeliverySnapshot(message.id)
+        // One outbox read per pending row: getPendingDeliverySnapshot carries
+        // attemptCount, nextAttemptAtEpochSec AND the exhausted flag together,
+        // so composition never pays a second (or third) synchronous file read.
+        val info = meshRepository.getPendingDeliverySnapshot(message.id)
         val terminalFailureCode = meshRepository.getPendingTerminalFailureCode(message.id)
-        val pending = pendingPair?.let {
+        val pending = info?.let {
             PendingDeliverySnapshot(
-                attemptCount = it.first,
-                nextAttemptAtEpochSec = it.second,
-                terminalFailureCode = terminalFailureCode
+                attemptCount = it.attemptCount,
+                nextAttemptAtEpochSec = it.nextAttemptAtEpochSec,
+                terminalFailureCode = terminalFailureCode,
+                exhausted = it.exhausted
             )
         }
         return DeliveryStateMapper.resolve(

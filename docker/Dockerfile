@@ -1,5 +1,12 @@
 # Build stage
-FROM rust:latest AS builder
+# PINNED to the bookworm variant (glibc 2.36), NOT rust:latest (trixie,
+# glibc 2.41+): the runtime stage is debian:bookworm-slim and the built
+# binary's glibc symbol floor must not exceed the runtime base. rust:latest
+# drifted to trixie and shipped binaries requiring GLIBC_2.38 ->
+# `GLIBC_2.38 not found` crash loop on every bookworm deployment
+# (2026-09-14). Deps bumps that raise the glibc floor must re-evaluate this
+# pin deliberately.
+FROM rust:bookworm AS builder
 
 # Optional: Override bootstrap nodes at build time
 # Format: comma-separated multiaddrs
@@ -104,14 +111,23 @@ COPY --from=builder /usr/src/scmessenger/target/release/stress-test /usr/local/b
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Create non-root user and data directories
+RUN groupadd -g 10001 scm && \
+    useradd -u 10001 -g scm -s /bin/bash -m scm && \
+    mkdir -p /home/scm/.config/scmessenger /data && \
+    chown -R scm:scm /home/scm /data
+
 # Environment variables
 ENV RUST_LOG=info
-ENV SCM_CONFIG_DIR=/root/.config/scmessenger
-ENV SCM_DATA_DIR=/root/.local/share/scmessenger
+ENV SCM_CONFIG_DIR=/home/scm/.config/scmessenger
+ENV SCM_DATA_DIR=/data
+ENV SCMESSENGER_DATA_DIR=/data
 ENV LISTEN_PORT=9000
 
 # Expose ports
 EXPOSE 9000 9001
+
+USER scm
 
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["scm", "start"]

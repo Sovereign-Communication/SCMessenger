@@ -10,14 +10,76 @@ pub const PUBLIC_KEY_PREFIX: &str = "pk:";
 /// Prefix for identity_id (blake3 hash) in logs and payloads to distinguish from public_key_hex
 pub const IDENTITY_ID_PREFIX: &str = "id:";
 
-/// Check if a 64-hex string looks like a public key (valid Ed25519 curve point)
+/// Ed25519 field prime p = 2^255 - 19, little-endian (RFC 8032 section 5.1).
+const ED25519_FIELD_P_LE: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
+/// Bytewise `a >= b` for two 32-byte little-endian integers.
+fn le_bytes_ge(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for i in (0..32).rev() {
+        if a[i] != b[i] {
+            return a[i] > b[i];
+        }
+    }
+    true
+}
+
+/// Strict (canonical) Ed25519 compressed-point decoding, per RFC 8032.
+///
+/// `ed25519_dalek::VerifyingKey::from_bytes` is LENIENT, and measured on
+/// 2026-09-17 that difference is load-bearing here: it accepts a y coordinate
+/// that is not canonically encoded (y >= p) and accepts a set sign bit on the
+/// encodings of x = 0. `is_valid_public_key` is what separates a 64-hex
+/// `public_key` from a 64-hex Blake3 `identity_id`, and roughly half of all
+/// identity_ids decompress to *some* point (see
+/// `test_identity_id_is_not_valid_ed25519_point`), so being laxer than the
+/// platform validator means more identity_ids are misread as public keys --
+/// the documented cause of "callers encrypt to a hash and produce ciphertext
+/// nobody can decrypt".
+///
+/// Two rules, both expressible without a curve dependency:
+///   1. The sign-bit-masked y must be < p; y >= p is a non-canonical encoding.
+///   2. x = 0 exactly when y^2 = 1, i.e. y == 1 or y == p-1. A set sign bit
+///      there is non-canonical: there is no negative zero.
+fn is_canonical_ed25519_encoding(bytes: &[u8; 32]) -> bool {
+    let sign_bit_set = bytes[31] & 0x80 != 0;
+    let mut y = *bytes;
+    y[31] &= 0x7f;
+
+    if le_bytes_ge(&y, &ED25519_FIELD_P_LE) {
+        return false;
+    }
+
+    if sign_bit_set {
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        let mut p_minus_one = ED25519_FIELD_P_LE;
+        p_minus_one[0] = 0xec; // p - 1 = 2^255 - 20
+        if y == one || y == p_minus_one {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Check if a 64-hex string is a public key: a canonically encoded, valid
+/// Ed25519 curve point.
+///
+/// Strictness matters, not just point-on-curve membership: see
+/// [`is_canonical_ed25519_encoding`]. The platform adapters this is exposed to
+/// over UniFFI rely on it to tell a public key from an identity_id, so it must
+/// not be laxer than they are.
 pub fn is_valid_public_key(hex_str: &str) -> bool {
     if hex_str.len() != 64 || !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
         return false;
     }
     if let Ok(bytes) = hex::decode(hex_str) {
         if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return ed25519_dalek::VerifyingKey::from_bytes(&arr).is_ok();
+            return is_canonical_ed25519_encoding(&arr)
+                && ed25519_dalek::VerifyingKey::from_bytes(&arr).is_ok();
         }
     }
     false
@@ -55,6 +117,101 @@ pub fn identify_key_type(hex_str: &str) -> &'static str {
         "identity_id"
     } else {
         "unknown"
+    }
+}
+
+/// Canonical triad of every peer identifier used across apps.
+///
+/// - `libp2p_peer_id` — base58 transport id (`12D3KooW…`)
+/// - `public_key_hex` — Ed25519 verifying key (`pk:`)
+/// - `identity_id` — blake3 of the public key bytes (`id:`)
+///
+/// All three are self-consistent: pubkey ⇄ peer_id is reversible for Ed25519
+/// identity multihashes; identity_id is one-way from pubkey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerIdTriad {
+    pub libp2p_peer_id: Option<String>,
+    pub public_key_hex: Option<String>,
+    pub identity_id: Option<String>,
+    /// How the caller's input was classified.
+    pub input_kind: String,
+    /// True when peer_id re-derives from public_key_hex (Ed25519 identity).
+    pub self_certifying: bool,
+}
+
+impl PeerIdTriad {
+    /// Resolve ANY of the three identifier flavors into the full triad.
+    ///
+    /// Accepts `12D3…` peer ids, 64-hex public keys, or 64-hex identity_ids.
+    /// Public keys yield the complete triad. Peer ids yield pubkey+identity_id
+    /// when the key is embedded. Identity_ids cannot invert to a pubkey, so
+    /// those fields stay `None` and only `identity_id` is returned.
+    pub fn resolve(input: &str) -> Option<Self> {
+        let raw = input.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        // Strip diagnostic prefixes if present.
+        let s = raw
+            .strip_prefix(PUBLIC_KEY_PREFIX)
+            .or_else(|| raw.strip_prefix(IDENTITY_ID_PREFIX))
+            .unwrap_or(raw);
+
+        if s.starts_with("12D") || s.starts_with("Qm") {
+            let public_key_hex = crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(s)?;
+            let identity_id = identity_id_from_public_key_hex(&public_key_hex);
+            return Some(Self {
+                libp2p_peer_id: Some(s.to_string()),
+                public_key_hex: Some(public_key_hex),
+                identity_id,
+                input_kind: "libp2p_peer_id".into(),
+                self_certifying: true,
+            });
+        }
+
+        if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            if is_valid_public_key(s) {
+                let public_key_hex = s.to_ascii_lowercase();
+                let identity_id = identity_id_from_public_key_hex(&public_key_hex);
+                let libp2p_peer_id =
+                    crate::store::ledger_entry::peer_id_from_public_key_hex(&public_key_hex);
+                let self_certifying = libp2p_peer_id.is_some();
+                return Some(Self {
+                    libp2p_peer_id,
+                    public_key_hex: Some(public_key_hex),
+                    identity_id,
+                    input_kind: "public_key".into(),
+                    self_certifying,
+                });
+            }
+            // 64-hex that is not a curve point: treat as identity_id.
+            return Some(Self {
+                libp2p_peer_id: None,
+                public_key_hex: None,
+                identity_id: Some(s.to_ascii_lowercase()),
+                input_kind: "identity_id".into(),
+                self_certifying: false,
+            });
+        }
+
+        None
+    }
+
+    /// Log-safe rendering: `p2p=… pk=… id=…` with prefixes.
+    pub fn log_label(&self) -> String {
+        format!(
+            "p2p={} pk:{} id:{} self_cert={}",
+            self.libp2p_peer_id.as_deref().unwrap_or("-"),
+            self.public_key_hex
+                .as_deref()
+                .map(|s| format!("{s}…"))
+                .unwrap_or_else(|| "-".into()),
+            self.identity_id
+                .as_deref()
+                .map(|s| format!("{s}…"))
+                .unwrap_or_else(|| "-".into()),
+            self.self_certifying
+        )
     }
 }
 
@@ -727,6 +884,50 @@ mod tests {
     }
 
     #[test]
+    fn test_strict_canonical_decoding_matches_rfc8032() {
+        // These four shapes are the ones the platform validator rejected and this
+        // core function used to ACCEPT (measured 2026-09-17, before the strict
+        // check was added). Kept as named regression vectors.
+
+        // y = 1 with the sign bit set: x = 0, and there is no negative zero.
+        let y_one_sign_one = {
+            let mut b = [0u8; 32];
+            b[0] = 1;
+            b[31] = 0x80;
+            b
+        };
+        assert!(!is_valid_public_key(&hex::encode(y_one_sign_one)));
+
+        // y = 1, sign bit clear: the canonical encoding of the same point.
+        let y_one_sign_zero = {
+            let mut b = [0u8; 32];
+            b[0] = 1;
+            b
+        };
+        assert!(is_valid_public_key(&hex::encode(y_one_sign_zero)));
+
+        // y = p-1 with the sign bit set: x = 0 again, non-canonical.
+        let mut y_p_minus_one_sign_one = ED25519_FIELD_P_LE;
+        y_p_minus_one_sign_one[0] = 0xec;
+        y_p_minus_one_sign_one[31] = 0xff;
+        assert!(!is_valid_public_key(&hex::encode(y_p_minus_one_sign_one)));
+
+        // y = p-1, sign bit clear: canonical.
+        let mut y_p_minus_one_sign_zero = ED25519_FIELD_P_LE;
+        y_p_minus_one_sign_zero[0] = 0xec;
+        assert!(is_valid_public_key(&hex::encode(y_p_minus_one_sign_zero)));
+
+        // y = p is outside the field entirely, however the sign bit is set.
+        assert!(!is_valid_public_key(&hex::encode(ED25519_FIELD_P_LE)));
+        let mut p_sign_set = ED25519_FIELD_P_LE;
+        p_sign_set[31] = 0xff;
+        assert!(!is_valid_public_key(&hex::encode(p_sign_set)));
+
+        // All-ff masks to a y far above p.
+        assert!(!is_valid_public_key(&hex::encode([0xffu8; 32])));
+    }
+
+    #[test]
     fn test_identity_id_is_not_valid_ed25519_point() {
         // WHAT THIS ACTUALLY PROVES: that a curve-point test CANNOT be used to
         // tell a public key apart from an identity_id.
@@ -1050,5 +1251,57 @@ mod tests {
             identity_id_from_public_key_hex(&"7f".repeat(32)).is_none(),
             "0x7f*32 is not a valid Ed25519 curve point"
         );
+    }
+
+    #[test]
+    fn peer_id_triad_roundtrips_pubkey_and_peer_id() {
+        let keys = IdentityKeys::generate();
+        let pk = keys.public_key_hex();
+        let triad = PeerIdTriad::resolve(&pk).expect("valid pubkey resolves");
+        assert_eq!(triad.input_kind, "public_key");
+        assert_eq!(triad.public_key_hex.as_deref(), Some(pk.as_str()));
+        let peer = triad.libp2p_peer_id.clone().expect("peer_id derived");
+        assert!(triad.identity_id.is_some());
+        assert!(triad.self_certifying);
+
+        // Resolving via peer id must yield the same pubkey + identity_id.
+        let via_peer = PeerIdTriad::resolve(&peer).expect("peer_id resolves");
+        assert_eq!(via_peer.input_kind, "libp2p_peer_id");
+        assert_eq!(via_peer.public_key_hex, Some(pk.clone()));
+        assert_eq!(via_peer.identity_id, triad.identity_id);
+        assert_eq!(via_peer.libp2p_peer_id, Some(peer));
+
+        // Resolving via identity_id cannot invert, but must keep the id.
+        // A blake3 digest is a valid Ed25519 curve point ~50% of the time; in
+        // that case PeerIdTriad classifies the input as a public_key (correct
+        // for real keys, ambiguous for those ids). Force a non-curve-point id.
+        let mut off_curve_id = None;
+        for _ in 0..64 {
+            let k = IdentityKeys::generate();
+            let id = identity_id_from_public_key_hex(&k.public_key_hex()).unwrap();
+            if !is_valid_public_key(&id) {
+                off_curve_id = Some(id);
+                break;
+            }
+        }
+        let id = off_curve_id.expect("should find a non-curve-point identity_id quickly");
+        let via_id = PeerIdTriad::resolve(&id).expect("identity_id resolves");
+        assert_eq!(via_id.input_kind, "identity_id");
+        assert_eq!(via_id.identity_id, Some(id));
+        assert!(via_id.public_key_hex.is_none());
+        assert!(via_id.libp2p_peer_id.is_none());
+    }
+
+    #[test]
+    fn peer_id_triad_accepts_prefixes_and_rejects_junk() {
+        let keys = IdentityKeys::generate();
+        let pk = keys.public_key_hex();
+        let labeled = format!("{PUBLIC_KEY_PREFIX}{pk}");
+        let t = PeerIdTriad::resolve(&labeled).expect("pk: prefix accepted");
+        assert_eq!(t.public_key_hex.as_deref(), Some(pk.as_str()));
+
+        assert!(PeerIdTriad::resolve("").is_none());
+        assert!(PeerIdTriad::resolve("not-an-id").is_none());
+        assert!(PeerIdTriad::resolve("12D3KooWnotvalidbase58!!!").is_none());
     }
 }

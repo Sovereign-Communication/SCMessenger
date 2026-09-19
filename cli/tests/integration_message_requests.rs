@@ -38,8 +38,9 @@ fn pubkey(node: &IronCore) -> String {
 }
 
 fn make_ctx(core: Arc<IronCore>) -> WebContext {
-    let dir = tempfile::tempdir().unwrap();
-    let ledger = scmessenger_cli::ledger::ConnectionLedger::load(dir.path()).unwrap();
+    let ledger = scmessenger_cli::ledger::ConnectionLedger::new(
+        scmessenger_core::store::LedgerManager::ephemeral(),
+    );
 
     WebContext {
         node_peer_id: "test-node".to_string(),

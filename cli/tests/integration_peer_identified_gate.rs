@@ -12,8 +12,20 @@
 // So this file covers the handler, from the crate's public surface, with no
 // swarm and no networking. `ConnectionLedger::record_identified_peer` is now the
 // only copy of that handler; both `main.rs` call sites delegate to it.
+//
+// T2 UNIFICATION (2026-08-31): the facade now stores into the shared core
+// ledger, whose ingress rejects DNS/SSRF/unroutable addresses at the store
+// edge and whose dialable-candidate build requires `success_count > 0`
+// (proven, not hearsay). The gate tests below pin the same hostile-address
+// outcomes they always did; the "operator DNS name" and "hearsay is dialable"
+// cases pin the NEW, stricter edges that replaced them.
 
-use scmessenger_cli::ledger::{ConnectionLedger, DnsPolicy};
+use scmessenger_cli::ledger::ConnectionLedger;
+use scmessenger_core::store::LedgerManager;
+
+fn ledger() -> ConnectionLedger {
+    ConnectionLedger::new(LedgerManager::ephemeral())
+}
 
 fn peer() -> String {
     libp2p::PeerId::random().to_string()
@@ -24,14 +36,13 @@ fn advertised(addrs: &[&str]) -> Vec<String> {
 }
 
 /// The exploit from the ticket, end to end through the ledger: a peer completes
-/// Identify and advertises `/dns4/evil.example/tcp/80`. The desktop build wires
-/// a real resolver (websocket + dns transport), so if that string reaches
+/// Identify and advertises `/dns4/evil.example/tcp/80`. If that string reached
 /// `dialable_addresses()` the scheduler dials whatever the zone says -- and the
 /// zone owner can re-point the A record between probes, which turns one ledger
 /// entry into an internal port scanner.
 #[test]
 fn identify_advertised_dns_never_becomes_a_dial_target() {
-    let mut ledger = ConnectionLedger::default();
+    let mut ledger = ledger();
     let pid = peer();
 
     let hostile = advertised(&[
@@ -50,11 +61,11 @@ fn identify_advertised_dns_never_becomes_a_dial_target() {
         "the Identify handler recorded a remote-advertised DNS name"
     );
     assert!(
-        ledger.dialable_addresses(None).is_empty(),
+        ledger.dialable_addresses(None, &[]).is_empty(),
         "a remote-advertised DNS name reached dialable_addresses(): {:?}",
-        ledger.dialable_addresses(None)
+        ledger.dialable_addresses(None, &[])
     );
-    assert!(ledger.entries.is_empty());
+    assert_eq!(ledger.entry_count(), 0);
 }
 
 /// The IP half of the same handler: `169.254.169.254` (cloud metadata),
@@ -64,7 +75,7 @@ fn identify_advertised_dns_never_becomes_a_dial_target() {
 /// rule before round 4.
 #[test]
 fn identify_advertised_ssrf_addresses_never_become_dial_targets() {
-    let mut ledger = ConnectionLedger::default();
+    let mut ledger = ledger();
     let pid = peer();
 
     let hostile = advertised(&[
@@ -85,18 +96,22 @@ fn identify_advertised_ssrf_addresses_never_become_dial_targets() {
 
     assert_eq!(ledger.record_identified_peer(&pid, &hostile), 0);
     assert!(
-        ledger.dialable_addresses(None).is_empty(),
+        ledger.dialable_addresses(None, &[]).is_empty(),
         "an SSRF address reached dialable_addresses(): {:?}",
-        ledger.dialable_addresses(None)
+        ledger.dialable_addresses(None, &[])
     );
+    assert_eq!(ledger.entry_count(), 0);
 }
 
 /// The gate is a filter, not an outage: a genuine advertised address is still
-/// recorded and dialable, including the LAN addresses the WiFi/mesh tier of the
-/// transport priority order depends on.
+/// RECORDED (routing knowledge), but it is HEARSAY -- `success_count == 0`,
+/// not `locally_verified` -- so it must not be blindly re-dialed from the
+/// persistent sweep. Only a locally proved connection promotes it to a dial
+/// candidate (T2 disclosure rule). Includes the LAN addresses the WiFi/mesh
+/// tier of the transport priority order depends on.
 #[test]
-fn identify_still_records_real_addresses() {
-    let mut ledger = ConnectionLedger::default();
+fn identify_still_records_real_addresses_but_never_verifies() {
+    let mut ledger = ledger();
     let pid = peer();
 
     let good = advertised(&[
@@ -106,11 +121,21 @@ fn identify_still_records_real_addresses() {
     ]);
 
     assert_eq!(ledger.record_identified_peer(&pid, &good), 3);
-    let dialable = ledger.dialable_addresses(None);
-    assert_eq!(dialable.len(), 3, "got {dialable:?}");
-    assert!(dialable
-        .iter()
-        .all(|(_, id)| id.as_deref() == Some(pid.as_str())));
+    assert_eq!(ledger.entry_count(), 3);
+    // Hearsay only: nothing from an advertisement is dialable yet.
+    assert!(
+        ledger.dialable_addresses(None, &[]).is_empty(),
+        "an advertisement reached dialable_addresses(): {:?}",
+        ledger.dialable_addresses(None, &[])
+    );
+
+    // A real connection to one of them proves it (core fires
+    // ledger.record_connection on ConnectionEstablished); that one becomes a
+    // dial target, the hearsay siblings do not.
+    ledger.record_connection("/ip4/198.51.100.4/tcp/9001", &pid);
+    let dialable = ledger.dialable_addresses(None, &[]);
+    assert_eq!(dialable.len(), 1, "got {dialable:?}");
+    assert_eq!(dialable[0].0, "/ip4/198.51.100.4/tcp/9001");
 }
 
 /// Both `main.rs` handlers now call the same function, so "the two handlers
@@ -128,54 +153,49 @@ fn the_handler_is_the_same_function_for_both_cli_commands() {
     ]);
 
     // `cmd_start`'s handler.
-    let mut start_ledger = ConnectionLedger::default();
+    let mut start_ledger = ledger();
     let start_recorded = start_ledger.record_identified_peer(&pid, &mixed);
 
     // `cmd_relay`'s handler.
-    let mut relay_ledger = ConnectionLedger::default();
+    let mut relay_ledger = ledger();
     let relay_recorded = relay_ledger.record_identified_peer(&pid, &mixed);
 
     assert_eq!(start_recorded, relay_recorded);
     assert_eq!(start_recorded, 1);
 
-    let mut start_keys: Vec<&String> = start_ledger.entries.keys().collect();
-    let mut relay_keys: Vec<&String> = relay_ledger.entries.keys().collect();
-    start_keys.sort();
-    relay_keys.sort();
-    assert_eq!(start_keys, relay_keys);
-    assert_eq!(start_keys, vec!["/ip4/198.51.100.4/tcp/9001"]);
+    // Only the single good address entered the store.
+    assert_eq!(start_ledger.entry_count(), 1);
+    assert_eq!(relay_ledger.entry_count(), 1);
 
     // Idempotent: replaying the same Identify does not promote a rejection.
     assert_eq!(start_ledger.record_identified_peer(&pid, &mixed), 1);
-    assert_eq!(start_ledger.entries.len(), 1);
+    assert_eq!(start_ledger.entry_count(), 1);
 }
 
-/// An operator-configured bootstrap NAME must keep working -- that is the
-/// internet-relay tier of the transport priority order -- while a name the
-/// ledger acquired any other way must not be dialed. `dialable_addresses` no
-/// longer depends on a documented invariant held up elsewhere in the file; it
-/// reads `is_bootstrap`, which only `add_bootstrap` sets.
+/// Operator-configured bootstrap entries must keep working -- that is the
+/// internet-relay tier of the transport priority order -- but the UNIFIED store
+/// has one definition of "dialable": even an operator-supplied DNS name cannot
+/// enter the core ledger (DNS is decided by the zone owner at dial time), so a
+/// bootstrap must be an IP-form multiaddr, like every fleet seed. The old
+/// `add_bootstrap` DNS-name slot is GONE along with the CLI's private store
+/// (T2); a name configured any other way cannot be dialed either.
 #[test]
-fn operator_bootstrap_names_survive_but_nothing_else_does() {
-    let mut ledger = ConnectionLedger::default();
-    ledger.add_bootstrap("/dns4/relay.sovereign.example/tcp/443", None);
+fn operator_bootstrap_addresses_survive_but_names_never_enter() {
+    let mut ledger = ledger();
 
-    let pid = peer();
-    ledger.record_identified_peer(&pid, &advertised(&["/dns4/evil.example/tcp/80"]));
-
-    let dialable = ledger.dialable_addresses(None);
+    // IP-form bootstrap: recorded, verified, dialable.
+    ledger.add_bootstrap("/ip4/198.51.100.200/tcp/443", None);
+    let dialable = ledger.dialable_addresses(None, &[]);
     assert_eq!(dialable.len(), 1, "got {dialable:?}");
-    assert!(dialable[0].0.contains("relay.sovereign.example"));
+    assert!(dialable[0].0.contains("198.51.100.200"));
 
-    // And the required-parameter form directly: only a caller that names
-    // `AllowLocallyConfigured` can store a name at all.
-    let mut fresh = ConnectionLedger::default();
-    assert!(!fresh.record_connection("/dns4/relay.example/tcp/443", &pid, DnsPolicy::Reject));
-    assert!(fresh.record_connection(
-        "/dns4/relay.example/tcp/443",
-        &pid,
-        DnsPolicy::AllowLocallyConfigured
-    ));
+    // DNS-form bootstrap: rejected at the store edge, no dialable target.
+    let pid = peer();
+    ledger.add_bootstrap("/dns4/relay.sovereign.example/tcp/443", None);
+    assert_eq!(ledger.entry_count(), 1, "DNS name must not enter the store");
+    ledger.record_identified_peer(&pid, &advertised(&["/dns4/evil.example/tcp/80"]));
+    assert_eq!(ledger.entry_count(), 1);
+    assert_eq!(ledger.dialable_addresses(None, &[]).len(), 1);
 }
 
 /// NEW-2: `ConnectionLedger::to_shared_entries()` is gone, and with it the
@@ -190,7 +210,7 @@ fn operator_bootstrap_names_survive_but_nothing_else_does() {
 /// `ConnectionLedger`, only consumed by `merge_shared_entries`.
 #[test]
 fn the_cli_ledger_has_no_wire_export_path() {
-    let mut ledger = ConnectionLedger::default();
+    let mut ledger = ledger();
     let pid = peer();
     ledger.record_identified_peer(&pid, &advertised(&["/ip4/198.51.100.4/tcp/9001"]));
     ledger.record_topic("/ip4/198.51.100.4/tcp/9001", "sc-family-chat");

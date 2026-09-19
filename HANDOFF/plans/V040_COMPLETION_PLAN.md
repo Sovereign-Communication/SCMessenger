@@ -86,3 +86,56 @@ Fill as evidence lands. Empty = honest unknown.
 3. **D5 sweep list**: 18+ dated `cto/*` branches from 08-21/22, plus ~40 undated stale refs (`test-merge`, `pr-*-head`, `subagent-*`).
 4. **README draft corrections ready**: stale alpha.1 claim -> rc.1 wording; layout table missing `mobile/` + `desktop_bridge/` rows; install-section APK line gated on D2-c landing.
 5. **Single largest blocker: D2 signing + publish** (operator secrets + hardware). Everything else is hours of mechanical work.
+
+## 6. Phase B progress (2026-08-25)
+
+- **CP1 remains green** — no regression since the Phase A evidence run.
+- **Receipt-convergence defect root-caused and FIXED live.** Android now
+  emits signed prepareReceipt envelopes (was bare JSON, rejected by the
+  receiver); send-status converges to `delivered:true` on the
+  Windows<->Pixel rig. Evidence: message ids
+  `4e693533-dbd6-4677-bde8-7ed89dc7e90b` and
+  `52a56a77-6f73-45a1-bf35-508aaf78a089` both `delivered:true`.
+  Regression guard test landed with the fix.
+- **Contact-unknown display bug fixed** — root cause was identity-cache
+  poisoning in `MeshRepository.getContact`; conversation names now resolve
+  for pubkey-canonical contacts.
+- **Three-node version parity achieved** — Windows / Pixel / AWS relay all
+  at `0064d49a` (AWS node rebuilt 2026-08-25; see
+  HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md).
+- **Formal D4/D6/D7 scoring still pending** released-APK demo day, per
+  SHIP_PLAN standard. The live receipt convergence above is rig evidence,
+  not CP3 credit.
+
+## 7. 2026-08-29 CTO progress (API-reset session)
+
+- **D1/CP1 still green; four more PRs landed on main today:**
+  #236 custody split-brain + bounded sled retry + GET /api/history,
+  #237 PR #234 Rule-8 APPROVE verdict doc, #238 signing preflight
+  (fail fast when SCMESSENGER_KEY_ALIAS missing), #239 routing_peer_seen
+  transport failover (D6 unblock). main now at `419e9678`.
+- **AWS node redeployed twice today** at `1fff557d` (10:00Z) and
+  `419e9678` (17:54Z, Docker Publish success). Health healthy; custody
+  counter went live (3) after the #236 fix deploy.
+- **NEW BLOCKER FOUND + FIX PR #240:** node identity rotates on every
+  redeploy (`640c258b` -> `78869300` -> `417be00d`) because the image
+  sets `SCM_DATA_DIR` (entrypoint-only) while the app reads
+  `SCMESSENGER_DATA_DIR`, writing identity to the container's ephemeral
+  layer. PR #240 points both env vars at `/data` (bound to
+  `/opt/scm-relay-data`). Must merge + redeploy + verify identity
+  persists across a second restart before L0-1 is creditable.
+- **L0-2/L0-4 (two-device demos) still operator+hardware.** All
+  agent-doable v0.4.0 code/config items are now either merged or in
+  flight; remaining gates require the keystore (D2), the devices (D4/D6/D7),
+  and the operator's tag execution.
+- **Windows node rebuilt at main `b2544d26` (19:30Z); 2-node mesh VERIFIED:**
+  AWS (DirectPreferred) <-> Windows (DirectPreferred) mutual peers at same
+  SHA. Third node (Pixel) is operator hardware.
+- **D2 exact blocker identified:** all four signing secrets exist in repo
+  settings, but the rc.1 release run failed at `packageRelease` with
+  `KeytoolException: No key with alias '***' found in keystore` -- the
+  `SCMESSENGER_KEY_ALIAS` secret does not match the actual alias in the
+  keystore. Fix (operator): run `keytool -list -v -keystore
+  scmessenger-release.jks` locally, then set `SCMESSENGER_KEY_ALIAS` to the
+  real alias (docs/ANDROID_RELEASE_SIGNING.md suggests `scmessenger`).
+  PR #238's preflight now fails fast on this instead of a 24-minute build.

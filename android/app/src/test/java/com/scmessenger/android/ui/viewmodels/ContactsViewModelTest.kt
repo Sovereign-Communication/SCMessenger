@@ -162,6 +162,83 @@ class ContactsViewModelTest {
     }
 
     // -----------------------------------------------------------------------
+    // Nearby peer identity distinction tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `PeerEvent Discovered does not create nearby peer for raw transport connection`() = runTest {
+        val rawTransportPeerId = "12D3KooWRawTransportSocket"
+        com.scmessenger.android.service.MeshEventBus.emitPeerEvent(
+            PeerEvent.Discovered(
+                peerId = rawTransportPeerId,
+                transport = TransportType.INTERNET
+            )
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Raw transport connections without identity must NEVER become NearbyPeer entries
+        val nearby = viewModel.nearbyPeers.value
+        assertTrue(
+            "Raw transport Peer ID must not appear in nearby peers list",
+            nearby.none { it.peerId == rawTransportPeerId }
+        )
+    }
+
+    @Test
+    fun `PeerEvent IdentityDiscovered creates nearby peer with sovereign identity id`() = runTest {
+        val rawPeerId = "12D3KooWAnnouncedPeer"
+        val expectedIdentityId = "5f2566a7c0d8d5410643fe32dfc531fa79ea9c0a958785e0c85bdf3514752f7c"
+        every { mockMeshRepository.resolveToIdentityId(validPublicKey) } returns expectedIdentityId
+
+        com.scmessenger.android.service.MeshEventBus.emitPeerEvent(
+            PeerEvent.IdentityDiscovered(
+                peerId = rawPeerId,
+                publicKey = validPublicKey,
+                nickname = "Dave",
+                libp2pPeerId = rawPeerId,
+                listeners = listOf("/ip4/127.0.0.1/tcp/9001"),
+                blePeerId = null
+            )
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val nearby = viewModel.nearbyPeers.value
+        val peer = nearby.firstOrNull { it.publicKey == validPublicKey }
+        assertNotNull("Peer should be discovered as nearby", peer)
+        assertEquals(
+            "NearbyPeer peerId must be the sovereign identity hash, never a libp2p Peer ID",
+            expectedIdentityId,
+            peer?.peerId
+        )
+        assertEquals("Dave", peer?.nickname)
+        assertEquals(rawPeerId, peer?.libp2pPeerId)
+    }
+
+    @Test
+    fun `PeerEvent IdentityDiscovered with unresolvable transport peer id is rejected`() = runTest {
+        val rawTransportId = "12D3KooWUnresolvableTransport"
+        every { mockMeshRepository.resolveToIdentityId(any()) } returns null
+
+        com.scmessenger.android.service.MeshEventBus.emitPeerEvent(
+            PeerEvent.IdentityDiscovered(
+                peerId = rawTransportId,
+                publicKey = "not_a_valid_hex_key",
+                nickname = "Ghost",
+                libp2pPeerId = rawTransportId,
+                listeners = emptyList(),
+                blePeerId = null
+            )
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val nearby = viewModel.nearbyPeers.value
+        assertTrue(
+            "Nearby peers must strictly reject unresolvable transport Peer IDs",
+            nearby.none { it.peerId == rawTransportId || it.nickname == "Ghost" }
+        )
+    }
+
+    // -----------------------------------------------------------------------
     // refreshDiscovery
     // -----------------------------------------------------------------------
 

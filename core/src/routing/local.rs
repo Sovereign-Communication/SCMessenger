@@ -22,6 +22,8 @@ pub enum TransportType {
     WiFiDirect,
     TCP,
     QUIC,
+    /// Relayed circuit (libp2p p2p-circuit through a helper node)
+    Circuit,
 }
 
 /// Status of a known peer in the local cell
@@ -47,7 +49,7 @@ pub struct PeerInfo {
     pub peer_id: PeerId,
     pub status: PeerStatus,
     /// Recipient hints this peer can deliver to (from their announcements)
-    pub reachable_hints: Vec<[u8; 4]>,
+    pub reachable_hints: Vec<[u8; 8]>,
     /// Number of messages this peer has (from sync metadata)
     pub message_count: u32,
     /// Observed relay quality (0.0 = terrible, 1.0 = perfect)
@@ -67,7 +69,7 @@ pub struct PeerInfo {
 pub struct CellSummary {
     pub peer_count: u32,
     pub gateway_count: u32,
-    pub reachable_hints: Vec<[u8; 4]>,
+    pub reachable_hints: Vec<[u8; 8]>,
     pub avg_reliability: f64,
     pub timestamp: u64,
 }
@@ -161,7 +163,7 @@ impl LocalCell {
     }
 
     /// Update reachable hints for a peer (from their PeerAnnouncement)
-    pub fn update_peer_hints(&mut self, peer_id: &PeerId, hints: Vec<[u8; 4]>) {
+    pub fn update_peer_hints(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>) {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             peer.reachable_hints = hints;
         }
@@ -203,33 +205,43 @@ impl LocalCell {
         }
     }
 
-    /// Find peers that might be able to reach a recipient (by hint)
-    pub fn peers_for_hint(&self, hint: &[u8; 4]) -> Vec<&PeerInfo> {
-        self.peers
+    /// Find active peers that might reach a recipient, ordered by the shared
+    /// reliability policy used by all local-cell selectors.
+    ///
+    /// V040-T13 F7-C: the engine's `route_message` takes `local_peers[0]` as
+    /// the primary next hop on the strength of a documented contract that this
+    /// list is "already sorted by reliability in LocalCell". Sort by the shared
+    /// reliability policy (score, then peer_id), never HashMap order.
+    pub fn peers_for_hint(&self, hint: &[u8; 8]) -> Vec<&PeerInfo> {
+        let mut peers: Vec<&PeerInfo> = self
+            .peers
             .values()
-            .filter(|p| {
-                if let PeerStatus::Active { .. } = p.status {
-                    p.reachable_hints.contains(hint)
-                } else {
-                    false
-                }
+            .filter(|peer| {
+                matches!(peer.status, PeerStatus::Active { .. })
+                    && peer.reachable_hints.contains(hint)
             })
-            .collect()
+            .collect();
+        Self::sort_by_reliability(&mut peers);
+        peers
     }
 
-    /// Get all active peers sorted by reliability (highest first)
+    /// Get all active peers sorted by the shared reliability policy.
     pub fn active_peers(&self) -> Vec<&PeerInfo> {
         let mut peers: Vec<&PeerInfo> = self
             .peers
             .values()
-            .filter(|p| matches!(p.status, PeerStatus::Active { .. }))
+            .filter(|peer| matches!(peer.status, PeerStatus::Active { .. }))
             .collect();
+        Self::sort_by_reliability(&mut peers);
+        peers
+    }
+
+    fn sort_by_reliability(peers: &mut Vec<&PeerInfo>) {
         peers.sort_by(|a, b| {
             b.reliability_score
-                .partial_cmp(&a.reliability_score)
-                .expect("f64 reliability scores should always be comparable")
+                .total_cmp(&a.reliability_score)
+                .then_with(|| a.peer_id.cmp(&b.peer_id))
         });
-        peers
     }
 
     /// Get gateway peers (for Layer 2 gossip)
@@ -333,14 +345,13 @@ impl LocalCell {
             return;
         }
 
-        let peer_to_evict = *self
-            .peers
-            .values()
-            .min_by(|a, b| {
-                a.reliability_score
-                    .partial_cmp(&b.reliability_score)
-                    .expect("f64 reliability scores should always be comparable")
-            })
+        // Same ordering as sort_by_reliability: lowest score first, peer-id
+        // tie-break, so equal-score eviction is deterministic, not
+        // HashMap-iteration-order dependent.
+        let mut ranked: Vec<&PeerInfo> = self.peers.values().collect();
+        Self::sort_by_reliability(&mut ranked);
+        let peer_to_evict = *ranked
+            .last()
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 
@@ -370,8 +381,10 @@ mod tests {
         id
     }
 
-    fn make_hint(n: u32) -> [u8; 4] {
-        n.to_le_bytes()
+    fn make_hint(n: u32) -> [u8; 8] {
+        let mut hint = [0u8; 8];
+        hint[..4].copy_from_slice(&n.to_le_bytes());
+        hint
     }
 
     #[test]
@@ -562,6 +575,33 @@ mod tests {
         assert_eq!(peer.message_count, 10);
     }
 
+    /// V040-T13 F7-C: `peers_for_hint` must return the most reliable peer
+    /// first -- the engine takes `[0]` as the primary next hop on the strength
+    /// of that contract. HashMap iteration order is not a substitute.
+    #[test]
+    fn test_peers_for_hint_sorted_by_reliability() {
+        let local_id = make_peer_id(1);
+        let mut cell = LocalCell::new(local_id);
+        let hint = make_hint(7);
+        let weak_peer = make_peer_id(2);
+        let strong_peer = make_peer_id(3);
+
+        cell.peer_seen(weak_peer, TransportType::BLE);
+        cell.peer_seen(strong_peer, TransportType::BLE);
+        cell.update_peer_hints(&weak_peer, vec![hint]);
+        cell.update_peer_hints(&strong_peer, vec![hint]);
+        // strong_peer scores higher than weak_peer regardless of insertion
+        // order: update_reliability bumps the score 0.1 per success.
+        cell.update_reliability(&strong_peer, true);
+        cell.update_reliability(&strong_peer, true);
+        cell.update_reliability(&weak_peer, true);
+
+        let matches = cell.peers_for_hint(&hint);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].peer_id, strong_peer, "highest reliability first");
+        assert_eq!(matches[1].peer_id, weak_peer);
+    }
+
     #[test]
     fn test_cell_summary_generation() {
         let local_id = make_peer_id(1);
@@ -585,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_active_peers_sorted_by_reliability() {
+    fn active_peer_selection_contract() {
         let local_id = make_peer_id(1);
         let mut cell = LocalCell::new(local_id);
         let peer1 = make_peer_id(2);
@@ -596,18 +636,21 @@ mod tests {
         cell.peer_seen(peer2, TransportType::BLE);
         cell.peer_seen(peer3, TransportType::BLE);
 
-        // Set reliability scores
         cell.update_reliability(&peer1, true);
         cell.update_reliability(&peer1, true);
         cell.update_reliability(&peer2, true);
         cell.update_reliability(&peer3, false);
 
         let active = cell.active_peers();
-        assert_eq!(active.len(), 3);
+        assert_eq!(
+            active.iter().map(|peer| peer.peer_id).collect::<Vec<_>>(),
+            vec![peer1, peer2, peer3]
+        );
 
-        // Should be sorted by reliability (descending)
-        assert!(active[0].reliability_score >= active[1].reliability_score);
-        assert!(active[1].reliability_score >= active[2].reliability_score);
+        let hint = make_hint(100);
+        cell.update_peer_hints(&peer1, vec![hint]);
+        cell.update_peer_hints(&peer2, vec![hint]);
+        assert_eq!(cell.peers_for_hint(&hint)[0].peer_id, peer1);
     }
 
     #[test]

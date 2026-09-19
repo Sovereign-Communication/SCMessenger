@@ -58,7 +58,9 @@ class ChatViewModelTest {
         every { repository.getConversation(any(), any()) } returns listOf(message("m1", "peer1"))
         every { repository.getContact(any()) } returns null
         coEvery { repository.sendMessage(any(), any()) } returns Unit
-        viewModel = ChatViewModel(repository)
+        viewModel = ChatViewModel(repository).apply {
+            ioDispatcher = testDispatcher
+        }
     }
 
     @After
@@ -67,7 +69,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `setPeer loads conversation`() = runTest {
+    fun `setPeer loads conversation`() = runTest(testDispatcher) {
         viewModel.setPeer("peer1")
         advanceUntilIdle()
 
@@ -77,7 +79,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `sendMessage sends and clears input`() = runTest {
+    fun `sendMessage sends and clears input`() = runTest(testDispatcher) {
         viewModel.setPeer("peer1")
         viewModel.updateInputText("hello world")
         viewModel.sendMessage()
@@ -95,7 +97,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `delivery status event marks message delivered`() = runTest {
+    fun `delivery status event marks message delivered`() = runTest(testDispatcher) {
         viewModel.setPeer("peer1")
         advanceUntilIdle()
 
@@ -106,7 +108,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `peer events update online status`() = runTest {
+    fun `peer events update online status`() = runTest(testDispatcher) {
         val collectJob = launch { viewModel.isOnline.collect { } }
         viewModel.setPeer("peer1")
         advanceUntilIdle()
@@ -122,7 +124,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `loadMoreMessages increases conversation limit`() = runTest {
+    fun `loadMoreMessages increases conversation limit`() = runTest(testDispatcher) {
         viewModel.setPeer("peer1")
         advanceUntilIdle()
 

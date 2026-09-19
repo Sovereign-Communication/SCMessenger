@@ -12,6 +12,8 @@ import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -141,5 +143,48 @@ class SettingsViewModelTest {
     fun `clearAdjustmentOverrides delegates to repository`() {
         viewModel.clearAdjustmentOverrides()
         verify(exactly = 1) { repository.clearAdjustmentOverrides() }
+    }
+
+    @Test
+    fun `infoCounts load on IO without blocking and never call repository on main thread`() = runTest {
+        // ANR-2026-09-09 recurrence fix: the Info section used to call the
+        // FFI getters synchronously in composition. The ViewModel must load
+        // them onto IO state instead.
+        every { repository.getContactCount() } returns 7u
+        every { repository.getMessageCount() } returns 42u
+        every { repository.getBuildProvenance() } returns "core-abc1234"
+
+        // Init also fires refreshInfoCounts on real Dispatchers.IO, which
+        // advanceUntilIdle cannot drain; re-trigger explicitly on the test
+        // dispatcher and then advance.
+        viewModel.refreshInfoCounts()
+        advanceUntilIdle()
+
+        // The init-time refresh runs on real Dispatchers.IO, which
+        // advanceUntilIdle cannot drain; its late write races this
+        // assertion under CI load. Await the first matching emission
+        // instead of polling a snapshot, so the wait is deterministic
+        // no matter which refresh lands first or last.
+        val counts = viewModel.infoCounts
+            .filter { it.contactCount == 7u && it.messageCount == 42u }
+            .first()
+
+        assertEquals(7u, counts.contactCount)
+        assertEquals(42u, counts.messageCount)
+        assertEquals("core-abc1234", counts.buildProvenance)
+    }
+
+    @Test
+    fun `refreshInfoCounts survives repository failures with zeroed counts`() = runTest {
+        every { repository.getContactCount() } throws RuntimeException("FFI down")
+        every { repository.getMessageCount() } throws RuntimeException("FFI down")
+        every { repository.getBuildProvenance() } throws RuntimeException("FFI down")
+
+        viewModel.refreshInfoCounts()
+        advanceUntilIdle()
+
+        assertEquals(0u, viewModel.infoCounts.value.contactCount)
+        assertEquals(0u, viewModel.infoCounts.value.messageCount)
+        assertEquals("", viewModel.infoCounts.value.buildProvenance)
     }
 }

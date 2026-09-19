@@ -78,6 +78,19 @@ open class MeshRepository(
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
 
+        /**
+         * UNIFICATION auth guard: only reject a federated contact update when the
+         * stored key is NON-BLANK and differs from the verified incoming key. A
+         * blank stored key (legacy/discovery-created record) is not a conflict —
+         * the incoming verified key should fill it.
+         */
+        internal fun federatedKeyConflict(storedPublicKey: String?, incomingPublicKey: String): Boolean {
+            val stored = storedPublicKey?.trim()?.lowercase() ?: return false
+            if (stored.isEmpty()) return false
+            val incoming = incomingPublicKey.trim().lowercase()
+            return stored != incoming
+        }
+
         internal fun resolvePlatformSecuredPassphrase(
             encryptedPrefs: SharedPreferences,
             legacyPrefsProvider: () -> SharedPreferences,
@@ -121,6 +134,66 @@ open class MeshRepository(
 
         /** Cap on how many ledger-sourced relays are surfaced in the Settings UI. */
         private const val MAX_SETTINGS_RELAYS = 10u
+
+        /** Cap on seed-tier candidates swept per bootstrap pass (poison-fanout guard). */
+        internal const val MAX_BOOTSTRAP_SEEDS = 4
+
+        /** Cap on last-resort cellular candidates (fail>=3 && success==0) so a poisoned
+         *  dead-tier ledger cannot fan out dials. C8. */
+        internal const val MAX_LAST_RESORT_CELL = 2
+
+        /**
+         * C7: delivery and bootstrap share dialThrottleState. Keying by purpose
+         * keeps a bootstrap dial of a multiaddr from skipping a delivery
+         * connectToPeer of the same multiaddr for 15s (and vice versa).
+         */
+        internal fun dialThrottleKey(purpose: String, multiaddr: String): String =
+            "${purpose.trim().ifEmpty { "delivery" }}|${multiaddr.trim()}"
+
+        /**
+         * C5: public-relay admission must match isDialableAddress. DNS forms
+         * are rejected there (rebinding), so they must not enter the public
+         * route filter either — otherwise getPublicInternetRelayRoutes emits
+         * addresses that normalizeAddressHint later drops, and cellular
+         * delivery silently loses the route.
+         */
+        internal fun isPublicInternetMultiaddr(addr: String): Boolean {
+            val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+            return when {
+                // C5: do not admit /dns4/ (or any /dns*) here. /ip6/ is admitted
+                // and then gated by isRestrictedIpv6 on the dial path.
+                v4 == null -> addr.contains("/ip6/")
+                v4.startsWith("192.168.") -> false
+                v4.startsWith("10.") -> false
+                v4.startsWith("127.") -> false
+                v4.startsWith("169.254.") -> false
+                v4.startsWith("172.") -> {
+                    val second = v4.split(".").getOrNull(1)?.toIntOrNull() ?: -1
+                    !(second in 16..31)
+                }
+                else -> true
+            }
+        }
+
+        /**
+         * Merge proven and seed-tier relay candidates for a bootstrap sweep.
+         * Pure so the proven/seed merge policy is unit-testable without the
+         * ledger manager. Order: proven (priority order preserved) first, then
+         * newest-first seeds not already covered, deduped.
+         */
+        internal fun mergeBootstrapCandidates(
+            proven: List<String>,
+            seeds: List<String>,
+            maxSeeds: Int = MAX_BOOTSTRAP_SEEDS
+        ): List<String> {
+            val provenTrimmed = proven.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            val provenSet = provenTrimmed.toSet()
+            val seedsTrimmed = seeds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                .filterNot { it in provenSet }
+                .distinct()
+                .take(maxSeeds)
+            return (provenTrimmed + seedsTrimmed).distinct()
+        }
 
         // NODE-TRANSPORT-VIS-001: canonical transport labels shown per node row.
         internal const val TRANSPORT_BLE = "BLE"
@@ -203,6 +276,68 @@ open class MeshRepository(
             maxAgeSeconds: Long
         ): Boolean {
             return ackedWithoutReceiptCount > 0 && (nowEpochSec - createdAtEpochSec) >= maxAgeSeconds
+        }
+
+        /**
+         * Drop-at-cap decision (regression seam for the 'message vanished'
+         * defect). Returns true when an undelivered, NEVER transport-acked send
+         * has reached the retry ceiling and must be RETAINED in the pending
+         * outbox as a visible queued/delivering state instead of being silently
+         * removed. The old behavior removed it (markMessageCorrupted + drop),
+         * which is exactly how the operator's sends disappeared.
+         */
+        internal fun retainUndeliveredAtAttemptCap(
+            attemptCount: Int,
+            ackedWithoutReceiptCount: Int,
+            maxAttempts: Int
+        ): Boolean {
+            return attemptCount >= maxAttempts && ackedWithoutReceiptCount == 0
+        }
+
+        /**
+         * Per-item decision for flushPendingOutbox's main loop, kept pure so
+         * the retry-at-cap control flow is testable on the JVM tier (the loop
+         * itself cannot run there: android.util.Base64 is stubbed to return
+         * null, which routes every envelope to the undecodable-payload removal
+         * before the retain logic). The order mirrors the loop exactly:
+         * delivered/terminal cleanup first, then the at-cap queued/delivering
+         * deferral (never drop, but genuinely re-attempt once the patient
+         * backoff elapses), then the backoff and shouldRetry gates.
+         */
+        internal fun decidePendingOutboxFlushAction(
+            item: PendingOutboundEnvelope,
+            nowEpochSec: Long,
+            isDeliveredLocally: Boolean,
+            shouldRetry: () -> Boolean,
+            maxAttempts: Int
+        ): PendingOutboxFlushAction {
+            if (isDeliveredLocally) return PendingOutboxFlushAction.REMOVE
+            if (retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = maxAttempts
+                )
+            ) {
+                // queued/delivering deferral: retained forever, never dropped.
+                // DEFER within the backoff window (no queue rewrite); once the
+                // backoff elapses, SEND -- the entry genuinely tries again on a
+                // patient cadence instead of parking at the cap forever.
+                return if (item.nextAttemptAtEpochSec > nowEpochSec) {
+                    PendingOutboxFlushAction.DEFER
+                } else {
+                    PendingOutboxFlushAction.SEND
+                }
+            }
+            if (item.nextAttemptAtEpochSec > nowEpochSec) return PendingOutboxFlushAction.SKIP
+            // The shouldRetry gate is bypassed for ANY at-cap item (not just
+            // acked==0 retained ones): a transport-acked message that reached the
+            // cap must keep re-sending until a receipt arrives or the patient
+            // age-based acked-without-receipt ceiling above stops it. The
+            // in-memory tracker (which shouldRetry reads) can otherwise sit at
+            // >=12 and park the message forever with the UI claiming forwarding.
+            if (item.attemptCount >= maxAttempts) return PendingOutboxFlushAction.SEND
+            if (!shouldRetry()) return PendingOutboxFlushAction.SKIP
+            return PendingOutboxFlushAction.SEND
         }
 
         /**
@@ -400,6 +535,7 @@ open class MeshRepository(
 
     // P0_NETWORK_001: Circuit breaker for relay failure tracking
     private val relayCircuitBreaker = CircuitBreaker()
+
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
     private val networkDetector = NetworkDetector(context)
     // P0_ANDROID_007: Diagnostics reporter for connectivity analysis
@@ -484,6 +620,12 @@ open class MeshRepository(
     open val incomingMessages = messageUpdates.filter { it.direction == uniffi.api.MessageDirection.RECEIVED }
 
     private val repoScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    // HANG-LOCK-001: dedicated lifecycle lock for start/stop only. Must NEVER be the
+    // same monitor as outbox/receipt I/O — startMeshService holds this across
+    // meshService.start() + migrateToCanonicalIds (10-60s on device). A shared
+    // @Synchronized(this) froze any main-thread path that touched outbox/permissions.
+    private val serviceLifecycleLock = Any()
+    private val outboxIoLock = Any()
     private var pendingOutboxRetryJob: kotlinx.coroutines.Job? = null
     private var coverTrafficJob: kotlinx.coroutines.Job? = null
     private var maintenanceJob: kotlinx.coroutines.Job? = null
@@ -590,6 +732,25 @@ open class MeshRepository(
         val publicKey: String,
         val nickname: String?,
         val localNickname: String? = null
+    )
+
+    /**
+     * What flushPendingOutbox should do with a pending entry this pass.
+     * SEND = fall through to the real delivery attempt; DEFER = at-cap
+     * retained entry waiting out its patient backoff; SKIP = below-cap entry
+     * not yet due (or blocked by shouldRetry); REMOVE = locally delivered.
+     */
+    internal enum class PendingOutboxFlushAction { SEND, SKIP, DEFER, REMOVE }
+
+    /**
+     * Single-load snapshot of a pending outbox entry for the UI delivery
+     * surface. Carries the exhausted flag so the composition path never pays a
+     * second outbox file read per row.
+     */
+    data class PendingDeliveryInfo(
+        val attemptCount: Int,
+        val nextAttemptAtEpochSec: Long,
+        val exhausted: Boolean
     )
 
     internal data class PendingOutboundEnvelope(
@@ -1465,8 +1626,10 @@ open class MeshRepository(
     /**
      * Start the mesh service with the given configuration.
      * This initializes the Rust core, starts BLE transport, and wires up events.
+     *
+     * HANG-LOCK-001: uses [serviceLifecycleLock] (not the object monitor) so a
+     * multi-second start cannot freeze main-thread outbox/receipt/permission paths.
      */
-    @Synchronized
     fun startMeshService(config: uniffi.api.MeshServiceConfig) {
         Timber.i("service_start_requested")
         if (meshService?.getState() == uniffi.api.ServiceState.RUNNING) {
@@ -1478,6 +1641,7 @@ open class MeshRepository(
             return
         }
 
+        synchronized(serviceLifecycleLock) {
         try {
             Timber.d("Starting MeshService...")
             if (meshService == null) {
@@ -2626,7 +2790,13 @@ open class MeshRepository(
             }
 
             val info = ironCore?.getIdentityInfo()
-            Timber.i("SC_IDENTITY_OWN p2p_id=${info?.libp2pPeerId ?: "unknown"} pk=${info?.publicKeyHex ?: "unknown"}")
+            // SC_IDENTITY_TRIAD: always log all three identifiers so PeerID /
+            // public_key / identity_id confusion is impossible in field logs.
+            Timber.i(
+                "SC_IDENTITY_OWN p2p_id=${info?.libp2pPeerId ?: "unknown"} " +
+                    "pk=${info?.publicKeyHex ?: "unknown"} " +
+                    "id=${info?.identityId ?: "unknown"}"
+            )
             Timber.i("Mesh service started successfully")
         } catch (e: Exception) {
             val isStorageError = e is uniffi.api.IronCoreException.StorageException ||
@@ -2642,6 +2812,7 @@ open class MeshRepository(
             stopMeshService()
             return
         }
+        } // synchronized(serviceLifecycleLock)
     }
 
     private fun sendDeliveryReceiptAsync(
@@ -3076,6 +3247,9 @@ open class MeshRepository(
             return
         }
 
+        // Ensure recovery and rescan have a manager before component wiring.
+        ensureTransportManager()
+
         // BLE GATT Client: must exist before scanner callbacks to avoid missing first identity reads.
         if (bleGattClient == null) {
             bleGattClient = com.scmessenger.android.transport.ble.BleGattClient(
@@ -3504,19 +3678,50 @@ open class MeshRepository(
     private fun updateDiscoveredPeer(key: String, info: PeerDiscoveryInfo) {
         val normalizedKey = PeerIdValidator.normalize(key)
         _discoveredPeers.update { current ->
+            // UNIFICATION: collapse PeerID and public_key keys for the same node.
+            // Look up existing entry under the input key OR the canonical pubkey hex
+            // derived from the incoming key / publicKey / libp2pPeerId.
+            val canonIncoming = PeerIdValidator.canonicalKey(
+                info.peerId.ifBlank { normalizedKey },
+                info.publicKey
+            ).ifEmpty {
+                PeerIdValidator.canonicalKey(info.libp2pPeerId, info.publicKey)
+            }.ifEmpty { PeerIdValidator.canonicalKey(normalizedKey, info.publicKey) }
+
             val existing = current[normalizedKey]
+                ?: (if (canonIncoming.isNotEmpty()) current[canonIncoming] else null)
+                ?: current.entries.firstOrNull { (mapKey, entryVal) ->
+                    PeerIdValidator.canonicalKey(mapKey, info.publicKey) == canonIncoming ||
+                        PeerIdValidator.canonicalKey(entryVal.peerId, entryVal.publicKey) == canonIncoming ||
+                        (info.libp2pPeerId != null && PeerIdValidator.isSame(mapKey, info.libp2pPeerId!!)) ||
+                        (info.libp2pPeerId != null && entryVal.libp2pPeerId?.let { p ->
+                            PeerIdValidator.isSame(p, info.libp2pPeerId!!)
+                        } == true)
+                }?.value
+
             if (existing != null && existing.isFull && !info.isFull && (info.lastSeen - existing.lastSeen < 300u)) {
                 // Don't downgrade a full identity to headless if we've seen it recently.
                 current
             } else {
                 val merged = if (existing == null) {
-                    info
+                    info.copy(
+                        publicKey = info.publicKey ?: PeerIdValidator.normalizePublicKeyHex(
+                            info.libp2pPeerId?.let { PeerKeyUtils.extractPublicKeyFromPeerId(it) }
+                        )
+                    )
                 } else {
                     info.copy(
                         peerId = selectCanonicalPeerId(info.peerId, existing.peerId),
                         publicKey = info.publicKey ?: existing.publicKey,
                         nickname = selectAuthoritativeNickname(info.nickname, existing.nickname),
-                        localNickname = selectAuthoritativeNickname(info.localNickname, existing.localNickname) ?: normalizeNickname(info.localNickname) ?: normalizeNickname(existing.localNickname),
+                        // NICKNAME-AUTHORITY: localNickname is user-defined. Never let a
+                        // discovery merge replace a real existing localNickname with a
+                        // different real incoming value — that caused local vs federated
+                        // display flip-flops. Fill only when existing is blank/synthetic.
+                        localNickname = com.scmessenger.android.utils.resolveLocalNickname(
+                            incoming = info.localNickname,
+                            existing = existing.localNickname
+                        ),
                         libp2pPeerId = info.libp2pPeerId ?: existing.libp2pPeerId,
                         transport = if (
                             info.transport == com.scmessenger.android.service.TransportType.INTERNET ||
@@ -3532,11 +3737,24 @@ open class MeshRepository(
                         transports = info.transports + existing.transports
                     )
                 }
-                val canonicalPeerId = PeerIdValidator.normalize(merged.peerId.ifEmpty { normalizedKey })
+                // Prefer public_key as map key when we can derive it.
+                val mapKey = PeerIdValidator.canonicalKey(
+                    merged.peerId.ifEmpty { normalizedKey },
+                    merged.publicKey
+                ).ifEmpty {
+                    PeerIdValidator.canonicalKey(merged.libp2pPeerId, merged.publicKey)
+                }.ifEmpty {
+                    PeerIdValidator.normalize(merged.peerId.ifEmpty { normalizedKey })
+                }
 
-                val withCanonical = current + (canonicalPeerId to merged)
-                withCanonical.filterNot { (mapKey, _) ->
-                    mapKey != canonicalPeerId && PeerIdValidator.isSame(mapKey, canonicalPeerId)
+                val withCanonical = current + (mapKey to merged)
+                // Drop any other key that resolves to the same canonical identity.
+                withCanonical.filterNot { (k, v) ->
+                    if (k == mapKey) return@filterNot false
+                    val kCanon = PeerIdValidator.canonicalKey(k, v.publicKey)
+                        .ifEmpty { PeerIdValidator.canonicalKey(v.peerId, v.publicKey) }
+                        .ifEmpty { PeerIdValidator.canonicalKey(v.libp2pPeerId, v.publicKey) }
+                    kCanon.isNotEmpty() && kCanon == mapKey
                 }
             }
         }
@@ -4029,8 +4247,13 @@ open class MeshRepository(
     /**
      * Stop the mesh service and all transports.
      */
-    @Synchronized
+    /**
+     * Stop the mesh service and all transports.
+     * HANG-LOCK-001: shares [serviceLifecycleLock] with start only (reentrant),
+     * never the outbox/permission monitors.
+     */
     fun stopMeshService() {
+        synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
         networkDetector.stopMonitoring()
         pendingOutboxRetryJob?.cancel()
@@ -4131,22 +4354,39 @@ open class MeshRepository(
         serviceStartedAtEpochSec = 0L
 
         Timber.i("Mesh service stopped")
+        } // synchronized(serviceLifecycleLock)
     }
 
     /**
      * Pause the mesh service (reduced activity).
+     * HANG-MAIN-001: pause() is a blocking Rust FFI (10s+ when the core is busy).
+     * Never run it on the caller thread — MainActivity/lifecycle paths used to
+     * freeze the UI here (ANR: main in uniffi meshservice_pause).
      */
     fun pauseMeshService() {
-        meshService?.pause()
-        Timber.d("Mesh service paused")
+        repoScope.launch {
+            try {
+                meshService?.pause()
+                Timber.d("Mesh service paused")
+            } catch (e: Exception) {
+                Timber.w(e, "pauseMeshService failed")
+            }
+        }
     }
 
     /**
      * Resume the mesh service (full activity).
+     * HANG-MAIN-001: same as pause — always off the caller thread.
      */
     fun resumeMeshService() {
-        meshService?.resume()
-        Timber.d("Mesh service resumed")
+        repoScope.launch {
+            try {
+                meshService?.resume()
+                Timber.d("Mesh service resumed")
+            } catch (e: Exception) {
+                Timber.w(e, "resumeMeshService failed")
+            }
+        }
     }
 
     /**
@@ -4287,6 +4527,22 @@ open class MeshRepository(
 
     // Public for ViewModel dedup — canonical public_key_hex for any id (hex, libp2p, identity_id)
     internal fun canonicalContactIdPublic(id: String): String = canonicalContactId(id)
+
+    /**
+     * Resolve any identifier format (public_key_hex, libp2p_peer_id, or identity_id)
+     * to the authoritative 64-hex lowercase Blake3 identity_id.
+     * Backed by IronCore's resolve_to_identity_id().
+     */
+    open fun resolveToIdentityId(anyId: String?): String? {
+        val trimmed = anyId?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        return try {
+            ironCore?.resolveToIdentityId(trimmed)?.let { PeerIdValidator.normalize(it) }
+        } catch (e: Exception) {
+            Timber.d("resolveToIdentityId could not resolve '$trimmed': ${e.message}")
+            null
+        }
+    }
 
     private fun canonicalContactId(id: String): String {
         val trimmed = id.trim()
@@ -4463,6 +4719,11 @@ open class MeshRepository(
             nickname = finalContact.nickname
         )
         Timber.i("UNIFICATION addContact saved: peerId $canonicalContactId nickname ${finalContact.nickname?.take(16) ?: "null"} localNickname ${finalContact.localNickname?.take(16) ?: "null"} pubKey ${finalContact.publicKey.take(8)}... display=${(finalContact.localNickname ?: finalContact.nickname)?.take(16) ?: "PK:${finalContact.publicKey.take(8)}"}")
+        val exclusiveNick = normalizeNickname(finalContact.localNickname ?: finalContact.nickname)
+            ?.takeUnless { isSyntheticFallbackNickname(it) }
+        if (exclusiveNick != null) {
+            reclaimExclusiveFederatedNickname(canonicalContactId, exclusiveNick)
+        }
     }
 
     /**
@@ -4620,11 +4881,20 @@ open class MeshRepository(
         return contactManager?.search(query) ?: emptyList()
     }
 
-    fun setContactNickname(peerId: String, nickname: String?) {
-        // UNIFICATION: federated nickname save — verbose logging, synthetic filtering handled by caller
+    suspend fun setContactNickname(peerId: String, nickname: String?) {
+        // UNIFICATION: federated nickname save — serialized under contactUpsertMutex so a
+        // concurrent identity-envelope upsert cannot write back a stale snapshot over this
+        // write (race previously let a rename be silently reverted). Suspend: all callers
+        // invoke from viewModelScope coroutines.
         Timber.i("UNIFICATION setContactNickname: save peer $peerId -> federated nick ${nickname?.take(16) ?: "null"} (clears if blank)")
-        contactManager?.setNickname(peerId, nickname)
-        Timber.d("Contact nickname updated: $peerId -> $nickname")
+        try {
+            contactUpsertMutex.withLock {
+                contactManager?.setNickname(peerId, nickname)
+            }
+            Timber.d("Contact nickname updated: $peerId -> $nickname")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set contact nickname for $peerId")
+        }
         try {
             val normalized = nickname?.trim()?.takeIf { it.isNotEmpty() }
             if (normalized != null && !isSyntheticFallbackNickname(normalized)) {
@@ -5061,6 +5331,17 @@ open class MeshRepository(
             return
         }
         persistIdentityBackup(core)
+        // NICKNAME-REVERT-001: keep the DataStore fallback in lockstep with the
+        // core. It used to be written only at identity creation, so a later
+        // rename left it stale and the next syncNicknameFromDatastore() pushed
+        // that stale value back over the core.
+        repoScope.launch {
+            try {
+                preferencesRepository?.setIdentityNickname(trimmed)
+            } catch (e: Exception) {
+                Timber.w(e, "setNickname: failed to update DataStore nickname fallback")
+            }
+        }
         // If swarm start was postponed before identity/nickname was ready, resume now.
         // Launched on repoScope: initializeAndStartSwarm is a suspend fun that can
         // block up to 15s waiting for the listener bind, and setNickname may be
@@ -5125,12 +5406,33 @@ open class MeshRepository(
 
         // Get current identity info to check if we already have this nickname
         val currentInfo = core.getIdentityInfo()
-        if (currentInfo?.nickname == cachedNickname) {
+        val coreNickname = currentInfo?.nickname?.trim()
+        if (coreNickname == cachedNickname.trim()) {
             Timber.d("syncNicknameFromDatastore: Nickname already synced: %s", cachedNickname)
             return
         }
 
-        // Push the cached nickname to Rust Core
+        // NICKNAME-REVERT-001: this function is a repair path for a core that
+        // has no nickname yet (see the doc comment above), not a way to impose
+        // the cache. A non-blank core nickname is authoritative -- the user may
+        // have just renamed through Settings -- so never overwrite it; refresh
+        // the stale fallback from the core instead. Overwriting here reverted a
+        // renamed identity the moment Settings observed the service RUNNING.
+        if (!coreNickname.isNullOrBlank()) {
+            Timber.i(
+                "syncNicknameFromDatastore: core nickname '%s' is authoritative; refreshing stale DataStore fallback '%s'",
+                coreNickname,
+                cachedNickname
+            )
+            try {
+                preferencesRepository?.setIdentityNickname(coreNickname)
+            } catch (e: Exception) {
+                Timber.w(e, "syncNicknameFromDatastore: failed to refresh DataStore fallback")
+            }
+            return
+        }
+
+        // Push the cached nickname to Rust Core (core has no nickname yet)
         Timber.i("syncNicknameFromDatastore: Pushing DataStore nickname to IronCore: %s", cachedNickname)
         try {
             core.setNickname(cachedNickname.trim())
@@ -5145,12 +5447,90 @@ open class MeshRepository(
         }
     }
 
-    fun setLocalNickname(peerId: String, nickname: String?) {
+    /**
+     * NICKNAME-OWNERSHIP-001 load-time sanitize: for every contact with a real
+     * localNickname (or exclusive federated nick), reclaim that name so no other
+     * peer keeps a federated copy. Clears pre-fix multi-peer paint (device RCA
+     * 2026-09-11: androidulaator on emulator + Windows).
+     */
+    private fun sanitizeExclusiveNicknames() {
+        try {
+            val contacts = contactManager?.list().orEmpty().filter { !it.isTombstone }
+            contacts.forEach { c ->
+                val exclusive = normalizeNickname(c.localNickname ?: c.nickname)
+                    ?.takeUnless { isSyntheticFallbackNickname(it) } ?: return@forEach
+                reclaimExclusiveFederatedNickname(c.peerId, exclusive)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "sanitizeExclusiveNicknames failed")
+        }
+    }
+
+    /**
+     * NICKNAME-OWNERSHIP-001: a non-synthetic display name belongs to exactly one
+     * identity. If peerId now claims nick, strip that federated nick from every
+     * other discovered peer (never touch localNickname — user-defined).
+     * Device RCA 2026-09-11: emulator "androidulaator" painted onto Windows rows.
+     */
+    private fun reclaimExclusiveFederatedNickname(ownerPeerId: String, nick: String?) {
+        val exclusive = normalizeNickname(nick)?.takeUnless { isSyntheticFallbackNickname(it) } ?: return
+        val owner = ownerPeerId.trim()
+        if (owner.isEmpty()) return
+        try {
+            val contacts = contactManager?.list().orEmpty()
+            val ownerKeys = contacts
+                .filter { it.peerId == owner || normalizePublicKey(it.publicKey) == normalizePublicKey(owner) }
+                .mapNotNull { normalizePublicKey(it.publicKey) }
+                .toSet() + listOfNotNull(normalizePublicKey(owner))
+            _discoveredPeers.update { current ->
+                var updated = current
+                var changed = false
+                for ((k, v) in current) {
+                    if (k == owner || v.peerId == owner) continue
+                    val isOwnerAlias = v.libp2pPeerId == owner ||
+                        normalizePublicKey(v.publicKey)?.let { it in ownerKeys } == true
+                    if (isOwnerAlias) continue
+                    if (!v.nickname.equals(exclusive, ignoreCase = true)) continue
+                    Timber.w(
+                        "NICKNAME-OWNERSHIP-001: reclaiming federated nick=$exclusive from non-owner peer=$k (owner=$owner)"
+                    )
+                    updated = updated + (k to v.copy(nickname = null))
+                    changed = true
+                }
+                if (changed) updated else current
+            }
+            contacts.forEach { c ->
+                if (c.peerId == owner) return@forEach
+                val isOwnerAlias = normalizePublicKey(c.publicKey)?.let { it in ownerKeys } == true
+                if (isOwnerAlias) return@forEach
+                val contactNick = c.nickname?.trim().orEmpty()
+                if (!contactNick.equals(exclusive, ignoreCase = true)) return@forEach
+                Timber.w(
+                    "NICKNAME-OWNERSHIP-001: clearing contact federated nick=$exclusive from ${c.peerId} (owner=$owner)"
+                )
+                kotlin.runCatching {
+                    contactManager?.setNickname(c.peerId, null)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "reclaimExclusiveFederatedNickname failed for $ownerPeerId")
+        }
+    }
+
+    suspend fun setLocalNickname(peerId: String, nickname: String?) {
         // UNIFICATION: user-defined localNickname save — verbose logging, never overwritten by federated sync
         val normalizedInput = nickname?.trim()?.takeIf { it.isNotEmpty() }
         Timber.i("UNIFICATION setLocalNickname: save peer $peerId -> localNick ${normalizedInput?.take(16) ?: "null (clear)"} raw=${nickname?.take(16) ?: "null"}")
         try {
-            contactManager?.setLocalNickname(peerId, nickname)
+            // UNIFICATION: localNickname save + federated-nickname reclaim are serialized
+            // under contactUpsertMutex together with upsertFederatedContact so a concurrent
+            // envelope upsert cannot write back a stale snapshot over the user's rename.
+            contactUpsertMutex.withLock {
+                contactManager?.setLocalNickname(peerId, nickname)
+                if (normalizedInput != null && !isSyntheticFallbackNickname(normalizedInput)) {
+                    reclaimExclusiveFederatedNickname(peerId, normalizedInput)
+                }
+            }
             Timber.i("UNIFICATION setLocalNickname saved: $peerId -> ${nickname?.take(16) ?: "null"}")
             _discoveredPeers.update { current ->
                 val normalized = peerId.trim()
@@ -5769,7 +6149,11 @@ open class MeshRepository(
 
     fun hasRequiredRuntimePermissions(): Boolean = hasAllPermissions(Permissions.required)
 
-    @Synchronized
+    /**
+     * Refresh transports after runtime permissions are granted.
+     * HANG-LOCK-001: must NOT be @Synchronized — MainActivity.onResume calls this
+     * on the main thread; a shared object monitor behind startMeshService froze UI.
+     */
     fun onRuntimePermissionsGranted() {
         if (meshService?.getState() != uniffi.api.ServiceState.RUNNING) {
             Timber.d("Permission refresh skipped: mesh service is not running")
@@ -5940,7 +6324,20 @@ open class MeshRepository(
      * asynchronously after service starts. This allows Settings screen to load immediately.
      */
     private fun ensureServiceInitializedDeferred() {
+        // STOP-RACE-001 (2026-09-11): Settings/async reload used to call
+        // startMeshService() ~1s after ACTION_STOP, resurrecting a mesh the
+        // user just stopped. The user-stop latch lives on MeshForegroundService
+        // and is set synchronously in decideCommand(ACTION_STOP).
+        if (com.scmessenger.android.service.MeshForegroundService.userStoppedForSession) {
+            Timber.i("ensureServiceInitializedDeferred: user stop in effect; not starting mesh")
+            return
+        }
         repoScope.launch {
+            // Re-check after dispatch: stop may have landed while we queued.
+            if (com.scmessenger.android.service.MeshForegroundService.userStoppedForSession) {
+                Timber.i("ensureServiceInitializedDeferred: user stop landed while queued; abort start")
+                return@launch
+            }
             val state = meshService?.getState()
             if (state == uniffi.api.ServiceState.RUNNING) {
                 return@launch
@@ -6210,7 +6607,26 @@ open class MeshRepository(
         ledgerManager?.recordConnection(multiaddr, peerId)
     }
 
-    fun recordConnectionFailure(multiaddr: String) {
+    fun recordConnectionFailure(multiaddr: String, detail: String? = null) {
+        // D3c fix: the ledger failure counter is a near-permanent statistic
+        // (LEDGER_DEAD_FAILURE_THRESHOLD=3 in core excludes the entry from the
+        // proven set forever). Local/epoch-specific conditions are NOT evidence
+        // about the endpoint's health: "Device offline" was recorded against the
+        // cloud relay during WiFi flaps until it fell out of the candidate set
+        // entirely (live 2026-09-09: bootstrap deadlocked with zero candidates
+        // and never dialed the cloud node from cellular). Only endpoint-fault
+        // evidence (refused/timeout/TLS/unreachable-with-route) poisons the
+        // ledger; circuit breaker + metrics still record everything.
+        val localEpochFailure = detail != null && (
+            detail.contains("Device offline") ||
+                detail.contains("No route to host") ||
+                detail.contains("carrier filtering non-standard ports") ||
+                detail.contains("carrier blocking QUIC/UDP")
+            )
+        if (localEpochFailure) {
+            Timber.d("Ledger failure not recorded for %s (local/epoch condition: %s)", multiaddr, detail)
+            return
+        }
         ledgerManager?.recordFailure(multiaddr)
     }
 
@@ -6321,6 +6737,21 @@ open class MeshRepository(
                             }
                         }
                     }
+                    val locallyVerified = obj.optBoolean("locally_verified", false)
+                    val isBootstrap = obj.optBoolean("is_bootstrap", false)
+                    val firstSeenRaw = obj.optLong("first_seen", 0L)
+                    val firstSeen = if (firstSeenRaw > 0) firstSeenRaw.toULong() else null
+                    val observedIdsJson = obj.optJSONArray("observed_peer_ids")
+                    val observedPeerIds = buildList {
+                        if (observedIdsJson != null) {
+                            for (j in 0 until observedIdsJson.length()) {
+                                val p = observedIdsJson.optString(j, "").trim()
+                                if (p.isNotEmpty()) add(p)
+                            }
+                        }
+                    }
+                    val labelRaw = obj.optString("label", "")
+                    val label = labelRaw.takeIf { it.isNotEmpty() }
                     val entry = uniffi.api.LedgerEntry(
                         multiaddr = multiaddr,
                         peerId = peerId,
@@ -6329,7 +6760,12 @@ open class MeshRepository(
                         successCount = successCount,
                         failureCount = failureCount,
                         lastSeen = lastSeen,
-                        topics = topics
+                        topics = topics,
+                        locallyVerified = locallyVerified,
+                        isBootstrap = isBootstrap,
+                        firstSeen = firstSeen,
+                        observedPeerIds = observedPeerIds,
+                        label = label
                     )
                     val pid = entry.peerId?.trim().orEmpty()
                     val key = entry.publicKey?.trim().orEmpty()
@@ -6353,13 +6789,15 @@ open class MeshRepository(
             try {
                 val rust = lm.seedAddresses(limit)
                 // Apply same poison-mask as getDialableAddresses/getAllLedgerEntries for consistency.
-                return rust.map { entry ->
-                    val pid = entry.peerId?.trim().orEmpty()
-                    val key = entry.publicKey?.trim().orEmpty()
-                    if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
-                        entry.copy(publicKey = null, nickname = null)
-                    } else entry
-                }
+                return rust
+                    .map { entry ->
+                        val pid = entry.peerId?.trim().orEmpty()
+                        val key = entry.publicKey?.trim().orEmpty()
+                        if (pid.isNotEmpty() && key.isNotEmpty() && !isSelfCertifyingKeyBinding(pid, key)) {
+                            entry.copy(publicKey = null, nickname = null)
+                        } else entry
+                    }
+                    .filterNot { isGhostLedgerEntry(it) }
             } catch (e: Exception) {
                 Timber.w(e, "getSeedAddresses: Rust delegate failed, falling back to cached file parse")
             }
@@ -6367,6 +6805,7 @@ open class MeshRepository(
         // LEDGER-CACHE-001: getAllLedgerEntries() is now mtime+size cached, so triple re-parse collapses to one.
         return getAllLedgerEntries()
             .filter { it.successCount == 0u && it.failureCount < 3u }
+            .filterNot { isGhostLedgerEntry(it) }
             .sortedByDescending { it.lastSeen ?: 0uL }
             .take(limit.toInt())
     }
@@ -6375,8 +6814,11 @@ open class MeshRepository(
         val cutoffSec = (System.currentTimeMillis() / 1000) - withinDays * 24 * 3600
         val cutoff = cutoffSec.coerceAtLeast(0).toULong()
         // LEDGER-CACHE-001: single cached fetch, not three disk parses.
+        // GHOST-IDENTITY-001: dead rows are exactly where retired identities hide
+        // (577fd171 had fail=3 success=0). Do not resurrect them into seed/UI.
         return getAllLedgerEntries()
             .filter { it.failureCount >= 3u && (it.lastSeen ?: 0uL) >= cutoff }
+            .filterNot { isGhostLedgerEntry(it) }
             .sortedByDescending { it.lastSeen ?: 0uL }
     }
 
@@ -6472,13 +6914,19 @@ open class MeshRepository(
     fun triggerTransportRescan() {
         repoScope.launch {
             try {
-                // Restart BLE scanning
+                initializeAndStartBle()
                 transportManager?.let { tm ->
                     tm.stopAll()
                     delay(200)
-                    tm.startAll()
+                    val settings = loadSettings()
+                    tm.initialize(
+                        bleEnabled = settings.bleEnabled,
+                        wifiAwareEnabled = settings.wifiAwareEnabled,
+                        wifiDirectEnabled = settings.wifiDirectEnabled
+                    )
+                    tm.startAll(enableMdns = settings.internetEnabled)
                 }
-                Timber.d("triggerTransportRescan: BLE + WiFi restarted")
+                Timber.d("triggerTransportRescan: repository BLE + manager transports restarted")
             } catch (e: Exception) {
                 Timber.w(e, "triggerTransportRescan failed")
             }
@@ -6505,8 +6953,21 @@ open class MeshRepository(
             // so seeded PeerDiscoveryInfo already carries "Claude-Windows-Driver" not "peer-30d0fa67".
             // Idempotent; also called explicitly from initializeManagers().
             repairSyntheticContactNicknames()
+            // NICKNAME-OWNERSHIP-001: clear pre-fix ledger/contact poison where one
+            // exclusive real name was painted onto multiple peer_ids (device RCA:
+            // emulator "androidulaator" on Windows 30d0fa67).
+            sanitizeExclusiveNicknames()
             val now = System.currentTimeMillis().toULong() / 1000u
             val seeded = linkedMapOf<String, PeerDiscoveryInfo>()
+            // Map of exclusive real localNickname -> owner peerId (for ledger nick masking)
+            val exclusiveOwnerByNick = contactManager?.list().orEmpty()
+                .filter { !it.isTombstone }
+                .mapNotNull { c ->
+                    val nick = normalizeNickname(c.localNickname ?: c.nickname)
+                        ?.takeUnless { isSyntheticFallbackNickname(it) }
+                    if (nick == null) null else nick.lowercase() to c.peerId.trim()
+                }
+                .toMap()
 
             contactManager?.list().orEmpty()
                 .filter { !it.isTombstone }
@@ -6537,16 +6998,29 @@ open class MeshRepository(
             // resurrect identity poison across WiFi/BLE cycles).
             // FIX: include offline nodes (seed + recent dead) so the peer list persists
             // "last seen Xm ago" with transport badges even when dialable==0.
-            val allLedgerForSeeding = (getDialableAddresses() + getSeedAddresses(16u) + getRecentlyDeadAddresses()).distinctBy { it.multiaddr }
+            val allLedgerForSeeding = (getDialableAddresses() + getSeedAddresses(16u) + getRecentlyDeadAddresses())
+                .distinctBy { it.multiaddr }
+                .filterNot { isGhostLedgerEntry(it) }
             allLedgerForSeeding.forEach { entry ->
                 val rawPeerId = entry.peerId?.trim().takeIf { !it.isNullOrEmpty() } ?: return@forEach
                 val transports = parseTransportsFromMultiaddrs(listOf(entry.multiaddr))
+                // NICKNAME-OWNERSHIP-001: never seed a ledger nick that another
+                // peer already owns as an exclusive real name.
+                val ledgerNick = normalizeNickname(entry.nickname)?.let { n ->
+                    val owner = exclusiveOwnerByNick[n.lowercase()]
+                    if (owner != null && owner != rawPeerId) {
+                        Timber.w(
+                            "NICKNAME-OWNERSHIP-001: masking ledger nick=$n on $rawPeerId (owned by $owner)"
+                        )
+                        null
+                    } else n
+                }
                 val existing = seeded[rawPeerId]
                 if (existing != null) {
-                    val authoritativeNick = selectAuthoritativeNickname(existing.nickname, entry.nickname)
-                        ?: selectAuthoritativeNickname(entry.nickname, existing.nickname)
+                    val authoritativeNick = selectAuthoritativeNickname(existing.nickname, ledgerNick)
+                        ?: selectAuthoritativeNickname(ledgerNick, existing.nickname)
                         ?: existing.nickname
-                        ?: entry.nickname
+                        ?: ledgerNick
                     // Prefer authoritative nickname (non-synthetic) and keep live transport union.
                     seeded[rawPeerId] = existing.copy(
                         nickname = selectAuthoritativeNickname(authoritativeNick, existing.nickname) ?: authoritativeNick,
@@ -6558,7 +7032,7 @@ open class MeshRepository(
                     seeded[rawPeerId] = PeerDiscoveryInfo(
                         peerId = rawPeerId,
                         publicKey = entry.publicKey?.trim()?.takeIf { it.isNotEmpty() },
-                        nickname = entry.nickname,
+                        nickname = ledgerNick,
                         libp2pPeerId = rawPeerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) },
                         transport = if (transports.contains(TRANSPORT_TCP_LAN))
                             com.scmessenger.android.service.TransportType.TCP_MDNS
@@ -6836,10 +7310,20 @@ open class MeshRepository(
         return loadPendingOutbox().size
     }
 
-    fun getPendingDeliverySnapshot(messageId: String): Pair<Int, Long>? {
+    fun getPendingDeliverySnapshot(messageId: String): PendingDeliveryInfo? {
         if (messageId.isBlank()) return null
         val pending = loadPendingOutbox().firstOrNull { it.historyRecordId == messageId } ?: return null
-        return pending.attemptCount to pending.nextAttemptAtEpochSec
+        return PendingDeliveryInfo(
+            attemptCount = pending.attemptCount,
+            nextAttemptAtEpochSec = pending.nextAttemptAtEpochSec,
+            // Single source of truth for the drop-at-cap decision; the UI
+            // surface must never drift from the flush-loop predicate.
+            exhausted = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                attemptCount = pending.attemptCount,
+                ackedWithoutReceiptCount = pending.ackedWithoutReceiptCount,
+                maxAttempts = pendingOutboxMaxAttempts
+            )
+        )
     }
 
     fun getPendingTerminalFailureCode(messageId: String): String? {
@@ -6976,14 +7460,28 @@ open class MeshRepository(
         listeners: List<String>,
         blePeerId: String? = null
     ) {
-        val canonicalPeerId = PeerIdValidator.normalize(peerId)
+        val inputPeerId = PeerIdValidator.normalize(peerId)
         val normalizedKey = normalizePublicKey(publicKey)
-        if (canonicalPeerId.isEmpty() || normalizedKey.isNullOrBlank()) {
+        if (inputPeerId.isEmpty() || normalizedKey.isNullOrBlank()) {
             return
         }
 
-        val normalizedRoute = libp2pPeerId?.let { PeerIdValidator.normalize(it) }?.takeIf { it.isNotEmpty() }
-        val normalizedBle = blePeerId?.trim()?.takeIf { it.isNotEmpty() }
+        // Ensure canonicalPeerId is NEVER a transport Peer ID.
+        // If peerId was a transport ID, resolve the sovereign identity (Blake3 identity_id or public_key_hex)
+        // and preserve the transport ID in normalizedRoute.
+        val isTransport = PeerIdValidator.isTransportPeerId(inputPeerId)
+        val canonicalPeerId = if (isTransport) {
+            resolveToIdentityId(normalizedKey) ?: resolveToIdentityId(inputPeerId) ?: normalizedKey
+        } else {
+            inputPeerId
+        }
+
+        val normalizedRoute = (libp2pPeerId ?: inputPeerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) })
+            ?.let { PeerIdValidator.normalize(it) }
+            ?.takeIf { it.isNotEmpty() }
+        val normalizedBle = (blePeerId ?: inputPeerId.takeIf { PeerIdValidator.isBlePeerId(it) })
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
         val normalizedNickname = normalizeNickname(nickname)
         val normalizedListeners = listeners
             .asSequence()
@@ -7232,8 +7730,19 @@ open class MeshRepository(
         }
     }
 
+    /**
+     * Report device state to Rust.
+     * HANG-MAIN-001: updateDeviceState is a blocking FFI that has ANR'd the main
+     * thread. Always dispatch to IO regardless of caller.
+     */
     fun updateDeviceState(profile: uniffi.api.DeviceProfile) {
-        meshService?.updateDeviceState(profile)
+        repoScope.launch {
+            try {
+                meshService?.updateDeviceState(profile)
+            } catch (e: Exception) {
+                Timber.w(e, "updateDeviceState failed")
+            }
+        }
     }
 
     fun overrideRelayMax(max: UInt) {
@@ -7914,10 +8423,154 @@ open class MeshRepository(
             // Core unavailable - don't mark as delivered even if BLE succeeded
             return DeliveryAttemptResult(acked = false, routePeerId = wifiPeerId)
         }
-        val sanitizedCandidates = routePeerCandidates
+        val sanitizedBase = routePeerCandidates
             .map { it.trim() }
             .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
             .distinct()
+
+        // CELL-ROUTE-AWS-001b: on cellular, inject proven PUBLIC relay peer ids
+        // as additional routes. Pair each peer with ITS OWN public multiaddrs
+        // (never dial AWS addr under Windows peerId).
+        // On cellular put public relays FIRST so a LAN-only Windows route does
+        // not burn the attempt window before AWS is tried.
+        val publicRelayRoutes: List<Pair<String, String>> = if (networkDetector.isCellularNetwork) {
+            getPublicInternetRelayRoutes()
+        } else {
+            emptyList()
+        }
+        // CELL-ROUTE-AWS-001c/001d: on cellular, try the paired public-relay route
+        // BEFORE SmartTransportRouter (which burns the window on failing LAN
+        // core/wifi-direct attempts). 001d: retry send + poll receipt so a
+        // "Delivery pending retry" transport ACK can become a real delivered
+        // state within the cellular window.
+        if (networkDetector.isCellularNetwork && publicRelayRoutes.isNotEmpty() && !localAcked) {
+            val firstRelay = publicRelayRoutes.first()
+            val relayPeer = firstRelay.first
+            val relayAddrs = publicRelayRoutes.filter { it.first == relayPeer }.map { it.second }.distinct()
+            Timber.i(
+                "CELL-ROUTE-AWS-001d: pre-pass dial relay=$relayPeer addrs=${relayAddrs.size} ctx=$attemptContext"
+            )
+            logDeliveryAttempt(
+                messageId = traceMessageId,
+                medium = "core",
+                phase = "cellular_pre_pass",
+                outcome = "attempt",
+                detail = "ctx=$attemptContext route=$relayPeer addrs=${relayAddrs.size}"
+            )
+            try {
+                connectToPeer(relayPeer, relayAddrs)
+                // 001d: longer connect wait — cellular RTT + CGNAT handshake.
+                val connected = awaitPeerConnection(relayPeer, timeoutMs = 8000L)
+                if (connected) {
+                    // 001d: retry sendMessageStatus up to 3 times with backoff.
+                    // "Delivery pending retry" means the swarm accepted the send
+                    // but the remote has not yet ACKed — wait and retry.
+                    var sendErr: String? = null
+                    var acked = false
+                    for (attempt in 1..3) {
+                        sendErr = bridge.sendMessageStatus(
+                            relayPeer,
+                            encryptedData,
+                            recipientIdentityId,
+                            intendedDeviceId
+                        )
+                        if (sendErr == null) {
+                            acked = true
+                            break
+                        }
+                        logDeliveryAttempt(
+                            messageId = traceMessageId,
+                            medium = "core",
+                            phase = "cellular_pre_pass",
+                            outcome = if (attempt < 3) "retry" else "failed",
+                            detail = "ctx=$attemptContext route=$relayPeer attempt=$attempt reason=$sendErr"
+                        )
+                        if (attempt < 3) {
+                            kotlinx.coroutines.delay(1500L * attempt)
+                        }
+                    }
+                    if (acked) {
+                        // 001d: poll history for delivery receipt for up to 20s.
+                        val deadline = System.currentTimeMillis() + 20_000L
+                        while (System.currentTimeMillis() < deadline) {
+                            try {
+                                val rec = historyManager?.get(traceMessageId ?: "")
+                                if (rec?.delivered == true || rec?.status == uniffi.api.MessageStatus.DELIVERED) {
+                                    Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass receipt via $relayPeer")
+                                    logDeliveryAttempt(
+                                        messageId = traceMessageId,
+                                        medium = "core",
+                                        phase = "cellular_pre_pass",
+                                        outcome = "success",
+                                        detail = "ctx=$attemptContext route=$relayPeer receipt=delivered"
+                                    )
+                                    return DeliveryAttemptResult(
+                                        acked = true,
+                                        routePeerId = relayPeer,
+                                        coreSwarmAcked = true
+                                    )
+                                }
+                            } catch (_: Exception) { }
+                            kotlinx.coroutines.delay(1000L)
+                        }
+                        // Transport ACK but no receipt yet — still treat as acked
+                        // so the durable outbox can wait for the receipt window.
+                        Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass transport ACK via $relayPeer (receipt pending)")
+                        logDeliveryAttempt(
+                            messageId = traceMessageId,
+                            medium = "core",
+                            phase = "cellular_pre_pass",
+                            outcome = "success",
+                            detail = "ctx=$attemptContext route=$relayPeer receipt=pending"
+                        )
+                        return DeliveryAttemptResult(
+                            acked = true,
+                            routePeerId = relayPeer,
+                            coreSwarmAcked = true
+                        )
+                    }
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_pre_pass",
+                        outcome = "failed",
+                        detail = "ctx=$attemptContext route=$relayPeer reason=$sendErr"
+                    )
+                } else {
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_pre_pass",
+                        outcome = "failed",
+                        detail = "ctx=$attemptContext route=$relayPeer reason=connect_timeout"
+                    )
+                }
+            } catch (ex: Exception) {
+                Timber.w(ex, "CELL-ROUTE-AWS-001d pre-pass failed")
+            }
+        }
+
+        val publicRelayPeerIds = publicRelayRoutes.map { it.first }.distinct()
+        if (networkDetector.isCellularNetwork) {
+            Timber.i(
+                "CELL-ROUTE-AWS-001b: cellular routes public=${publicRelayPeerIds.size} base=${sanitizedBase.size} ctx=$attemptContext"
+            )
+        }
+        if (networkDetector.isCellularNetwork && publicRelayPeerIds.isEmpty()) {
+            Timber.w(
+                "CELL-ROUTE-AWS-001b: cellular but no public relay routes " +
+                    "(ledger proven+seed empty or all private/dns). base=${sanitizedBase.size}"
+            )
+        }
+        val sanitizedCandidates = if (networkDetector.isCellularNetwork) {
+            (publicRelayPeerIds + sanitizedBase)
+                .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
+                .distinct()
+        } else {
+            (sanitizedBase + publicRelayPeerIds)
+                .filter { it.isNotEmpty() && PeerIdValidator.isLibp2pPeerId(it) }
+                .distinct()
+        }
 
         if (sanitizedCandidates.isEmpty()) {
             // AND-NO-ROUTE-001: Add diagnostic context for empty route candidates
@@ -7962,11 +8615,46 @@ open class MeshRepository(
 
         for (routePeerId in sanitizedCandidates) {
             val liveRouteHints = getDialHintsForRoutePeer(routePeerId)
-            val dialCandidates = buildDialCandidatesForPeer(
+            // CELL-ROUTE-AWS-001b: this route IS a public relay peer — use only
+            // that peer's public multiaddrs (correct peer↔addr pairing).
+            val publicAddrsForThisRoute = publicRelayRoutes
+                .filter { it.first == routePeerId }
+                .map { it.second }
+                .distinct()
+            // C6: shared `listeners` belong to the recipient (or a third peer).
+            // Merging them into a public-relay route attaches foreign LAN addrs
+            // to AWS/Windows and burns cellular dial time on unreachable hops.
+            // When paired public addrs exist, only that route's own live hints
+            // plus its paired public addrs are dial candidates.
+            val rawForThisRoute = if (publicAddrsForThisRoute.isNotEmpty()) {
+                liveRouteHints + publicAddrsForThisRoute
+            } else {
+                listeners + liveRouteHints
+            }
+            var dialCandidates = buildDialCandidatesForPeer(
                 routePeerId = routePeerId,
-                rawAddresses = listeners + liveRouteHints,
+                rawAddresses = rawForThisRoute,
                 includeRelayCircuits = true
             )
+            if (publicAddrsForThisRoute.isNotEmpty()) {
+                val lanOnly = dialCandidates.none { addr ->
+                    val v4 = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+                    !(v4 == null || v4.startsWith("192.168.") || v4.startsWith("10.") || v4.startsWith("127."))
+                }
+                if (dialCandidates.isEmpty() || (networkDetector.isCellularNetwork && lanOnly)) {
+                    dialCandidates = publicAddrsForThisRoute
+                    Timber.i(
+                        "CELL-ROUTE-AWS-001b: route=$routePeerId using ${publicAddrsForThisRoute.size} paired public addrs on cellular"
+                    )
+                    logDeliveryAttempt(
+                        messageId = traceMessageId,
+                        medium = "core",
+                        phase = "cellular_fallback",
+                        outcome = "attempt",
+                        detail = "ctx=$attemptContext route=$routePeerId paired_public=${publicAddrsForThisRoute.size}"
+                    )
+                }
+            }
             Timber.d("[ROUTE] Transport: route=$routePeerId dialCandidates=${dialCandidates.size} (${dialCandidates.joinToString { it.substringBefore("/") }})")
             if (dialCandidates.isNotEmpty()) {
                 connectToPeer(routePeerId, dialCandidates)
@@ -8155,29 +8843,54 @@ open class MeshRepository(
                 // transport. We now fall through to the real send path below; the
                 // attempt-cap branch is additionally guarded so acked-without-receipt
                 // messages are never corrupted/dropped by the attempt count.
-                // AND-DELIVERY-001: Enforce maximum retry limit to prevent infinite retries
-                // Only applies to messages that have NOT been transport-acked
-                if (item.attemptCount >= pendingOutboxMaxAttempts && item.ackedWithoutReceiptCount == 0) {
-                    Timber.w("Dropping message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts) - NOT transport-acked")
-                    markMessageCorrupted(item.historyRecordId)
+                // AND-DELIVERY-001 REVISED (the operator's 'message vanished' defect):
+                // Enforce a retry CEILING to avoid tight spinning, but NEVER silently
+                // discard an undelivered send. Store-and-forward is the product
+                // contract; an unreachable peer must not erase the sender's message.
+                // At the attempt ceiling an undelivered, never-acked send becomes a
+                // persistent, visible 'queued/delivering' state: it is DEFERRED on a
+                // patient backoff (the pending-outbox rewrite only happens when the
+                // send path itself advances the record), NEVER removed, and once the
+                // backoff elapses it falls through to the real send path below and
+                // genuinely tries again -- so it keeps retrying on a patient cadence
+                // until a route exists or delivery is confirmed. The delivered check
+                // runs FIRST (via decidePendingOutboxFlushAction) so a retained entry
+                // that later gets delivered is removed instead of parked forever.
+                val isDeliveredLocally = isMessageDeliveredLocally(item.historyRecordId)
+                val retainedAtCap = MeshRepository.Companion.retainUndeliveredAtAttemptCap(
+                    attemptCount = item.attemptCount,
+                    ackedWithoutReceiptCount = item.ackedWithoutReceiptCount,
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                val flushAction = MeshRepository.Companion.decidePendingOutboxFlushAction(
+                    item = item,
+                    nowEpochSec = now,
+                    isDeliveredLocally = isDeliveredLocally,
+                    // Lazily evaluated by the decision function: the in-memory
+                    // tracker must not be materialized for non-due items.
+                    shouldRetry = { shouldRetryMessage(item.historyRecordId) },
+                    maxAttempts = pendingOutboxMaxAttempts
+                )
+                if (retainedAtCap && flushAction == MeshRepository.PendingOutboxFlushAction.SEND) {
+                    // Log once per real at-cap attempt (not per flush pass):
+                    // each retained SEND is a genuine retry of a message that
+                    // would previously have been silently dropped.
+                    Timber.w("Retaining undelivered message ${item.historyRecordId} after ${item.attemptCount} attempts (max=$pendingOutboxMaxAttempts): queued/delivering, NOT dropped")
                     logDeliveryState(
                         messageId = item.historyRecordId,
-                        state = "failed",
-                        detail = "dropped_pending_outbox reason=max_attempts_exceeded attempt=${item.attemptCount}"
+                        state = "queued_delivering",
+                        detail = "retained_pending_outbox reason=max_attempts_reached_never_drop attempt=${item.attemptCount}"
                     )
-                    iterator.remove()
-                    updated = true
-                    continue
                 }
-                if (item.nextAttemptAtEpochSec > now) continue
-                if (!shouldRetryMessage(item.historyRecordId)) {
-                    Timber.w("Skipping retry for ${item.historyRecordId}: shouldRetryMessage=false")
-                    continue
-                }
-                if (isMessageDeliveredLocally(item.historyRecordId)) {
-                    iterator.remove()
-                    updated = true
-                    continue
+                when (flushAction) {
+                    MeshRepository.PendingOutboxFlushAction.REMOVE -> {
+                        iterator.remove()
+                        updated = true
+                        continue
+                    }
+                    MeshRepository.PendingOutboxFlushAction.SKIP,
+                    MeshRepository.PendingOutboxFlushAction.DEFER -> continue
+                    MeshRepository.PendingOutboxFlushAction.SEND -> Unit
                 }
                 logDeliveryState(
                     messageId = item.historyRecordId,
@@ -8348,7 +9061,7 @@ open class MeshRepository(
         }
     }
 
-    private fun enqueuePendingOutbound(
+    private suspend fun enqueuePendingOutbound(
         historyRecordId: String,
         peerId: String,
         routePeerId: String?,
@@ -8360,14 +9073,14 @@ open class MeshRepository(
         recipientIdentityId: String? = null,
         intendedDeviceId: String? = null,
         terminalFailureCode: String? = null
-    ) {
+    ) = pendingOutboxFlushMutex.withLock {
         if (isMessageDeliveredLocally(historyRecordId)) {
             logDeliveryState(
                 messageId = historyRecordId,
                 state = "delivered",
                 detail = "skip_enqueue_already_delivered"
             )
-            return
+            return@withLock
         }
         val now = System.currentTimeMillis() / 1000
         val queue = loadPendingOutbox().toMutableList()
@@ -8468,9 +9181,11 @@ open class MeshRepository(
 
     /**
      * Synchronous load for internal use (must only be called from IO dispatcher).
+     * HANG-LOCK-001: outbox I/O uses [outboxIoLock], never the object monitor /
+     * startMeshService lock.
      */
-    @Synchronized
     private fun loadPendingOutboxSync(): List<PendingOutboundEnvelope> {
+        synchronized(outboxIoLock) {
         if (!pendingOutboxFile.exists()) return emptyList()
         return try {
             val raw = pendingOutboxFile.readText()
@@ -8513,6 +9228,7 @@ open class MeshRepository(
             Timber.w(e, "Failed to parse pending outbox")
             emptyList()
         }
+        }
     }
 
     /**
@@ -8520,8 +9236,8 @@ open class MeshRepository(
      */
     internal fun loadPendingOutbox(): List<PendingOutboundEnvelope> = loadPendingOutboxSync()
 
-    @Synchronized
     private fun savePendingOutbox(queue: List<PendingOutboundEnvelope>) {
+        synchronized(outboxIoLock) {
         try {
             val arr = org.json.JSONArray()
             queue.forEach { item ->
@@ -8549,6 +9265,7 @@ open class MeshRepository(
         } catch (e: Exception) {
             Timber.w(e, "Failed to persist pending outbox")
         }
+        } // synchronized(outboxIoLock)
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -8676,7 +9393,15 @@ open class MeshRepository(
             if (keyMatches.isNotEmpty()) return resolvedCanonicalPeerId
         }
 
-        return if (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId)) {
+        // UNIFICATION: never let the message hint downgrade an already-canonical
+        // 64-hex identity (public key OR identity_id) to a derived hash. The hint
+        // identity_id is only preferred when the resolved/sender form is NOT already
+        // a 64-hex key (e.g. legacy libp2p routing ID or BLE UUID), where the hint
+        // is genuinely more canonical than the raw sender id.
+        return if (
+            !PeerIdValidator.isIdentityId(resolvedCanonicalPeerId) &&
+                (PeerIdValidator.isSame(resolvedCanonicalPeerId, senderId) || PeerIdValidator.isLibp2pPeerId(resolvedCanonicalPeerId))
+        ) {
             normalizedHint
         } else {
             resolvedCanonicalPeerId
@@ -8826,7 +9551,12 @@ open class MeshRepository(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> KEEP EXISTING.
+            // Last-writer-wins let a self-reported nick (BLE/identity_sync)
+            // permanently steal another node's name. User-defined localNickname
+            // is the only intended overwrite path (setContactNickname).
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
     }
 
@@ -9015,14 +9745,22 @@ open class MeshRepository(
     }
 
     /**
-     * A public key may only be bound to a libp2p peer id when the binding is
+     * A public key may only be bound to a peer id when the binding is
      * self-certifying (Ed25519 peer ids embed their key). Bindings learned from
      * transport routing hints — relay hops, /p2p-circuit dial candidates,
      * self-reported identity-sync hints — are rejected here so circuit-relay
      * route annotations can never poison ledger identity resolution.
+     *
+     * Two accepted forms:
+     *  1. Canonical hex form: the ledger stores peer_id as the 64-hex public key
+     *     itself (the unified canonical identity). A hex peer_id equal to the
+     *     public key is self-certifying by construction.
+     *  2. libp2p base58 form: the derived peer id must equal the stored peer id
+     *     (Ed25519 peer ids embed their key).
      */
     private fun isSelfCertifyingKeyBinding(peerId: String, publicKey: String): Boolean {
         if (!PeerKeyUtils.isValidPublicKey(publicKey)) return false
+        if (peerId.equals(publicKey, ignoreCase = true)) return true
         return PeerKeyUtils.extractPeerIdFromPublicKey(publicKey) == peerId
     }
 
@@ -9107,16 +9845,24 @@ open class MeshRepository(
         // A null here means "routing metadata only, no identity claim".
         dialHints.forEach { multiaddr ->
             kotlin.runCatching {
-                // Double-check: if we are about to write a synthetic over an existing
-                // authoritative ledger entry, skip. Read current ledger entry for this
-                // multiaddr/peer to ensure we don't clobber Claude with peer-30...
-                val shouldWriteNick = if (normalizedNickname == null) {
-                    // Synthetic or null -> only write if ledger has no authoritative nick
-                    val existingNick = getAllLedgerEntries().firstOrNull {
-                        it.multiaddr == multiaddr && it.peerId == normalizedRoute
-                    }?.nickname?.trim()?.takeIf { it.isNotEmpty() }
-                    existingNick == null || isSyntheticFallbackNickname(existingNick)
-                } else true
+                // NICKNAME-OWNERSHIP-001: only write a real nickname onto a
+                // ledger row that already belongs to normalizedRoute (or has no
+                // peer_id). Fan-out of a real nick onto every dial candidate
+                // painted the emulator name onto Windows multiaddrs.
+                val owningEntry = getAllLedgerEntries().firstOrNull {
+                    it.multiaddr == multiaddr
+                }
+                val ownsOrUnclaimed = owningEntry == null ||
+                    owningEntry.peerId.isNullOrBlank() ||
+                    owningEntry.peerId == normalizedRoute
+                val shouldWriteNick = when {
+                    normalizedNickname == null -> {
+                        val existingNick = owningEntry?.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                        ownsOrUnclaimed &&
+                            (existingNick == null || isSyntheticFallbackNickname(existingNick))
+                    }
+                    else -> ownsOrUnclaimed
+                }
                 ledgerManager?.annotateIdentity(
                     multiaddr,
                     normalizedRoute,
@@ -9400,7 +10146,10 @@ open class MeshRepository(
 
             // Auth guard: for an existing canonical peerId, only accept federated updates
             // when the source public key is consistent with the stored contact key.
-            if (existingById != null && normalizePublicKey(existingById.publicKey) != normalizedKey) {
+            // A BLANK stored key is not a conflict — it means the contact record predates
+            // the key (ledger/discovery-created); fill it with the verified incoming key.
+            // Only a non-empty MISMATCHING key is rejected.
+            if (existingById != null && federatedKeyConflict(existingById.publicKey, normalizedKey)) {
                 Timber.w(
                     "Rejected federated nickname update for $normalizedPeerId: key mismatch " +
                         "(stored=${existingById.publicKey.take(8)}..., incoming=${normalizedKey.take(8)}...)"
@@ -9498,33 +10247,35 @@ open class MeshRepository(
         return (filtered + "listeners:${listeners.joinToString(",")}").joinToString(";")
     }
 
-    @Synchronized
     private fun removePendingOutbound(historyRecordId: String) {
         if (historyRecordId.isBlank()) return
-        val queue = loadPendingOutbox().toMutableList()
-        val removed = queue.removeAll { it.historyRecordId == historyRecordId }
-        if (removed) savePendingOutbox(queue)
+        synchronized(outboxIoLock) {
+            val queue = loadPendingOutbox().toMutableList()
+            val removed = queue.removeAll { it.historyRecordId == historyRecordId }
+            if (removed) savePendingOutbox(queue)
+        }
     }
 
-    @Synchronized
     private fun promotePendingOutboundForPeer(peerId: String, excludingMessageId: String? = null) {
         val trimmedPeerId = peerId.trim()
         if (trimmedPeerId.isEmpty()) return
         val now = System.currentTimeMillis() / 1000
-        val queue = loadPendingOutbox().toMutableList()
-        var changed = false
-        for (idx in queue.indices) {
-            val item = queue[idx]
-            val routePeerId = item.routePeerId?.trim()
-            if (item.peerId != trimmedPeerId && routePeerId != trimmedPeerId) continue
-            if (!excludingMessageId.isNullOrBlank() && item.historyRecordId == excludingMessageId) continue
-            if (item.terminalFailureCode != null) continue
-            if (item.nextAttemptAtEpochSec <= now) continue
-            queue[idx] = item.copy(nextAttemptAtEpochSec = now)
-            changed = true
+        synchronized(outboxIoLock) {
+            val queue = loadPendingOutbox().toMutableList()
+            var changed = false
+            for (idx in queue.indices) {
+                val item = queue[idx]
+                val routePeerId = item.routePeerId?.trim()
+                if (item.peerId != trimmedPeerId && routePeerId != trimmedPeerId) continue
+                if (!excludingMessageId.isNullOrBlank() && item.historyRecordId == excludingMessageId) continue
+                if (item.terminalFailureCode != null) continue
+                if (item.nextAttemptAtEpochSec <= now) continue
+                queue[idx] = item.copy(nextAttemptAtEpochSec = now)
+                changed = true
+            }
+            if (!changed) return
+            savePendingOutbox(queue)
         }
-        if (!changed) return
-        savePendingOutbox(queue)
         logDeliveryState(
             messageId = excludingMessageId ?: "unknown",
             state = "forwarding",
@@ -9544,7 +10295,6 @@ open class MeshRepository(
         }
     }
 
-    @Synchronized
     private fun markDeliveredReceiptSeen(messageId: String): Boolean {
         pruneDeliveredReceiptCache()
         val now = System.currentTimeMillis()
@@ -9642,6 +10392,38 @@ open class MeshRepository(
         return null
     }
 
+    /**
+     * UNIFICATION_DIAL: Resolve a route candidate to its dialable libp2p peer id.
+     *
+     * Dialing (swarm bridge, connectToPeer, core transport) requires a libp2p
+     * base58 peer id. Ledger/discovery may surface a contact bound to the
+     * canonical 64-hex public key (`peer_id == public_key`). When that binding
+     * is self-certifying for the given recipient key we derive its libp2p peer
+     * id via the repo-native helper; a real invalid id (or a hex id that does
+     * not certify against the recipient key) returns null so it stays rejected.
+     */
+    private fun toDialableRoutePeerId(peerId: String, recipientPublicKey: String?): String? {
+        val normalized = peerId.trim()
+        if (normalized.isEmpty()) return null
+        // Passthrough MUST precede the recipient-key guard: an already-libp2p
+        // candidate from cached/notes/discovery is dialable as-is and must not be
+        // dropped just because recipientPublicKey is null/empty (regression test
+        // `valid libp2p candidate passes through even with null recipient key`).
+        if (PeerIdValidator.isLibp2pPeerId(normalized)) return normalized
+        // Only accept the canonical hex form when it self-certifies against the
+        // recipient key (hex peer_id equal to the public key is self-certifying
+        // by construction — mirrors isSelfCertifyingKeyBinding form 1). A hex id
+        // unrelated to the recipient stays rejected.
+        val recipientKey = normalizePublicKey(recipientPublicKey)
+        if (recipientKey == null || !PeerKeyUtils.isValidPublicKey(normalized)) return null
+        if (!normalized.equals(recipientKey, ignoreCase = true)) return null
+        // Derive from the canonical recipient key (equal to the hex peer_id by
+        // the self-certificate check, but case-normalized) so derivation is
+        // immune to a case-sensitive hex decoder.
+        val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(recipientKey)
+        return if (PeerIdValidator.isLibp2pPeerId(derived)) derived else null
+    }
+
     private fun buildRoutePeerCandidates(
         peerId: String,
         cachedRoutePeerId: String?,
@@ -9685,11 +10467,28 @@ open class MeshRepository(
             diagSources.add("peer_id=valid")
             candidates.add(peerId)
         } else {
-            diagSources.add("peer_id=invalid_format")
+            // UNIFICATION_DIAL: a canonical 64-hex peer id that self-certifies
+            // against the recipient public key is dialable via its derived
+            // libp2p form (same repo-native helper the sanitizer/discovery use).
+            // Without this the hex-bound ledger contact (e.g. AWS parity) is
+            // rejected as invalid_format here and can never be dialed.
+            val dialable = toDialableRoutePeerId(peerId, recipientPublicKey)
+            if (dialable != null) {
+                diagSources.add("peer_id=canonical_hex_derived")
+                candidates.add(dialable)
+            } else {
+                diagSources.add("peer_id=invalid_format")
+            }
         }
 
         val filtered = candidates
             .map { it.trim() }
+            .mapNotNull { candidate ->
+                // Normalize any self-certifying canonical-hex candidate to its
+                // dialable libp2p form so downstream dial code (which expects a
+                // libp2p peer id) can actually connect to it.
+                toDialableRoutePeerId(candidate, recipientPublicKey)
+            }
             .filter { candidate ->
                 candidate.isNotEmpty() &&
                     PeerIdValidator.isLibp2pPeerId(candidate) &&
@@ -9734,7 +10533,7 @@ open class MeshRepository(
             .asSequence()
             .mapNotNull { entry ->
                 val candidate = entry.peerId?.trim().orEmpty()
-                if (candidate.isEmpty() || !PeerIdValidator.isLibp2pPeerId(candidate)) {
+                if (candidate.isEmpty()) {
                     return@mapNotNull null
                 }
                 // Identity-resolution hardening: a poisoned entry can claim the
@@ -9743,7 +10542,10 @@ open class MeshRepository(
                 val candidateKey = normalizePublicKey(entry.publicKey) ?: return@mapNotNull null
                 if (!isSelfCertifyingKeyBinding(candidate, candidateKey)) return@mapNotNull null
                 if (candidateKey != normalizedRecipientKey) return@mapNotNull null
-                candidate
+                // Emit the dialable libp2p form: a canonical 64-hex peer id that
+                // self-certifies is converted via the repo-native deriver (the
+                // hex form itself is not a dialable libp2p peer id).
+                toDialableRoutePeerId(candidate, candidateKey) ?: return@mapNotNull null
             }
             .toList()
 
@@ -9821,8 +10623,20 @@ open class MeshRepository(
 
     fun getDialHintsForRoutePeer(routePeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(routePeerId)) return emptyList()
-        val fromLedger = (ledgerManager?.dialableAddresses() ?: emptyList())
-            .filter { it.peerId == routePeerId }
+        val dialable = ledgerManager?.dialableAddresses() ?: emptyList()
+        val allEntries = getAllLedgerEntries()
+        val combined = (dialable + allEntries).distinctBy { it.multiaddr }
+        val fromLedger = combined
+            .filter { entry ->
+                if (entry.peerId == routePeerId) return@filter true
+                if (entry.multiaddr.endsWith("/p2p/$routePeerId")) return@filter true
+                val key = entry.publicKey?.takeIf { it.isNotBlank() } ?: entry.peerId
+                if (key != null && key.length == 64) {
+                    val derived = PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(key)
+                    if (derived == routePeerId) return@filter true
+                }
+                false
+            }
             .map { it.multiaddr }
         return buildDialCandidatesForPeer(
             routePeerId = routePeerId,
@@ -10023,40 +10837,36 @@ open class MeshRepository(
         }
     }
 
+    // DOCTRINE: Platform adapters are dumb byte pipes. Circuit address construction
+    // and hop traversal are owned by Rust core's CircuitRelayLadder and swarm.
+    // This helper only collects existing circuit hints already recorded in the ledger
+    // or established through active dynamic peers.
     private fun relayCircuitAddressesForPeer(targetPeerId: String): List<String> {
         if (!PeerIdValidator.isLibp2pPeerId(targetPeerId)) return emptyList()
         val circuits = mutableListOf<String>()
 
-        // Use getHealthyRelays to pre-filter relays with closed (healthy) circuits
-        val healthyRelayAddrs = relayCircuitBreaker.getHealthyRelays().toSet()
-
-        // 1. Static Bootstrap Relays (prioritized by network type)
-        val prioritizedNodes = emptyList<String>()
-
-        prioritizedNodes.forEach { bootstrap ->
-            val relayInfo = parseBootstrapRelay(bootstrap)
-            if (relayInfo != null) {
-                val (relayTransportAddr, relayPeerId) = relayInfo
-                // Skip circuit addresses for relays with open circuit breakers
-                if (relayCircuitBreaker.isCircuitOpen(bootstrap)) return@forEach
-                // Prioritize relays confirmed healthy by circuit breaker
-                if (bootstrap !in healthyRelayAddrs && relayCircuitBreaker.getFailureCount(bootstrap) > 0) {
-                    Timber.d("Skipping unhealthy relay: $bootstrap")
-                    return@forEach
+        // 1. Direct circuit entries already recorded in the ledger targeting targetPeerId
+        val allEntries = getAllLedgerEntries()
+        for (entry in allEntries) {
+            val addr = entry.multiaddr
+            if (addr.contains("/p2p-circuit/p2p/$targetPeerId")) {
+                if (!circuits.contains(addr)) {
+                    circuits.add(addr)
                 }
-                circuits.add("$relayTransportAddr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId")
             }
         }
 
-        // 2. Dynamic Mesh Peers as Relays — UNIFICATION_V2: all nodes are relays
+        // 2. Dynamic mesh peers — UNIFICATION_V2: all nodes perform custody behavior
         _discoveredPeers.value.entries.filter {
             it.key != targetPeerId && PeerIdValidator.isLibp2pPeerId(it.key)
         }.forEach { entry ->
-            val relayPeerId = entry.key
-            val directAddrs = getDialHintsForRoutePeer(relayPeerId)
+            val nodePeerId = entry.key
+            val directAddrs = getDialHintsForRoutePeer(nodePeerId)
             directAddrs.forEach { addr ->
-                val circuit = "$addr/p2p/$relayPeerId/p2p-circuit/p2p/$targetPeerId"
-                if (!circuits.contains(circuit)) circuits.add(circuit)
+                if (!addr.contains("/p2p-circuit") && !relayCircuitBreaker.isCircuitOpen(addr)) {
+                    val circuit = "$addr/p2p/$nodePeerId/p2p-circuit/p2p/$targetPeerId"
+                    if (!circuits.contains(circuit)) circuits.add(circuit)
+                }
             }
         }
 
@@ -10213,6 +11023,105 @@ open class MeshRepository(
     }
 
     /**
+     * Bootstrap dial candidates: the proven relay tier first, then the seed
+     * tier (invite/QR/ledger-exchange-supplied addresses we have never yet
+     * dialed successfully). Sweeping the seed tier closes the cold-start
+     * chicken-and-egg where a ledger-exchanged cloud relay (e.g. the AWS
+     * bootstrap node shared via the peer list) could never become proven
+     * because it was only ever dialed after being proven — live evidence
+     * 2026-09-10: phone held AWS in its ledger knowledge but bootstrap
+     * attempted only its 1 proven candidate (Windows) and never reached the
+     * cloud node. A first successful dial promotes the seed via
+     * record_connection in core (swarm.rs identify path), after which it
+     * ranks from the proven tier. Seed candidates keep every guard the proven
+     * path has: circuit breaker, shouldAttemptDial throttle, failure cap
+     * (seed_addresses already excludes failure_count >= threshold), and the
+     * same backoff arithmetic on all-fail. The seed sweep is capped so a
+     * poisoned seed ledger cannot fan out dials unboundedly.
+     */
+    private fun getBootstrapCandidateAddresses(): List<String> {
+        val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .map { it.multiaddr }
+        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt()).map { it.multiaddr }
+        return mergeBootstrapCandidates(proven, seeds)
+    }
+
+    /**
+     * CELL-ROUTE-AWS-001: public (non-RFC1918) multiaddrs from proven ledger
+     * relays — usable on cellular when the destination route is LAN-only.
+     */
+    private fun getPublicInternetRelayMultiaddrs(): List<String> {
+        return getPublicInternetRelayRoutes().map { it.second }
+    }
+
+    /**
+     * CELL-ROUTE-AWS-001b: (dialablePeerId, public multiaddr) pairs for proven
+     * public relays. peerId is taken from the multiaddr /p2p/ segment when
+     * present so connectToPeer(route, addrs) pairs correctly.
+     *
+     * C8: on cellular, also surface a capped last-resort tier of public
+     * dead-ledger rows (fail>=3 && success==0) that proven and seed both
+     * exclude. Without this, a node that only ever failed while offline
+     * stays invisible forever after restart. Ghosts stay filtered.
+     */
+    private fun getPublicInternetRelayRoutes(): List<Pair<String, String>> {
+        val proven = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
+            .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
+        val seeds = getSeedAddresses(MAX_BOOTSTRAP_SEEDS.toUInt())
+            .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
+        val lastResort = if (networkDetector.isCellularNetwork) {
+            getRecentlyDeadAddresses()
+                .filter { it.successCount == 0u && it.failureCount >= 3u }
+                .filterNot { isGhostLedgerEntry(it) }
+                .take(MAX_LAST_RESORT_CELL)
+                .map { Triple(it.multiaddr, it.peerId, it.publicKey) }
+        } else {
+            emptyList()
+        }
+        return (proven + seeds + lastResort)
+            .mapNotNull { (addr, storedPeerId, storedPk) ->
+                if (!isPublicInternetMultiaddr(addr)) return@mapNotNull null
+                val fromMultiaddr = Regex("/p2p/([^/]+)").find(addr)?.groupValues?.get(1)
+                val dialable = fromMultiaddr
+                    ?: storedPeerId?.let { toDialableRoutePeerId(it, storedPk ?: it) }
+                    ?: storedPk?.let { pk ->
+                        if (PeerKeyUtils.isValidPublicKey(pk)) {
+                            PeerKeyUtils.generateLibp2pPeerIdFromPublicKey(pk)
+                        } else null
+                    }
+                    ?: return@mapNotNull null
+                if (!PeerIdValidator.isLibp2pPeerId(dialable)) return@mapNotNull null
+                dialable to addr
+            }
+            .distinctBy { it.first to it.second }
+    }
+
+    private fun isPublicInternetMultiaddr(addr: String): Boolean =
+        Companion.isPublicInternetMultiaddr(addr)
+
+    /**
+     * R1: true when the multiaddr's host already appears in a live peer's
+     * listeners or in our current address snapshots. Used to clear stuck
+     * circuit-breakers so bootstrap does not skip a reachable host.
+     */
+    private fun isAddrHostConnected(addr: String): Boolean {
+        val host = Regex("/ip4/([0-9.]+)/").find(addr)?.groupValues?.get(1)
+            ?: Regex("/ip6/([^/]+)/").find(addr)?.groupValues?.get(1)
+            ?: return false
+        // PeerDiscoveryInfo does not carry listeners. Use mDNS LAN multiaddrs
+        // as the live-peer address snapshot (same role the broken field was
+        // meant to play).
+        if (mdnsLanPeers.values.any { addrs -> addrs.any { it.contains(host) } }) {
+            return true
+        }
+        // Also treat ourselves as connected when peersDiscovered > 0 and host
+        // is the LAN/external host we are already using.
+        val peerCount = meshService?.getStats()?.peersDiscovered?.toInt() ?: 0
+        return peerCount > 0 &&
+            (host.startsWith("192.168.") || host.startsWith("10.") || host == "18.234.62.247")
+    }
+
+    /**
      * P0_NETWORK_001: Bootstrap relay connections with circuit breaker and
      * WebSocket fallback for cellular networks.
      *
@@ -10237,15 +11146,14 @@ open class MeshRepository(
         Timber.i("Bootstrap: network=%s, cellular=%b, priority=%s",
             networkDetector.networkType.value, isCellular, transportPriority)
 
-        // Build the candidate list from proven ledger relays. Do not hardcode
-        // an endpoint: a fresh install legitimately has no candidates until
+        // Build the candidate list from proven ledger relays plus the seed
+        // tier (see getBootstrapCandidateAddresses). Do not hardcode an
+        // endpoint: a fresh install legitimately has no candidates until
         // invite/QR, LAN discovery, or a successful ledger exchange supplies
         // one. The previous empty list made every periodic bootstrap pass a
         // misleading zero-attempt "all-failed" result, including cellular.
         val addresses = prioritizeAddressesForCurrentNetwork(
-            (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
-                .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
-                .distinct()
+            getBootstrapCandidateAddresses()
         )
 
         if (addresses.isEmpty()) {
@@ -10260,14 +11168,37 @@ open class MeshRepository(
         Timber.i("Bootstrap: attempting ${addresses.size} proven ledger relay candidate(s)")
 
         var anySuccess = false
+        var anyBreakerBlocked = false
+        var anyDialAttempted = false
         for (addr in addresses) {
             try {
+                // R1: a live peer is proof of reachability — do not bootstrap-skip
+                // an address whose host we are already talking to.
+                if (isAddrHostConnected(addr)) {
+                    Timber.d("Bootstrap: %s host already connected; clearing breaker", addr)
+                    relayCircuitBreaker.reset(addr)
+                }
                 // Check circuit breaker before attempting
                 if (!relayCircuitBreaker.allowRequest(addr)) {
                     Timber.d("Circuit breaker blocked %s, skipping", addr)
+                    // RCA-D3 (2026-09-06): a breaker skip is not a dial failure.
+                    // Counting it as one grew the backoff ladder while zero real
+                    // dials were attempted, pinning the node offline until the
+                    // breaker's own half-open timer happened to align with the
+                    // backoff. Track skips separately instead.
+                    anyBreakerBlocked = true
                     continue
                 }
-                if (!shouldAttemptDial(addr)) continue
+                // R2-3: the dial throttle (shouldAttemptDial) is also a
+                // no-evidence skip, not a reachability result — a round where
+                // every candidate was throttled must not book backoff either.
+                // C7: bootstrap purpose so delivery dials of the same multiaddr
+                // are not skipped 15s after this bootstrap dial.
+                if (!shouldAttemptDial(addr, purpose = "bootstrap")) {
+                    anyBreakerBlocked = true
+                    continue
+                }
+                anyDialAttempted = true
                 bridge.dial(addr)
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
@@ -10279,12 +11210,30 @@ open class MeshRepository(
                 Timber.w("Bootstrap dial failed for $addr - $errorDetail")
                 relayCircuitBreaker.recordFailure(addr, errorDetail)
                 networkFailureMetrics.recordFailure(addr, errorDetail, e)
-                recordConnectionFailure(addr)
+                recordConnectionFailure(addr, errorDetail)
             }
         }
 
-        // P1_ANDROID_013: Update consecutive failure tracking and backoff
-        if (!anySuccess) {
+        // P1_ANDROID_013: Update consecutive failure tracking and backoff.
+        // RCA-D3: when every candidate was skipped by the breaker, no new
+        // evidence about reachability exists — do not grow the failure ladder.
+        // Re-probe on the breaker's own half-open cadence (30 s, matching
+        // CircuitBreakerConfig.halfOpenTimeoutMs) so the breaker gets probe
+        // attempts without a 5 s hot loop (R1-5).
+        // R1-1: the no-evidence path applies only when ZERO real dials were
+        // attempted; a round with real failures still books backoff.
+        if (!anySuccess && anyBreakerBlocked && !anyDialAttempted) {
+            // R2-5: reuse the breaker's own half-open cadence instead of a
+            // hard-coded value so the probe rate tracks the breaker config.
+            // R4-L3: read the cadence from the active breaker instance, not a
+            // companion constant, so the two cannot silently diverge.
+            val reprobeMs = relayCircuitBreaker.halfOpenTimeoutMs
+            nextBootstrapAttemptMs = nowMs + reprobeMs
+            Timber.i(
+                "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
+                reprobeMs
+            )
+        } else if (!anySuccess) {
             consecutiveBootstrapFailures++
             val backoffMs = when {
                 consecutiveBootstrapFailures <= 1 -> 10_000L
@@ -10315,7 +11264,7 @@ open class MeshRepository(
         }
 
         addresses.forEach { addr ->
-            if (!shouldAttemptDial(addr)) return@forEach
+            if (!shouldAttemptDial(addr, purpose = "bootstrap")) return@forEach
             repoScope.launch {
                 try {
                     bridge.dial(addr)
@@ -10382,13 +11331,13 @@ open class MeshRepository(
             relayCircuitBreaker.resetAll()
         }
 
-        // Build prioritized address list from the ledger (v0.4.0: no dedicated
-        // relays, no hardcoded node addresses -- discovery is ledger sharing).
+        // Build prioritized address list from the ledger proven tier plus the
+        // seed tier (v0.4.0: no dedicated relays, no hardcoded node addresses
+        // -- discovery is ledger sharing; see getBootstrapCandidateAddresses).
         // A fresh install has an empty ledger and legitimately has no
         // candidates here; that falls straight through to the mDNS fallback
         // below, which is the intended cold-start path, not a bug.
-        val prioritizedAddresses = (ledgerManager?.getPreferredRelays(5u) ?: emptyList())
-            .map { it.multiaddr }
+        val prioritizedAddresses = getBootstrapCandidateAddresses()
         if (prioritizedAddresses.isEmpty()) {
             Timber.i("Racing bootstrap: no known relays in ledger yet, going straight to mDNS fallback")
         }
@@ -10399,9 +11348,19 @@ open class MeshRepository(
 
         // Filter out circuit-breaker-blocked and throttle-blocked addresses,
         // and deprioritize addresses whose host:port is confirmed blocked
-        val candidateAddresses = prioritizedAddresses.filter { addr ->
-            relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr)
-        }.sortedByDescending { addr ->
+        var candidateAddresses = prioritizedAddresses.filter { addr ->
+            relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr, purpose = "bootstrap")
+        }
+        if (candidateAddresses.isEmpty() && prioritizedAddresses.isNotEmpty()) {
+            if (relayCircuitBreaker.getOpenCircuits().isNotEmpty()) {
+                Timber.i("All bootstrap candidates circuit-breaker-blocked; resetting circuit breakers to allow retry")
+                relayCircuitBreaker.resetAll()
+                candidateAddresses = prioritizedAddresses.filter { addr ->
+                    relayCircuitBreaker.allowRequest(addr) && shouldAttemptDial(addr, purpose = "bootstrap")
+                }
+            }
+        }
+        val sortedCandidateAddresses = candidateAddresses.sortedByDescending { addr ->
             // Boost priority for addresses whose ports are confirmed reachable
             // Deprioritize addresses with ports likely blocked by current network (isPortLikelyBlocked)
             val port = extractPortFromMultiaddr(addr)
@@ -10414,7 +11373,7 @@ open class MeshRepository(
             portReachable && portNotBlocked
         }
 
-        if (candidateAddresses.isEmpty()) {
+        if (sortedCandidateAddresses.isEmpty()) {
             Timber.w("No candidate addresses available (all circuit-breaker-blocked or throttled)")
             return attemptMdnsFallback()
         }
@@ -10423,7 +11382,7 @@ open class MeshRepository(
         // (Individual dials may take longer; first success wins, others are cancelled)
         val result = kotlinx.coroutines.withTimeoutOrNull(3_000L) {
             kotlinx.coroutines.coroutineScope {
-                val deferreds = candidateAddresses.map { addr ->
+                val deferreds = sortedCandidateAddresses.map { addr ->
                     async(Dispatchers.IO) {
                         try {
                             val bridge = swarmBridge ?: return@async BootstrapAttempt.Failure(addr, "no bridge")
@@ -10437,7 +11396,7 @@ open class MeshRepository(
                             val detail = classifyBootstrapError(e, addr)
                             relayCircuitBreaker.recordFailure(addr, detail)
                             networkFailureMetrics.recordFailure(addr, detail, e)
-                            recordConnectionFailure(addr)
+                            recordConnectionFailure(addr, detail)
                             Timber.d("Bootstrap race attempt failed for $addr: $detail")
                             BootstrapAttempt.Failure(addr, e.message ?: "unknown")
                         }
@@ -10572,11 +11531,18 @@ open class MeshRepository(
                     Timber.i("Network type changed: %s → %s (flap=%d, cooldown=%dms)",
                         previousType, newType, networkFlapCount, cooldownMs)
 
-                    // Only reset circuits when transitioning TO a healthy network.
+                    // D3d fix: reset circuit breakers on EVERY network-type change,
+                    // not only recovery-to-WiFi. Breaker state describes the OLD
+                    // network epoch; failures observed on WiFi (e.g. "Device offline"
+                    // during a radio flap) must not block candidates in the new epoch.
+                    // Live 2026-09-09: on cellular the racing bootstrap refused every
+                    // candidate with "No candidate addresses available (all
+                    // circuit-breaker-blocked or throttled)" and never dialed the
+                    // cloud node. The breaker still guards within-epoch retry storms.
+                    relayCircuitBreaker.resetAll()
                     val isRecovery = newType == com.scmessenger.android.transport.NetworkType.WIFI ||
                         newType == com.scmessenger.android.transport.NetworkType.ETHERNET
                     if (isRecovery) {
-                        relayCircuitBreaker.resetAll()
                         if (swarmBridge == null) {
                             Timber.i("Network recovered to WiFi/Ethernet and swarm is inactive — attempting recovery restart")
                             repoScope.launch {
@@ -10650,9 +11616,17 @@ open class MeshRepository(
         return portRegex?.groupValues?.get(1)?.toIntOrNull()
     }
 
-    private fun shouldAttemptDial(multiaddr: String): Boolean {
-        val key = multiaddr.trim()
-        if (key.isEmpty()) return false
+    /**
+     * C7: throttle state is keyed by (purpose, multiaddr). Delivery dials
+     * (connectToPeer) and bootstrap dials used to share one key, so a
+     * bootstrap dial of an address made delivery skip the same address for
+     * the full backoff window (up to 15s) — starving cellular delivery of a
+     * just-probed public relay.
+     */
+    private fun shouldAttemptDial(multiaddr: String, purpose: String = "delivery"): Boolean {
+        val trimmed = multiaddr.trim()
+        if (trimmed.isEmpty()) return false
+        val key = dialThrottleKey(purpose, trimmed)
 
         val now = System.currentTimeMillis()
         val (attempts, nextAllowedMs) = dialThrottleState[key] ?: (0 to 0L)
@@ -10759,6 +11733,66 @@ open class MeshRepository(
      */
     fun getExternalAddresses(): List<String> {
         return externalAddressesSnapshot
+    }
+
+    /**
+     * Own LAN-facing IP literals from listener/external snapshots (no ports).
+     * GHOST-IDENTITY-001: used to drop ledger rows that dial THIS device
+     * under a retired peer_id (self-dial poison after identity rotation).
+     * Includes IPv6 (2600:381:… self-dial rows observed 2026-09-11).
+     */
+    fun getOwnLanAddrLiterals(): Set<String> {
+        val out = linkedSetOf<String>()
+        val v4 = Regex("""/ip4/(\d{1,3}(?:\.\d{1,3}){3})/""")
+        val v6 = Regex("""/ip6/([^/]+)/""")
+        for (ma in listeningAddressesSnapshot + externalAddressesSnapshot) {
+            v4.find(ma)?.groupValues?.get(1)?.let { out.add(it) }
+            v6.find(ma)?.groupValues?.get(1)?.let { host ->
+                if (host != "::1" && host != "0:0:0:0:0:0:0:1") out.add(host)
+            }
+        }
+        return out
+    }
+
+    /**
+     * SELF-AS-PEER-001 (2026-09-11): all encodings of THIS node's identity.
+     * Any ledger row whose peer_id/public_key matches these is self-dial
+     * poison (own pk appeared as an external node).
+     */
+    fun ownIdentityKeySet(): Set<String> {
+        val out = linkedSetOf<String>()
+        try {
+            val info = getIdentityInfoSync() ?: identityInfo.value
+            info?.publicKeyHex?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            info?.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            info?.identityId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        } catch (_: Exception) { }
+        try {
+            identityCachePrefs.getString(IDENTITY_CACHE_PUBLIC_KEY, null)
+                ?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        } catch (_: Exception) { }
+        return out
+    }
+
+    /** GHOST-IDENTITY-001 + SELF-AS-PEER-001: true when this ledger row must not resurrect as a node. */
+    fun isGhostLedgerEntry(entry: uniffi.api.LedgerEntry): Boolean {
+        val own = ownIdentityKeySet()
+        val pid = entry.peerId?.trim()?.lowercase().orEmpty()
+        val pk = entry.publicKey?.trim()?.lowercase().orEmpty()
+        if (pid.isNotEmpty() && pid in own) {
+            return true
+        }
+        if (pk.isNotEmpty() && pk in own) {
+            return true
+        }
+        return GhostIdentityGate.isGhost(
+            peerId = entry.peerId,
+            publicKey = entry.publicKey,
+            multiaddr = entry.multiaddr,
+            successCount = entry.successCount,
+            failureCount = entry.failureCount,
+            ownLanAddrs = getOwnLanAddrLiterals(),
+        )
     }
 
     /**

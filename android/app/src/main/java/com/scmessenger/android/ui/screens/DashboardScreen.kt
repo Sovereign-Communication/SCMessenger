@@ -21,7 +21,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -160,18 +159,24 @@ fun DashboardScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                // FIX(Compose-crash): stable key per peerId prevents SlotTable MutableVector corruption
-                // on rapid discoveredPeers updates. Dashboard list is small (<50), Column eliminates
-                // LazyColumn prefetch race; key() ensures SwipeToDismissBox/state not reused across peerIds.
+                // CHURN-001 (RCA-COMPOSE-TEARDOWN-2026-09-16): this list is a plain
+                // Column, not a LazyColumn, and none of its items hold per-item
+                // remembered state (PeerItem is Row/text/Identicon; Identicon is
+                // address-keyed). key() therefore bought nothing here, but it did
+                // cost a full dispose+insert of every position whose peer changed
+                // place each time sortPeersForUnifiedView re-orders the list
+                // (online <-> offline flip). Those remove+insert operations are the
+                // exact change-list shape that misfired in
+                // crash_1789526624102.log (PostInsertNodeFixup -> insertBottomUp at
+                // a stale child index). Positional composition emits content updates
+                // only, so no structural operations are queued for a re-order.
                 sortedPeers.forEach { peer ->
-                    key(peer.peerId) {
-                        Column {
-                            PeerItem(peer, onClick = { onPeerClick(peer) })
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 4.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        }
+                    Column {
+                        PeerItem(peer, onClick = { onPeerClick(peer) })
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        )
                     }
                 }
             }

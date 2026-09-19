@@ -1,6 +1,6 @@
 use crate::transport::addr_filter::{
     is_dialable_multiaddr, is_disclosable_multiaddr, is_disclosable_on_rfc1918_network,
-    is_recordable_multiaddr, DnsPolicy, NetworkMode,
+    is_recordable_multiaddr, is_self_address, DnsPolicy, NetworkMode,
 };
 use libp2p::Multiaddr;
 use parking_lot::Mutex;
@@ -19,6 +19,139 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
+/// Clamp a wire-supplied `last_seen` (seconds, as carried by
+/// `SharedPeerEntry`) into local millis. `last_seen` is a RANKING key:
+/// `seed_addresses` sorts descending, `evict_one_locked` picks the minimum.
+/// A ceiling of `now + allowance` would still let a hostile `u64::MAX` land
+/// strictly above every honest value forever (honest senders report a past
+/// observation), so the ceiling is plain local `now`: an attacker gains
+/// nothing, and an honest peer with a fast clock ties with local time
+/// instead of beating everyone.
+fn clamp_wire_last_seen_ms(wire_seconds: u64) -> u64 {
+    wire_seconds.saturating_mul(1000).min(current_timestamp())
+}
+
+/// Whether a multiaddr carries a TCP/UDP port below the IANA dynamic range
+/// (49152). Ephemeral source ports (>= 49152) are dead the instant the
+/// connection closes and are the bulk of the legacy CLI store's pollution.
+fn has_plausible_listen_port(multiaddr: &str) -> bool {
+    let Ok(addr) = multiaddr.parse::<libp2p::Multiaddr>() else {
+        return false;
+    };
+    addr.iter().any(|p| {
+        matches!(
+            p,
+            libp2p::multiaddr::Protocol::Tcp(port) | libp2p::multiaddr::Protocol::Udp(port)
+                if port < 49152
+        )
+    })
+}
+
+/// Extract the first `/ip4/x.x.x.x/` component of a multiaddr, if any.
+fn extract_ipv4(multiaddr: &str) -> Option<std::net::Ipv4Addr> {
+    let Ok(addr) = multiaddr.parse::<libp2p::Multiaddr>() else {
+        return None;
+    };
+    addr.iter().find_map(|p| match p {
+        libp2p::multiaddr::Protocol::Ip4(ip) => Some(ip),
+        _ => None,
+    })
+}
+
+/// Which RFC1918 private-address class an IPv4 address falls in, if any.
+fn rfc1918_class(ip: &std::net::Ipv4Addr) -> Option<u8> {
+    let o = ip.octets();
+    if o[0] == 10 {
+        Some(0) // 10.0.0.0/8
+    } else if o[0] == 172 && (16..=31).contains(&o[1]) {
+        Some(1) // 172.16.0.0/12
+    } else if o[0] == 192 && o[1] == 168 {
+        Some(2) // 192.168.0.0/16
+    } else {
+        None
+    }
+}
+
+fn is_cgnat(ip: &std::net::Ipv4Addr) -> bool {
+    let value = u32::from_be_bytes(ip.octets());
+    (u32::from_be_bytes([100, 64, 0, 0])..=u32::from_be_bytes([100, 127, 255, 255]))
+        .contains(&value)
+}
+
+fn is_ula(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// V040-T2 port from the CLI ledger: node-aware dialability. Rejects
+/// self-dials outright, and rejects a private-range (RFC1918) address unless
+/// this node itself holds an address in the SAME private-range class (a node
+/// on 192.168.0.121 must not promiscuously dial an advertised 10.0.2.16 it
+/// has no route to). Circuit addresses are exempt: their leading IP is the
+/// RELAY hop's address, not the target's. This is the Local-mode semantics
+/// the CLI applied at every call site; it now lives in the store so callers
+/// cannot forget it.
+pub fn is_dialable_for_this_node(multiaddr: &str, my_addrs: &[String]) -> bool {
+    if is_self_address(multiaddr, my_addrs) {
+        return false;
+    }
+    if multiaddr.contains("/p2p-circuit") {
+        return true;
+    }
+    if let Some(candidate_ip) = extract_ipv4(multiaddr) {
+        let has_transport_port = multiaddr.contains("/tcp/") || multiaddr.contains("/udp/");
+        if !has_transport_port
+            && my_addrs
+                .iter()
+                .filter_map(|a| extract_ipv4(a))
+                .any(|ip| ip == candidate_ip)
+        {
+            return false;
+        }
+    }
+    if let Some(candidate_ip) = extract_ipv4(multiaddr) {
+        if let Some(candidate_class) = rfc1918_class(&candidate_ip) {
+            let my_ipv4s: Vec<std::net::Ipv4Addr> =
+                my_addrs.iter().filter_map(|a| extract_ipv4(a)).collect();
+            let on_same_range = my_ipv4s
+                .iter()
+                .any(|m| rfc1918_class(m) == Some(candidate_class));
+            if !on_same_range {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// V040-T2 port from the CLI ledger: prefer directly useful local candidates
+/// without discarding global fallbacks. STABLE sort, so the caller's
+/// freshness ordering is preserved within each locality class.
+pub fn prioritize_dial_candidates(entries: &mut [LedgerEntry]) {
+    entries.sort_by_key(|entry| {
+        let priority = entry
+            .multiaddr
+            .parse::<libp2p::Multiaddr>()
+            .ok()
+            .and_then(|addr| {
+                addr.iter().find_map(|protocol| match protocol {
+                    libp2p::multiaddr::Protocol::Ip4(ip) => {
+                        Some(if ip.is_private() || is_cgnat(&ip) {
+                            0u8
+                        } else {
+                            1u8
+                        })
+                    }
+                    libp2p::multiaddr::Protocol::Ip6(ip) => {
+                        Some(if is_ula(&ip) { 0u8 } else { 2u8 })
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or(3);
+        (priority, entry.multiaddr.clone())
+    });
+}
+
 // ============================================================================
 // CONNECTION LEDGER
 // ============================================================================
@@ -33,6 +166,27 @@ pub struct LedgerEntry {
     pub failure_count: u32,
     pub last_seen: Option<u64>,
     pub topics: Vec<String>,
+    /// Personally verified by a local successful OUTBOUND connection (the
+    /// `endpoint.is_dialer()`-guarded path) or an operator-seeded bootstrap,
+    /// versus hearsay (advertised by a peer via Identify, or imported from an
+    /// invite / legacy store). V040-T2 disclosure rule: ONLY locally verified
+    /// entries may be exported to other peers. `#[serde(default)]` so
+    /// pre-existing ledger.json entries classify as hearsay until re-verified
+    /// by a fresh successful connection.
+    #[serde(default)]
+    pub locally_verified: bool,
+    /// Operator-seeded bootstrap entry (never evicted, treated as verified).
+    #[serde(default)]
+    pub is_bootstrap: bool,
+    /// Unix millis of first observation (same clock as `last_seen`).
+    pub first_seen: Option<u64>,
+    /// Peer ids ever observed at this address, bounded -- the misattribution
+    /// signal: several ids at one address means the ADDRESS, not the identity,
+    /// is the stable key.
+    #[serde(default)]
+    pub observed_peer_ids: Vec<String>,
+    /// Human-readable label (e.g. "GCP Primary", "Community Relay").
+    pub label: Option<String>,
 }
 
 /// Maximum number of [`SeedLedgerEntry`] records an invite may carry, and the
@@ -56,6 +210,12 @@ const MAX_LEN_NICKNAME: usize = 128;
 const MAX_TOPICS_PER_ENTRY: usize = 64;
 /// Topic lengths are measured in UTF-8 bytes, matching the other string caps.
 const MAX_LEN_TOPIC: usize = 256;
+
+/// Cap on `observed_peer_ids` per entry, mirroring `MAX_TOPICS_PER_ENTRY`:
+/// an address that has accumulated many identities is a NAT/CGNAT or
+/// misattribution signal, and unbounded retention would let a hostile peer
+/// grow the store.
+const MAX_OBSERVED_PEER_IDS_PER_ENTRY: usize = 16;
 
 /// Largest persisted ledger accepted before allocating its JSON contents.
 ///
@@ -361,6 +521,23 @@ fn truncate_tail_for_log(value: &str) -> &str {
     value.get(value.len().saturating_sub(8)..).unwrap_or(value)
 }
 
+/// Record that `peer_id` was observed at this entry's address, bounded by
+/// [`MAX_OBSERVED_PEER_IDS_PER_ENTRY`]. Several ids at one address is the
+/// misattribution signal (a NAT/CGNAT or a stale identity minted on rebuild);
+/// the cap keeps a hostile peer from growing the store through this path.
+fn record_observed_peer_id_locked(entry: &mut LedgerEntry, peer_id: &str) {
+    if peer_id.is_empty() {
+        return;
+    }
+    if !entry.observed_peer_ids.iter().any(|p| p == peer_id) {
+        if entry.observed_peer_ids.len() >= MAX_OBSERVED_PEER_IDS_PER_ENTRY {
+            // Drop the oldest observation, keep the newest.
+            entry.observed_peer_ids.remove(0);
+        }
+        entry.observed_peer_ids.push(peer_id.to_string());
+    }
+}
+
 fn annotate_identity_locked(
     entries: &mut Vec<LedgerEntry>,
     multiaddr: String,
@@ -477,18 +654,50 @@ fn annotate_identity_locked(
         if normalized_public_key.is_some() {
             entry.public_key = normalized_public_key;
         }
-        if normalized_nickname.is_some() {
+        // NICKNAME-OWNERSHIP-001: never write a nickname onto an entry that
+        // already claims a different peer_id. Device RCA 2026-09-11: emulator
+        // nick "androidulaator" landed on Windows ledger rows via multiaddr
+        // fan-out + last-writer-wins.
+        if normalized_nickname.is_some()
+            && entry
+                .peer_id
+                .as_deref()
+                .map(|p| p == peer_id)
+                .unwrap_or(true)
+        {
             entry.nickname = normalized_nickname;
         }
         entry.last_seen = Some(current_timestamp());
         false
     } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
-        entry.peer_id = Some(peer_id);
-        if normalized_public_key.is_some() {
-            entry.public_key = normalized_public_key;
-        }
-        if normalized_nickname.is_some() {
-            entry.nickname = normalized_nickname;
+        let existing_peer = entry.peer_id.clone();
+        let owns_entry = existing_peer
+            .as_deref()
+            .map(|p| p.is_empty() || p == peer_id)
+            .unwrap_or(true);
+        if owns_entry {
+            // Only claim peer_id when the row is unowned or already ours.
+            entry.peer_id = Some(peer_id);
+            if normalized_public_key.is_some() {
+                entry.public_key = normalized_public_key;
+            }
+            if normalized_nickname.is_some() {
+                entry.nickname = normalized_nickname;
+            }
+        } else if normalized_public_key.is_none() && normalized_nickname.is_none() {
+            // Observe-only: different peer at this multiaddr. Record sighting;
+            // do NOT steal peer_id or paint nickname.
+            record_observed_peer_id_locked(entry, &peer_id);
+            entry.last_seen = Some(current_timestamp());
+        } else {
+            // Refuse identity claim on a multiaddr owned by another peer.
+            tracing::debug!(
+                target: "ledger",
+                multiaddr = %entry.multiaddr,
+                existing_peer = ?existing_peer,
+                incoming_peer = %peer_id,
+                "annotate_identity refused: multiaddr owned by different peer"
+            );
         }
         entry.last_seen = Some(current_timestamp());
         false
@@ -505,6 +714,11 @@ fn annotate_identity_locked(
             failure_count: 0,
             last_seen: Some(current_timestamp()),
             topics: Vec::new(),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: Some(current_timestamp()),
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
         true
     }
@@ -1026,6 +1240,12 @@ impl LedgerManager {
             if let Some(idx) = found_dns_idx {
                 let entry = &mut entries[idx];
                 entry.success_count += 1;
+                // A live connection proves the address is not dead: reset the
+                // failure counter so a healthy node that once had transient
+                // failures is no longer stuck in the dead tier (dialable and
+                // ledger-exchange both gate on failure_count < 3). Mirrors the
+                // CLI DialPolicy::record_success reset.
+                entry.failure_count = 0;
                 // UNIFICATION: ensure existing DNS entry public_key is canonical if we derived one
                 if entry.public_key.is_none() {
                     if let Some(pk) = &canonical_public_key {
@@ -1033,9 +1253,25 @@ impl LedgerManager {
                     }
                 }
                 entry.last_seen = Some(current_timestamp());
+                // V040-T2: a connection WE dialed and completed is personally
+                // verified -- this is the only writer allowed to set it.
+                entry.locally_verified = true;
+                record_observed_peer_id_locked(entry, &peer_id);
             } else if let Some(entry) = entries.iter_mut().find(|e| e.multiaddr == multiaddr) {
+                // A REBIND: the address was serving a different identity until
+                // this connection. Keep the departing identity observable so
+                // the stale-identity dial guard can still collapse dials to
+                // this host:port (the fleet mints a fresh identity on every
+                // rebuild -- observed_peer_ids exists for exactly this).
+                if let Some(prior) = entry.peer_id.clone() {
+                    if prior != peer_id {
+                        record_observed_peer_id_locked(entry, &prior);
+                    }
+                }
                 entry.success_count += 1;
                 entry.peer_id = Some(peer_id.clone());
+                // Same live-connection reset as the DNS branch above.
+                entry.failure_count = 0;
                 // UNIFICATION: populate public_key with canonical if missing (mirrors load migration)
                 if entry.public_key.is_none() {
                     if let Some(pk) = &canonical_public_key {
@@ -1043,6 +1279,9 @@ impl LedgerManager {
                     }
                 }
                 entry.last_seen = Some(current_timestamp());
+                // V040-T2: personally verified by a completed outbound dial.
+                entry.locally_verified = true;
+                record_observed_peer_id_locked(entry, &peer_id);
             } else {
                 while entries.len() >= MAX_LEDGER_ENTRIES {
                     evict_one_locked(&mut entries);
@@ -1056,6 +1295,13 @@ impl LedgerManager {
                     failure_count: 0,
                     last_seen: Some(current_timestamp()),
                     topics: Vec::new(),
+                    // A connection WE dialed and completed is by definition
+                    // personally verified: it is the only path that sets this.
+                    locally_verified: true,
+                    is_bootstrap: false,
+                    first_seen: Some(current_timestamp()),
+                    observed_peer_ids: Vec::new(),
+                    label: None,
                 });
             }
             (*entries).clone()
@@ -1120,16 +1366,32 @@ impl LedgerManager {
     // eviction only on capacity pressure via evict_one_locked. This matches
     // get_preferred_relays ranking and replaces the previous insertion-order.
     pub fn dialable_addresses(&self) -> Vec<LedgerEntry> {
+        // D3c fix (live 2026-09-09): the previous hard exclusion
+        // (`failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD`) permanently removed
+        // proven endpoints that accumulated 3 local-epoch failures (e.g. dials
+        // attempted while the phone was mid-radio-flap) - the cloud relay fell
+        // out of the candidate set entirely and cellular bootstrap deadlocked
+        // with zero candidates. Failure counts here now DEMOTE, not exclude: a
+        // proven endpoint that goes quiet sinks to the tail and can always be
+        // dialed again; one successful connection resets the counter
+        // (`record_connection` sets failure_count = 0). Per-epoch retry-rate
+        // protection stays with the circuit breaker and the dial throttle.
         let entries = self.entries.lock();
         let mut out: Vec<LedgerEntry> = entries
             .iter()
-            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
+            // Proven either by a real connection (success_count) or by
+            // operator fiat (is_bootstrap, set only via add_bootstrap) --
+            // a fresh node must dial its configured seeds before it has any
+            // connection history. Failure counts demote (sort below), they do
+            // not exclude -- D3c live fix, see comment above.
+            .filter(|e| e.success_count > 0 || e.is_bootstrap)
             .cloned()
             .collect();
         out.sort_by(|a, b| {
-            b.last_seen
-                .unwrap_or(0)
-                .cmp(&a.last_seen.unwrap_or(0))
+            // Dead-counter demotion first: healthy-but-stale outranks flapping.
+            a.failure_count
+                .cmp(&b.failure_count)
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
                 .then_with(|| {
                     let a_total = a.success_count as u64 + a.failure_count as u64;
                     let b_total = b.success_count as u64 + b.failure_count as u64;
@@ -1265,15 +1527,24 @@ impl LedgerManager {
     // dialable_addresses — proven relays float by recency; deep deprioritize
     // (not prune) keeps ephemeral peers tail-ranked until failure threshold.
     pub fn get_preferred_relays(&self, limit: u32) -> Vec<LedgerEntry> {
+        // D3c fix: match `dialable_addresses` - failure counts demote, never
+        // exclude (see the rationale there). Without this, a proven cloud relay
+        // poisoned by 3 local-epoch failures vanished from every candidate list
+        // and cellular bootstrap had nothing to dial.
         let entries = self.entries.lock();
         let mut preferred: Vec<LedgerEntry> = entries
             .iter()
-            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
+            .filter(|e| e.success_count > 0)
             .cloned() // Clone now so we can sort
             .collect();
-        // Sort by last_seen descending (freshness) — primary stability signal:
-        // a 24/7 AWS relay has a recent last_seen; a phone slept since yesterday.
-        preferred.sort_by_key(|b| std::cmp::Reverse(b.last_seen.unwrap_or(0)));
+        // Sort by failure_count ascending (demote flapping), then last_seen
+        // descending (freshness — primary stability signal: a 24/7 AWS relay
+        // has a recent last_seen; a phone slept since yesterday).
+        preferred.sort_by(|a, b| {
+            a.failure_count
+                .cmp(&b.failure_count)
+                .then_with(|| b.last_seen.unwrap_or(0).cmp(&a.last_seen.unwrap_or(0)))
+        });
         preferred.truncate(limit as usize);
         preferred
     }
@@ -1381,8 +1652,12 @@ impl LedgerManager {
         limit: u32,
         audience: SeedExportAudience,
     ) -> Vec<SeedLedgerEntry> {
+        // V040-T2 disclosure rule: only personally verified entries may be
+        // handed to another peer. Hearsay (advertised/imported) is usable
+        // locally but must never be re-published as though we proved it.
         self.get_preferred_relays(limit)
             .into_iter()
+            .filter(|entry| entry.locally_verified)
             .map(|entry| strip_peer_id_component(&entry.multiaddr))
             .filter(|addr| match audience {
                 SeedExportAudience::Untrusted => is_disclosable_multiaddr(addr),
@@ -1465,6 +1740,12 @@ impl LedgerManager {
                         failure_count: 0,
                         last_seen: Some(current_timestamp()),
                         topics: Vec::new(),
+                        // Invite/QR seed: hearsay, never locally verified.
+                        locally_verified: false,
+                        is_bootstrap: false,
+                        first_seen: Some(current_timestamp()),
+                        observed_peer_ids: Vec::new(),
+                        label: None,
                     });
                     added += 1;
                 }
@@ -1541,9 +1822,33 @@ impl LedgerManager {
         my_addrs: &[String],
     ) -> Vec<SharedPeerEntry> {
         let entries = self.entries.lock();
+        // Peer-liveness aware disclosure: an address whose own failure counter is
+        // in the dead tier (>= THRESHOLD) may still be shared when the PEER is
+        // reachable via another entry in this ledger (e.g. a live relay/circuit
+        // hop while the primary address accumulated stale failures). Per-address
+        // failure_count is left untouched so a genuinely dead address is never
+        // re-dialed as a retry path — eligibility for exchange is decided at the
+        // peer level, dialing stays per-address.
+        let mut live_peers = std::collections::HashSet::new();
+        for e in entries.iter() {
+            if let Some(pid) = e.peer_id.as_deref() {
+                if e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD {
+                    live_peers.insert(pid.to_string());
+                }
+            }
+        }
         entries
             .iter()
-            .filter(|e| e.success_count > 0 && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD)
+            .filter(|e| {
+                e.success_count > 0
+                    && (e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD
+                        || e.peer_id
+                            .as_deref()
+                            .is_some_and(|pid| live_peers.contains(pid)))
+            })
+            // V040-T2 disclosure rule: hearsay is never re-published. Only
+            // entries this node personally verified may reach the wire.
+            .filter(|e| e.locally_verified)
             .filter(|e| e.peer_id.as_deref() != Some(requester_peer_id))
             .filter(|e| {
                 let addr = strip_peer_id_component(&e.multiaddr);
@@ -1558,6 +1863,618 @@ impl LedgerManager {
             .take(limit)
             .map(ledger_entry_to_shared_routing_only)
             .collect()
+    }
+}
+
+/// V040-T2 -- the CLI ledger's address-hygiene surface, ported onto the core
+/// store so the two peer stores converge into one.
+impl LedgerManager {
+    /// Record a peer's ADVERTISED listen addresses from Identify.
+    ///
+    /// This is hearsay, not evidence: the peer chose what to advertise, so
+    /// entries land unverified (`locally_verified = false`) and can be dialed
+    /// locally but are never exported. A successful outbound connection later
+    /// promotes them via [`Self::record_connection`]. Returns the number of
+    /// addresses recorded.
+    pub fn record_identified_peer(&self, peer_id: &str, listen_addrs: &[String]) -> usize {
+        if listen_addrs.is_empty() || peer_id.is_empty() {
+            return 0;
+        }
+        let mut recorded = 0usize;
+        for addr in listen_addrs {
+            let stripped = strip_peer_id_component(addr);
+            // ADVERTISEMENT = hearsay: the identical gate the CLI's ingestion
+            // choke point applied (DnsPolicy::Reject). A remote's self-claim
+            // with a DNS name or an SSRF-prone address (loopback, link-local,
+            // cloud metadata) must not be STORED -- recording it is one
+            // reviewer-cited bug away from a dial decision.
+            if stripped.is_empty()
+                || !is_dialable_multiaddr(&stripped, NetworkMode::Local, DnsPolicy::Reject)
+            {
+                continue;
+            }
+            let _save_guard = self.save_lock.lock();
+            let snapshot = {
+                let mut entries = self.entries.lock();
+                let slot = entries
+                    .iter_mut()
+                    .find(|e| strip_peer_id_component(&e.multiaddr) == stripped);
+                match slot {
+                    // Attach the advertised identity to the known address but
+                    // do NOT mark it verified -- advertisement is hearsay.
+                    // V040-T13 F-DHT (Bypass-B fix, uniform with the wire-merge
+                    // and migration paths): an advertised pid is never written
+                    // into an entry's CURRENT-BINDING slot when that entry is
+                    // locally_verified. The DHT gate authorizes (identity,
+                    // address) PAIRS from our own store -- if an Identify
+                    // message could bind an attacker pid as the current
+                    // binding of a verified entry (e.g. an operator bootstrap
+                    // with an empty peer_id slot), the pair lookup would
+                    // authenticate it. Verified entries get their binding from
+                    // the dial that proved them.
+                    //
+                    // `observed_peer_ids` is still recorded on verified
+                    // entries: it is the P0 stale-identity signal the dial
+                    // guard needs (an address that served `a` is now claimed
+                    // by `b`), and the F-DHT predicate never consults it.
+                    Some(entry) => {
+                        if !entry.locally_verified {
+                            entry.peer_id.get_or_insert_with(|| peer_id.to_string());
+                        }
+                        record_observed_peer_id_locked(entry, peer_id);
+                    }
+                    None => {
+                        while entries.len() >= MAX_LEDGER_ENTRIES {
+                            evict_one_locked(&mut entries);
+                        }
+                        entries.push(LedgerEntry {
+                            multiaddr: stripped.clone(),
+                            peer_id: Some(peer_id.to_string()),
+                            public_key: None,
+                            nickname: None,
+                            success_count: 0,
+                            failure_count: 0,
+                            last_seen: Some(current_timestamp()),
+                            topics: Vec::new(),
+                            locally_verified: false,
+                            is_bootstrap: false,
+                            first_seen: Some(current_timestamp()),
+                            observed_peer_ids: vec![peer_id.to_string()],
+                            label: None,
+                        });
+                    }
+                }
+                recorded += 1;
+                (*entries).clone()
+            };
+            let _ = self.save_with_entries(&snapshot);
+        }
+        recorded
+    }
+
+    /// Drop a peer's stale ledger addresses once a NEWER address is CONFIRMED.
+    ///
+    /// CONFIRMED connections only -- a successful outbound dial to
+    /// `confirmed_addr` proves that address; every OTHER address of the same
+    /// peer is a redundant dial path forever. Remote advertisements must never
+    /// trigger this (a peer legitimately advertises LAN + WAN + IPv6 at once),
+    /// so the caller is the dial-success path, never `record_connection`.
+    /// Bootstrap entries are exempt so no peer can reap the seeded discovery
+    /// roots. Returns the number of entries removed.
+    pub fn reap_stale_addresses_for_peer(&self, peer_id: &str, confirmed_addr: &str) -> usize {
+        let confirmed = strip_peer_id_component(confirmed_addr);
+        let _save_guard = self.save_lock.lock();
+        let (snapshot, removed) = {
+            let mut entries = self.entries.lock();
+            let stale: Vec<String> = entries
+                .iter()
+                .filter_map(|e| {
+                    let addr = strip_peer_id_component(&e.multiaddr);
+                    if addr != confirmed && e.peer_id.as_deref() == Some(peer_id) && !e.is_bootstrap
+                    {
+                        Some(e.multiaddr.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let removed = stale.len();
+            entries.retain(|e| !stale.contains(&e.multiaddr));
+            ((*entries).clone(), removed)
+        };
+        let _ = self.save_with_entries(&snapshot);
+        removed
+    }
+
+    /// Find the stored entry for a peer identity, if any.
+    pub fn find_by_peer_id(&self, peer_id: &str) -> Option<LedgerEntry> {
+        // Entries store CANONICAL hex identities (record_connection writes the
+        // canonical form); callers arrive with either that or a base58 libp2p
+        // PeerId, so canonicalize before comparing.
+        let canonical = canonical_ledger_peer_id(peer_id, None);
+        let entries = self.entries.lock();
+        entries
+            .iter()
+            // Match the CURRENT binding first, then any identity ever observed
+            // at the entry's address. Observed-identity matching is what lets
+            // the dial scheduler's address guard collapse several stale
+            // `DialKey::Peer`s onto the one host:port they all point at (the
+            // CLI's P0 stale-identity guard) -- without it, two stale ids of
+            // one address are treated as unrelated dials.
+            .find(|e| {
+                let bound = e.peer_id.as_deref();
+                bound == Some(peer_id)
+                    || canonical.is_some() && bound == canonical.as_deref()
+                    || e.observed_peer_ids.iter().any(|p| p == peer_id)
+                    || canonical
+                        .as_ref()
+                        .is_some_and(|c| e.observed_peer_ids.iter().any(|p| p == c))
+            })
+            .cloned()
+    }
+
+    /// Whether a peer identity is known-good: locally verified, proven, and
+    /// not in the dead tier. Mirrors the CLI dial policy's notion so the dial
+    /// scheduler can seed its process-lifetime state from the shared store.
+    pub fn is_peer_known_good(&self, peer_id: &str) -> bool {
+        self.find_by_peer_id(peer_id).is_some_and(|e| {
+            e.locally_verified
+                && e.success_count > 0
+                && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD
+        })
+    }
+
+    /// Record a topic observed from a peer at `multiaddr`.
+    pub fn record_topic(&self, multiaddr: &str, topic: &str) {
+        if topic.is_empty() {
+            return;
+        }
+        let stripped = strip_peer_id_component(multiaddr);
+        if stripped.is_empty() {
+            return;
+        }
+        let _save_guard = self.save_lock.lock();
+        let snapshot = {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
+            {
+                if !entry.topics.iter().any(|t| t == topic) {
+                    if entry.topics.len() >= MAX_TOPICS_PER_ENTRY {
+                        entry.topics.remove(0);
+                    }
+                    entry.topics.push(topic.to_string());
+                }
+            }
+            (*entries).clone()
+        };
+        let _ = self.save_with_entries(&snapshot);
+    }
+
+    /// Merge a ledger-exchange reply from a peer into this store.
+    ///
+    /// Shared entries are hearsay: they carry no local evidence, so they are
+    /// imported with `success_count = 0` and `locally_verified = false` --
+    /// dialable locally, never re-exported. Returns the number of entries
+    /// that were newly added.
+    pub fn merge_shared_entries(&self, entries: &[SharedPeerEntry]) -> usize {
+        let mut added = 0usize;
+        for shared in entries {
+            let stripped = strip_peer_id_component(&shared.multiaddr);
+            if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
+                continue;
+            }
+            let _save_guard = self.save_lock.lock();
+            let snapshot = {
+                let mut ledger = self.entries.lock();
+                let exists = ledger
+                    .iter()
+                    .any(|e| strip_peer_id_component(&e.multiaddr) == stripped);
+                if exists {
+                    // Attach identity + observation time to the known address.
+                    if let Some(entry) = ledger
+                        .iter_mut()
+                        .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
+                    {
+                        // V040-T13 F-DHT (Bypass-B fix): a wire-supplied pid is
+                        // never written onto an entry this node has personally
+                        // verified. The DHT gate authorizes (identity, address)
+                        // PAIRS from our own store -- if a wire message could
+                        // bind an attacker pid to a locally_verified entry
+                        // (e.g. an operator bootstrap with an empty peer_id
+                        // slot), the pair lookup would authenticate it. Hearsay
+                        // entries may still learn identity from the wire; the
+                        // first successful dial overwrites it.
+                        if let Some(pid) = shared.last_peer_id.as_deref() {
+                            if !entry.locally_verified {
+                                entry.peer_id.get_or_insert_with(|| pid.to_string());
+                            }
+                            // Review triage (qwen3.8-max-0902, finding 3),
+                            // uniform with record_identified_peer: the
+                            // wire-merge path also records the observed pid on
+                            // verified entries -- it is the P0 stale-identity
+                            // signal (an address that served `a` is now claimed
+                            // by `b`), it is never consulted by the F-DHT
+                            // predicate, and it never touches the verified
+                            // entry's current-binding slot (dial-proven only).
+                            record_observed_peer_id_locked(entry, pid);
+                        }
+                        if entry.last_seen.map(|ls| ls / 1000).unwrap_or(0) < shared.last_seen {
+                            // V040-T13 F2: wire `last_seen` is attacker-chosen;
+                            // never let a remote value exceed local time (plus
+                            // the skew allowance). In a capped store this value
+                            // selects eviction victims and the dial tier.
+                            entry.last_seen = Some(clamp_wire_last_seen_ms(shared.last_seen));
+                        }
+                        for topic in &shared.known_topics {
+                            if !entry.topics.iter().any(|t| t == topic)
+                                && entry.topics.len() < MAX_TOPICS_PER_ENTRY
+                            {
+                                entry.topics.push(topic.clone());
+                            }
+                        }
+                    }
+                } else {
+                    while ledger.len() >= MAX_LEDGER_ENTRIES {
+                        evict_one_locked(&mut ledger);
+                    }
+                    ledger.push(LedgerEntry {
+                        multiaddr: stripped.clone(),
+                        peer_id: shared.last_peer_id.clone(),
+                        public_key: None,
+                        nickname: None,
+                        success_count: 0,
+                        failure_count: 0,
+                        last_seen: Some(clamp_wire_last_seen_ms(shared.last_seen)),
+                        topics: shared.known_topics.clone(),
+                        locally_verified: false,
+                        is_bootstrap: false,
+                        first_seen: Some(current_timestamp()),
+                        observed_peer_ids: shared
+                            .last_peer_id
+                            .as_ref()
+                            .map(|p| vec![p.clone()])
+                            .unwrap_or_default(),
+                        label: None,
+                    });
+                    added += 1;
+                }
+                (*ledger).clone()
+            };
+            let _ = self.save_with_entries(&snapshot);
+        }
+        added
+    }
+
+    /// Mark an operator-configured bootstrap address: locally verified,
+    /// never evicted, labelled.
+    ///
+    /// Review triage (qwen3.8-max-0902, finding 2): an entry added without a
+    /// peer_id binding (and with success_count 0) can never satisfy
+    /// `is_locally_verified_pair` until a completed dial fills the binding
+    /// via `record_connection`. That is INTENTIONAL and is the doctrine: a
+    /// bootstrap address is operator hearsay, not a proven (address,
+    /// identity) pair, so it must not be DHT-published until our store has
+    /// proved it. The entry remains fully usable for seeding/dialing.
+    pub fn add_bootstrap(&self, multiaddr: &str, label: Option<&str>) {
+        let stripped = strip_peer_id_component(multiaddr);
+        if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
+            return;
+        }
+        let _save_guard = self.save_lock.lock();
+        let snapshot = {
+            let mut entries = self.entries.lock();
+            let slot = entries
+                .iter_mut()
+                .find(|e| strip_peer_id_component(&e.multiaddr) == stripped);
+            if let Some(entry) = slot {
+                entry.locally_verified = true;
+                entry.is_bootstrap = true;
+                if let Some(l) = label {
+                    entry.label = Some(l.to_string());
+                }
+            } else {
+                while entries.len() >= MAX_LEDGER_ENTRIES {
+                    evict_one_locked(&mut entries);
+                }
+                entries.push(LedgerEntry {
+                    multiaddr: stripped.clone(),
+                    peer_id: None,
+                    public_key: None,
+                    nickname: None,
+                    success_count: 0,
+                    failure_count: 0,
+                    last_seen: Some(current_timestamp()),
+                    topics: Vec::new(),
+                    locally_verified: true,
+                    is_bootstrap: true,
+                    first_seen: Some(current_timestamp()),
+                    observed_peer_ids: Vec::new(),
+                    label: label.map(|l| l.to_string()),
+                });
+            }
+            (*entries).clone()
+        };
+        let _ = self.save_with_entries(&snapshot);
+    }
+}
+
+/// V040-T2 -- legacy `peers.json` migration input. One flat, validated shape
+/// so the CLI's legacy reader can hand survivors to the core store without
+/// core depending on any CLI type.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LedgerMigrationEntry {
+    /// Transport-only multiaddr (no `/p2p/` suffix).
+    pub multiaddr: String,
+    pub peer_id: Option<String>,
+    pub locally_verified: bool,
+    pub is_bootstrap: bool,
+    /// Unix SECONDS (legacy CLI clock) -- converted to millis on import.
+    pub first_seen: Option<u64>,
+    pub last_seen: Option<u64>,
+    pub observed_peer_ids: Vec<String>,
+    pub label: Option<String>,
+    pub consecutive_failures: u32,
+}
+
+/// Result of a legacy `peers.json` migration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LedgerMigrationResult {
+    pub offered: usize,
+    pub imported: usize,
+    pub rejected: usize,
+}
+
+impl LedgerManager {
+    /// One-time migration: import filtered survivors of a legacy CLI
+    /// `peers.json` into the core store.
+    ///
+    /// `local_peer_id` (own identity) and `my_addrs` (own listen/external
+    /// addresses) exclude self-entries -- the migration must never import a
+    /// node's own address or identity. The legacy `locally_verified` flag is
+    /// NOT trusted (V040-T13 F9): the pre-unification CLI marked every
+    /// advertised listen address as verified, so only `is_bootstrap`
+    /// (operator-configured by fiat) survives as verified; everything else
+    /// imports as hearsay and is re-proven by the first live dial.
+    /// `peers.json` is archived by the caller on successful migration
+    /// (renamed to `peers.json.migrated-<ts>`, cli/src/ledger.rs); it is
+    /// left in place only when unreadable or invalid legacy JSON.
+    pub fn import_legacy_cli_entries(
+        &self,
+        entries: Vec<LedgerMigrationEntry>,
+        local_peer_id: Option<&str>,
+        my_addrs: &[String],
+    ) -> LedgerMigrationResult {
+        let offered = entries.len();
+        let mut imported = 0usize;
+        let mut rejected = 0usize;
+        for entry in entries {
+            let stripped = strip_peer_id_component(&entry.multiaddr);
+            if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
+                rejected += 1;
+                continue;
+            }
+            // Ephemeral source ports (IANA dynamic range) are dead the
+            // instant the connection closed -- the bulk of the pollution.
+            if !has_plausible_listen_port(&stripped) {
+                rejected += 1;
+                continue;
+            }
+            // Self-entry by identity (either stored form: legacy files carry
+            // base58 PeerIds, fresh writes carry the canonical hex).
+            let me_canonical = local_peer_id.and_then(|me| canonical_ledger_peer_id(me, None));
+            let is_self = local_peer_id.is_some_and(|me| entry.peer_id.as_deref() == Some(me))
+                || me_canonical
+                    .as_ref()
+                    .is_some_and(|canon| entry.peer_id.as_deref() == Some(canon.as_str()));
+            if is_self {
+                rejected += 1;
+                continue;
+            }
+            // Self-entry by address, or unreachable private-range address.
+            if !is_dialable_for_this_node(&stripped, my_addrs) {
+                rejected += 1;
+                continue;
+            }
+            let _save_guard = self.save_lock.lock();
+            let snapshot = {
+                let mut ledger = self.entries.lock();
+                let exists = ledger
+                    .iter()
+                    .any(|e| strip_peer_id_component(&e.multiaddr) == stripped);
+                if exists {
+                    // Keep the existing entry; merge in legacy verification
+                    // only if the store has none yet.
+                    if let Some(e) = ledger
+                        .iter_mut()
+                        .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
+                    {
+                        // V040-T13 F9: the legacy verified flag is not trusted.
+                        // Only operator bootstrap status may upgrade an entry.
+                        if !e.locally_verified && entry.is_bootstrap {
+                            e.locally_verified = true;
+                        }
+                        if e.is_bootstrap {
+                            // keep
+                        } else if entry.is_bootstrap {
+                            e.is_bootstrap = true;
+                        }
+                        // V040-T13 F-DHT (Bypass-B fix, uniform with the wire
+                        // merge path): a legacy-supplied pid is never written
+                        // onto an entry this node has personally verified.
+                        if !e.locally_verified {
+                            if let Some(pid) = entry.peer_id.as_deref() {
+                                e.peer_id.get_or_insert_with(|| pid.to_string());
+                                record_observed_peer_id_locked(e, pid);
+                            }
+                            for pid in &entry.observed_peer_ids {
+                                record_observed_peer_id_locked(e, pid);
+                            }
+                        }
+                        if e.first_seen.is_none() {
+                            e.first_seen = entry.first_seen.map(|s| s.saturating_mul(1000));
+                        }
+                        if let Some(ls) = entry.last_seen {
+                            if e.last_seen.unwrap_or(0) / 1000 < ls {
+                                // V040-T13 F6: legacy last_seen is the same
+                                // ranking-key hazard as the wire value -- clamp.
+                                e.last_seen = Some(clamp_wire_last_seen_ms(ls));
+                            }
+                        }
+                    }
+                } else {
+                    while ledger.len() >= MAX_LEDGER_ENTRIES {
+                        evict_one_locked(&mut ledger);
+                    }
+                    ledger.push(LedgerEntry {
+                        multiaddr: stripped.clone(),
+                        peer_id: entry.peer_id.clone(),
+                        public_key: None,
+                        nickname: None,
+                        success_count: 0,
+                        failure_count: 0,
+                        // Legacy `consecutive_failures` maps onto the core
+                        // dead-tier counter so a poisoned entry cannot
+                        // masquerade as healthy.
+                        // V040-T13 F6: legacy last_seen is the same
+                        // ranking-key hazard as the wire value -- clamp.
+                        last_seen: entry.last_seen.map(clamp_wire_last_seen_ms),
+                        topics: Vec::new(),
+                        // V040-T13 F9: the legacy verified flag is not
+                        // trusted -- only operator bootstrap survives.
+                        locally_verified: entry.is_bootstrap,
+                        is_bootstrap: entry.is_bootstrap,
+                        first_seen: entry.first_seen.map(|s| s.saturating_mul(1000)),
+                        observed_peer_ids: entry
+                            .observed_peer_ids
+                            .into_iter()
+                            .take(MAX_OBSERVED_PEER_IDS_PER_ENTRY)
+                            .collect(),
+                        label: entry.label,
+                    });
+                    imported += 1;
+                }
+                (*ledger).clone()
+            };
+            let _ = self.save_with_entries(&snapshot);
+        }
+        LedgerMigrationResult {
+            offered,
+            imported,
+            rejected,
+        }
+    }
+
+    /// Dial candidates for THIS node: proven, alive, not self, node-reachable,
+    /// prioritised. The `is_dialable_for_this_node` self/mode filter and the
+    /// prioritisation ordering live here so every call site gets them instead
+    /// of re-implementing per site.
+    pub fn dialable_addresses_for_node(
+        &self,
+        my_addrs: &[String],
+        local_peer_id: Option<&str>,
+    ) -> Vec<LedgerEntry> {
+        // Entries store canonical hex identities; the caller's self id may be
+        // base58 -- normalize so the self-filter actually catches our own
+        // entry (otherwise every node dials itself on the first reboot after
+        // a canonicalized write).
+        let me_canonical = local_peer_id.and_then(|me| canonical_ledger_peer_id(me, None));
+        let entries = self.entries.lock();
+        let mut out: Vec<LedgerEntry> = entries
+            .iter()
+            // Proven either by a real connection (success_count) or by
+            // operator fiat (is_bootstrap, set only via add_bootstrap) --
+            // a fresh node must dial its configured seeds before it has any
+            // connection history.
+            .filter(|e| {
+                (e.success_count > 0 || e.is_bootstrap)
+                    && e.failure_count < LEDGER_DEAD_FAILURE_THRESHOLD
+            })
+            .filter(|e| {
+                if local_peer_id.is_some_and(|me| e.peer_id.as_deref() == Some(me))
+                    || me_canonical
+                        .as_ref()
+                        .is_some_and(|canon| e.peer_id.as_deref() == Some(canon.as_str()))
+                {
+                    return false;
+                }
+                is_dialable_for_this_node(&e.multiaddr, my_addrs)
+            })
+            .cloned()
+            .collect();
+        prioritize_dial_candidates(&mut out);
+        out
+    }
+
+    /// Look up a stored entry by its (stripped) transport multiaddr. Used by the
+    /// CLI dial-policy facade to decide bootstrap/known-good classification for
+    /// address keys without carrying a second peer store.
+    pub fn entry_for_multiaddr(&self, multiaddr: &str) -> Option<LedgerEntry> {
+        let stripped = strip_peer_id_component(multiaddr);
+        self.entries
+            .lock()
+            .iter()
+            .find(|e| strip_peer_id_component(&e.multiaddr) == stripped)
+            .cloned()
+    }
+
+    /// V040-T13 F-DHT (revised): whether the (identity, address) PAIR is
+    /// proven in OUR OWN store. The address is the lookup key -- the same
+    /// per-entry granularity the export paths use
+    /// (`export_seed_entries_for`, `exchange_response_entries_for_request`,
+    /// both filtering per entry on `locally_verified`). An entry passes only
+    /// if it is locally verified (a dial WE completed), proven
+    /// (`success_count > 0`), not dead-tier, and bound to exactly this peer
+    /// identity as its CURRENT binding. Never consults `observed_peer_ids`
+    /// (wire-attacker-writable) and never accepts a wire-supplied peer id as
+    /// the key -- the wire may only NAME the pair; our store must PROVE it.
+    pub fn is_locally_verified_pair(&self, multiaddr: &str, peer_id: &str) -> bool {
+        let Some(entry) = self.entry_for_multiaddr(multiaddr) else {
+            return false;
+        };
+        if !entry.locally_verified
+            || entry.success_count == 0
+            || entry.failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD
+        {
+            return false;
+        }
+        let Some(bound) = entry.peer_id.as_deref() else {
+            return false;
+        };
+        let canonical = canonical_ledger_peer_id(peer_id, None);
+        // Review triage (qwen3.8-max-0902, V040-T13) + hostile re-review
+        // (2026-09-01): the raw arm is LOAD-BEARING for stored bounds that
+        // canonical_ledger_peer_id cannot convert (non-Ed25519 pids are
+        // stored as base58 and the canonical arm returns None for them).
+        // Case-insensitivity is safe ONLY for hex: hex digits are a
+        // case-insensitive spelling of the same bytes, so a case-variant of
+        // a 64-hex bound is the same identity and can never admit an
+        // unproven pair. Base58 is a case-SENSITIVE encoding: a hand-crafted
+        // case-variant decodes to different bytes, so the exact arm must
+        // stay exact for non-hex bounds (the live caller passes canonical
+        // PeerId::to_string(), which is base58 in canonical case). The
+        // canonical arm covers key-derived base58 and mixed-case hex; all
+        // arms fail closed on garbage (canonical -> None).
+        let trimmed = peer_id.trim();
+        let hex_casefold = trimmed.len() == 64 && trimmed.eq_ignore_ascii_case(bound);
+        trimmed == bound || hex_casefold || canonical.as_deref() == Some(bound)
+    }
+
+    /// Number of stored entries that carry at least one known gossipsub topic.
+    /// Complements `all_known_topics` for the topology endpoint that counts
+    /// topic-bearing peers rather than distinct topic strings.
+    pub fn entry_count_with_known_topics(&self) -> usize {
+        self.entries
+            .lock()
+            .iter()
+            .filter(|e| !e.topics.is_empty())
+            .count()
+    }
+
+    /// Total number of stored entries (any verification state).
+    pub fn entry_count(&self) -> usize {
+        self.entries.lock().len()
     }
 }
 
@@ -1667,6 +2584,80 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    /// V040-T13 F2 (revised per Rule-8 F-5): `last_seen` is a RANKING key --
+    /// `seed_addresses` sorts descending, `evict_one_locked` picks the
+    /// minimum. A ceiling of `now + allowance` would still let a hostile
+    /// u64::MAX land strictly above every honest value forever (honest
+    /// senders report a PAST observation), so the clamp is plain
+    /// `min(wire, now)`: an attacker can never exceed what a fresh local
+    /// observation produces, and an honest peer with a fast clock ties with
+    /// local time instead of beating everyone.
+    #[test]
+    fn wire_last_seen_cannot_outrank_honest_entries() {
+        let (_dir, mgr) = manager();
+        let pid = peer();
+        let addr = "/ip4/198.51.100.200/tcp/9001".to_string();
+
+        // Attacker: u64::MAX. Clamps to exactly local now.
+        let merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid.clone()),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        assert_eq!(merged, 1);
+        let stored = mgr.entry_for_multiaddr(&addr).expect("stored");
+        let now_ms = current_timestamp();
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "attacker last_seen must clamp to local now, not now + allowance"
+        );
+
+        // Honest peer with a fast clock: reports now + 30s. Under the old
+        // +5min ceiling this landed below the attacker; with min(wire, now)
+        // it ties at local time. THE ORDERING PROPERTY: the attacker must
+        // never sort strictly above an honest peer.
+        let honest_addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let fast_clock = (current_timestamp() / 1000) + 30;
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: honest_addr.clone(),
+            last_peer_id: Some(peer()),
+            last_seen: fast_clock,
+            known_topics: Vec::new(),
+        }]);
+        let honest = mgr
+            .entry_for_multiaddr(&honest_addr)
+            .expect("honest stored");
+        let now_ms = current_timestamp();
+        assert!(
+            honest.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "honest fast-clock value must clamp to local now"
+        );
+        assert!(
+            stored.last_seen.unwrap_or(u64::MAX) <= honest.last_seen.unwrap_or(u64::MAX),
+            "attacker must not outrank an honest peer"
+        );
+
+        // Exists-branch (update): re-merging the hostile value stays clamped.
+        mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(pid),
+            last_seen: u64::MAX,
+            known_topics: Vec::new(),
+        }]);
+        let remerged = mgr.entry_for_multiaddr(&addr).expect("remerged");
+        let now_ms = current_timestamp();
+        assert!(
+            remerged.last_seen.unwrap_or(u64::MAX) <= now_ms,
+            "update branch must re-clamp the hostile value"
+        );
+
+        // V040-T13 F-DHT: merged entries are hearsay, never locally verified --
+        // the exact property the Kademlia disclosure gate checks before
+        // re-publishing an address.
+        assert!(!honest.locally_verified, "merged entries are hearsay");
     }
 
     /// A (peer_id, public_key_hex) pair that genuinely self-certifies: the
@@ -1793,7 +2784,10 @@ mod tests {
         assert!(relays
             .iter()
             .any(|e| e.multiaddr == "/ip4/10.0.0.4/tcp/9001"));
-        assert!(!relays
+        // A live connection proves the address is not dead: failure_count resets
+        // on success, so the previously-threshold-dead entry revives and is
+        // relay-ranked again (see record_connection_resets_failures_and_revives_dead_entry).
+        assert!(relays
             .iter()
             .any(|e| e.multiaddr == "/ip4/10.0.0.5/tcp/9001"));
     }
@@ -1858,6 +2852,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(last_seen),
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         };
         let proven = "/ip4/203.0.113.100/tcp/9001".to_string();
         let oldest_zero = "/ip4/10.0.0.0/tcp/9001".to_string();
@@ -1908,6 +2908,12 @@ mod tests {
             failure_count: 0,
             last_seen: None,
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
 
         std::fs::write(
@@ -1960,6 +2966,12 @@ mod tests {
             failure_count: 0,
             last_seen: None,
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
 
         let topic_suffix = "x".repeat(242);
@@ -1977,6 +2989,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: None,
                 topics: topics.clone(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             })
             .collect();
         let compact = serde_json::to_vec(&entries).expect("compact ledger");
@@ -2020,6 +3038,12 @@ mod tests {
                     failure_count: 0,
                     last_seen: None,
                     topics: vec![escaped_topic.clone(); MAX_TOPICS_PER_ENTRY],
+
+                    locally_verified: false,
+                    is_bootstrap: false,
+                    first_seen: None,
+                    observed_peer_ids: Vec::new(),
+                    label: None,
                 });
             }
         }
@@ -2048,6 +3072,12 @@ mod tests {
             failure_count: 0,
             last_seen: None,
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         });
 
         mgr.load().expect("missing ledger is the default state");
@@ -2111,6 +3141,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(1_700_000_000_000),
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         };
 
         let shared = ledger_entry_to_shared(&entry);
@@ -2203,6 +3239,120 @@ mod tests {
             after[0].peer_id.as_deref(),
             Some(proven_peer.as_str()),
             "known peer_id was disturbed by seed data"
+        );
+    }
+
+    /// REGRESSION (AWS parity ledger-share): a live successful connection must
+    /// lift an entry out of the dead tier. `record_connection` used to only
+    /// increment `success_count`, so an address that once had transient
+    /// failures stayed at `failure_count >= LEDGER_DEAD_FAILURE_THRESHOLD`
+    /// forever - excluded from `dialable_addresses`, `get_preferred_relays`
+    /// and the ledger-exchange response - even while the node was actively
+    /// connected to it. This stranded healthy peers (e.g. the AWS parity node
+    /// at /ip4/54.235.20.24/tcp/9001, success=2 fail=3) so they were never
+    /// shared to the Android app via ledger exchange.
+    ///
+    /// UPDATED (D3c demote-not-exclude, live 2026-09-09): dialing accessors
+    /// now DEMOTE dead-tier entries instead of excluding them (a poisoned
+    /// proven endpoint must stay dialable so one successful connection can
+    /// reset it - the cellular-bootstrap deadlock came from the old hard
+    /// exclusion). Disclosure (`exchange_response_entries`) keeps its own
+    /// stricter dead-tier policy, so the exchange assertions below are
+    /// unchanged in spirit: the entry is only shareable once revived.
+    #[test]
+    fn record_connection_resets_failures_and_revives_dead_entry() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/54.235.20.24/tcp/9001";
+        let p = peer();
+
+        // Prove the entry, then push it into the dead tier.
+        mgr.record_connection(addr.to_string(), p.clone());
+        for _ in 0..LEDGER_DEAD_FAILURE_THRESHOLD {
+            mgr.record_failure(addr.to_string());
+        }
+        // Demoted, not excluded: still dialable (so a retry can revive it),
+        // but ranked last by failure_count.
+        let dialable = mgr.dialable_addresses();
+        assert_eq!(
+            dialable.len(),
+            1,
+            "dead-tier entry must be demoted, not excluded"
+        );
+        assert_eq!(
+            dialable[0].failure_count, LEDGER_DEAD_FAILURE_THRESHOLD,
+            "dead-tier failure_count must survive untouched"
+        );
+        assert_eq!(
+            mgr.get_preferred_relays(8).len(),
+            1,
+            "demoted entry stays a preferred relay candidate (ranked last)"
+        );
+        assert!(
+            mgr.exchange_response_entries(8, "some-peer", &[])
+                .is_empty(),
+            "disclosure keeps the stricter dead-tier exclusion"
+        );
+
+        // A live connection revives it: failure_count resets, success bumps.
+        mgr.record_connection(addr.to_string(), p.clone());
+        let dialable = mgr.dialable_addresses();
+        assert_eq!(dialable.len(), 1, "live connection must revive the entry");
+        assert_eq!(
+            dialable[0].failure_count, 0,
+            "failure_count must reset on success"
+        );
+        assert_eq!(dialable[0].success_count, 2);
+        assert_eq!(
+            mgr.get_preferred_relays(8).len(),
+            1,
+            "revived entry must be a preferred relay"
+        );
+        assert_eq!(
+            mgr.exchange_response_entries(8, "some-peer", &[]).len(),
+            1,
+            "revived entry must be shareable in ledger exchange"
+        );
+    }
+
+    #[test]
+    fn live_peer_disclosure_allows_dead_tier_sibling_addresses() {
+        let (_dir, mgr) = manager();
+        let p = peer();
+        let primary_addr = "/ip4/54.235.20.24/tcp/9001";
+        let hop_addr = "/ip4/148.64.77.201/tcp/9021"; // routable sibling address of the same peer
+
+        // Same peer, two addresses: the PRIMARY in the dead tier (accumulated
+        // failures) while a DIFFERENT hop address of the same peer is live - the
+        // exact AWS parity state observed on the Windows node, where the hop
+        // success recorded against the hop multiaddr and left the primary's
+        // failure counter high.
+        mgr.record_connection(primary_addr.to_string(), p.clone());
+        for _ in 0..LEDGER_DEAD_FAILURE_THRESHOLD {
+            mgr.record_failure(primary_addr.to_string());
+        }
+        // A live connection on the sibling address proves the peer is reachable.
+        mgr.record_connection(hop_addr.to_string(), p.clone());
+        // UPDATED (D3c demote-not-exclude): both addresses stay dialable; the
+        // dead primary sorts AFTER the healthy sibling (failure_count demotion).
+        let stored = mgr.dialable_addresses();
+        assert_eq!(stored.len(), 2, "demotion keeps both addresses dialable");
+        assert_eq!(
+            stored[1].multiaddr, primary_addr,
+            "dead primary must rank below the live sibling"
+        );
+        assert_eq!(
+            stored[1].failure_count, LEDGER_DEAD_FAILURE_THRESHOLD,
+            "per-address failure counter is untouched by sibling liveness"
+        );
+
+        // Disclosure is peer-liveness aware: because the peer is live via the hop
+        // address, its primary address is shared too (a fresh install can learn
+        // and dial the parity node), WITHOUT resetting the dead address's failure
+        // counter (asserted above - no retry-loop erasure).
+        let shared = mgr.exchange_response_entries(8, "some-peer", &[]);
+        assert!(
+            shared.iter().any(|s| s.multiaddr == primary_addr),
+            "live peer's dead-tier address must become exchange-shareable"
         );
     }
 
@@ -2320,6 +3470,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(1_700_000_000_123),
             topics: vec!["sc-mesh".to_string()],
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         };
         let shared = ledger_entry_to_shared(&entry);
         assert_eq!(shared.last_seen, 1_700_000_000);
@@ -2821,18 +3977,22 @@ mod tests {
         let addr = "/ip4/198.51.100.10/tcp/9001";
         let (self_peer, self_key) = self_certifying_pair();
 
-        mgr.annotate_identity(addr.to_string(), self_peer.clone(), Some(self_key), None);
+        mgr.annotate_identity(
+            addr.to_string(),
+            self_peer.clone(),
+            Some(self_key.clone()),
+            None,
+        );
 
         let entries = mgr.entries.lock();
         let entry = entries
             .iter()
             .find(|e| e.multiaddr == addr)
             .expect("entry stored");
-        assert_eq!(entry.peer_id.as_deref(), Some(self_peer.as_str()));
-        assert!(
-            entry.public_key.is_some(),
-            "a self-certifying binding must be kept"
-        );
+        // Live canonicalization rewrites a self-certifying libp2p peer_id
+        // to the canonical public-key hex on write; the binding survives.
+        assert_eq!(entry.peer_id.as_deref(), Some(self_key.as_str()));
+        assert_eq!(entry.public_key.as_deref(), Some(self_key.as_str()));
     }
 
     /// Load-time repair must strip poisoned bindings from ALL persisted entries
@@ -2853,6 +4013,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(42),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: "/ip4/198.51.100.12/tcp/9001".to_string(),
@@ -2863,6 +4029,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: None,
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
         ];
         let ledger_file = dir.path().join("ledger.json");
@@ -2877,13 +4049,19 @@ mod tests {
 
         let repaired = mgr.entries.lock();
         assert_eq!(repaired.len(), 2);
+        // Load migration canonicalizes the libp2p peer_id to the key hex
+        // derived from it; the poisoned OTHER key is what gets stripped.
+        let victim_canonical = public_key_hex_from_libp2p_peer_id(&victim_peer)
+            .expect("victim peer id is a libp2p id");
         let victim = repaired
             .iter()
-            .find(|e| e.peer_id.as_deref() == Some(victim_peer.as_str()))
+            .find(|e| e.peer_id.as_deref() == Some(victim_canonical.as_str()))
             .expect("poisoned entry retained as routing record");
-        assert!(
-            victim.public_key.is_none(),
-            "load repair must strip the poisoned binding"
+        // The poisoned OTHER key is gone; the migration replaces it with
+        // the victim's own canonical key (identity collapsed to hex).
+        assert_eq!(
+            victim.public_key.as_deref(),
+            Some(victim_canonical.as_str())
         );
         assert_eq!(victim.nickname.as_deref(), Some("Bob"));
         assert_eq!(victim.success_count, 1, "routing metadata preserved");
@@ -3097,6 +4275,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(42),
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         }];
         std::fs::write(
             &ledger_file,
@@ -3132,6 +4316,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(1),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: "/ip4/198.51.100.23/tcp/9001".to_string(),
@@ -3142,6 +4332,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(2),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: valid_one.clone(),
@@ -3152,6 +4348,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(3),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: valid_two.clone(),
@@ -3162,6 +4364,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: None,
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
         ];
         std::fs::write(
@@ -3206,6 +4414,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: None,
                 topics,
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: dropped_fields_addr.clone(),
@@ -3216,6 +4430,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: None,
                 topics: vec!["\0invalid".to_string()],
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
         ];
         std::fs::write(
@@ -3276,6 +4496,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(1000 + i as u64),
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         };
         let entries: Vec<LedgerEntry> = (0..MAX_LEDGER_ENTRIES + 50).map(mk).collect();
         std::fs::write(
@@ -3312,6 +4538,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(1),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
             LedgerEntry {
                 multiaddr: "/ip4/198.51.100.31/tcp/9001".to_string(),
@@ -3322,6 +4554,12 @@ mod tests {
                 failure_count: 0,
                 last_seen: Some(2),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             },
         ];
         std::fs::write(
@@ -3452,6 +4690,12 @@ mod tests {
                     failure_count: 0,
                     last_seen: Some(1000 + i as u64),
                     topics: Vec::new(),
+
+                    locally_verified: false,
+                    is_bootstrap: false,
+                    first_seen: None,
+                    observed_peer_ids: Vec::new(),
+                    label: None,
                 });
             }
         }
@@ -3498,6 +4742,12 @@ mod tests {
             failure_count: 0,
             last_seen: Some(42),
             topics: Vec::new(),
+
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
         };
 
         mgr_a.entries.lock().extend(addrs.iter().map(|a| mk(a)));
@@ -3534,6 +4784,12 @@ mod tests {
                     failure_count: 0,
                     last_seen: Some(5000 + i as u64),
                     topics: Vec::new(),
+
+                    locally_verified: false,
+                    is_bootstrap: false,
+                    first_seen: None,
+                    observed_peer_ids: Vec::new(),
+                    label: None,
                 });
             }
         }
@@ -3560,13 +4816,17 @@ mod tests {
 
     #[test]
     fn dead_threshold_all_accessors() {
+        // D3c fix semantics: failure counts DEMOTE, never exclude. A proven
+        // endpoint that accumulated local-epoch failures (failure_count >= the
+        // old LEDGER_DEAD_FAILURE_THRESHOLD) must remain dialable and must NOT
+        // be disclosed to exchange peers at a better rank than healthy ones.
         let (_dir, mgr) = manager();
-        let included = "/ip4/198.51.100.40/tcp/9001".to_string();
-        let excluded = "/ip4/198.51.100.41/tcp/9001".to_string();
+        let healthy = "/ip4/198.51.100.40/tcp/9001".to_string();
+        let flapping = "/ip4/198.51.100.41/tcp/9001".to_string();
         {
             let mut entries = mgr.entries.lock();
             entries.push(LedgerEntry {
-                multiaddr: included.clone(),
+                multiaddr: healthy.clone(),
                 peer_id: Some(peer()),
                 public_key: None,
                 nickname: None,
@@ -3574,25 +4834,562 @@ mod tests {
                 failure_count: 2,
                 last_seen: Some(7000),
                 topics: Vec::new(),
+
+                locally_verified: true,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             });
             entries.push(LedgerEntry {
-                multiaddr: excluded.clone(),
+                multiaddr: flapping.clone(),
                 peer_id: Some(peer()),
                 public_key: None,
                 nickname: None,
                 success_count: 1,
-                failure_count: 3,
+                failure_count: 5,
                 last_seen: Some(7001),
                 topics: Vec::new(),
+
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
             });
         }
 
+        // Both stay dialable (no permanent exclusion).
         let dialable = mgr.dialable_addresses();
-        assert!(dialable.iter().any(|e| e.multiaddr == included));
-        assert!(!dialable.iter().any(|e| e.multiaddr == excluded));
+        assert!(dialable.iter().any(|e| e.multiaddr == healthy));
+        assert!(dialable.iter().any(|e| e.multiaddr == flapping));
+        // ...but the healthy one outranks the flapping one.
+        let healthy_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = dialable
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
+        assert!(
+            healthy_pos < flapping_pos,
+            "healthy entry must rank above the failure-demoted one"
+        );
 
-        let shared = mgr.exchange_response_entries(10, "requester-peer", &[]);
-        assert!(shared.iter().any(|e| e.multiaddr == included));
-        assert!(!shared.iter().any(|e| e.multiaddr == excluded));
+        let preferred = mgr.get_preferred_relays(5);
+        assert!(preferred.iter().any(|e| e.multiaddr == healthy));
+        assert!(preferred.iter().any(|e| e.multiaddr == flapping));
+        let healthy_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == healthy)
+            .unwrap();
+        let flapping_pos = preferred
+            .iter()
+            .position(|e| e.multiaddr == flapping)
+            .unwrap();
+        assert!(
+            healthy_pos < flapping_pos,
+            "healthy entry must rank above the failure-demoted one in relays"
+        );
+    }
+
+    /// V040-T2 acceptance 3 (disclosure rule): an entry with
+    /// `locally_verified: false` is never returned by `export_seed_entries`
+    /// or `exchange_response_entries`, even when it is otherwise proven
+    /// (`success_count > 0`). Hearsay is usable locally and never
+    /// re-published.
+    #[test]
+    fn locally_verified_only_entries_are_exported() {
+        let (_dir, mgr) = manager();
+        let hearsay_addr = "/ip4/198.51.100.10/tcp/9001".to_string();
+        let verified_addr = "/ip4/198.51.100.11/tcp/9001".to_string();
+        mgr.entries.lock().push(LedgerEntry {
+            multiaddr: hearsay_addr.clone(),
+            peer_id: Some(peer()),
+            public_key: None,
+            nickname: None,
+            success_count: 1,
+            failure_count: 0,
+            last_seen: Some(1_700_000_000_000),
+            topics: Vec::new(),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
+        });
+        mgr.entries.lock().push(LedgerEntry {
+            multiaddr: verified_addr.clone(),
+            peer_id: Some(peer()),
+            public_key: None,
+            nickname: None,
+            success_count: 1,
+            failure_count: 0,
+            last_seen: Some(1_700_000_000_001),
+            topics: Vec::new(),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
+        });
+
+        let shared = mgr.exchange_response_entries(10, "requester", &[]);
+        assert!(!shared.iter().any(|e| e.multiaddr == hearsay_addr));
+        assert!(shared.iter().any(|e| e.multiaddr == verified_addr));
+
+        let seeds = mgr.export_seed_entries(10);
+        assert!(!seeds.iter().any(|s| s.multiaddr == hearsay_addr));
+        assert!(seeds.iter().any(|s| s.multiaddr == verified_addr));
+    }
+
+    /// V040-T2 acceptance 2 (migration): the polluted store in, only
+    /// hygienic survivors out -- zero self-entries (by identity AND by
+    /// address), zero ephemeral-port entries, zero private addresses
+    /// attributed to peers we cannot route to. `locally_verified` survives
+    /// for genuinely verified history; everything else imports as hearsay.
+    #[test]
+    fn find_by_peer_id_resolves_observed_identities_after_address_rebinding() {
+        let (_dir, mgr) = manager();
+        // REAL keypair identities: the canonical-hex write path only triggers
+        // for a public key that decodes from the PeerId, which random pids do
+        // not always satisfy.
+        let first = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+        let second = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+        mgr.record_connection("/ip4/198.51.100.180/tcp/9001".to_string(), first.clone());
+        // Fleet norm: the same address gets rebound to a fresh identity on
+        // reboot. The departed identity stays observable so the dial
+        // scheduler's stale-identity address guard can still collapse dials
+        // to the shared host:port.
+        mgr.record_connection("/ip4/198.51.100.180/tcp/9001".to_string(), second.clone());
+        let current = mgr
+            .find_by_peer_id(&second)
+            .expect("current identity resolves");
+        let stale = mgr
+            .find_by_peer_id(&first)
+            .expect("observed identity resolves");
+        // Base58 callers (the CLI passes base58 PeerIds everywhere) must
+        // resolve the canonical-hex-stored entry; the stored binding itself
+        // is the canonical hex of the latest claimant.
+        let second_canonical = canonical_ledger_peer_id(&second, None).expect("canonical");
+        assert_eq!(current.peer_id.as_deref(), Some(second_canonical.as_str()));
+        assert_eq!(stale.peer_id.as_deref(), Some(second_canonical.as_str()));
+
+        // Self-exclusion uses the same normalized comparison: the address's
+        // CURRENT identity must never dial it (that is a genuine self-dial).
+        let dialable_now = mgr.dialable_addresses_for_node(&[], Some(&second));
+        assert_eq!(
+            dialable_now.len(),
+            0,
+            "current self entry leaked into dial candidates"
+        );
+        // The DEPARTED identity still dials it: after a rebuild the address
+        // hosts the machine's reincarnation -- a legitimate reconnect, not a
+        // self-dial.
+        let dialable_old = mgr.dialable_addresses_for_node(&[], Some(&first));
+        assert_eq!(dialable_old.len(), 1);
+    }
+
+    #[test]
+    fn dialable_candidates_include_operator_bootstraps_before_first_success() {
+        let (_dir, mgr) = manager();
+        mgr.add_bootstrap("/ip4/198.51.100.200/tcp/443", Some("Bootstrap 1"));
+        // Hearsay-only entry stays out of the candidate set.
+        let pid = peer();
+        mgr.record_identified_peer(&pid, &["/ip4/192.0.2.7/tcp/9001".to_string()]);
+
+        let dialable = mgr.dialable_addresses_for_node(&[], None);
+        assert_eq!(dialable.len(), 1, "got {:?}", dialable);
+        assert_eq!(
+            dialable[0].multiaddr, "/ip4/198.51.100.200/tcp/443",
+            "an operator seed without connection history must still be dialed"
+        );
+
+        // Same rule on the mobile-facing candidate builder.
+        let mobile = mgr.dialable_addresses();
+        assert_eq!(mobile.len(), 1);
+        assert_eq!(mobile[0].multiaddr, "/ip4/198.51.100.200/tcp/443");
+    }
+
+    #[test]
+    fn migration_imports_only_hygienic_survivors() {
+        let (_dir, mgr) = manager();
+        let my_addrs = vec!["/ip4/192.168.0.121/tcp/9001".to_string()];
+        let my_peer = peer();
+        let remote_verified = peer();
+        let remote_hearsay = peer();
+
+        // V040-T13 F9: legacy `locally_verified: true` is NOT trusted -- the
+        // pre-unification CLI marked every advertised listen address as
+        // verified. Only `is_bootstrap` (operator-configured by fiat) survives
+        // as verified; this fixture imports as hearsay.
+        let good_verified = LedgerMigrationEntry {
+            multiaddr: "/ip4/98.94.45.116/tcp/9001".to_string(),
+            peer_id: Some(remote_verified.clone()),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: vec![remote_verified.clone()],
+            label: None,
+            consecutive_failures: 0,
+        };
+        // Operator bootstrap: verified by fiat even though the legacy flag
+        // says otherwise -- the only trusted verified input.
+        let good_bootstrap = LedgerMigrationEntry {
+            multiaddr: "/ip4/198.51.100.250/tcp/9001".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: false,
+            is_bootstrap: true,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+        let good_hearsay = LedgerMigrationEntry {
+            multiaddr: "/ip4/203.0.113.50/tcp/9002".to_string(),
+            peer_id: Some(remote_hearsay.clone()),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+        let ephemeral = LedgerMigrationEntry {
+            multiaddr: "/ip4/147.81.41.188/tcp/55276".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+        let self_by_identity = LedgerMigrationEntry {
+            multiaddr: "/ip4/54.235.20.24/tcp/9001".to_string(),
+            peer_id: Some(my_peer.clone()),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+        let self_by_address = LedgerMigrationEntry {
+            multiaddr: "/ip4/192.168.0.121/tcp/9001".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+        let unreachable_private = LedgerMigrationEntry {
+            multiaddr: "/ip4/10.32.4.5/tcp/9001".to_string(),
+            peer_id: Some(peer()),
+            locally_verified: true,
+            is_bootstrap: false,
+            first_seen: Some(1_700_000_000),
+            last_seen: Some(1_700_000_100),
+            observed_peer_ids: Vec::new(),
+            label: None,
+            consecutive_failures: 0,
+        };
+
+        let result = mgr.import_legacy_cli_entries(
+            vec![
+                good_verified,
+                good_bootstrap,
+                good_hearsay,
+                ephemeral,
+                self_by_identity,
+                self_by_address,
+                unreachable_private,
+            ],
+            Some(&my_peer),
+            &my_addrs,
+        );
+        assert_eq!(result.offered, 7);
+        assert_eq!(result.imported, 3);
+        assert_eq!(result.rejected, 4);
+
+        let entries = mgr.entries.lock().clone();
+        assert!(entries
+            .iter()
+            .all(|e| e.multiaddr != "/ip4/147.81.41.188/tcp/55276"));
+        assert!(entries
+            .iter()
+            .all(|e| e.peer_id.as_deref() != Some(my_peer.as_str())));
+        assert!(entries
+            .iter()
+            .all(|e| e.multiaddr != "/ip4/192.168.0.121/tcp/9001"));
+        assert!(entries
+            .iter()
+            .all(|e| e.multiaddr != "/ip4/10.32.4.5/tcp/9001"));
+        // V040-T13 F9: the legacy verified flag is NOT trusted -- this entry
+        // imports as hearsay despite `locally_verified: true` in the file.
+        let verified = entries
+            .iter()
+            .find(|e| e.multiaddr == "/ip4/98.94.45.116/tcp/9001")
+            .expect("legacy verified survivor imported");
+        assert!(
+            !verified.locally_verified,
+            "legacy locally_verified flag must not survive migration"
+        );
+        // Operator bootstrap survives as verified by fiat.
+        let bootstrap = entries
+            .iter()
+            .find(|e| e.multiaddr == "/ip4/198.51.100.250/tcp/9001")
+            .expect("bootstrap survivor imported");
+        assert!(bootstrap.locally_verified);
+        assert!(bootstrap.is_bootstrap);
+        let hearsay = entries
+            .iter()
+            .find(|e| e.multiaddr == "/ip4/203.0.113.50/tcp/9002")
+            .expect("hearsay survivor imported");
+        assert!(!hearsay.locally_verified);
+    }
+
+    /// V040-T2 acceptance 4 (supersession): identity X known at A, confirmed
+    /// at B -- B outranks A in `seed_addresses()`, and A retires without X
+    /// itself becoming undialable (the PR #256/#257 property: a reachable
+    /// peer never sticks in the dead tier).
+    #[test]
+    fn supersession_confirms_new_address_without_dead_tiering() {
+        let (_dir, mgr) = manager();
+        let x = peer();
+        let addr_a = "/ip4/98.94.45.10/tcp/9001".to_string();
+        let addr_b = "/ip4/98.94.45.20/tcp/9001".to_string();
+        // X advertises A and B (hearsay, unverified).
+        mgr.record_identified_peer(&x, &[addr_a.clone(), addr_b.clone()]);
+        // We confirm B with a completed outbound connection: verified + proven.
+        mgr.record_connection(addr_b.clone(), x.clone());
+        // Supersede A now that B is confirmed.
+        let removed = mgr.reap_stale_addresses_for_peer(&x, &addr_b);
+        assert_eq!(removed, 1);
+
+        // X is still dialable through B (never dead-tiered).
+        assert!(mgr.is_peer_known_good(&x));
+        let dialable = mgr.dialable_addresses_for_node(&[], None);
+        assert!(dialable.iter().any(|e| e.multiaddr == addr_b));
+        assert!(dialable.iter().all(|e| e.multiaddr != addr_a));
+    }
+
+    /// V040-T2 acceptance 5 (caps): a peer observed at 20 addresses stores
+    /// at most the per-peer cap, and the store never exceeds
+    /// `MAX_LEDGER_ENTRIES`.
+    #[test]
+    fn observed_peer_ids_bounded_and_store_capped() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.60/tcp/9001".to_string();
+        let mut entries = mgr.entries.lock();
+        entries.push(LedgerEntry {
+            multiaddr: addr.clone(),
+            peer_id: Some(peer()),
+            public_key: None,
+            nickname: None,
+            success_count: 0,
+            failure_count: 0,
+            last_seen: None,
+            topics: Vec::new(),
+            locally_verified: false,
+            is_bootstrap: false,
+            first_seen: None,
+            observed_peer_ids: Vec::new(),
+            label: None,
+        });
+        for _ in 0..40 {
+            record_observed_peer_id_locked(entries.last_mut().unwrap(), &peer());
+        }
+        assert!(entries[0].observed_peer_ids.len() <= MAX_OBSERVED_PEER_IDS_PER_ENTRY);
+        assert_eq!(
+            entries[0].observed_peer_ids.len(),
+            MAX_OBSERVED_PEER_IDS_PER_ENTRY
+        );
+
+        // The whole store never exceeds the hard cap: pushing past
+        // MAX_LEDGER_ENTRIES evicts the least-useful entry.
+        for i in 0..(MAX_LEDGER_ENTRIES + 32) {
+            if entries.len() >= MAX_LEDGER_ENTRIES {
+                evict_one_locked(&mut entries);
+            }
+            entries.push(LedgerEntry {
+                multiaddr: format!("/ip4/198.51.100.{}/tcp/9001", 100 + (i % 200)),
+                peer_id: Some(peer()),
+                public_key: None,
+                nickname: None,
+                success_count: 0,
+                failure_count: 0,
+                last_seen: Some(1_700_000_000 + i as u64),
+                topics: Vec::new(),
+                locally_verified: false,
+                is_bootstrap: false,
+                first_seen: None,
+                observed_peer_ids: Vec::new(),
+                label: None,
+            });
+        }
+        assert!(entries.len() <= MAX_LEDGER_ENTRIES);
+    }
+
+    /// The verification semantics that make the disclosure rule sound: a
+    /// completed outbound connection marks an entry locally verified, an
+    /// advertisement does not.
+    #[test]
+    fn record_connection_verifies_but_advertisement_does_not() {
+        let (_dir, mgr) = manager();
+        let p = peer();
+        mgr.record_identified_peer(&p, &["/ip4/198.51.100.70/tcp/9001".to_string()]);
+        assert!(
+            !mgr.find_by_peer_id(&p)
+                .expect("advertised entry")
+                .locally_verified
+        );
+        mgr.record_connection("/ip4/198.51.100.70/tcp/9001".to_string(), p.clone());
+        assert!(mgr.find_by_peer_id(&p).expect("entry").locally_verified);
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 1): the pair predicate must
+    /// accept the stored hex binding in ANY case (case cannot change
+    /// identity) and must keep failing closed on a wrong or garbage pid.
+    #[test]
+    fn pair_gate_matches_mixed_case_hex_and_rejects_others() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.71/tcp/9001".to_string();
+        // Ed25519-derived pid: record_connection's live canonicalization
+        // stores the bound as lowercase hex (PeerId::random() is not
+        // Ed25519-derived, so canonical_ledger_peer_id would return None).
+        let (p, _key_hex) = self_certifying_pair();
+        let bound_hex = canonical_ledger_peer_id(&p, None).expect("base58 -> hex");
+        assert_eq!(bound_hex, bound_hex.to_lowercase());
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        // Same identity, any presentation: base58 (the live caller form) and
+        // the stored hex in UPPERCASE both match.
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "base58 caller form must match"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex.to_uppercase()),
+            "uppercase hex caller form must match (case-insensitive arm)"
+        );
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &bound_hex),
+            "lowercase hex caller form must match"
+        );
+
+        // Wrong identity and garbage fail closed.
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &peer()),
+            "different pid must not match"
+        );
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, "not-a-peer-id"),
+            "garbage pid must fail closed"
+        );
+    }
+
+    /// Hostile re-review (2026-09-01): a stored BASE58 bound (a pid the
+    /// canonicalizer cannot convert to hex, e.g. non-Ed25519) must match its
+    /// canonical base58 string exactly -- base58 is case-sensitive, so a
+    /// hand-crafted case-variant decodes to a DIFFERENT peer id and must
+    /// fail closed even though it case-folds to the bound.
+    #[test]
+    fn pair_gate_rejects_base58_case_variants() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.73/tcp/9001".to_string();
+        let p = peer(); // PeerId::random() is not Ed25519-derived
+        assert!(
+            canonical_ledger_peer_id(&p, None).is_none(),
+            "fixture must be un-canonicalizable so the bound stays base58"
+        );
+        mgr.record_connection(addr.clone(), p.clone());
+        assert!(
+            mgr.entry_for_multiaddr(&addr)
+                .expect("stored")
+                .locally_verified
+        );
+
+        assert!(
+            mgr.is_locally_verified_pair(&addr, &p),
+            "canonical base58 must match the stored bound exactly"
+        ); // Flip one letter's case: same string modulo case, different bytes
+           // when read as base58. Must fail closed.
+        let mut mangled = p.clone();
+        let flip = mangled
+            .find(|c: char| c.is_ascii_alphabetic())
+            .expect("base58 pid has letters");
+        let ch = mangled[flip..flip + 1].chars().next().expect("char");
+        let toggled = if ch.is_ascii_lowercase() {
+            ch.to_ascii_uppercase()
+        } else {
+            ch.to_ascii_lowercase()
+        };
+        mangled.replace_range(flip..flip + 1, &toggled.to_string());
+        assert_ne!(mangled, p, "fixture must actually differ");
+        assert!(
+            !mgr.is_locally_verified_pair(&addr, &mangled),
+            "base58 case-variant must fail closed"
+        );
+    }
+
+    /// Review triage (qwen3.8-max-0902, finding 3): the wire-merge path must
+    /// record the heard pid in observed_peer_ids even on a locally_verified
+    /// entry (stale-identity signal), while the current binding and the
+    /// verified flag stay untouched.
+    #[test]
+    fn wire_merge_records_observed_pid_on_verified_entry() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.72/tcp/9001".to_string();
+        let proven = peer();
+        let heard = peer();
+        mgr.record_connection(addr.clone(), proven.clone());
+        let before = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(before.locally_verified);
+        assert_eq!(before.peer_id.as_deref(), Some(proven.as_str()));
+
+        // Update branch (entry exists): merge returns the added-count, which
+        // is 0 for an update -- the observable state is what we assert on.
+        let _merged = mgr.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: addr.clone(),
+            last_peer_id: Some(heard.clone()),
+            last_seen: current_timestamp() / 1000,
+            known_topics: Vec::new(),
+        }]);
+
+        let after = mgr.entry_for_multiaddr(&addr).expect("stored");
+        assert!(
+            after.locally_verified,
+            "verified flag must survive the merge"
+        );
+        assert_eq!(
+            after.peer_id.as_deref(),
+            Some(proven.as_str()),
+            "current binding must stay dial-proven, never overwritten by wire"
+        );
+        assert!(
+            after.observed_peer_ids.iter().any(|id| id == &heard),
+            "heard pid must land in observed_peer_ids on a verified entry"
+        );
     }
 }

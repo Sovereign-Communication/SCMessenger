@@ -70,7 +70,7 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.TarGz
             )
             packageName = "SCMessenger"
-            packageVersion = "0.3.0"
+            packageVersion = "0.4.0"
             description = "SCMessenger Encrypted Delay-Tolerant Messaging"
             copyright = "© 2024-2026 SCMessenger Contributors"
 

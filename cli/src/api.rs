@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json as AxumJson, Path, State},
+    extract::{Json as AxumJson, Path, Query, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
@@ -22,6 +22,15 @@ use tower_http::cors::{Any, CorsLayer};
 
 pub const API_PORT: u16 = 9876;
 pub const API_ADDR: &str = "127.0.0.1:9876";
+
+/// Default number of messages `/api/history` returns when the caller omits
+/// `limit`. This is the primary operator-facing endpoint for verifying
+/// message receipt (see `scripts`/runbooks that `curl` it after a send), so
+/// the old default of 20 under-reported real verification runs. 100 is
+/// still a hard bound, not unbounded -- large enough for a manual check or
+/// a fleet-run verification pass without one query being able to force the
+/// server to serialize an entire history store.
+const DEFAULT_HISTORY_LIMIT: usize = 100;
 
 const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_GIT_HASH: &str = env!("SCM_GIT_HASH");
@@ -81,6 +90,37 @@ pub struct AddContactResponse {
 pub struct PeerEntry {
     pub peer_id: String,
     pub reputation: f64,
+    /// Canonical triad (PeerID / public_key / identity_id) when resolvable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triad: Option<PeerIdTriadDto>,
+}
+
+/// DTO for the three self-consistent peer identifiers used across apps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerIdTriadDto {
+    pub libp2p_peer_id: Option<String>,
+    pub public_key_hex: Option<String>,
+    pub identity_id: Option<String>,
+    pub input_kind: String,
+    pub self_certifying: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeerResolveResponse {
+    pub success: bool,
+    pub input: String,
+    pub triad: Option<PeerIdTriadDto>,
+    pub error: Option<String>,
+}
+
+pub fn triad_dto(t: scmessenger_core::identity::PeerIdTriad) -> PeerIdTriadDto {
+    PeerIdTriadDto {
+        libp2p_peer_id: t.libp2p_peer_id,
+        public_key_hex: t.public_key_hex,
+        identity_id: t.identity_id,
+        input_kind: t.input_kind,
+        self_certifying: t.self_certifying,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1004,14 +1044,45 @@ async fn handle_get_peers(
         .map(|p| {
             let pid = p.to_string();
             let reputation = ctx.core.get_peer_reputation(pid.clone());
+            let triad = scmessenger_core::identity::PeerIdTriad::resolve(&pid).map(triad_dto);
             PeerEntry {
                 peer_id: pid,
                 reputation,
+                triad,
             }
         })
         .collect();
 
     Ok(AxumJson(GetPeersResponse { peers }))
+}
+
+/// GET /api/peer-resolve?input=<peer_id | public_key_hex | identity_id>
+#[allow(clippy::disallowed_methods)]
+async fn handle_peer_resolve(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<AxumJson<PeerResolveResponse>, (StatusCode, String)> {
+    let input = q
+        .get("input")
+        .or_else(|| q.get("id"))
+        .or_else(|| q.get("peer_id"))
+        .cloned()
+        .unwrap_or_default();
+    match scmessenger_core::identity::PeerIdTriad::resolve(&input) {
+        Some(t) => Ok(AxumJson(PeerResolveResponse {
+            success: true,
+            input,
+            triad: Some(triad_dto(t)),
+            error: None,
+        })),
+        None => Ok(AxumJson(PeerResolveResponse {
+            success: false,
+            input,
+            triad: None,
+            error: Some(
+                "unrecognized identifier: expected libp2p peer id (12D3…), 64-hex public key, or 64-hex identity_id".into(),
+            ),
+        })),
+    }
 }
 
 async fn handle_get_swarm_stats(
@@ -1070,15 +1141,20 @@ async fn handle_get_listeners(
     Ok(AxumJson(GetListenersResponse { listeners }))
 }
 
-async fn handle_get_history(
-    State(ctx): State<Arc<ApiContext>>,
-    AxumJson(request): AxumJson<GetHistoryRequest>,
+/// Shared implementation for both `/api/history` verbs. `request.limit`
+/// defaults to `DEFAULT_HISTORY_LIMIT` (not unbounded) when omitted.
+async fn history_response(
+    ctx: Arc<ApiContext>,
+    request: GetHistoryRequest,
 ) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
     let history = ctx.core.history_store_manager();
 
     let messages = if let Some(peer_id) = request.peer_id {
         history
-            .conversation(peer_id, request.limit.unwrap_or(20) as u32)
+            .conversation(
+                peer_id,
+                request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32,
+            )
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1087,7 +1163,7 @@ async fn handle_get_history(
             })?
     } else {
         history
-            .recent(None, request.limit.unwrap_or(20) as u32)
+            .recent(None, request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32)
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1114,6 +1190,27 @@ async fn handle_get_history(
     Ok(AxumJson(GetHistoryResponse {
         messages: history_messages,
     }))
+}
+
+/// `POST /api/history` with a JSON body. Kept for existing callers.
+async fn handle_get_history(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
+}
+
+/// `GET /api/history?peer_id=..&limit=..`, both optional. This is the
+/// operator-facing verification path: a bare `curl .../api/history` used to
+/// hit Axum's default 405 (POST-only route) with an empty body, which reads
+/// identically to a broken endpoint. `GetHistoryRequest` already derives
+/// `Deserialize` with both fields `Option`, so `Query` treats an absent key
+/// as `None` the same way the JSON body does.
+async fn handle_get_history_query(
+    State(ctx): State<Arc<ApiContext>>,
+    Query(request): Query<GetHistoryRequest>,
+) -> Result<AxumJson<GetHistoryResponse>, (StatusCode, String)> {
+    history_response(ctx, request).await
 }
 
 async fn handle_get_external_address(
@@ -1338,6 +1435,12 @@ async fn handle_get_identity(
     State(ctx): State<Arc<ApiContext>>,
 ) -> Result<AxumJson<serde_json::Value>, (StatusCode, String)> {
     let info = ctx.core.get_identity_info();
+    let triad = info
+        .libp2p_peer_id
+        .as_deref()
+        .or(info.public_key_hex.as_deref())
+        .and_then(scmessenger_core::identity::PeerIdTriad::resolve)
+        .map(triad_dto);
     Ok(AxumJson(serde_json::json!({
         "identity_id": info.identity_id,
         "public_key_hex": info.public_key_hex,
@@ -1346,6 +1449,7 @@ async fn handle_get_identity(
         "initialized": info.initialized,
         "nickname": info.nickname,
         "libp2p_peer_id": info.libp2p_peer_id,
+        "triad": triad,
     })))
 }
 
@@ -1535,6 +1639,7 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
             }),
         )
         .route("/api/identity", get(handle_get_identity))
+        .route("/api/peer-resolve", get(handle_peer_resolve))
         .route("/api/send", post(handle_send_message))
         .route("/api/send/:message_id", get(handle_get_send_status))
         .route(
@@ -1544,7 +1649,10 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .route("/api/peers", get(handle_get_peers))
         .route("/api/swarm/stats", get(handle_get_swarm_stats))
         .route("/api/listeners", get(handle_get_listeners))
-        .route("/api/history", post(handle_get_history))
+        .route(
+            "/api/history",
+            get(handle_get_history_query).post(handle_get_history),
+        )
         .route("/api/external-address", get(handle_get_external_address))
         .route(
             "/api/connection-path-state",
