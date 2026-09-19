@@ -1,6 +1,6 @@
 # V040-T12 -- Stop burning the CI queue on superseded and irrelevant runs
 
-Status: IN REVIEW -- PR #317 (platform-relevance half, 2026-09-19). Filed
+Status: IN REVIEW -- PR #319 (platform-relevance half, 2026-09-19). Filed
 2026-08-31 on the operator's CI-pacing directive; acceptance 1 landed on main
 earlier and is not re-verified here, acceptance 2 landed and is extended by
 this pass, acceptance 3-4 are unverified on this branch.
@@ -120,7 +120,7 @@ semantics are exactly the thing people get wrong here.
 
 ---
 
-## Evidence appendix -- platform-relevance pass (2026-09-19, PR #317)
+## Evidence appendix -- platform-relevance pass (2026-09-19, PR #319)
 
 Added by the 2026-09-19 pass. Everything above this line is the ticket as filed;
 premises that turned out to be stale are named here rather than silently
@@ -180,8 +180,34 @@ workflow edit, empty diff and main push -> both true (fail open). All 15 matched
 expectation. Every changed YAML parses and every gated `if:` names a step id
 that exists in its job.
 
-[WARNING] Local execution cannot prove what GitHub actually triggers. Only the
-probe PR observation in the PR body can, and it is recorded there.
+### Observed on GitHub, not only locally
+
+Two throwaway probes carried the same one-line Android-only change
+(`android/gradle.properties`, diff confirmed with `git diff --name-only`); both
+were closed without merging and the first probe's runs were cancelled after its
+trigger set was recorded, to conserve macOS runners.
+
+| lane | before (probe #317, off main) | after (probe #318, head carries this fix) |
+|---|---|---|
+| iOS Build & Test | triggered: iOS Build & Simulator Test + macOS Native Tests | not triggered at all |
+| iOS Build (mobile.yml) | pending, headed for the full XCFramework + xcodebuild | pass in 10s, steps skipped |
+| Android Wiring Gate | triggered | triggered, pass 9s |
+| Android JVM Unit Tests / Debug APK | triggered | triggered (the real work for this diff) |
+
+Workflows started for the same diff: 7 before, 2 after. That count is confounded
+and is not offered as the headline: `ci.yml`, `lint.yml`, `hygiene.yml` and
+`cross.yml` all declare `pull_request: branches: [main]`, so the probe's non-main
+base suppressed them regardless of any path filter. Only `mobile.yml` and
+`ios-build-test.yml` carry no branch restriction, and those are the two rows that
+carry the evidence.
+
+[WARNING] Two claims here are therefore verified structurally and locally, not
+observed on GitHub for an Android-only PR: the `Swift Linting` skip, and that the
+four required contexts still report. Both need a PR into `main` whose diff does
+not include `.github/**`, and that cannot exist until this work lands, because a
+branch carrying the workflow change has a `.github/**` diff which the action
+treats as unrecognised and therefore fails open on. On PR #319 itself all four
+required contexts report normally.
 
 ### Deliberately not done here
 
