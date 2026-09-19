@@ -17,7 +17,8 @@ It also exercises `.github/actions/detect-platform-change`, the gate that decide
 whether a non-required lane may skip its work. That gate is only safe while it
 FAILS OPEN: on push, on manual dispatch, when the diff cannot be computed, and
 whenever a changed path is not recognised -- a gate that fails closed is a check
-that cannot fail. The gate's own bash is extracted and run against a stubbed git.
+that cannot fail. The gate's own bash is extracted and run inside a scratch
+git repository whose diff is exactly the fixture's changed-path set.
 
 Parsing uses a REAL YAML parser and prints which one, because a line-oriented
 reader that guesses at the format is how an earlier revision of this check BOTH
@@ -289,58 +290,103 @@ GATE_SCENARIOS = (
      {"ios_relevant": "true", "android_relevant": "true"}),
     ("diff cannot be computed", "pull_request", None, True,
      {"ios_relevant": "true", "android_relevant": "true"}),
-    # Not a fail-open case: the gate must still CLASSIFY, or "fails open" would be
+    # Neither case is fail-open: the gate must still CLASSIFY, or "fails open" would be
     # satisfied by a gate that answers true for everything.
     ("android-only diff", "pull_request",
      ["android/app/src/main/java/com/scmessenger/android/Foo.kt"], False,
      {"ios_relevant": "false", "android_relevant": "true"}),
+    ("ios-only diff", "pull_request",
+     ["iOS/SCMessenger/Views/ChatView.swift"], False,
+     {"ios_relevant": "true", "android_relevant": "false"}),
 )
 
-STUB_GIT = """#!/usr/bin/env bash
-set -u
-case "$1 $2" in
-  "cat-file -e"|"fetch --depth=1") exit 0 ;;
-  "diff --name-only")
-    if [ "${STUB_DIFF_FAIL:-0}" = "1" ]; then exit 128; fi
-    printf '%s\\n' "${STUB_DIFF:-}"
-    exit 0 ;;
-esac
-exit 0
-"""
+GIT_IDENTITY = ("-c", "user.email=gate-harness@example.invalid",
+                "-c", "user.name=gate-harness",
+                "-c", "commit.gpgsign=false",
+                "-c", "core.autocrlf=false")
+
+# A commit that cannot resolve: the PR base a shallow checkout never fetched.
+UNCOMPUTABLE_SHA = "0" * 40
+
+
+def scratch_git(repo, *args):
+    """git, run inside a scenario's own repository; raises on failure."""
+    return subprocess.run(["git", *GIT_IDENTITY, "-C", str(repo), *args],
+                          capture_output=True, text=True, timeout=60, check=True)
+
+
+def make_scratch_repo(root, paths):
+    """A real repository whose second commit changes exactly `paths`.
+
+    The gate reads its changed-path set from git itself, so a real diff is the
+    only fixture that exercises the classifier the way production does. A git
+    stubbed onto PATH does not: bash skips a PATH entry it cannot execute, so
+    wherever the exec bit is not honoured (the Linux runner) the action silently
+    diffs the real checkout instead, and every pull_request scenario then reports
+    fail-open -- asserting the very thing this fixture exists to test.
+
+    Returns the repository, the base commit an ordinary PR would carry, and the
+    paths git actually reports for the diff.
+    """
+    repo = root / "repo"
+    repo.mkdir(parents=True)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    scratch_git(repo, "init", "-q")
+    scratch_git(repo, "add", "-A")
+    scratch_git(repo, "commit", "-qm", "base")
+    for rel in paths:
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("fixture\n", encoding="utf-8")
+    scratch_git(repo, "add", "-A")
+    # --allow-empty: the push/dispatch and uncomputable scenarios name no
+    # changed paths, and their verdict comes from the trigger, not the diff.
+    scratch_git(repo, "commit", "-qm", "changed", "--allow-empty")
+    base = scratch_git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    observed = sorted(scratch_git(repo, "diff", "--name-only", base, "HEAD").stdout.split())
+    return repo, base, observed
 
 
 def run_gate_scenarios(script_text, declared_outputs):
-    # The composite action interpolates the PR base SHA before running; do the
-    # same, and refuse anything that cannot be substituted.
-    script_text = re.sub(r"\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}",
-                         "deadbeef" * 5, script_text)
-    leftovers = sorted(set(re.findall(r"\$\{\{[^}]*\}\}", script_text)))
-    if leftovers:
-        return [
-            f"the gate script uses expressions the harness cannot substitute, so its fail-open "
-            f"behaviour cannot be verified: {leftovers}"
-        ], []
-
     harness_root = REPO_ROOT / "tmp"
     harness_root.mkdir(exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="gate-harness-", dir=str(harness_root)))
-    (workdir / "bin").mkdir()
-    (workdir / "gate.sh").write_text(script_text, encoding="utf-8")
-    (workdir / "bin" / "git").write_text(STUB_GIT, encoding="utf-8")
-
     findings, results = [], []
+
     for label, event, changed, diff_fails, expected in GATE_SCENARIOS:
-        output_file = workdir / "out.env"
+        workdir = Path(tempfile.mkdtemp(prefix="gate-harness-", dir=str(harness_root)))
+        fixture_paths = sorted(changed or [])
+        repo, base_sha, observed = make_scratch_repo(workdir, fixture_paths)
+        if observed != fixture_paths:
+            findings.append(
+                f"gate scenario '{label}': the scratch repository does not produce the diff it "
+                f"claims (wanted {fixture_paths}, git reports {observed}), so the scenario would "
+                f"assert something other than what it names")
+            continue
+        if diff_fails:
+            # The genuinely uncomputable case, asserted on its own: a base commit
+            # nothing can resolve, which is what a shallow checkout can leave.
+            base_sha = UNCOMPUTABLE_SHA
+
+        # The composite action interpolates the PR base SHA before running; do
+        # the same, with a SHA that exists in this scenario's repository.
+        script = re.sub(r"\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}",
+                        base_sha, script_text)
+        leftovers = sorted(set(re.findall(r"\$\{\{[^}]*\}\}", script)))
+        if leftovers:
+            findings.append(
+                f"the gate script uses expressions the harness cannot substitute, so its fail-open "
+                f"behaviour cannot be verified: {leftovers}")
+            return findings, results
+
+        (workdir / "gate.sh").write_text(script, encoding="utf-8")
         env = dict(os.environ)
         env.update({
-            "PATH": f"{workdir / 'bin'}{os.pathsep}{env.get('PATH', '')}",
             "GITHUB_EVENT_NAME": event,
-            "GITHUB_OUTPUT": str(output_file),
-            "STUB_DIFF": "\n".join(changed or []),
-            "STUB_DIFF_FAIL": "1" if diff_fails else "0",
+            "GITHUB_OUTPUT": str(workdir / "out.env"),
         })
-        done = subprocess.run(["bash", str(workdir / "gate.sh")], cwd=str(REPO_ROOT), env=env,
+        done = subprocess.run(["bash", str(workdir / "gate.sh")], cwd=str(repo), env=env,
                               capture_output=True, text=True, timeout=120)
+        output_file = workdir / "out.env"
         emitted = {}
         if output_file.exists():
             for line in output_file.read_text(encoding="utf-8").splitlines():
