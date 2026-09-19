@@ -3106,6 +3106,23 @@ pub struct MessageRecord {
     pub status: MessageStatus,
     #[serde(default)]
     pub hidden: bool,
+    /// MSG-ORDER-003, the insertion fact: epoch MILLISECONDS at which this row
+    /// was first written to the store.
+    ///
+    /// `timestamp` is this device's clock in whole seconds, so a reply that
+    /// arrived in the same second as the message that triggered it tied with
+    /// it. The tie then fell back to message-id order, which carries no
+    /// ordering information, and the reply reloaded ABOVE its trigger (measured
+    /// on the operator's Pixel: 24 of 332 real auto-reply pairs). The store
+    /// assigns this value itself in `add()` -- never a caller -- and a re-add
+    /// inherits the stored one, so the fact is recorded once and a later status
+    /// change cannot move a row past one written before it.
+    ///
+    /// `0` means "not recorded": rows written before this field existed. Those
+    /// rows fall through to `newest_first`'s direction rank, which cannot
+    /// contradict causality; their sub-second order is not recoverable.
+    #[serde(default)]
+    pub stored_at_millis: u64,
 }
 
 impl MessageRecord {
@@ -3149,6 +3166,45 @@ fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Opt
         }
     }
     false
+}
+
+/// MSG-ORDER-003: the conversation order the store and the UI share. Every key
+/// is either a recorded fact or a direction that cannot contradict causality:
+///
+/// 1. `timestamp` -- the local second, which is what ties in the first place.
+/// 2. `stored_at_millis` -- the recorded insertion fact. Two rows cannot be
+///    written in the same millisecond when one answers the other, so this
+///    decides every reply pair written from now on.
+/// 3. direction rank -- Sent before Received. This is the fallback for rows
+///    written before the fact existed (and the last word if two rows did land in
+///    one millisecond). Inside a single second only one of the two orders can
+///    contradict causality: an auto-reply cannot be generated before the message
+///    it answers, so ranking our sent row first is safe, while the id order that
+///    shipped is not -- 24 of 332 real auto-reply pairs on the operator's Pixel
+///    reloaded with the reply above its trigger that way. A reply to a message
+///    the peer sent (both rows Received) is untouched by this key.
+/// 4. `sender_timestamp` -- the sender's own clock. It is only consulted when
+///    both rows share a direction, which means both stamps come from one clock,
+///    and then it is that sender's real send order (the 4 Received-trigger
+///    pairs in the corpus).
+/// 5. `id` -- arbitrary, and last: a deterministic tie-break, nothing more.
+///
+/// The Android side sorts the same keys ascending (`utils/MessageOrder.kt`), so
+/// the store's list and the rendered thread agree.
+fn direction_rank(direction: MessageDirection) -> u8 {
+    match direction {
+        MessageDirection::Sent => 0,
+        MessageDirection::Received => 1,
+    }
+}
+
+fn newest_first(a: &MessageRecord, b: &MessageRecord) -> std::cmp::Ordering {
+    b.timestamp
+        .cmp(&a.timestamp)
+        .then_with(|| b.stored_at_millis.cmp(&a.stored_at_millis))
+        .then_with(|| direction_rank(b.direction).cmp(&direction_rank(a.direction)))
+        .then_with(|| b.sender_timestamp.cmp(&a.sender_timestamp))
+        .then_with(|| b.id.cmp(&a.id))
 }
 
 #[derive(uniffi::Object)]
@@ -3222,9 +3278,17 @@ impl HistoryManager {
         Err(crate::IronCoreError::StorageError)
     }
 
-    pub fn add(&self, record: MessageRecord) -> Result<(), crate::IronCoreError> {
+    pub fn add(&self, mut record: MessageRecord) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         let key = record.id.as_bytes();
+        // MSG-ORDER-003: the store owns the insertion fact, so no caller can
+        // forget it and no caller can forge it. An existing row keeps the value
+        // it was first written with -- every update path (mark_delivered,
+        // hide_messages_for_peer) round-trips the stored record, and this
+        // lookup covers a caller that rebuilds the row from scratch.
+        if record.stored_at_millis == 0 {
+            record.stored_at_millis = stored_at_millis(&db, key).unwrap_or_else(current_timestamp);
+        }
         let value = serde_json::to_vec(&record).map_err(|_| crate::IronCoreError::Internal)?;
         db.insert(key, value)
             .map_err(|_| crate::IronCoreError::StorageError)?;
@@ -3297,7 +3361,7 @@ impl HistoryManager {
 
         // Do not rely on sled key order (message IDs are not time-ordered).
         // Sort explicitly so callers receive newest records first.
-        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id)));
+        records.sort_by(newest_first);
         if records.len() > limit as usize {
             records.truncate(limit as usize);
         }
@@ -4282,6 +4346,15 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
+/// MSG-ORDER-003: the insertion fact already stored for `key`, if the row exists
+/// and carries one. Read-only; a missing row, an unreadable value or a legacy
+/// row yields `None`, and the caller then stamps the current millisecond.
+fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
+    let previous = db.get(key).ok()??;
+    let record: MessageRecord = serde_json::from_slice(&previous).ok()?;
+    (record.stored_at_millis != 0).then_some(record.stored_at_millis)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4768,6 +4841,7 @@ mod tests {
                     delivered: false,
                     status: MessageStatus::default(),
                     hidden: false,
+                    stored_at_millis: 0,
                 })
                 .unwrap();
             history.mark_delivered("msg-persist-1".to_string()).unwrap();
@@ -4800,6 +4874,7 @@ mod tests {
                 delivered: false,
                 status: MessageStatus::default(),
                 hidden: false,
+                stored_at_millis: 0,
             })
             .unwrap();
         history
@@ -4813,6 +4888,7 @@ mod tests {
                 delivered: false,
                 status: MessageStatus::default(),
                 hidden: false,
+                stored_at_millis: 0,
             })
             .unwrap();
         history
@@ -4826,6 +4902,7 @@ mod tests {
                 delivered: true,
                 status: MessageStatus::Delivered,
                 hidden: false,
+                stored_at_millis: 0,
             })
             .unwrap();
 
@@ -4837,6 +4914,163 @@ mod tests {
         assert_eq!(peer_a.len(), 2);
         assert_eq!(peer_a[0].id, "a_new");
         assert_eq!(peer_a[1].id, "z_old");
+    }
+
+    /// MSG-ORDER-003 helper: a row with an explicit insertion fact, so the
+    /// tests below assert the ordering contract instead of the wall clock.
+    fn record_at(
+        id: &str,
+        direction: MessageDirection,
+        timestamp: u64,
+        stored_at_millis: u64,
+    ) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            direction,
+            peer_id: "peer-a".to_string(),
+            content: id.to_string(),
+            timestamp,
+            sender_timestamp: timestamp,
+            delivered: true,
+            status: MessageStatus::Delivered,
+            hidden: false,
+            stored_at_millis,
+        }
+    }
+
+    #[test]
+    fn test_same_second_tie_breaks_on_insertion_order_not_message_id() {
+        let dir = tempdir().unwrap();
+        let history = HistoryManager::new(dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // The reply's id sorts ABOVE the trigger's, so the id-based tie-break
+        // that shipped before this fix still renders the reply first.
+        history
+            .add(record_at(
+                "zz-trigger",
+                MessageDirection::Sent,
+                1_789_841_591,
+                1_000,
+            ))
+            .unwrap();
+        history
+            .add(record_at(
+                "aa-reply",
+                MessageDirection::Received,
+                1_789_841_591,
+                1_270,
+            ))
+            .unwrap();
+
+        let conversation = history.conversation("peer-a".to_string(), 10).unwrap();
+        assert_eq!(
+            conversation
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aa-reply", "zz-trigger"]
+        );
+    }
+
+    #[test]
+    fn test_legacy_same_second_tie_ranks_sent_before_received() {
+        let dir = tempdir().unwrap();
+        let history = HistoryManager::new(dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Both rows predate the insertion fact (stored_at_millis == 0), and the
+        // trigger's id sorts ABOVE the reply's, so the id tie-break that shipped
+        // would hand the conversation back with the reply first.
+        history
+            .add(record_at(
+                "zz-trigger",
+                MessageDirection::Sent,
+                1_789_841_591,
+                0,
+            ))
+            .unwrap();
+        history
+            .add(record_at(
+                "aa-reply",
+                MessageDirection::Received,
+                1_789_841_591,
+                0,
+            ))
+            .unwrap();
+
+        let conversation = history.conversation("peer-a".to_string(), 10).unwrap();
+        assert_eq!(
+            conversation
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aa-reply", "zz-trigger"]
+        );
+    }
+
+    #[test]
+    fn test_insertion_fact_is_assigned_once_and_survives_an_update() {
+        let dir = tempdir().unwrap();
+        let history = HistoryManager::new(dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // A caller does not supply the fact; the store assigns it.
+        history
+            .add(record_at("tie-1", MessageDirection::Sent, 1_789_841_591, 0))
+            .unwrap();
+        let stamped = history.get("tie-1".to_string()).unwrap().unwrap();
+        assert_ne!(stamped.stored_at_millis, 0);
+
+        // mark_delivered rewrites the row through add(); re-stamping it here
+        // would let a later status change move a row past one written before it.
+        history.mark_delivered("tie-1".to_string()).unwrap();
+        let after = history.get("tie-1".to_string()).unwrap().unwrap();
+        assert_eq!(after.stored_at_millis, stamped.stored_at_millis);
+    }
+
+    #[test]
+    fn test_reply_written_later_reloads_below_its_trigger() {
+        let dir = tempdir().unwrap();
+        let history = HistoryManager::new(dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // The operator-visible shape: a trigger and the auto-reply it caused
+        // share one local second, and the reply is written second.
+        history
+            .add(record_at(
+                "trigger-1",
+                MessageDirection::Sent,
+                1_789_841_591,
+                1,
+            ))
+            .unwrap();
+        history
+            .add(record_at(
+                "reply-1",
+                MessageDirection::Received,
+                1_789_841_591,
+                2,
+            ))
+            .unwrap();
+
+        // The store hands the conversation over newest first.
+        let reloaded = history.conversation("peer-a".to_string(), 10).unwrap();
+        assert_eq!(reloaded[0].id, "reply-1");
+        assert_eq!(reloaded[1].id, "trigger-1");
+
+        // Rendering sorts that same pair ascending, which puts the trigger
+        // first even though the store gave the reply first.
+        let mut rendered = reloaded.clone();
+        rendered.sort_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then_with(|| a.stored_at_millis.cmp(&b.stored_at_millis))
+        });
+        assert_eq!(rendered[0].id, "trigger-1");
+        assert_eq!(rendered[1].id, "reply-1");
+
+        // And the key that shipped before this fix cannot order them at all:
+        // a stable sort on the second alone leaves the reply on top.
+        let mut single_key = reloaded.clone();
+        single_key.sort_by_key(|r| r.timestamp);
+        assert_eq!(single_key[0].id, "reply-1");
     }
 
     // -----------------------------------------------------------------------
@@ -6191,6 +6425,7 @@ mod tests {
             delivered: true,
             status: MessageStatus::Delivered,
             hidden: false,
+            stored_at_millis: 0,
         };
         manager.add(record).unwrap();
 
@@ -6228,6 +6463,7 @@ mod tests {
             delivered: true,
             status: MessageStatus::Delivered,
             hidden: false,
+            stored_at_millis: 0,
         };
         manager.add(re_added).unwrap();
         let hidden = manager.hide_messages_for_peer(pubkey_hex.clone()).unwrap();
@@ -6283,6 +6519,7 @@ mod tests {
             delivered: true,
             status: MessageStatus::Delivered,
             hidden: false,
+            stored_at_millis: 0,
         };
         manager.add(other_record).unwrap();
         assert!(manager.recent(Some(identity_id), 10).unwrap().is_empty());

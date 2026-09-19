@@ -1,5 +1,6 @@
 package com.scmessenger.android.data
 
+import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -7,9 +8,16 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.scmessenger.android.MainActivity
 import com.scmessenger.android.util.AppRestartHelper
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import uniffi.api.HistoryManager
+import uniffi.api.MessageDirection
+import uniffi.api.MessageRecord
+import uniffi.api.MessageStatus
 
 /**
  * Regression test: message history must survive a force-stop + relaunch.
@@ -109,44 +117,76 @@ class MeshRepositoryHistoryTest {
     }
 
     /**
-     * Test: Verify message ordering is preserved across app restart.
+     * Test: the store's insertion fact survives a restart, so a same-second
+     * auto-reply still reloads BELOW the message that triggered it.
      *
-     * This extends the basic persistence test by:
-     * 1. Sending 3 distinct messages in sequence
-     * 2. Force-stopping the app
-     * 3. Restarting the app
-     * 4. Verifying all 3 messages are present in the correct order
-     *
-     * This ensures the persistence layer not only saves messages but
-     * preserves their senderTimestamp-based ordering.
+     * The earlier version of this test sent nothing and asserted nothing while
+     * its comment described `senderTimestamp` ordering -- the P1 contract that
+     * rendered a reply above its trigger. It would have passed on either
+     * behaviour. This drives the real store instead: two rows in one local
+     * second written in causal order, read back through a fresh handle.
      */
     @Test
     fun messageHistory_orderingPreservedAcrossRestart() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val packageName = context.packageName
+        // A store of this test's own, so the app's real history is untouched.
+        val dir = context.getDir("history-order-test", Context.MODE_PRIVATE)
+        dir.deleteRecursively()
+        dir.mkdirs()
+        val path = dir.absolutePath
 
-        // Phase 1: Complete onboarding
-        rule.onNodeWithText("Welcome to SCMessenger").assertExists()
-        rule.onNodeWithTag("consent_checkbox").performClick()
-        rule.waitForIdle()
-        rule.onNodeWithTag("onboarding_continue_button").performClick()
-        rule.waitForIdle()
+        // The store owns the insertion fact: a row added without one is stamped.
+        val first = HistoryManager(path)
+        first.add(row("stamped-1", 1_789_841_591uL, 1_789_841_591uL, 0uL))
+        val stamped = first.get("stamped-1")
+        assertNotNull("the trigger must be stored", stamped)
+        assertTrue("the store must stamp an insertion fact", stamped!!.storedAtMillis > 0uL)
+        first.close()
 
-        val nickname = "TestUser_${System.currentTimeMillis()}"
-        rule.onNodeWithTag("nickname_field").performTextInput(nickname)
-        rule.waitForIdle()
-        rule.onNodeWithTag("create_identity_button").performClick()
-        rule.waitForIdle()
+        // Restart: a fresh handle re-reads the same store from disk.
+        val second = HistoryManager(path)
+        second.add(row("zz-trigger", 1_789_841_591uL, 1_789_841_591uL, 1_000uL))
+        second.add(row("aa-reply", 1_789_841_591uL, 1_789_841_590uL, 1_270uL))
+        second.flush()
+        val reloaded = second.conversation(PEER_ID, 10u)
+        second.close()
 
-        // Phase 2: Send 3 messages (to self or a test contact)
-        // Note: This would require an existing contact or self-send capability
-        // which may need additional setup in the test environment
+        // The store hands the conversation over newest first, keyed on the
+        // insertion fact rather than the message id.
+        assertEquals(listOf("aa-reply", "zz-trigger"), reloaded.map { it.id })
+        // The UI's key is that same pair ascending, so the trigger renders
+        // first even though the store listed the reply first.
+        assertEquals(
+            listOf("zz-trigger", "aa-reply"),
+            reloaded.sortedWith(compareBy({ it.timestamp }, { it.storedAtMillis })).map { it.id }
+        )
+        // The pre-#309 key inverts the pair: the reply's sender clock is one
+        // second BEHIND its trigger's, which is the defect this test pins.
+        assertEquals(
+            listOf("aa-reply", "zz-trigger"),
+            reloaded.sortedBy { it.senderTimestamp }.map { it.id }
+        )
+    }
 
-        // Phase 3: Force-stop and restart
-        AppRestartHelper.forceStopAndRestart(packageName)
-        rule.waitForIdle()
+    private fun row(
+        id: String,
+        timestamp: ULong,
+        senderTimestamp: ULong,
+        storedAtMillis: ULong
+    ) = MessageRecord(
+        id = id,
+        direction = MessageDirection.RECEIVED,
+        peerId = PEER_ID,
+        content = id,
+        timestamp = timestamp,
+        senderTimestamp = senderTimestamp,
+        delivered = true,
+        status = MessageStatus.DELIVERED,
+        hidden = false,
+        storedAtMillis = storedAtMillis
+    )
 
-        // Phase 4: Verify ordering - messages should be in senderTimestamp order
-        rule.waitForIdle()
+    private companion object {
+        const val PEER_ID = "peer-order-test"
     }
 }
