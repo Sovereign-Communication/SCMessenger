@@ -2,10 +2,11 @@
 # AWS scm-node redeploy at the current main SHA.
 #
 # Usage: scripts/aws_deploy.sh [host-ip]
-#   With no argument the host is discovered from the EC2 API by instance tag,
-#   because the node's public IP changes on every instance replacement and a
-#   hardcoded address goes stale silently. Requires ~/.ssh/scm-node-key.pem and,
-#   for discovery, ~/.config/scmorc/aws.env.
+#   With no argument the host is resolved by scripts/aws_node_ip.sh -- $SCM_AWS_HOST
+#   when set, otherwise the EC2 API by instance tag -- because the node's public
+#   IP changes on every instance replacement and a hardcoded address goes stale
+#   silently. Requires ~/.ssh/scm-node-key.pem and, for discovery,
+#   ~/.config/scmorc/aws.env.
 #
 # Precondition: the Docker Publish workflow has built the image from the SHA
 # you intend to deploy. `docker-publish.yml` builds `latest` only from main;
@@ -29,24 +30,10 @@ IMAGE="${IMAGE_TAG:-testbotz/scmessenger:latest}"
 HOST_IP="${1:-}"
 if [ -z "$HOST_IP" ]; then
   echo "[INFO] Discovering scm-always-on-node public IP from the EC2 API"
-  HOST_IP=$(python3 - <<'PY'
-import os, sys
-sys.path.insert(0, os.path.expanduser("~/Documents/GitHub/SCMessenger/.codebuff_deploy/aws"))
-try:
-    from scm_session import session
-except Exception:
-    print("", end="")
-    raise SystemExit(0)
-ec2 = session().client("ec2")
-r = ec2.describe_instances(Filters=[
-    {"Name": "tag:Name", "Values": ["scm-always-on-node", "scm-node", "scmessenger"]},
-    {"Name": "instance-state-name", "Values": ["running"]},
-])
-ips = [i.get("PublicIpAddress") for res in r.get("Reservations", [])
-       for i in res.get("Instances", []) if i.get("PublicIpAddress")]
-print(ips[0] if ips else "", end="")
-PY
-)
+  # One copy of the lookup, shared with scripts/tier_a_conformance.sh. It
+  # honors $SCM_AWS_HOST first, then the EC2 API by instance tag, and never
+  # falls back to a hardcoded address.
+  HOST_IP="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/aws_node_ip.sh")"
 fi
 
 if [ -z "$HOST_IP" ]; then
