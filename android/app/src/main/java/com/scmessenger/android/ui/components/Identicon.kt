@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -31,6 +32,9 @@ fun Identicon(
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
 ) {
+    // Colors/pattern are cheap (6 values) so no per-frame memoization is
+    // needed here; the peer-id and hex wrappers memoize the byte array
+    // itself (string-keyed) which is the real per-recomposition win.
     val colors = generateColors(data)
     val pattern = generatePattern(data)
 
@@ -117,12 +121,14 @@ fun IdenticonFromHex(
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
 ) {
-    val bytes = try {
-        hexString.chunked(2)
-            .map { it.toInt(16).toByte() }
-            .toByteArray()
-    } catch (e: Exception) {
-        ByteArray(0)
+    val bytes = remember(hexString) {
+        try {
+            hexString.chunked(2)
+                .map { it.toInt(16).toByte() }
+                .toByteArray()
+        } catch (e: Exception) {
+            ByteArray(0)
+        }
     }
 
     Identicon(data = bytes, size = size, modifier = modifier)
@@ -137,8 +143,8 @@ fun IdenticonFromPeerId(
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
 ) {
-    // Use the peer ID string bytes directly for simplicity
-    val bytes = peerId.toByteArray()
+    // Cache the byte array so rapid peer churn does not reallocate per frame.
+    val bytes = remember(peerId) { peerId.toByteArray() }
     Identicon(data = bytes, size = size, modifier = modifier)
 }
 

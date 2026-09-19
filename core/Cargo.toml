@@ -54,6 +54,11 @@ dirs = "5.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-appender = { workspace = true }
+# Local interface enumeration for the dial self-address guard (already in
+# the lock as a transitive dep of the libp2p transport stack; native only -
+# the crate cannot compile for wasm32). Used to catch poisoned ledger
+# entries naming OUR interface IPs on OUR listen ports.
+if-addrs = "0.15"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }
@@ -62,6 +67,12 @@ getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 rexie = "0.6"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+# Only the mobile-gated DNS transport in transport/swarm.rs uses hickory
+# directly (ResolverConfig::google() preset removal in 0.26); gating it here
+# keeps hickory out of the native and wasm32 graphs.
+hickory-resolver = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 tokio = { workspace = true, features = ["full"] }

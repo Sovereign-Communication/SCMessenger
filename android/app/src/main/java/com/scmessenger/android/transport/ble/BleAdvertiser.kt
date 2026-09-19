@@ -10,6 +10,7 @@ import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
@@ -38,7 +39,13 @@ class BleAdvertiser(private val context: Context) {
 
     // Rotation management
     private var rotationIntervalMs: Long = 0L  // 0 = no rotation
-    private val handler = Handler(Looper.getMainLooper())
+    // D8 fix: advertising rotation makes BT binder calls; run them on a dedicated
+    // thread so a wedged Bluetooth stack can never stall the main thread (live
+    // launch-freeze 2026-09-09, see D8 in the drop-phase RCA).
+    private val bleThread: HandlerThread by lazy {
+        HandlerThread("BleAdvertiserThread").apply { start() }
+    }
+    private val handler = Handler(bleThread.looper)
     private var rotationRunnable: Runnable? = null
 
     // Advertise settings
@@ -190,6 +197,13 @@ class BleAdvertiser(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startAdvertising() {
+        // D8 fix: the advertiser.startAdvertising() call below is a binder call
+        // into the Bluetooth stack; post it to the BLE thread so a wedged stack
+        // can never block the caller (often the main thread).
+        handler.post { startAdvertisingInternal() }
+    }
+
+    private fun startAdvertisingInternal() {
         if (advertiser == null) {
             Timber.w("Bluetooth Advertiser not available")
             return
@@ -299,6 +313,11 @@ class BleAdvertiser(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun stopAdvertising() {
+        // D8 fix: binder call posted to the BLE thread (see startAdvertising).
+        handler.post { stopAdvertisingInternal() }
+    }
+
+    private fun stopAdvertisingInternal() {
         if (advertiser == null || !isAdvertising) return
         if (!hasAdvertisePermission()) {
             Timber.w("BLUETOOTH_ADVERTISE permission missing; cannot stop BLE advertising cleanly")

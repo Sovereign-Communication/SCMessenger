@@ -129,15 +129,13 @@ class AnrWatchdog(
      * Stops non-critical background operations.
      */
     private fun reduceSystemLoad() {
+        // HANG-ANR-001: do not pause the mesh as "load reduction". ACTION_PAUSE
+        // is a blocking FFI that makes the hang worse and can drop custody.
+        // Logging only — the watchdog's job is detection, not lifecycle mutation.
         try {
-            // Notify service to reduce activity
-            val intent = Intent(context, MeshForegroundService::class.java).apply {
-                action = MeshForegroundService.ACTION_PAUSE
-            }
-            context.startService(intent)
-            Timber.d("Reduced system load via service pause")
+            Timber.w("ANR load reduction: mesh left running (pause was itself a hang source)")
         } catch (e: Exception) {
-            Timber.w(e, "Failed to reduce system load")
+            Timber.w(e, "Failed to log ANR load reduction")
         }
     }
 
@@ -183,14 +181,15 @@ class AnrWatchdog(
             Timber.e(e, "Failed to write ANR diagnostics")
         }
 
-        // Request service restart via intent (safe from background thread)
+        // Request service restart via intent (safe from background thread).
+        // HANG-ANR-001: do NOT ACTION_START during a hang. A long startMeshService
+        // holding the lifecycle lock is the usual cause; restarting while it runs
+        // piles another start on the same lock and turns a 20s stall into a
+        // multi-minute freeze. Log and leave recovery to the user/operator.
         try {
-            val restartIntent = Intent(context, MeshForegroundService::class.java).apply {
-                action = MeshForegroundService.ACTION_START
-            }
-            context.startService(restartIntent)
+            Timber.w("ANR recovery: NOT restarting MeshForegroundService during hang (HANG-ANR-001)")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to trigger ANR recovery restart")
+            Timber.e(e, "Failed to log ANR recovery decision")
         }
     }
 

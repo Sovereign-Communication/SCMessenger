@@ -90,6 +90,37 @@ pub struct AddContactResponse {
 pub struct PeerEntry {
     pub peer_id: String,
     pub reputation: f64,
+    /// Canonical triad (PeerID / public_key / identity_id) when resolvable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triad: Option<PeerIdTriadDto>,
+}
+
+/// DTO for the three self-consistent peer identifiers used across apps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerIdTriadDto {
+    pub libp2p_peer_id: Option<String>,
+    pub public_key_hex: Option<String>,
+    pub identity_id: Option<String>,
+    pub input_kind: String,
+    pub self_certifying: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeerResolveResponse {
+    pub success: bool,
+    pub input: String,
+    pub triad: Option<PeerIdTriadDto>,
+    pub error: Option<String>,
+}
+
+pub fn triad_dto(t: scmessenger_core::identity::PeerIdTriad) -> PeerIdTriadDto {
+    PeerIdTriadDto {
+        libp2p_peer_id: t.libp2p_peer_id,
+        public_key_hex: t.public_key_hex,
+        identity_id: t.identity_id,
+        input_kind: t.input_kind,
+        self_certifying: t.self_certifying,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1013,14 +1044,45 @@ async fn handle_get_peers(
         .map(|p| {
             let pid = p.to_string();
             let reputation = ctx.core.get_peer_reputation(pid.clone());
+            let triad = scmessenger_core::identity::PeerIdTriad::resolve(&pid).map(triad_dto);
             PeerEntry {
                 peer_id: pid,
                 reputation,
+                triad,
             }
         })
         .collect();
 
     Ok(AxumJson(GetPeersResponse { peers }))
+}
+
+/// GET /api/peer-resolve?input=<peer_id | public_key_hex | identity_id>
+#[allow(clippy::disallowed_methods)]
+async fn handle_peer_resolve(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<AxumJson<PeerResolveResponse>, (StatusCode, String)> {
+    let input = q
+        .get("input")
+        .or_else(|| q.get("id"))
+        .or_else(|| q.get("peer_id"))
+        .cloned()
+        .unwrap_or_default();
+    match scmessenger_core::identity::PeerIdTriad::resolve(&input) {
+        Some(t) => Ok(AxumJson(PeerResolveResponse {
+            success: true,
+            input,
+            triad: Some(triad_dto(t)),
+            error: None,
+        })),
+        None => Ok(AxumJson(PeerResolveResponse {
+            success: false,
+            input,
+            triad: None,
+            error: Some(
+                "unrecognized identifier: expected libp2p peer id (12D3…), 64-hex public key, or 64-hex identity_id".into(),
+            ),
+        })),
+    }
 }
 
 async fn handle_get_swarm_stats(
@@ -1373,6 +1435,12 @@ async fn handle_get_identity(
     State(ctx): State<Arc<ApiContext>>,
 ) -> Result<AxumJson<serde_json::Value>, (StatusCode, String)> {
     let info = ctx.core.get_identity_info();
+    let triad = info
+        .libp2p_peer_id
+        .as_deref()
+        .or(info.public_key_hex.as_deref())
+        .and_then(scmessenger_core::identity::PeerIdTriad::resolve)
+        .map(triad_dto);
     Ok(AxumJson(serde_json::json!({
         "identity_id": info.identity_id,
         "public_key_hex": info.public_key_hex,
@@ -1381,6 +1449,7 @@ async fn handle_get_identity(
         "initialized": info.initialized,
         "nickname": info.nickname,
         "libp2p_peer_id": info.libp2p_peer_id,
+        "triad": triad,
     })))
 }
 
@@ -1570,6 +1639,7 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
             }),
         )
         .route("/api/identity", get(handle_get_identity))
+        .route("/api/peer-resolve", get(handle_peer_resolve))
         .route("/api/send", post(handle_send_message))
         .route("/api/send/:message_id", get(handle_get_send_status))
         .route(

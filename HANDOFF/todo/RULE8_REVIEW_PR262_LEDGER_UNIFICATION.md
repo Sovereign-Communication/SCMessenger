@@ -1,7 +1,8 @@
 # Rule-8 adversarial review -- PR #262 (ledger unification) and #263 (routing feed)
 
-Status: OPEN (filed 2026-08-31)
-Priority: P0 -- neither #262 nor #263 can merge without a recorded APPROVE
+Status: CLOSED 2026-09-13 -- verdict WAS delivered pre-merge; this ticket was
+   never updated (see closure record at the end)
+Priority: resolved (was: P0 -- neither #262 nor #263 can merge without a recorded APPROVE)
 **Lane: NOT Freebuff.** Freebuff authored both #262 and #263; Rule-8 requires a reviewer that
 did not author the change. Route to the DashScope/Qwen lane (reasoning tier:
 `qwq-plus`, 906k remaining, or `deepseek-v4-pro-0813`, 1M) per
@@ -145,3 +146,32 @@ D6 defect where the function had zero callers repo-wide.
 Verdict for #263 to `HANDOFF/freebuff/inbox/RULE8_PR263_VERDICT.md`, same
 standard: APPROVE only on positively checked items, `UNVERIFIED` for anything
 you could not reach.
+
+---
+
+# CLOSURE RECORD (2026-09-13, Buffy / Freebuff recovery session)
+
+This ticket is CLOSED, not because the gate was skipped, but because it was
+satisfied and the satisfaction was filed under a different filename than this
+ticket demanded:
+
+- Delivered verdict: `HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md`
+  (2026-08-31 20:54) -- "VERDICT: PR #262 -- APPROVE" and "VERDICT: PR #263 --
+  APPROVE" from an independent seat (authored neither PR nor the T2 spec).
+  Trees pinned by explicit ref (`2e32ffad`, `bc5bff0f`, base `b2d8d126`),
+  four ledger-egress points enumerated, merge-tree conflict check, per-finding
+  file:line. This ticket asked for `RULE8_PR262_VERDICT.md` (and a separate
+  `RULE8_PR263_VERDICT.md`); the reviewer delivered a combined
+  `RULE8_PR262_PR263_VERDICT_OPUS.md` -- no agent later grepping for the
+  demanded filenames would find it, which is exactly what happened.
+- Both PRs merged 2026-09-01, AFTER the verdict. Timeline is clean.
+- Follow-up dispositions verified on main `5f1cf702` (evidence in
+  `HANDOFF/audit/T1_T2_CENSUS_DISPOSITION_2026-09-13.md` ADDENDUM): F1 closed
+  (T13-F9 legacy-flag strip), F2 closed (`clamp_wire_last_seen_ms`), F7 closed
+  (PR #268, 8-byte hints), F-DHT A closed (gated add_address sites). F6
+  [INFO] doc-line residual ticketed as
+  `HANDOFF/todo/P3_DOC_LEDGER_MIGRATION_F6_NOTES.md`.
+- Process lesson recorded: verdict-filename mismatches leave rule-8 tickets
+  open forever and make completed gates look like breaches. Future review
+  tickets should require the reviewer to ALSO append a one-line pointer to
+  this ticket's Status header on delivery.

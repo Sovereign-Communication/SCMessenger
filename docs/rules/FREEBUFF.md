@@ -133,6 +133,15 @@ Anything it needs must be on the page. Every task file carries:
 **May:** scoped implementation in `cli/`, `core/src/store/`, `android/`,
 workflow and config edits, test authoring, doc corrections, PR-queue burndown.
 
+**May not:**
+- **Drive the Pixel. Ever.** No UI automation, no `input text`/`input tap`, no
+  `am start`/`am force-stop` to reach a screen, no scroll-and-read of the UI. The
+  device belongs to the operator and is frequently in use. The ONLY permitted
+  device interactions are (a) deploying an APK (`adb install -r`) and (b)
+  passively pulling SCMessenger logs (`adb logcat`, and reading its own app
+  files/data through `run-as`). Everything else about device state is observed
+  from logs, never provoked. Operator directive, 2026-09-16, mandatory.
+
 **May not, without a human in the loop:**
 - Merge its own PR. Green CI is necessary, not sufficient.
 - Merge anything touching `core/src/{crypto,transport,routing,privacy}` without a

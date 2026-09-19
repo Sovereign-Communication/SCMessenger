@@ -482,6 +482,7 @@
     <string name="notification_peer_discovered_title">Peer Discovered</string>
     <string name="notification_peer_discovered_format">%1$s via %2$s</string>
     <string name="notification_message_request_title">Message Request from %1$s</string>
+    <string name="notification_summary_new_messages">New messages</string>
     <string name="notification_mesh_status_content_format">Connected: %1$d peers • Relayed: %2$d messages</string>
 
     <!-- Notification Channels -->

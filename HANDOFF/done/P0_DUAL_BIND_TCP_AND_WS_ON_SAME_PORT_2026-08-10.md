@@ -1,3 +1,14 @@
+> **RESOLVED 2026-09-10 -- moved to done/ per the 2026-08-29 closure ruling, verified in source this session.**
+> Evidence (this session, main@45ab59f9): `core/src/transport/multiport.rs:75-99`
+> `generate_listen_addresses()` now emits exactly one transport per port
+> (comment at :79 "exactly one transport per port"), dedupes via `seen_ports`
+> HashSet (:77, :84), and no longer pushes a `/ws` multiaddr for the same port.
+> The CTO_STATE 2026-08-29 entry had already ruled this fixed-in-code; this move
+> aligns the ticket with that ruling. Ticket's own acceptance #3 (regression test
+> for duplicate (family, port) entries) is partially met via dedup logic; the
+> probe-table re-run (acceptance #4/#5) remains Tier-A rig work.
+
+
 # P0 -- the node binds BOTH plain TCP and WebSocket to the same port
 
 Status: Open -- root cause identified in code and confirmed at runtime

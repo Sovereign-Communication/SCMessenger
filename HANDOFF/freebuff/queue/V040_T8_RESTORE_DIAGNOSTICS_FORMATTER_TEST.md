@@ -1,6 +1,6 @@
 # V040-T8 -- Restore the WS11 test deleted under a false premise
 
-Status: OPEN (filed 2026-08-31, from the T5 finding)
+Status: PR FILED -- #271 open, CI-VERIFIED (Android JVM Unit Tests job passed both restored tests on the fresh runner 2026-09-01); awaiting review.
 Priority: P2 -- small, and it closes a real coverage hole rather than a doc link
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: restore one Android unit test. No production code changes.
