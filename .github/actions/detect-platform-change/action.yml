@@ -1,0 +1,98 @@
+name: Detect platform-relevant change
+description: >-
+  Classifies a pull request diff by the platform lanes it can actually affect,
+  so a lane that cannot be affected by the diff does not spend a runner on it.
+  Fails open, and deliberately: on push/main or manual dispatch, when the diff
+  cannot be computed, and whenever a changed path is not recognised as one of
+  the known platform inputs, every output is true. An unnecessary run wastes a
+  runner; a lane skipped while it was still needed ships a regression
+  unverified. The second failure mode is the one this action refuses to risk.
+
+outputs:
+  ios_relevant:
+    description: "true when the diff can affect the iOS/macOS lanes (iOS/, the shared Rust core, Cargo manifests, mobile/, the XCFramework script); always true when the diff cannot be computed or contains an unrecognised path"
+    value: ${{ steps.detect.outputs.ios_relevant }}
+  android_relevant:
+    description: "true when the diff can affect the Android lanes (android/, the shared Rust core, Cargo manifests, mobile/, the wiring-gate scripts); always true when the diff cannot be computed or contains an unrecognised path"
+    value: ${{ steps.detect.outputs.android_relevant }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute platform-relevance flags
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Every early exit below sets BOTH flags true. Failing open is the only
+        # safe direction here: a lane wrongly skipped is a check that stopped
+        # being able to fail, which is worse than a slow queue (T12 section 3).
+        emit_all() {
+          {
+            echo "ios_relevant=true"
+            echo "android_relevant=true"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          # Push to main and manual dispatch always run every lane: main's runs
+          # are the trunk-health record, and there is no base to diff against
+          # cheaply. Fail open.
+          emit_all
+          exit 0
+        fi
+
+        BASE_SHA="${{ github.event.pull_request.base.sha }}"
+        # The default shallow checkout does not carry the base commit. Fetch it
+        # (depth 1) so the diff is against the true base, not FETCH_HEAD.
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          git fetch --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 || true
+        fi
+
+        CHANGED="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || true)"
+        if [ -z "$CHANGED" ]; then
+          # Diff unavailable (shallow edge cases). Fail open: run everything.
+          emit_all
+          exit 0
+        fi
+
+        # The three inert classes are the ones cross.yml already paths-ignores
+        # ('**.md', 'HANDOFF/**', 'docs/**') and the ones detect-docs-only uses,
+        # so the skip mechanisms agree on what cannot affect a build instead of
+        # each carrying its own opinion. Never read $? after a pipe: capture the
+        # match and test the value.
+        NON_INERT="$(printf '%s\n' "$CHANGED" | grep -vE '^docs/|^HANDOFF/|\.md$' || true)"
+        if [ -z "$NON_INERT" ]; then
+          # Documentation only: no platform lane has anything to observe.
+          echo "ios_relevant=false" >> "$GITHUB_OUTPUT"
+          echo "android_relevant=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Platform input sets. core/ and mobile/ are SHARED: the same Rust core
+        # is compiled into the iOS XCFramework and into the Android JNI library,
+        # and mobile/ is the mobile FFI crate, so a change in either is
+        # relevant to both platforms.
+        IOS_PATHS='^(iOS/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|scripts/build_xcframework\.sh$)'
+        ANDROID_PATHS='^(android/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|scripts/check_wiring\.py$|scripts/test_check_wiring\.py$)'
+
+        # A changed path in neither set (a workflow edit, a new top-level file, a
+        # script nobody has classified yet) is NOT assumed inert: fail open.
+        UNKNOWN_COUNT="$(printf '%s\n' "$NON_INERT" | grep -vcE "$IOS_PATHS|$ANDROID_PATHS" || true)"
+        if [ "$UNKNOWN_COUNT" != "0" ]; then
+          emit_all
+          exit 0
+        fi
+
+        if printf '%s\n' "$NON_INERT" | grep -qE "$IOS_PATHS"; then
+          echo "ios_relevant=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ios_relevant=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if printf '%s\n' "$NON_INERT" | grep -qE "$ANDROID_PATHS"; then
+          echo "android_relevant=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "android_relevant=false" >> "$GITHUB_OUTPUT"
+        fi
