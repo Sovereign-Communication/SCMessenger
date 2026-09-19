@@ -50,7 +50,7 @@ class RequestsInboxViewModel @Inject constructor(
             Timber.d("loadRequests skipped — ViewModelScope not active")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true

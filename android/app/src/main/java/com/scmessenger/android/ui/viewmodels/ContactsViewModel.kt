@@ -7,6 +7,7 @@ import com.scmessenger.android.service.MeshEventBus
 import com.scmessenger.android.service.PeerEvent
 import com.scmessenger.android.utils.ContactImportParseResult
 import com.scmessenger.android.utils.PeerIdValidator
+import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.parseContactImportPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -15,59 +16,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import java.math.BigInteger
 import javax.inject.Inject
 
-// UNIFICATION P1-1: Ed25519 field constants — mirrors Rust is_valid_public_key (VerifyingKey::from_bytes).
-// Roughly 50% of blake3 identity_id hashes are valid 64-hex but not valid curve points; Kotlin must not
-// treat them as pubkeys or merge with 30d0fa will fail.
-private val CONTACT_ED25519_P: BigInteger = BigInteger("57896044618658097711785492504343953926634992332820282019728792003956564819949")
-private val CONTACT_ED25519_D: BigInteger by lazy {
-    val p = CONTACT_ED25519_P
-    val inv121666 = BigInteger.valueOf(121666).modInverse(p)
-    BigInteger.valueOf(121665).negate().mod(p).multiply(inv121666).mod(p)
-}
-private val CONTACT_ED25519_SQRT_M1: BigInteger by lazy {
-    BigInteger.valueOf(2).modPow(CONTACT_ED25519_P.subtract(BigInteger.ONE).divide(BigInteger.valueOf(4)), CONTACT_ED25519_P)
-}
-private val CONTACT_ED25519_P_PLUS3_OVER8: BigInteger by lazy {
-    CONTACT_ED25519_P.add(BigInteger.valueOf(3)).divide(BigInteger.valueOf(8))
-}
-
-private fun isValidEd25519PointContact(hex: String): Boolean {
-    try {
-        if (hex.length != 64) return false
-        val bytes = ByteArray(32)
-        for (i in 0 until 32) {
-            val hi = Character.digit(hex[i * 2], 16)
-            val lo = Character.digit(hex[i * 2 + 1], 16)
-            if (hi == -1 || lo == -1) return false
-            bytes[i] = ((hi shl 4) or lo).toByte()
-        }
-        val yBytes = bytes.clone()
-        val signBit = (yBytes[31].toInt() and 0x80) != 0
-        yBytes[31] = (yBytes[31].toInt() and 0x7F).toByte()
-        val y = BigInteger(1, yBytes.reversedArray())
-        if (y >= CONTACT_ED25519_P) return false
-        val yy = y.multiply(y).mod(CONTACT_ED25519_P)
-        val u = yy.subtract(BigInteger.ONE).mod(CONTACT_ED25519_P)
-        val v = CONTACT_ED25519_D.multiply(yy).add(BigInteger.ONE).mod(CONTACT_ED25519_P)
-        if (v == BigInteger.ZERO) return false
-        val vInv = try { v.modInverse(CONTACT_ED25519_P) } catch (_: ArithmeticException) { return false }
-        val x2 = u.multiply(vInv).mod(CONTACT_ED25519_P)
-        if (x2 == BigInteger.ZERO) return !signBit
-        var x = x2.modPow(CONTACT_ED25519_P_PLUS3_OVER8, CONTACT_ED25519_P)
-        var check = x.multiply(x).mod(CONTACT_ED25519_P)
-        if (check != x2) {
-            x = x.multiply(CONTACT_ED25519_SQRT_M1).mod(CONTACT_ED25519_P)
-            check = x.multiply(x).mod(CONTACT_ED25519_P)
-            if (check != x2) return false
-        }
-        return true
-    } catch (_: Exception) {
-        return false
-    }
-}
+// UNIFICATION P1: Ed25519 curve-point validation consolidated into
+// PeerIdValidator.isValidEd25519Point (single authoritative Kotlin copy,
+// pinned to Rust is_valid_public_key by shared dalek-derived test vectors).
 
 /** A peer discovered on the mesh but not yet saved as a contact. */
 data class NearbyPeer(
@@ -80,8 +33,9 @@ data class NearbyPeer(
     val isOnline: Boolean = true,
     val transport: com.scmessenger.android.service.TransportType? = null
 ) {
-    val displayName: String get() = nickname?.takeIf { it.isNotBlank() } ?: peerId.take(16)
-    val hasFullIdentity: Boolean get() = publicKey != null
+    val displayName: String get() = nickname?.takeIf { it.isNotBlank() }
+        ?: (if (PeerIdValidator.isTransportPeerId(peerId)) (publicKey?.take(16) ?: peerId.take(16)) else peerId.take(16))
+    val hasFullIdentity: Boolean get() = !publicKey.isNullOrBlank() && !PeerIdValidator.isTransportPeerId(peerId)
 }
 
 /**
@@ -190,7 +144,9 @@ class ContactsViewModel @Inject constructor(
             incomingSynthetic && existingSynthetic -> null
             incomingSynthetic -> existingNormalized
             existingSynthetic -> incomingNormalized
-            else -> incomingNormalized
+            // NICKNAME-AUTHORITY-001: real fills empty; both real and differ -> keep existing.
+            existingNormalized == null -> incomingNormalized
+            else -> existingNormalized
         }
         // UNIFICATION verbose logging for nickname merge decisions (diagnose ChristyLove -> peer-... revert)
         if (incomingNormalized != existingNormalized) {
@@ -207,25 +163,25 @@ class ContactsViewModel @Inject constructor(
         return runCatching { java.util.UUID.fromString(normalized) }.isSuccess
     }
 
-    private fun selectStablePeerId(incomingPeerId: String, existingPeerId: String?): String {
-        val incoming = incomingPeerId.trim()
+    private fun selectStablePeerId(incomingPeerId: String?, existingPeerId: String?): String? {
+        val incoming = incomingPeerId?.trim().orEmpty()
         val existing = existingPeerId?.trim().orEmpty()
-        if (existing.isEmpty() || existing == incoming) return incoming
 
-        val incomingIsLibp2p = PeerIdValidator.isLibp2pPeerId(incoming)
-        val existingIsLibp2p = PeerIdValidator.isLibp2pPeerId(existing)
-        val incomingIsIdentity = PeerIdValidator.isIdentityId(incoming)
-        val existingIsIdentity = PeerIdValidator.isIdentityId(existing)
-        val incomingIsBle = isBlePeerId(incoming)
-        val existingIsBle = isBlePeerId(existing)
-
-        return when {
-            existingIsIdentity && incomingIsLibp2p -> existing
-            incomingIsIdentity && existingIsLibp2p -> incoming
-            existingIsBle && !incomingIsBle -> incoming
-            !existingIsBle && incomingIsBle -> existing
-            else -> incoming
+        val incomingIsTransport = PeerIdValidator.isTransportPeerId(incoming)
+        val existingIsTransport = PeerIdValidator.isTransportPeerId(existing)
+        if (existing.isNotEmpty() && !existingIsTransport && incomingIsTransport) {
+            return existing
         }
+        if (incoming.isNotEmpty() && !incomingIsTransport && existingIsTransport) {
+            return incoming
+        }
+        if (incoming.isNotEmpty() && !incomingIsTransport) {
+            return incoming
+        }
+        if (existing.isNotEmpty() && !existingIsTransport) {
+            return existing
+        }
+        return null
     }
 
     /**
@@ -246,6 +202,16 @@ class ContactsViewModel @Inject constructor(
         } ?: false
 
         if (sameByPublicKey) return true
+
+        // UNIFICATION: extract pubkey from libp2p PeerIDs so 12D3… and 30d0fa…
+        // for the SAME node never appear as two nearby rows.
+        val peerCanon = PeerIdValidator.canonicalKey(peer.peerId, peer.publicKey)
+            .ifEmpty { PeerIdValidator.canonicalKey(peer.libp2pPeerId, peer.publicKey) }
+        val eventCanon = PeerIdValidator.canonicalKey(event.peerId, event.publicKey)
+            .ifEmpty { PeerIdValidator.canonicalKey(event.libp2pPeerId, event.publicKey) }
+        if (peerCanon.isNotEmpty() && eventCanon.isNotEmpty() && peerCanon == eventCanon) {
+            return true
+        }
 
         // Secondary: ID-based matching (for cases where public key may not be available)
         val incomingPeerId = PeerIdValidator.normalize(event.peerId)
@@ -371,7 +337,18 @@ class ContactsViewModel @Inject constructor(
                         }
                         cancelPendingNearbyRemoval(existing?.peerId)
 
-                        val resolvedPeerId = selectStablePeerId(event.peerId, existing?.peerId)
+                        // Sovereign identity resolution: ensure peerId is NEVER a libp2p Peer ID or transport string.
+                        val sovereignId = meshRepository.resolveToIdentityId(event.publicKey)
+                            ?: meshRepository.resolveToIdentityId(event.peerId)
+                            ?: event.publicKey.lowercase().takeIf { PeerIdValidator.isIdentityHash(it) || PeerIdValidator.isPublicKeyHex(it) }
+                            ?: event.peerId.takeIf { PeerIdValidator.isIdentityHash(it) }
+
+                        val resolvedPeerId = selectStablePeerId(sovereignId, existing?.peerId)
+                        if (resolvedPeerId.isNullOrBlank() || PeerIdValidator.isTransportPeerId(resolvedPeerId)) {
+                            // Transport Peer IDs must NEVER become nearby peers
+                            return@collect
+                        }
+
                         val resolvedLibp2pPeerId = event.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }
                             ?: existing?.libp2pPeerId?.trim()?.takeIf { it.isNotEmpty() }
                             ?: event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
@@ -394,7 +371,7 @@ class ContactsViewModel @Inject constructor(
                                 } else null
                         val updated = NearbyPeer(
                             peerId = resolvedPeerId,
-                            publicKey = event.publicKey,
+                            publicKey = event.publicKey ?: existing?.publicKey,
                             nickname = selectAuthoritativeNickname(event.nickname, existing?.nickname),
                             blePeerId = resolvedBlePeerId,
                             libp2pPeerId = resolvedLibp2pPeerId,
@@ -420,23 +397,36 @@ class ContactsViewModel @Inject constructor(
 
                         cancelPendingNearbyRemoval(event.peerId)
                         val current = _nearbyPeers.value.toMutableList()
-                        val existingIdx = current.indexOfFirst {
-                            PeerIdValidator.isSame(it.peerId, event.peerId) ||
-                            it.libp2pPeerId?.let { libp -> PeerIdValidator.isSame(libp, event.peerId) } ?: false
+                        // UNIFICATION: match by canonical pubkey hex so a libp2p
+                        // Discovered event updates (not duplicates) a nearby entry
+                        // that was already keyed by public_key.
+                        val eventCanon = PeerIdValidator.canonicalKey(event.peerId, null)
+                        val existingIdx = current.indexOfFirst { peer ->
+                            PeerIdValidator.isSame(peer.peerId, event.peerId) ||
+                            peer.libp2pPeerId?.let { libp -> PeerIdValidator.isSame(libp, event.peerId) } ?: false ||
+                            PeerIdValidator.canonicalKey(peer.peerId, peer.publicKey) == eventCanon ||
+                            PeerIdValidator.canonicalKey(peer.libp2pPeerId, peer.publicKey) == eventCanon
                         }
                         if (existingIdx >= 0) {
                             // Update isOnline, and refine transport if we now have a definite value.
                             val existing = current[existingIdx]
                             val refinedTransport = existing.transport ?: event.transport
-                            current[existingIdx] = existing.copy(isOnline = true, transport = refinedTransport)
-                            _nearbyPeers.value = current
-                        } else if (!alreadyContact && !isDismissed(event.peerId)) {
-                            _nearbyPeers.value = current + NearbyPeer(
-                                peerId = event.peerId,
-                                isOnline = true,
-                                transport = event.transport
+                            val extractedPk = PeerIdValidator.normalizePublicKeyHex(
+                                PeerKeyUtils.extractPublicKeyFromPeerId(event.peerId)
                             )
+                            current[existingIdx] = existing.copy(
+                                isOnline = true,
+                                transport = refinedTransport,
+                                publicKey = existing.publicKey ?: extractedPk,
+                                libp2pPeerId = existing.libp2pPeerId
+                                    ?: event.peerId.takeIf { PeerIdValidator.isLibp2pPeerId(it) }
+                            )
+                            _nearbyPeers.value = current
                         }
+                        // Note: PeerEvent.Discovered is a raw transport socket connection event.
+                        // It does NOT carry an identity announcement or verified public key.
+                        // We do not add new NearbyPeer items here to prevent transport Peer IDs
+                        // from appearing in the nearby contacts list.
                     }
                     is PeerEvent.Disconnected -> {
                         val current = _nearbyPeers.value.toMutableList()
@@ -514,7 +504,7 @@ class ContactsViewModel @Inject constructor(
             Timber.d("loadContacts skipped — ViewModelScope not active")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 if (!viewModelScope.isActive) return@launch
                 _isLoading.value = true
@@ -582,11 +572,10 @@ class ContactsViewModel @Inject constructor(
                     onComplete?.invoke(false)
                     return@launch
                 }
-                // UNIFICATION P1-1: Validate Ed25519 curve point — roughly 50% of blake3 identity_id hashes are valid
-                // 64-hex but NOT valid curve points. Rust's is_valid_public_key checks VerifyingKey::from_bytes;
-                // Kotlin must not accept identity_id as pubkey or merge with 30d0fa will fail. If not a valid point,
-                // treat as identity_id (not pubkey) and reject contact add as invalid pubkey.
-                if (!isValidEd25519PointContact(trimmedKey)) {
+                // UNIFICATION P1: Ed25519 curve-point validation via PeerIdValidator (single authoritative
+                // Kotlin copy, pinned to Rust is_valid_public_key). If not a valid point, treat as identity_id
+                // (not pubkey) and reject contact add as invalid pubkey.
+                if (!PeerIdValidator.isValidEd25519Point(trimmedKey)) {
                     _error.value = "Public key is not a valid Ed25519 point (may be an identity_id hash, not a pubkey)"
                     onComplete?.invoke(false)
                     return@launch
@@ -895,8 +884,13 @@ class ContactsViewModel @Inject constructor(
             Timber.w("promoteNearbyPeerToContact rejected: missing public key for ${peer.peerId}")
             return false
         }
+        val sovereignPeerId = if (PeerIdValidator.isTransportPeerId(peer.peerId)) {
+            meshRepository.resolveToIdentityId(peer.publicKey) ?: peer.publicKey.lowercase()
+        } else {
+            peer.peerId
+        }
         addContact(
-            peerId = peer.peerId,
+            peerId = sovereignPeerId,
             publicKey = peer.publicKey,
             nickname = peer.nickname,
             libp2pPeerId = peer.libp2pPeerId,

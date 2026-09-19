@@ -526,12 +526,10 @@ impl IronCoreBehaviour {
                 .with_max_pending_outgoing(Some(32))
                 .with_max_established_outgoing(Some(128))
                 .with_max_established_incoming(Some(64))
-                // Keep one relay path and one direct/hole-punch path available,
-                // but prevent address churn from opening a third connection to
-                // the same peer. request-response 0.29 assumes a bounded
-                // per-peer connection set and has panicked during six-path
-                // convergence in the Windows soak.
-                .with_max_established_per_peer(Some(2)),
+                // Keep direct path, relay path, and headroom for mobile interface
+                // handover (Wi-Fi to Cellular transition) before dead sockets time out,
+                // while keeping per-peer connection count bounded.
+                .with_max_established_per_peer(Some(4)),
         );
 
         Ok(Self {

@@ -1,8 +1,190 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-08-30 (recorded Android agent authorization scope; #251/#252 in flight)
+Last updated: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
 Entry point: `/CTO`. This file is the whole context load.
+
+# ===== RESUME HERE (2026-09-15, evening) =====
+
+## Tag-readiness delivered — awaiting operator verification + rulings
+
+Full evidence: HANDOFF/audit/TAG_READINESS_EVIDENCE_2026-09-15.md (commit
+6c87a7ee). State at handoff:
+
+1. All 3 nodes on unified 0.4.0 stack: AWS sha-31776b4 (16h uptime),
+   Windows CI artifact fb46f2a == d7b4f77d2 tree (provenance verified via
+   merge-base ancestry; identity preserved: local_peer_id=12D3KooWD6vZ...,
+   "Loaded existing identity"), Pixel b39bfd2d APK (operator mobile).
+2. Heartbeat watchdog LIVE on Windows node (commit d7b4f77d; 2 black-box
+   integration tests pass locally 6.32s; CI Test lane green).
+3. Release rehearsal 34996353889 FINAL: attempt-1 failure was the
+   deprecated 'tools' SDK package (infra drift) — fixed in 12bdf292 and
+   verified cleared by attempt 2 running ~52 min past it. Attempt-2 final:
+   6/7 build jobs green (all CLI platforms, WASM, version metadata);
+   Create Release correctly skipped (artifacts_only). Sole failure:
+   "SCMESSENGER_KEY_ALIAS is not present in the decoded keystore"
+   (17:32:36Z) — the secret VALUE does not match the keystore; workflow
+   wiring verified correct. Operator action: scripts/verify_release_keystore.sh,
+   then re-set the secret and re-dispatch the rehearsal. Until then the
+   pipeline can build every artifact EXCEPT the signed release AAB/APK.
+   Tip CI on 1aaf6d34: 7/7 workflows green (Mobile concluded 17:47:51Z).
+4. BoD disposition (wedge P1): two paid-tier runs, 4/5 APPROVE both
+   (scores 0.88-0.98), zero REJECT; deepseek-v3.2 seat malformed twice ->
+   fail-closed DEFERRED. OPERATOR RULING REQUIRED to convert to APPROVED.
+5. OPERATOR DIRECTIVE: "Do not tag - gather all evidence... present it to
+   me for verification." No tag created; PR #288 merge stays with the
+   orchestrator per standing order.
+6. NEXT (after operator rulings): (0) operator fixes SCMESSENGER_KEY_ALIAS
+   secret + re-dispatches rehearsal to green (signed-APK proof),
+   (1) merge PR #288 -> tag v0.4.0 on merge commit -> 0.5.0 planning
+   (wedge root-cause priority; UniFFI relocation; Kotlin P2 warning
+   burndown; hickory advisory recheck).
+
+# ===== PREVIOUS RESUME POINT (2026-09-15, early) =====
+
+## Cellular-path triangulation — VERDICT (full audit: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md)
+
+Operator question: were cellular messages stored/forwarded, or direct?
+Evidence from all 3 nodes (Pixel adb, AWS docker logs, Windows local logs):
+
+1. Direct Pixel<->Windows: NEVER achieved — double-NAT, DCUtR hole-punch
+   failed repeatedly, relay fallback engaged by design. Correct behavior.
+2. Store-and-forward: ZERO LOSS. 12 custody entries held on AWS for the
+   Windows destination while Windows was wedged; all 12 burst-delivered at
+   04:22:14Z within 1s of node recovery; phone outbox drained to [];
+   both stuck receipts converged at 04:22:24Z.
+3. DEFECT FOUND: Windows node silent wedge 01:32:50Z-04:21:30Z (~2h45m).
+   Process alive, logs frozen, API hung, 6x CLOSE_WAIT, no panic, existing
+   watchdog blind (event loop never died). Remediated live by restart.
+   Ticket: HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md.
+   Tag disposition per ticket: acceptable as known P1 for 0.5.0 IF the
+   log-silence heartbeat watchdog lands pre-tag (bounded, observable failure).
+4. Node versions at audit time: AWS sha-31776b4, Windows f985b10,
+   Pixel b39bfd2d APK — unified 0.4.0 stack (identifier parity audit holds).
+
+Next: heartbeat watchdog implementation (cli/, not rule-8 gated), CI artifact
+redeploy of Windows node, then tag buy-in with G3-0/G4-1/T4 + P1 disposition.
+
+# ===== PREVIOUS RESUME POINT (2026-09-14) =====
+
+## Major Breakthrough: Multi-Transport Store & Forward Live Verification
+
+[OK] VERIFIED LIVE BY OPERATOR: Bidirectional message delivery and delivery ACKs confirmed between Windows CLI (LAN/WiFi) and Android Pixel (Cellular WAN, WiFi disconnected) through the AWS cloud node.
+This is the first time multi-transport and off-WiFi operation have functioned simultaneously in SCMessenger. Eventual delivery via store-and-forward across disparate networks is proven end-to-end.
+
+### Technical Root Causes Solved in this Iteration
+
+1. **Originating Sender Identity Resolution (`cli/src/main.rs`)**:
+   - `resolve_sender_peer_id()` extracts the true author's libp2p `PeerId` from the authenticated envelope's public key hex or identity envelope metadata, falling back to direct socket peer ID.
+   - Fixed relayed delivery ACKs and auto-replies: previously, ACKs were misdirected to the intermediary relay node's PeerId instead of routing back to the originating sender.
+   - Applied across `cmd_start` and `cmd_relay` for message notifications, contact learning, and ACK dispatch.
+
+2. **Cooperative Mesh Relay Custody (`core/src/store/relay_custody.rs`, `core/src/transport/swarm.rs`)**:
+   - In `RelayCustodyStore::accept_custody()` and `resolve_custody_metadata()`, handled `CustodyError::NoRegistration` gracefully.
+   - Doctrine alignment ("Nodes, not relays"): in a cooperative mesh, nodes accept custody and store-and-forward for communicating peers even if the recipient has not directly registered with this node.
+   - Enforced strict recipient identity format (64-hex Blake3 hash), device ID bounds, and envelope payload bounds (1..=65536 bytes). Added unit tests covering acceptance and defensive rejection.
+
+3. **Mobile Interface Handover & Connection Headroom (`core/src/transport/behaviour.rs`, `core/src/transport/swarm.rs`)**:
+   - Increased `max_established_per_peer` from 2 to 4 to provide socket headroom during mobile network transitions (e.g., Wi-Fi drop to Cellular).
+   - In `swarm.rs`, handled `IronCoreBehaviourEvent::Ping(event)` failure by immediately calling `swarm.close_connection(event.connection)` to aggressively clean dead sockets during interface handover.
+
+4. **Android Relay Discovery & Circuit Breaker Reset (`MeshRepository.kt`)**:
+   - `relayCircuitAddressesForPeer()` collects ledger-recorded circuit addresses and active dynamic peers, strictly conforming to the dumb-byte-pipe doctrine per BoD ruling `bod-9ee86618`.
+   - `bootstrapToMeshWithResults()` auto-resets tripped circuit breakers if all candidate addresses are blocked during an interface handover, enabling immediate retry on new networks.
+   - `getDialHintsForRoutePeer()` matches ledger entries, `/p2p/$routePeerId`, and derives libp2p PeerId from 64-hex public key.
+
+5. **Board of Directors Governance**:
+   - Resolution `bod-9ee86618`: 5/5 UNANIMOUS APPROVAL + Judge concurrence.
+
+# ===== PREVIOUS RESUME POINT (2026-09-10) =====
+
+## Session record 2026-09-10 — Freebuff sandbox (Linux; no Windows toolchain, no AWS creds)
+
+All facts below were verified by command this session. Environment: Freebuff
+Linux sandbox — container builds are advisory-only per AGENTS.md; none were
+run and none were needed (everything landed was docs/CI-snapshot surface).
+
+### Verified state of the burn-down (each item: command that proved it)
+
+- **`main` green at `c5b7c530`** — push lanes CI/Lint/Cross/Docker Publish/
+  Docker Integration Suite/Repository Hygiene all `success` on the #267 merge;
+  `gh run list --branch main`. Failures on main are schedule-lanes only
+  (Docker Integration Suite schedule, Security Scan schedule) — not push gates.
+- **Custody split-brain: ALREADY FIXED on main.** The 2026-08-29 charter item
+  is stale. `core/src/transport/swarm.rs:3040-3055` now publishes the swarm's
+  live `RelayCustodyStore` back into `IronCore`
+  (`*core.relay_custody_store.write() = relay_custody_store.clone()`), with a
+  comment citing the v0.4.0 gate. Landed in the recent #267-#278 wave. No work
+  remains. Do not re-implement.
+- **`docs_sync_check.sh` PASSES on main** — run verbatim this session. Charter
+  L4-4 (and Freebuff T5) are DONE. The broken residual-risk-register link was
+  fixed upstream; every agent's finalize gate is unblocked again.
+- **`routing_peer_seen` is WIRED (D6 code blocker cleared).** Production call
+  sites at `core/src/transport/swarm.rs:5641` and `:8067`, fed from the F-DHT
+  locally-verified gate (PR #267); confidence tests at `iron_core.rs:5079`.
+  Remaining: field re-measure of non-zero routing confidence on the Tier A rig
+  (T4's acceptance, not a code task).
+- **Dual-bind: fixed in code, verified** — `multiport.rs:75-99` emits exactly
+  one transport per port with `seen_ports` dedup. The L0-4 operator decision
+  is moot; ticket moved to `done/` (this session, via PR #280).
+- **L1-1 (release alias preflight) is on main** — `release.yml:209` fails fast
+  with `[FAIL] SCMESSENGER_KEY_ALIAS is not present in the decoded keystore`.
+- **Three resolved tickets moved to `done/` with evidence headers** (routing,
+  dual-bind, deeplink) and **`SUPPORT.md` version line corrected** v0.3.5 ->
+  v0.4.0 — open as **PR #280**.
+- **PR #277 (beach-join audit docs) MERGED** `c5b7c530` — all 17 checks green,
+  HANDOFF-only files verified before merge.
+
+### PR #272 (v0.4.0 candidate) — fix pushed, merge still gated
+
+- Root cause of its only red check, from run `34111832444` log: the branch's
+  `mobile_bridge.rs` adds one UniFFI export
+  `set_swarm_peer_connection(publicKeyHex, connected)` but never updated the
+  checked-in FFI snapshots. CI printed the exact missing lines (addition-only
+  hunks: Kotlin `317a318`, Swift `225a226`).
+- Fix: fast-forwarded the PR branch `85cb4c67..5fe7d664` with those two lines
+  inserted verbatim into `scripts/ffi-snapshots/{kotlin,swift}-symbols.txt`.
+  The check regenerates bindings and diffs, so the snapshot cannot lie — CI is
+  the verifier. FFI check `pending` at session end; confirm before anything else.
+- **BLOCKER THAT REMAINS: no Rule-8 adversarial review on file for #272.** It
+  touches `core/src/transport/` + `core/src/routing/` (+1,434 lines in
+  mobile_bridge). Verified: zero PR reviews/comments on GitHub and no review
+  doc in `docs/security/` or `HANDOFF/` referencing #272. Do NOT merge on green
+  CI alone. Dispatch a fresh reviewer (different model family from the author)
+  and file the verdict before merging.
+
+### Other open PRs (30 open at session end; full list from `gh pr list`)
+
+- **#279 (transport unification wave) is CONFLICTING** with main — it predates
+  the #267-#278 run. Rebase or merge-main is the owner's call; a rebase needs a
+  force-push, which is banned on shared branches, so leave it to its author or
+  get explicit operator direction.
+- Charter L3 lane: dependabot/docs PRs #214/#212/#211/#141 (merge after rebase),
+  close-superseded #223/#224/#225/#205/#206, DIRTY-but-green #227/#209 rebase —
+  all still open, none started this session.
+
+### Tier A — cloud node: NOT verified, likely DOWN at the recorded address
+
+- `curl http://54.226.67.101:9876/health` returned `000` (unreachable) from the
+  sandbox. The Freebuff README itself warns the public IP changes on every
+  instance replacement, so the recorded address may simply be stale — but the
+  down-or-stale state is UNRESOLVED.
+- This sandbox has neither `~/.ssh/scm-node-key.pem` nor the EC2 discovery
+  config, so `scripts/aws_deploy.sh` cannot run here. **Operator/Windows-host
+  action:** run `scripts/aws_deploy.sh` (no arg — it discovers the IP) to
+  redeploy `testbotz/scmessenger:latest` at `main@c5b7c530`-equivalent image
+  (Docker Publish was green on the #267 merge), with the `/opt/scm-relay-data`
+  mount, then paste `/health` + deployed-SHA evidence. That re-arms L0-2/L0-3
+  (custody + connection-assistance scoring), which remain the v0.4.0 gate.
+
+### Operator actions still outstanding (unchanged by this session)
+
+1. **Keystore alias check** (charter 1.1, ~2 min) — preflight will now fail
+   fast in CI, so the wrong alias costs seconds instead of 24 minutes.
+2. **External audit commissioning** (charter 1.2) — board decision, money.
+3. **D4/D6/D7 field scoring** (charter 1.4) — released APK, second handset,
+   cross-network. D7 (offline proximity) is still NOT STARTED and is the next
+   unclaimed gate item after the cloud node is proven.
 
 # ===== RESUME HERE (2026-08-30) =====
 
@@ -2960,3 +3142,57 @@ before merging anything.
 session's uncommitted work. `cargo clean --target <triple>` wiped 44.7 GB. The
 preflight hook now blocks both and prints the working form — if it fires, read
 it; it is there because someone already paid for that lesson.
+
+---
+
+## 2026-09-16 — Pre-v0.4.0 Shadow Audit, Remediation Merge Train & Work-Ahead Coordination
+
+Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main` 1e2fb747.
+
+### 1. Pre-v0.4.0 Adversarial Shadow Audit Completed
+- Master Audit Report committed: `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`.
+- Issue #155 Evidence Uploaded: Comment posted on [PR #156 (Comment 5705455726)](https://github.com/Sovereign-Communication/SCMessenger/pull/156#issuecomment-5705455726).
+- Six targeted P1 remediation PRs created, fully implemented, and pushed:
+  - **PR #292** (`fix/swarm-channel-backpressure-deadlock`, commit `f5b3cf05`): TRN-01 resolved. Decoupled `register_identity_with_relay`, `share_ledger`, `flush_outbox_for_peer`, and delivery ACKs onto `tokio::spawn` in `cmd_start` and `cmd_relay`; widened swarm event channels to 1024 slots. Clears the cyclic deadlock causing the recurring Windows silent wedge.
+  - **PR #293** (`fix/docker-control-api-security`, commit `27a261f4`): CLI-01 resolved. Restricted HTTP API bind default to `127.0.0.1:9876` (`SCM_HTTP_BIND` override retained); added non-root `USER scm` (UID 10001) in `docker/Dockerfile`.
+  - **PR #294** (`fix/release-signing-gate-fail-closed`, commit `7251b459`): SEC-01 resolved. Added fail-closed release signing assertion (`startsWith(github.ref, 'refs/tags/v') && env.HAS_KEYSTORE != 'true'`); blocked debug APK publishing via negative glob.
+  - **PR #295** (`fix/android-coldstart-and-scaffold-remediation`, commit `78d0a35a`): AND-01, AND-02, AND-03 resolved. Implemented startup cold-boot notification buffer and replay queue in `NotificationHelper.kt` (with unit tests in `NotificationHelperGateTest.kt`); de-nested child `Scaffold` composables in `PeerListScreen.kt` and `TopologyScreen.kt` into `Column(Modifier.fillMaxSize())` to resolve SlotTable corruption; restored port `9001` to `SubnetProbe.RAW_TCP_PORTS`; removed crash-swallowing logic in `MeshApplication.kt` to prevent zombie ANR states. Reconciles and supersedes #291.
+  - **PR #296** (`fix/core-identity-spoof-and-wasm-topic-parity`, commit `5f0bce67`): CRYPTO-01 & TRN-03 resolved. Passed verified `canonical_peer_id` and authenticated `sender_public_key_hex` to `delegate.on_message_received`; subscribed WASM swarm to own peer topic `/scmessenger/peer/<own_hex>/v1` guarded by `is_ghost_peer_topic`.
+  - **PR #297** (`fix/cli-outbox-canonical-drain-and-sled-unification`, commit `a9861f25`): CLI-03 & CORE-02 resolved. Fixed outbox drain by resolving both Base58 and canonical 64-hex keys; unified `IronCore::with_storage` with persistent Sled storage backend across daemon restarts.
+
+### 2. Clearance of Previous Draft Holds
+- Earlier 7-day merge plan notes (PR #303) placed a HOLD on #292 and #295 when they were initial docs-only tracking tickets.
+- **HOLD IS CLEARED**: Both #292 and #295 have full, tested code implementations pushed.
+  - PR #292 is not docs-only; it contains the complete async decoupling fix for TRN-01.
+  - PR #295 resolves the semantic question with #291 by implementing cold-start buffering with replay upon DataStore hydration, satisfying both fail-closed security and zero message loss.
+
+### 3. Concurrent Work-Ahead Audits & High-Confidence Resolutions
+Adversarial security audits were conducted for all concurrent work-ahead PRs, actionable review comments were posted, and 99%+ confidence fixes were implemented and pushed to each branch:
+- **PR #289** (`p1/curve-uniffi-kotlin-20260914`, commit `102e726a`): Resolved CI unit test failures by correcting test vector endianness (placing sign bit at byte 31 in `yOneSign1`) and fixing `pMinus1` hex string literals to exactly 64 characters (`pMinus1Sign0` and `pMinus1Sign1`).
+- **PR #290** (`fix/subnetprobe-hostaddress-null-20260915`): Reviewed null-safe `hostAddress` handling and port scanning gaps.
+- **PR #291** (`workahead/notif-cold-start-gate`): Superseded and reconciled by PR #295's buffer-and-replay architecture.
+- **PR #298** (`workahead/android-joinmesh-gms-gate`, commit `3537ba67`): Added "Paste Join Bundle" clipboard fallback in `QrScannerView`, unblocking devices without Google Play Services (GrapheneOS/CalyxOS/F-Droid), and cleaned redundant dead check.
+- **PR #299** (`workahead/android-persist-join-seeds`, commit `ca96da0f`): Bounded seed import to `MAX_SEEDS_PER_IMPORT = 16` via `take(16)`, added explicit uninitialized `ledgerManager` warning guard, and added hermetic JVM unit tests in `MeshRepositorySeedImportTest.kt`.
+- **PR #300** (`workahead/android-apk-host-hardening`, commit `5d2ea2f4`): Promoted `serverExecutor` to class field with graceful `shutdownNow()` in `stopLocalApkHost()`, added HTTP `HEAD` support for DownloadManager preflights, and stripped `?query` / `#fragment` from target path in `parseHttpRequestLine`.
+- **PR #301** (`workahead/ios-apk-link-share`, commit `d50e0cef`): Wrapped `releaseApkURL` in a typed `URL` object before passing to `ShareSheet`, restoring rich link preview metadata, Safari actions, and AirDrop compatibility.
+- **PR #302** (`workahead/android-install-qr-payload`, commit `263eab0a`): Normalized `sha256Hex` to lowercase in `parseInstallPayloadUri` and added unit test coverage in `InstallPayloadTest.kt`.
+
+### 4. Verified Merge Recommendation & Phase Order
+1. **Phase 1: Merge into `feat/v040-multi-transport-store-forward` (carrier PR #288)**
+   1. `PR #290` (SubnetProbe null-safety)
+   2. `PR #294` (Release signing fail-closed gate)
+   3. `PR #293` (Docker localhost control API & non-root UID)
+   4. `PR #292` (Swarm backpressure deadlock decoupling & 1024-slot channels)
+   5. `PR #295` (Cold-start notification buffer & replay, scaffold de-nesting, port 9001)
+   6. `PR #296` (Verified delegate identity & WASM own-topic parity)
+   7. `PR #297` (Canonical 64-hex outbox drain & Sled storage unification)
+2. **Phase 2: Refresh & Merge Carrier PR #288 into `main`**
+   - Rerun all pending checks on PR #288; verify mergeability; merge to `main`.
+3. **Phase 3: Main Stack Rollout (Post-#288)**
+   - `PR #283` (V1.0.0 docs readiness audit -> `main`)
+   - `PR #289` (UniFFI Ed25519 point validator & tests — FIXED via `102e726a`)
+   - `PR #298` (JoinMesh GMS gate & clipboard fallback — FIXED via `3537ba67`)
+   - `PR #299` (Seed persistence seam & 16-seed bound — FIXED via `ca96da0f`)
+   - `PR #300` (APK host lifecycle, HEAD, query strip — FIXED via `5d2ea2f4`)
+   - `PR #302` (Install QR payload & SHA lowercase — FIXED via `263eab0a`)
+   - `PR #301` (iOS release link typed URL share — FIXED via `d50e0cef`)

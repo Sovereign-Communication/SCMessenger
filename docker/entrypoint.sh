@@ -71,9 +71,9 @@ if [ "$1" = "scm" ] && [ "$2" = "start" ]; then
     # Order: scm [global flags] start [subcommand flags]
     NEW_ARGS=("$1")  # scm
 
-    # Add global flags before subcommand
+    # Add global flags before subcommand (default to loopback interface)
     if ! echo "$@" | grep -q "\-\-http-bind"; then
-        NEW_ARGS+=("--http-bind" "0.0.0.0:9876")
+        NEW_ARGS+=("--http-bind" "${SCM_HTTP_BIND:-127.0.0.1:9876}")
     fi
 
     NEW_ARGS+=("$2")  # start

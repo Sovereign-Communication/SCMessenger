@@ -70,6 +70,7 @@ class ContactsViewModelTest {
         every { repository.replayDiscoveredPeerEvents() } returns Unit
         every { repository.isBootstrapRelayPeer(any()) } returns false
         every { repository.getContact(any()) } returns null
+        every { repository.resolveToIdentityId(any()) } answers { firstArg<String?>()?.takeIf { it.length == 64 } }
 
         viewModel = ContactsViewModel(repository)
     }
