@@ -1,6 +1,6 @@
 # V040-T11 -- Make the canonical docs self-consistent
 
-Status: OPEN (filed 2026-08-31, from the Haiku canonical audit)
+Status: PR FILED -- #314 open (branch freebuff/t11-canonical-doc-reconcile); partial increment landed and the ticket text below is otherwise unchanged -- acceptance 1 and 2 are NOT satisfied, see the hand-off appended at the end
 Priority: P2 -- blocks nothing, costs every session that reads them
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: canonical documentation only. No code.
@@ -76,3 +76,50 @@ document from one that was always right.
 - Keep Status / Last-updated headers accurate on anything you touch.
 - Shared checkout: touch only what this task requires.
 - Never read `$?` after a pipe.
+
+---
+
+## Hand-off (2026-09-19)
+
+The status line above now names the PR. Nothing else in the ticket text was
+reworded. This is a **partial increment**, not the whole ticket.
+
+Landed and exercised in this pass:
+
+- Nine rows in `DOCUMENT_STATUS_INDEX.md` Sections 2, 3 and 4 named files that do
+  not exist while Section 8a of the same document recorded them as moved to
+  `docs/historical/` on 2026-07-11. Each now names its real path and carries
+  `Historical`. Nine, not eight: the WS12.29 row already said "moved" in prose
+  but its path column still read `docs/`, which does not resolve.
+- The header note said "Section 9 lists the moves". There is no Section 9 --
+  `grep -nE '^##+ ' docs/DOCUMENT_STATUS_INDEX.md` lists sections 1-8 only.
+  Corrected to Section 8a, the real location, with the original wording kept in a
+  new Section 8c.
+- `DOCUMENTATION.md` read `Applies to: v0.3.5 (alpha, working toward v1.0.0)`,
+  contradicting its own banner in the same file (superseded for execution until
+  the v0.4.0 tag) and the source of truth: `Cargo.toml:9` is
+  `version = "0.4.0"`. `git tag --list 'v0.4*'` returns `v0.4.0-rc.1` only, so
+  v0.4.0 is cut as a release candidate and is **not shipped** -- "on v0.4.0" and
+  "v0.4.0 is shipped" are different claims, which is the distinction the
+  2026-08-31 I-22 correction was about. Corrected in place, original retained.
+- `bash scripts/docs_sync_check.sh` -> `docs-sync-check: PASS` (exit 0);
+  `python scripts/rules_check.py` -> exit 0.
+
+Checked and deliberately left alone: `REMAINING_WORK_TRACKING.md`'s header
+already says it is superseded unambiguously; `docs/CURRENT_STATE.md` Section 2
+already carries the "not re-verified since" label the ticket says to either
+keep or justify; `docs/FEATURE_PARITY.md` is excluded by the ticket.
+
+**Acceptance 1 and acceptance 2 are NOT satisfied by this diff.** The index's
+Sections 2-5 name 65 documents (47 + 6 + 7 + 5). This pass verified that their
+paths resolve -- not that their contents match reality -- and it fixed one
+version contradiction rather than scanning all 65 for others. The complete
+UNVERIFIED list, including the five `docs/...` references deliberately left
+inside the dated logs in Sections 8 and 8a, is in
+`HANDOFF/freebuff/inbox/V040_T11_UNRESOLVED_2026-09-19.md`.
+
+Worth the reader's attention: `scripts/docs_sync_check.sh` passes on every one of
+the defects above. It validates `Status:`/`Last updated:` headers, machine-local
+paths and markdown links over a fixed file list; it does not test the backticked
+path claims in the index. That is how the document whose whole job is to say
+which documents are current stayed nine rows wrong.

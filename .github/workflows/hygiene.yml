@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
@@ -268,6 +269,43 @@ jobs:
             # Don't fail; warn only for now
           else
             echo "[OK] No oversized tracked files detected"
+          fi
+
+      - name: Verify required status contexts cannot be path-filtered
+        run: |
+          echo "Checking that branch-protection required contexts always report..."
+          python3 scripts/check_required_contexts.py
+      # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
+      # ------------------------------------------
+      # A queue ticket whose status line advertises an open PR that has already
+      # merged is how a lane picks finished work off the dispatch queue: on
+      # 2026-09-19 four tickets cited PRs merged on 2026-09-03, and one of them was
+      # nearly dispatched again on the strength of its own status line. This is a
+      # required context already, so the check costs no new workflow and no new
+      # runner class. See scripts/check_queue_status.py for what it can and cannot
+      # see.
+      #
+      # ENFORCEMENT IS PR-ONLY. On a push to main it runs --warn-only, because
+      # merging the very PR that a ticket cites is what makes that citation stale;
+      # failing there would redden main for its own correct merge. On a pull request
+      # the cited PR cannot be the one under test in a merged state, so the verdict
+      # is enforced -- and only on tickets that PR actually changes, so pre-existing
+      # debt is reported rather than silently blocking unrelated work.
+      - name: Check queue ticket status lines against GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENFORCE: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$ENFORCE" = "true" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          echo "Checking queue ticket status lines (event=${{ github.event_name }}, base=${BASE:0:8})..."
+          if [ "$ENFORCE" = "true" ]; then
+            python3 scripts/check_queue_status.py --changed-only --base-ref "$BASE"
+          else
+            python3 scripts/check_queue_status.py --changed-only --base-ref "$BASE" --warn-only
           fi
 
       - name: Summary

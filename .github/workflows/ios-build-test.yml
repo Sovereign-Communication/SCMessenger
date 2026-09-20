@@ -54,8 +54,17 @@ on:
         default: main
         type: string
   pull_request:
+    # WHY 'android/**' IS NOT IN THIS LIST
+    # -----------------------------------
+    # Both of this workflow's jobs run on macOS runners (macos-latest, and
+    # macos-14 with a 60min timeout around ~29min of real work). Its own header
+    # says the trigger is "the iOS/FFI surface", and no step in either job reads
+    # android/ -- verified by grep, not assumed. The entry came from mobile.yml,
+    # where the Android jobs make it correct; here it made every Android-only PR
+    # start two macOS jobs that cannot observe the change. mobile.yml still
+    # triggers on android/** and owns every Android job, so nothing Android-side
+    # stops running.
     paths:
-      - 'android/**'
       - 'iOS/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -74,7 +83,6 @@ on:
     branches:
       - main
     paths:
-      - 'android/**'
       - 'iOS/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

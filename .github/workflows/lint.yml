@@ -111,16 +111,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
+      # WHY THERE IS ONLY ONE DETECTION STEP HERE
+      # ----------------------------------------
+      # detect-platform-change's inert set IS detect-docs-only's set (both use
+      # '^docs/|^HANDOFF/|\.md$'), so a docs-only diff reports
+      # ios_relevant=false by construction: the platform gate subsumes the
+      # docs-only gate in this job, and one owner now decides whether these
+      # steps run instead of two conditions that could drift apart. The job
+      # itself always starts and completes green, so the check still reports.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
 
       - name: Install swiftlint
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.ios_relevant == 'true'
         run: brew install swiftlint
       
       - name: Run swiftlint
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.ios_relevant == 'true'
         run: |
           cd iOS
           swiftlint lint --strict
