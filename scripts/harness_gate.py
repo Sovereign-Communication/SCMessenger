@@ -11,6 +11,14 @@ Policy (operator 2026-09-11):
 
 Exit codes follow harness: 0 ok, 1 fatal, 2 verify fail, 3 deferred.
 Also exits 4 if policy arguments are invalid.
+
+Contract read from source at harness 0.3.3 (the floor below): the verify
+report carries top-level "verdict", "consensus" and "actual_cost";
+consensus["agreement"] is a STRING ("high"/"medium"/"low"/"none"/
+"unknown"), not a fraction of panelists; and paid escalation is gated by
+HARNESS_ALLOW_ESCALATION. A checkout below the floor is refused rather than
+silently driving the lane, because a stale harness would still exit 0 and the
+resulting evidence would look identical.
 """
 
 from __future__ import annotations
@@ -18,20 +26,83 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-HARNESS_ROOT = Path(r"C:\Users\SCM\Documents\GitHub\Harness")
+# The harness is a separate WIP checkout, upgraded in place -- never vendored
+# into this repo. Override the location with SCM_HARNESS_ROOT (a checkout that
+# lives elsewhere, or a scratch copy used to prove the floor below).
+HARNESS_ROOT = Path(
+    os.environ.get("SCM_HARNESS_ROOT") or r"C:\Users\SCM\Documents\GitHub\Harness"
+)
 REPO = Path(__file__).resolve().parents[1]
 # Out-of-tree by default so we never drop harness debris in the live product tree.
 DEFAULT_OUT_ROOT = HARNESS_ROOT / "audits" / "scmessenger" / "_runs" / "seat-gates"
 PAID_MAX_DEFAULT = 0.10  # operator ceiling per escalation/use
 
+# A floor, not a pin: the harness is WIP and moves forward. Anything older than
+# this is refused, so an un-updated clone cannot quietly produce gate evidence.
+HARNESS_MIN_VERSION = "0.3.3"
+
 
 def _py() -> str:
     return os.environ.get("MIMO_PYTHON") or sys.executable
+
+
+def _harness_version() -> str:
+    """Version of the harness checkout this run would drive.
+
+    Read from pyproject.toml rather than by importing the package: the answer
+    must be available before any code from that checkout executes.
+    """
+    pyproject = HARNESS_ROOT / "pyproject.toml"
+    try:
+        if pyproject.is_file():
+            match = re.search(
+                r'^version\s*=\s*"([^"]+)"',
+                pyproject.read_text(encoding="utf-8"),
+                re.M,
+            )
+            if match:
+                return match.group(1)
+    except OSError:
+        pass
+    return ""
+
+
+def _version_tuple(text: str) -> tuple:
+    """Lenient major.minor.patch tuple, so '0.3.3' and '0.3.3.dev1' compare."""
+    parts = []
+    for chunk in text.split(".")[:3]:
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def _check_version() -> int:
+    """Refuse to run against a harness older than the floor.
+
+    The harness is required additional evidence, so an unknown or stale
+    checkout must not produce it silently: this fails closed (exit 4) rather
+    than reporting a verdict from a lane we cannot identify.
+    """
+    found = _harness_version()
+    print(f"[HARNESS] version={found or 'unknown'} (floor {HARNESS_MIN_VERSION})")
+    if not found:
+        print(f"[BLOCK] cannot read a version from {HARNESS_ROOT}/pyproject.toml")
+        return 4
+    if _version_tuple(found) < _version_tuple(HARNESS_MIN_VERSION):
+        print(
+            f"[BLOCK] harness {found} is older than the required floor "
+            f"{HARNESS_MIN_VERSION}; update the checkout at {HARNESS_ROOT}"
+        )
+        return 4
+    return 0
 
 
 def _harness_env() -> dict:
@@ -57,7 +128,15 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--kind",
-        choices=["verify", "spend", "ledger", "trust", "lint-claims", "smoke"],
+        choices=[
+            "verify",
+            "spend",
+            "ledger",
+            "trust",
+            "lint-claims",
+            "smoke",
+            "version",
+        ],
         default="smoke",
     )
     p.add_argument("--prompt-file", default="", help="verify prompt (absolute or rel)")
@@ -85,6 +164,16 @@ def main() -> int:
     if not HARNESS_ROOT.is_dir():
         print(f"[BLOCK] harness checkout missing: {HARNESS_ROOT}")
         return 4
+
+    rc = _check_version()
+    if rc != 0:
+        return rc
+
+    if args.kind == "version":
+        # Hermetic: reads the checkout's version only. No key, no network, no
+        # spend -- the cheap way to assert the lane is on the updated harness.
+        print(f"[RESULT] harness version={_harness_version()} root={HARNESS_ROOT}")
+        return 0
 
     if args.max_cost > PAID_MAX_DEFAULT:
         print(
