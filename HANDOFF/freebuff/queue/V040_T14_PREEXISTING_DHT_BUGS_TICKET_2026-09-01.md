@@ -1,8 +1,8 @@
 # V040-T14 -- Two pre-existing DHT bugs (found by Rule-8 review of #267)
 
-Status: PR FILED -- #269 open (NOT in PR #267 -- CEO ruling: "do not fold pre-existing bugs into this PR"); awaiting adversarial review
-Source: RULE8_PR267_VERDICT.md [FAIL] F-3, confirmed in RULING_2026-09-01_PR267_REJECTED_my_ruling_was_wrong.md
-Filed: 2026-09-01
+Status: MERGED -- both fixes landed as PR #269 (merged 2026-09-03). Status
+corrected 2026-09-19 from "PR FILED -- #269 open" by the queue-reconcile pass;
+the ticket body below is unchanged.
 
 Two `kademlia.add_address` feeds on `main` are ungated and pre-date the F-DHT
 work. Both are separate from #267's gate rework and need their own PR.
@@ -44,3 +44,13 @@ hole-punch.
 3. Both: full gate set (fmt, workspace clippy, workspace no-run, core + cli
    tests, wasm32 check), Rule-8 adversarial review (touches
    `core/src/transport/`).
+
+### Status reconciliation (2026-09-19)
+
+```
+gh pr view 269 --json state,mergedAt
+#  MERGED 2026-09-03T15:12:11Z
+```
+
+[WARNING] Only the merge is asserted here; whether both DHT bugs are actually
+closed is not re-verified by this pass and the code is rule-8 gated.
