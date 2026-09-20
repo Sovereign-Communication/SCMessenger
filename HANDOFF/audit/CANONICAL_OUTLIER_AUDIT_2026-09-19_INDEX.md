@@ -25,13 +25,14 @@ Status: IN PROGRESS
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter1.md (M1, DIM-A)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter2.md (M2, DIM-B)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter3.md (M3, DIM-C -- check_wiring.py RC=0, full output in file)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter4.md (M4, DIM-D -- docs_sync_check RC=0)
 
 ## Cumulative counts by dimension
 
 - DIM-A: 5 new findings (CO-A-001..005) + 12 STILL-OPEN prior rows re-verified + 3 reclassifications
 - DIM-B: 6 new findings (CO-B-001..006) + 2 prior rows re-verified RESOLVED (SHADOW CLI-03, CORE-02) + 2 verified-consistent categories
 - DIM-C: 0 findings; check_wiring.py RC=0 (full output in iter3); manifest cross-check OK; iOS reachability UNVERIFIED
-- DIM-D: 0 findings (not yet run)
+- DIM-D: 3 new findings (CO-D-001..003); docs_sync_check.sh RC=0 PASS recorded; 4 verified-consistent categories
 - DIM-E: 0 findings (not yet run)
 - DIM-F: 0 findings (not yet run)
 - DIM-G: 0 findings (not yet run)
@@ -47,6 +48,9 @@ Status: IN PROGRESS
 - MED: +3 (CO-B-003 0.4.0, CO-B-004 1.0.0, CO-B-005 0.5.0)
 - LOW: +1 (CO-B-006, unknown)
 - Targets cumulative: 0.4.0 x7, 0.5.0 x1, 1.0.0 x2, unknown x1
+- DIM-D added: MED x2 (CO-D-001 0.4.0, CO-D-002 0.4.0/NEEDS-HUMAN), LOW x1 (CO-D-003 process)
+- NEEDS-HUMAN count: 2 (CO-A-005, CO-D-002)
+- Targets cumulative: 0.4.0 x9, 0.5.0 x1, 1.0.0 x2, process x1, unknown x1
 
 ## Open BLOCKER-0.4.0 list
 
@@ -58,3 +62,4 @@ Status: IN PROGRESS
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter1_DONE_2026-09-19.md (M1)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter2_DONE_2026-09-19.md (M2)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter3_DONE_2026-09-19.md (M3)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter4_DONE_2026-09-19.md (M4)
