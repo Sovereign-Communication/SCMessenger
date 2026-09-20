@@ -3879,8 +3879,26 @@ impl IronCore {
     pub fn get_identity_keys(&self) -> Option<crate::identity::IdentityKeys> {
         self.identity.read().keys().cloned()
     }
+    /// Drain queued messages for `peer_id`.
+    ///
+    /// Key resolution (base58 PeerId vs canonical 64-hex public key) happens
+    /// inside `Outbox::drain_for_peer` via `resolve_queue_key` /
+    /// `canonical_peer_key` (PR #322). A second drain with the extracted hex
+    /// form is kept as a belt-and-suspenders path for callers that bypass
+    /// canonicalization (CO-B-001); if the outbox already resolved the key the
+    /// second drain is a no-op.
     pub fn flush_outbox_for_peer(&self, peer_id: &str) -> Vec<QueuedMessage> {
-        self.outbox.write().drain_for_peer(peer_id)
+        let mut messages = self.outbox.write().drain_for_peer(peer_id);
+        if let Ok(pid) = peer_id.parse::<libp2p::PeerId>() {
+            if let Ok(pk) = crate::transport::extract_ed25519_public_key_from_peer_id(&pid) {
+                let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
+                if hex_pk != peer_id {
+                    let mut canonical = self.outbox.write().drain_for_peer(&hex_pk);
+                    messages.append(&mut canonical);
+                }
+            }
+        }
+        messages
     }
     pub fn contacts_store_manager(&self) -> CoreContactManager {
         self.contact_manager.read().clone()
@@ -5494,6 +5512,64 @@ mod tests {
             "a recovered connection must re-drain the entry the race deferred (R9-F3)"
         );
         assert!(core.mark_message_sent(prepared_r9.message_id));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn flush_outbox_for_peer_drains_base58_flush_against_hex_queue_key() {
+        use crate::store::outbox::{MessageState, QueuedMessage};
+
+        const BASE58_PEER: &str = "12D3KooWD776DQdWh6iHV8Qcnpj9jvTXhpJAgSsFPbMCaRtQpFmn";
+        const HEX_PEER: &str = "30dce2bb779b4f1419f6d7d9e91b3ae201aed9e3b181aef674a9496f340a0645";
+
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let msg = QueuedMessage {
+            version: 1,
+            message_id: "cob001-msg".to_string(),
+            recipient_id: HEX_PEER.to_string(),
+            envelope_data: vec![9, 9, 9],
+            queued_at: 1,
+            attempts: 0,
+            next_retry_at: None,
+            in_custody: false,
+            custody_established_at: 0,
+            state: MessageState::Enqueued,
+        };
+        core.outbox.write().enqueue(msg).unwrap();
+        assert_eq!(core.outbox_count(), 1);
+
+        // Flush spelling used by wasm PeerDiscovered (base58), queue keyed as hex.
+        let drained = core.flush_outbox_for_peer(BASE58_PEER);
+        assert_eq!(
+            drained.len(),
+            1,
+            "base58 flush must drain a hex-keyed outbox entry (CO-B-001)"
+        );
+        assert_eq!(drained[0].message_id, "cob001-msg");
+        assert_eq!(core.outbox_count(), 0);
+
+        // Hex flush still works for hex-keyed entries.
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                message_id: "cob001-msg2".to_string(),
+                recipient_id: HEX_PEER.to_string(),
+                envelope_data: vec![1],
+                version: 1,
+                queued_at: 2,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: MessageState::Enqueued,
+            })
+            .unwrap();
+        let drained_hex = core.flush_outbox_for_peer(HEX_PEER);
+        assert_eq!(drained_hex.len(), 1);
+        assert_eq!(core.outbox_count(), 0);
     }
 
     #[test]
