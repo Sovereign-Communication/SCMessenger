@@ -1,5 +1,6 @@
 package com.scmessenger.android.data
 
+import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -7,9 +8,17 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.scmessenger.android.MainActivity
 import com.scmessenger.android.util.AppRestartHelper
+import com.scmessenger.android.utils.inCausalOrder
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import uniffi.api.HistoryManager
+import uniffi.api.MessageDirection
+import uniffi.api.MessageRecord
+import uniffi.api.MessageStatus
 
 /**
  * Regression test: message history must survive a force-stop + relaunch.
@@ -109,44 +118,83 @@ class MeshRepositoryHistoryTest {
     }
 
     /**
-     * Test: Verify message ordering is preserved across app restart.
+     * Test: the store's insertion fact survives a restart, so a same-second
+     * auto-reply still reloads BELOW the message that triggered it.
      *
-     * This extends the basic persistence test by:
-     * 1. Sending 3 distinct messages in sequence
-     * 2. Force-stopping the app
-     * 3. Restarting the app
-     * 4. Verifying all 3 messages are present in the correct order
+     * The earlier version of this test sent nothing and asserted nothing while
+     * its comment described `senderTimestamp` ordering -- the P1 contract that
+     * rendered a reply above its trigger. It would have passed on either
+     * behaviour. This drives the real store instead: two rows in one local
+     * second written in causal order, read back through a fresh handle.
      *
-     * This ensures the persistence layer not only saves messages but
-     * preserves their senderTimestamp-based ordering.
+     * Expected orders are not eyeballed. They are the store's four keys and this
+     * module's `inCausalOrder()` comparator, both applied offline to exactly the
+     * rows written below. No workflow compiles or starts this source set
+     * (`mobile.yml` runs `:app:testDebugUnitTest` and `:app:assembleDebug` only),
+     * so that simulation is the strongest verification this test can have.
      */
     @Test
     fun messageHistory_orderingPreservedAcrossRestart() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val packageName = context.packageName
+        // A store of this test's own, so the app's real history is untouched.
+        val dir = context.getDir("history-order-test", Context.MODE_PRIVATE)
+        dir.deleteRecursively()
+        dir.mkdirs()
+        val path = dir.absolutePath
 
-        // Phase 1: Complete onboarding
-        rule.onNodeWithText("Welcome to SCMessenger").assertExists()
-        rule.onNodeWithTag("consent_checkbox").performClick()
-        rule.waitForIdle()
-        rule.onNodeWithTag("onboarding_continue_button").performClick()
-        rule.waitForIdle()
+        // The store owns the insertion fact: a row added without one is stamped.
+        // It is written under its OWN peer, so the conversation read below holds
+        // exactly the two rows this test asserts on.
+        val first = HistoryManager(path)
+        first.add(row("stamped-1", STAMP_PEER_ID, SECOND, SECOND, 0uL))
+        val stamped = first.get("stamped-1")
+        assertNotNull("the row must be stored", stamped)
+        assertTrue("the store must stamp an insertion fact", stamped!!.storedAtMillis > 0uL)
+        first.close()
 
-        val nickname = "TestUser_${System.currentTimeMillis()}"
-        rule.onNodeWithTag("nickname_field").performTextInput(nickname)
-        rule.waitForIdle()
-        rule.onNodeWithTag("create_identity_button").performClick()
-        rule.waitForIdle()
+        // Restart: a fresh handle re-reads the same store from disk.
+        val reopened = HistoryManager(path)
+        reopened.add(row("zz-trigger", PEER_ID, SECOND, SECOND, SECOND * 1_000uL))
+        reopened.add(row("aa-reply", PEER_ID, SECOND, SECOND - 1uL, SECOND * 1_000uL + 270uL))
+        reopened.flush()
+        val reloaded = reopened.conversation(PEER_ID, 10u)
+        reopened.close()
 
-        // Phase 2: Send 3 messages (to self or a test contact)
-        // Note: This would require an existing contact or self-send capability
-        // which may need additional setup in the test environment
+        // The store hands the conversation over newest first.
+        assertEquals(listOf("aa-reply", "zz-trigger"), reloaded.map { it.id })
+        // The display order, through the comparator this module ships: the
+        // trigger first, its reply 270 ms of insertion fact later.
+        assertEquals(listOf("zz-trigger", "aa-reply"), reloaded.inCausalOrder().map { it.id })
+        // The pre-#309 key inverts the pair: the reply's sender clock is one
+        // second BEHIND its trigger's, which is the defect this test pins.
+        assertEquals(
+            listOf("aa-reply", "zz-trigger"),
+            reloaded.sortedBy { it.senderTimestamp }.map { it.id }
+        )
+    }
 
-        // Phase 3: Force-stop and restart
-        AppRestartHelper.forceStopAndRestart(packageName)
-        rule.waitForIdle()
+    private fun row(
+        id: String,
+        peerId: String,
+        timestamp: ULong,
+        senderTimestamp: ULong,
+        storedAtMillis: ULong
+    ) = MessageRecord(
+        id = id,
+        direction = MessageDirection.RECEIVED,
+        peerId = peerId,
+        content = id,
+        timestamp = timestamp,
+        senderTimestamp = senderTimestamp,
+        delivered = true,
+        status = MessageStatus.DELIVERED,
+        hidden = false,
+        storedAtMillis = storedAtMillis
+    )
 
-        // Phase 4: Verify ordering - messages should be in senderTimestamp order
-        rule.waitForIdle()
+    private companion object {
+        const val PEER_ID = "peer-order-test"
+        const val STAMP_PEER_ID = "peer-stamp-test"
+        const val SECOND = 1_789_841_591uL
     }
 }

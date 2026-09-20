@@ -13,6 +13,7 @@ import com.scmessenger.android.utils.PeerIdValidator
 import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.SecurityUtils
 import com.scmessenger.android.utils.BackoffStrategy
+import com.scmessenger.android.utils.inCausalOrder
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -3191,7 +3192,7 @@ open class MeshRepository(
         }
         repoScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val recentMsgs = historyManager?.conversation(canonicalPeerId, 400u)?.sortedBy { it.timestamp } ?: emptyList()
+                val recentMsgs = historyManager?.conversation(canonicalPeerId, 400u)?.inCausalOrder() ?: emptyList()
                 if (recentMsgs.isEmpty()) {
                     Timber.w("sendHistorySyncDataIfNeeded: no recent msgs for $canonicalPeerId")
                     return@launch
