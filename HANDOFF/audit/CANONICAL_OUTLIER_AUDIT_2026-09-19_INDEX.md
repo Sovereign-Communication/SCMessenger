@@ -24,12 +24,13 @@ Status: IN PROGRESS
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter0.md (M0 baseline)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter1.md (M1, DIM-A)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter2.md (M2, DIM-B)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter3.md (M3, DIM-C -- check_wiring.py RC=0, full output in file)
 
 ## Cumulative counts by dimension
 
 - DIM-A: 5 new findings (CO-A-001..005) + 12 STILL-OPEN prior rows re-verified + 3 reclassifications
 - DIM-B: 6 new findings (CO-B-001..006) + 2 prior rows re-verified RESOLVED (SHADOW CLI-03, CORE-02) + 2 verified-consistent categories
-- DIM-C: 0 findings (not yet run)
+- DIM-C: 0 findings; check_wiring.py RC=0 (full output in iter3); manifest cross-check OK; iOS reachability UNVERIFIED
 - DIM-D: 0 findings (not yet run)
 - DIM-E: 0 findings (not yet run)
 - DIM-F: 0 findings (not yet run)
@@ -56,3 +57,4 @@ Status: IN PROGRESS
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter0_DONE_2026-09-19.md (M0)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter1_DONE_2026-09-19.md (M1)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter2_DONE_2026-09-19.md (M2)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter3_DONE_2026-09-19.md (M3)
