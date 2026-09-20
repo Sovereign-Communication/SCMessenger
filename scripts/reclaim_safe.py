@@ -44,6 +44,171 @@ import sys
 
 DEFAULT_DURABLE = ["origin/tracking/pre-v040-tag-work", "origin/main"]
 
+# Managed classes outside the checkout (added 2026-09-17). Imported from
+# disk_budget so the reporter and the deleter cannot disagree about what a
+# class contains -- a guard that measures a different set than the tool that
+# deletes is how a "22 GB cache" becomes an unnoticed 22 GB.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disk_budget import (  # noqa: E402
+    ANDROID_AVD_HOME,
+    EMULATOR_STATE_NAMES,
+    NEVER_RECLAIMABLE_SUFFIXES,
+    SHARED_TARGET_HOME,
+    is_build_script_output,
+)
+
+
+def _processes_under(path):
+    """PIDs of processes whose image is inside `path`. Returns (pids, ok).
+
+    ok=False means detection itself failed. Callers MUST treat that as a
+    refusal: a running node's binary inside target/ is exactly how a sanctioned
+    reclaim on 2026-09-17 deleted a live node's restart path.
+    """
+    if os.name != "nt":
+        return [], True
+    ps = ("Get-Process | Where-Object { $_.Path -like '*%s*' } | "
+          "Select-Object -ExpandProperty Id" % path.replace("\\", "\\"))
+    rc, out, err = run_cmd(["powershell", "-NoProfile", "-Command", ps], timeout=90)
+    if rc != 0:
+        return [], False
+    return [l.strip() for l in out.splitlines() if l.strip()], True
+
+
+def _emulator_processes():
+    """Lines from tasklist matching an emulator/qemu process. (lines, ok)."""
+    rc, out, err = run_cmd(["tasklist"], timeout=90)
+    if rc != 0:
+        return [], False
+    return [l for l in out.splitlines()
+            if "qemu" in l.lower() or "emulator" in l.lower()], True
+
+
+def _durable_hits(root):
+    """Non-build files under root that mean the path is not a pure cache."""
+    hits = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        for n in filenames:
+            if not n.lower().endswith(NEVER_RECLAIMABLE_SUFFIXES):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, n), root)
+            if is_build_script_output(rel):
+                continue
+            try:
+                sz = os.path.getsize(os.path.join(dirpath, n))
+            except OSError:
+                sz = 0
+            hits.append((rel, sz))
+    return hits
+
+
+def reclaim_shared_target(dry_run=False):
+    """Delete the children of the shared cargo target cache, keeping the dir."""
+    root = SHARED_TARGET_HOME
+    print("\n--- Shared cargo target %s ---" % ("[DRY RUN]" if dry_run else "[LIVE]"))
+    if not os.path.isdir(root):
+        print("[INFO]  %s does not exist; nothing to reclaim." % root)
+        return 0
+
+    pids, ok = _processes_under(root)
+    if not ok:
+        print("[FAIL]  Could not determine whether a process is running from %s." % root)
+        print("        Refusing to delete (fail closed).")
+        return 0
+    if pids:
+        print("[FAIL]  Process(es) running from this tree: %s" % ", ".join(pids))
+        print("        Refusing to delete: a running binary must not lose its image.")
+        return 0
+    print("[OK]    No process is running from this tree.")
+
+    durable = _durable_hits(root)
+    if durable:
+        print("[FAIL]  %d non-build file(s) present -- this is not a pure cache:"
+              % len(durable))
+        for rel, sz in durable[:20]:
+            print("          %10.3f MB  %s" % (sz / 1024 ** 2, rel))
+        print("        Refusing to bulk-delete. Reclaim the build output by hand.")
+        return 0
+    print("[OK]    No durable (non-build) files present.")
+
+    children = [os.path.join(root, n) for n in sorted(os.listdir(root))]
+    freed = 0
+    for child in children:
+        size_bytes = get_dir_size_bytes(child) if os.path.isdir(child) else 0
+        if dry_run:
+            print("[DRY-RUN] Would reclaim %s (%s)" % (child, format_bytes(size_bytes)))
+            freed += size_bytes
+            continue
+        try:
+            if os.path.isdir(child):
+                shutil.rmtree(child, onerror=handle_remove_readonly)
+            else:
+                os.remove(child)
+            print("[OK]   Reclaimed %s (%s freed)" % (child, format_bytes(size_bytes)))
+            freed += size_bytes
+        except Exception as e:
+            print("[FAIL] Failed to remove %s: %s" % (child, e))
+    print("[DONE] Shared target: %s reclaimed." % format_bytes(freed))
+    return freed
+
+
+def reclaim_emulator_state(dry_run=False):
+    """Delete AVD runtime state, keeping the AVD definition so it re-spawns."""
+    print("\n--- Emulator runtime state %s ---" % ("[DRY RUN]" if dry_run else "[LIVE]"))
+    if not os.path.isdir(ANDROID_AVD_HOME):
+        print("[INFO]  %s does not exist; nothing to reclaim." % ANDROID_AVD_HOME)
+        return 0
+
+    hits, ok = _emulator_processes()
+    if not ok:
+        print("[FAIL]  Could not enumerate processes. Refusing to delete (fail closed).")
+        return 0
+    if hits:
+        print("[FAIL]  An emulator appears to be running:")
+        for line in hits[:5]:
+            print("          %s" % line.strip())
+        print("        Refusing to delete live emulator state.")
+        return 0
+    print("[OK]    No emulator/qemu process is running.")
+
+    freed = 0
+    kept = []
+    for avd in sorted(os.listdir(ANDROID_AVD_HOME)):
+        avd_path = os.path.join(ANDROID_AVD_HOME, avd)
+        if not os.path.isdir(avd_path) or not avd.endswith(".avd"):
+            continue
+        # Guard: never step outside the AVD home.
+        if not os.path.abspath(avd_path).startswith(os.path.abspath(ANDROID_AVD_HOME) + os.sep):
+            print("[FAIL]  Refusing path outside AVD home: %s" % avd_path)
+            continue
+        for name in EMULATOR_STATE_NAMES:
+            p = os.path.join(avd_path, name)
+            if not os.path.exists(p):
+                continue
+            size_bytes = get_dir_size_bytes(p) if os.path.isdir(p) else os.path.getsize(p)
+            if dry_run:
+                print("[DRY-RUN] Would reclaim %s (%s)" % (p, format_bytes(size_bytes)))
+                freed += size_bytes
+                continue
+            try:
+                if os.path.isdir(p):
+                    shutil.rmtree(p, onerror=handle_remove_readonly)
+                else:
+                    os.remove(p)
+                print("[OK]   Reclaimed %s (%s freed)" % (p, format_bytes(size_bytes)))
+                freed += size_bytes
+            except Exception as e:
+                print("[FAIL] Failed to remove %s: %s" % (p, e))
+        for keep in ("config.ini", "AVD.conf", "userdata.img"):
+            if os.path.exists(os.path.join(avd_path, keep)):
+                kept.append(os.path.join(avd, keep))
+
+    print("[INFO]  Kept the AVD definition so it re-spawns fresh:")
+    for k in kept:
+        print("          %s" % k)
+    print("[DONE] Emulator state: %s reclaimed." % format_bytes(freed))
+    return freed
+
 
 def find_repo_root():
     """Dynamically determine the repo root from git or file location."""
@@ -176,6 +341,28 @@ def handle_remove_readonly(func, path, exc):
             raise
     else:
         raise
+
+
+def resolve_durable_refs(repo_root, refs):
+    """Split `refs` into (present, missing) by whether the ref resolves here.
+
+    Why: DEFAULT_DURABLE names `origin/tracking/pre-v040-tag-work`, which does
+    not exist on this clone or on origin. `check_merged_state` reports a ref
+    error as UNKNOWN rather than a false NOT-MERGED (correct, and documented),
+    but a phantom in the default list therefore makes EVERY worktree that is not
+    an ancestor of origin/main permanently UNKNOWN -- 7 of 11 on 2026-09-17 --
+    and makes the tool exit 1 unconditionally. A safety check that can never
+    reach SAFE is not conservative, it is inert.
+
+    Missing refs are printed, not silently dropped (rule 15: visibility fails
+    open).
+    """
+    present, missing = [], []
+    for ref in refs:
+        rc, out, err = run_cmd(["git", "rev-parse", "--verify", "--quiet", ref],
+                               cwd=repo_root, timeout=15)
+        (present if rc == 0 else missing).append(ref)
+    return present, missing
 
 
 def survey_worktrees(repo_root, durable_refs):
@@ -362,11 +549,36 @@ def main():
         default=False,
         help="Output survey results in JSON format.",
     )
+    parser.add_argument(
+        "--reclaim-shared-target",
+        action="store_true",
+        default=False,
+        help="Reclaim the shared cargo target cache (verified: no process running "
+             "from it, no durable non-build files).",
+    )
+    parser.add_argument(
+        "--reclaim-emulator-state",
+        action="store_true",
+        default=False,
+        help="Reclaim AVD runtime state, keeping the AVD definition so it re-spawns.",
+    )
 
     args = parser.parse_args()
 
     repo_root = find_repo_root()
     durable_refs = args.durable_refs or DEFAULT_DURABLE
+
+    present, missing = resolve_durable_refs(repo_root, durable_refs)
+    if missing:
+        print("[WARNING] Durable ref(s) do not resolve here and cannot prove a merge:",
+              file=sys.stderr)
+        for ref in missing:
+            print("          %s" % ref, file=sys.stderr)
+    if not present:
+        print("[WARNING] No durable ref resolved; falling back to origin/main only.",
+              file=sys.stderr)
+        present = ["origin/main"]
+    durable_refs = present
 
     results = survey_worktrees(repo_root, durable_refs)
 
@@ -377,6 +589,14 @@ def main():
 
     if args.reclaim:
         perform_reclaim(results, dry_run=args.dry_run)
+
+    # The two managed classes outside the checkout have their own gates and do
+    # not participate in the worktree SAFE/UNKNOWN model.
+    if args.reclaim_shared_target:
+        reclaim_shared_target(dry_run=args.dry_run)
+
+    if args.reclaim_emulator_state:
+        reclaim_emulator_state(dry_run=args.dry_run)
 
     # Exit non-zero if any worktree has UNKNOWN verdict so callers cannot mistake it for clean
     has_unknown = any(r["merged_verdict"] == "UNKNOWN" for r in results)
