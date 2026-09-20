@@ -28,4 +28,4 @@ Operator interview answers (2026-09-20):
 
 Other session dirty paths in main checkout (left untouched): Android Kotlin UI/viewmodels, `core/src/iron_core.rs`, `HANDOFF/CTO_STATE.md`, untracked inbox/review/test files.
 
-PR number for this docs landing: filled after `gh pr create` on the docs branch.
+PR number for this docs landing: https://github.com/Sovereign-Communication/SCMessenger/pull/336 (OPEN).
