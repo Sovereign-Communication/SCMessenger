@@ -3,7 +3,7 @@
 Task: HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md
 Branch: glm/canonical-outlier-audit
 Mode: REPORT-ONLY. Findings feed 0.4.0 gate / 0.5.0 parity / 1.0.0 unification ledger.
-Status: IN PROGRESS
+Status: FINAL for this pass (2026-09-19, iterations 0-6 complete)
 
 ## HEAD snapshot
 
@@ -27,6 +27,7 @@ Status: IN PROGRESS
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter3.md (M3, DIM-C -- check_wiring.py RC=0, full output in file)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter4.md (M4, DIM-D -- docs_sync_check RC=0)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter5.md (M5, DIM-E + DIM-F)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter6.md (M6 FINAL, DIM-G + whole-pass triage)
 
 ## Cumulative counts by dimension
 
@@ -36,8 +37,8 @@ Status: IN PROGRESS
 - DIM-D: 3 new findings (CO-D-001..003); docs_sync_check.sh RC=0 PASS recorded; 4 verified-consistent categories
 - DIM-E: 3 findings (CO-E-001 MED 0.4.0 AWS-IP policy violated by 28 stray copies incl. 3 active tickets; CO-E-002 MED 0.4.0 Mixed-status docs keep pre-ledger-sharing premise; CO-E-003 verified-consistent no-finding)
 - DIM-F: 3 findings (CO-F-001 LOW 0.5.0, CO-F-002 MED 0.5.0, CO-F-003 PROCESS UNVERIFIED)
-- DIM-G: 0 findings (not yet run)
-- TOTAL: 0 (this file updated each milestone; counts must match iteration files)
+- DIM-G: 3 findings (CO-G-001 MED process 18 unindexed queue files; CO-G-002 MED 0.4.0 stale-premise P1 ticket, NEEDS-HUMAN; CO-G-003 STILL-OPEN confirmation: 4 MULTIDIM rows re-verified with current evidence)
+- TOTAL new findings: 23 rows = 22 substantive + 1 verified-consistent record (CO-E-003). Counts match iter1-iter6 files exactly; no "and N more".
 
 ## Cumulative counts by severity / target
 
@@ -54,10 +55,15 @@ Status: IN PROGRESS
 - Targets cumulative: 0.4.0 x9, 0.5.0 x1, 1.0.0 x2, process x1, unknown x1
 - DIM-E/F added: MED x3 (CO-E-001, CO-E-002 0.4.0; CO-F-002 0.5.0), LOW x1 (CO-F-001 0.5.0), PROCESS x1 (CO-F-003)
 - Targets cumulative: 0.4.0 x11, 0.5.0 x3, 1.0.0 x2, process x2, unknown x1
+- DIM-G added: MED x2 (CO-G-001 process, CO-G-002 0.4.0), STILL-OPEN confirmation x1 (CO-G-003, 0.4.0)
+- FINAL: 0.4.0 x13 | 0.5.0 x3 | 1.0.0 x2 | process x3 | unknown x1 = 22 substantive rows; HIGH 2 | MED 12 | LOW 6 | PROCESS 1; verified-record 1 (CO-E-003)
+- STILL-OPEN prior rows re-verified with current evidence: 16 (12 DIM-A inventory spots + 4 MULTIDIM rows)
+- Prior rows re-verified RESOLVED: 2 (SHADOW CLI-03, CORE-02); reclassifications: 3 (DIM-A)
+- BLOCKER-0.4.0 count: 0 (reasoning in iter6 triage)
 
 ## Open BLOCKER-0.4.0 list
 
-- (empty)
+- (empty -- zero BLOCKER-0.4.0 findings; see iter6 triage reasoning)
 
 ## Inbox messages written
 
@@ -67,3 +73,4 @@ Status: IN PROGRESS
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter3_DONE_2026-09-19.md (M3)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter4_DONE_2026-09-19.md (M4)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter5_DONE_2026-09-19.md (M5)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter6_DONE_2026-09-19.md (M6 FINAL)
