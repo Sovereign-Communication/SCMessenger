@@ -1,103 +1,82 @@
-# V040 freebuff operator decisions — required before tag
+# V040 operator decisions — FILLED 2026-09-20 (interview)
 
-Status: AWAITING OPERATOR — orchestrator cannot improvise these (AGENTS rule 9)
+Status: ANSWERED — recorded from operator interview in the orchestrator session
 Date: 2026-09-20
-Context: `HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md`
+Authority: `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` (rewritten to match)
 
-Return rulings by editing this file on a branch the orchestrator merges, or by
-telling the orchestrator session to record them in the unified path §7.
+This file supersedes the blank questionnaire that landed with PR #330.
 
 ---
 
-## R1 — Release keystore / D2 (blocking public APK)
+## R1 — Release keystore / D2
 
-**Facts:** secrets exist in GitHub; keystore files at `C:\Users\SCM\kiee\`
-(`scmessenger-release.jks`); Multi-Platform Release Pipeline last runs failed;
-historical failure: `SCMESSENGER_KEY_ALIAS is not present in the decoded keystore`.
+**Ruling:** DEFERRED. "No tag, no secrets, just get it working first."
 
-**Action (operator, interactive):**
-
-```
-scripts/verify_release_keystore.sh C:\Users\SCM\kiee\scmessenger-release.jks <alias>
-```
-
-Then ensure `SCMESSENGER_KEY_ALIAS` **value** matches the resolved alias
-exactly (PKCS12 is case-sensitive). Re-run release rehearsal:
-
-```
-gh workflow run release.yml -f artifacts_only=true
-```
-
-**Ruling needed:** alias value confirmed? rehearsal green Y/N? run URL: ______
+Do **not** re-dispatch keystore verify, secret re-set, or release rehearsal
+until the working bar in the working-first path is met.
 
 ---
 
 ## R2 — SEC-03 sled / deny.toml
 
-**Facts:** `deny.toml` still waives multiple RUSTSEC ids via sled with no
-expiry. #305 RCA escalated; no dependency change made (rule 9).
+**Ruling:** **(b)** Start storage migration on a branch.
 
-**Pick one:**
-
-- [ ] **(a) Accept for tag:** dated waiver, named owner, migration budget in
-      0.5.0. Record expiry date: __________
-- [ ] **(b) Migrate on a branch** after tag; do not block tag on completion.
-      Candidate engine: __________
-
-**Ruling:** (a) / (b) — ______
+- Tag is not blocked on completing the migration.
+- Engine swap still needs a further operator sign-off before merge to main
+  (rule 9). Parallel exploration is authorized.
+- Suggested candidates remain open (redb/fjall etc.); pick during branch work.
 
 ---
 
 ## R3 — AND-06 Kotlin curve math
 
-**Facts:** UniFFI `is_valid_public_key` on main (#305, canonical decode fixed).
-Kotlin still contains Ed25519 BigInteger math in `PeerIdValidator.kt` and
-related ViewModels. Ticket `HANDOFF/todo/P1_ANDROID_UNIFFI_CURVE_CHECK_RELOCATION.md`
-still says must land before tag.
+**Ruling:** DO IT RIGHT — unification ordered.
 
-**Pick one:**
+1. **A-lite:** collapse redundant Kotlin copies (one validator path).
+2. **A full:** finish UniFFI cutover to `is_valid_public_key`; delete remaining
+   curve math from Android.
 
-- [ ] **(A) Pre-tag:** freebuff implements Kotlin half; acceptance grep clean;
-      wire via UniFFI; Rule-8 if surface changes.
-- [ ] **(B) Tag with dated accept:** Kotlin half is 0.5.0; update ticket text
-      so it stops contradicting the tag path.
-
-**Ruling:** (A) / (B) — ______
+Not option B (dated accept and leave math in Kotlin).
 
 ---
 
-## R4 — External crypto audit commission (G4-2)
+## R4 — External crypto audit commission
 
-Commissioning is the gate, not completion.
-
-- Firm: ______
-- Scope: ______
-- Price: ______
-- Dates: ______
+**Ruling:** DEFER until mesh is reliable. Not on Wave 1 critical path.
 
 ---
 
-## R5 — Optional waivers for the public alpha
+## R5 — Scope / process waivers
 
-- [ ] AWS IP-churn autonomous rediscovery: **known limitation** + manual
-      bootstrap runbook (V050-B1/B2 remains open design work).
-- [ ] BLE real-time chat + cellular-only bootstrap: **UNVERIFIED** on tag
-      notes; operator-supervised retests post-tag.
-- [ ] Security Scan schedule lane red: **not a D1 blocker** under current
-      branch-protection contexts (operator confirms).
+**Rulings:**
 
-**Confirm each with initials/date:** ______
-
----
-
-## R6 — Open PR batch (non-code judgement)
-
-- [ ] CLOSE #215 (superseded routing wire-up; CONFLICTING)
-- [ ] CLOSE #156 if Docker Integration Suite remains green on main
-- [ ] Defer dependabot wave / Apple docs / identity-unification PRs to post-tag
-- [ ] Pull #322/#325 into the tag candidate (orchestrator merges when green)
+- Reliable day-to-day mesh is the working definition (not formal D4/D6/D7 yet).
+- **No scoring until it all lands.**
+- Pixel UI: **operator always drives** the phone. Orchestrator may `adb install -r`
+  anytime; otherwise passive logs only.
+- Orchestrator may redeploy Windows/AWS from CI artifacts when appropriate.
+- Beach-join **Phase 0-1 pulled forward** into Wave 1 (operator multi-select).
+- AWS IP-churn autonomous rediscovery **in Wave 1**.
 
 ---
 
-Recording: orchestrator will update `HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md`
-§7 when these boxes are filled.
+## R6 — Open PR batch
+
+**Rulings:**
+
+- **#325** — merge when green.
+- **#322** — merge when green after check diagnosis.
+- **#215** — already closed as superseded.
+- Other legacy/dependabot/Apple PRs — post-wave disposition.
+
+---
+
+## Post-wave evidence bar (operator)
+
+Harness (`tier_a_conformance.sh`) + Windows/AWS log slices + **one operator
+phone session**. Then the mesh may be called working.
+
+---
+
+Recording complete. Orchestrator rewrote `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+and freebuff README DISPATCHABLE set to match.

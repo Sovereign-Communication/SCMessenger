@@ -1,15 +1,17 @@
 # V0.4.0 tag path — unified (2026-09-20)
 
-Status: Active — this document SUPERSEDES contradictory status claims in
-`SHIP_PLAN.md` §5/§6 scoreboard rows, `HANDOFF/CTO_STATE.md` resume headers,
-`HANDOFF/freebuff/README.md` queue order, and freebuff ticket Status lines
-that still advertise open PRs already merged. Where those documents conflict,
-THIS file wins until the tag is cut. Historical evidence in those files is
-left intact; only execution authority moves here.
+Status: **SUPERSEDED FOR EXECUTION PRIORITY** by
+`HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` (operator interview same day:
+"no tag, no secrets, just get it working first"). This file remains useful as
+the D1-D7 definition archive and audit-disposition history. Where sequencing
+conflicts, the working-first path wins.
+
+Status note: D1-D7 definitions below stay the future release exit criteria.
 
 Author: orchestrator session (Windows host, FULL class). Operator directive
-this session: take ownership, run gates, score items, unify contradictions,
-plan the freebuff lane to the tag.
+this session (initial): take ownership, run gates, score items, unify
+contradictions, plan the freebuff lane. **Subsequent operator interview
+re-prioritized to working-first — see the successor document.**
 
 Evidence base: `origin/main` @ `efd240d7` (PR #308 merge), commands run
 2026-09-20 on this host. Worktree used for verification:
