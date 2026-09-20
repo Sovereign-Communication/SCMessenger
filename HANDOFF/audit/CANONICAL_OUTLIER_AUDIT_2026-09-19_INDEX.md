@@ -26,6 +26,7 @@ Status: IN PROGRESS
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter2.md (M2, DIM-B)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter3.md (M3, DIM-C -- check_wiring.py RC=0, full output in file)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter4.md (M4, DIM-D -- docs_sync_check RC=0)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter5.md (M5, DIM-E + DIM-F)
 
 ## Cumulative counts by dimension
 
@@ -33,8 +34,8 @@ Status: IN PROGRESS
 - DIM-B: 6 new findings (CO-B-001..006) + 2 prior rows re-verified RESOLVED (SHADOW CLI-03, CORE-02) + 2 verified-consistent categories
 - DIM-C: 0 findings; check_wiring.py RC=0 (full output in iter3); manifest cross-check OK; iOS reachability UNVERIFIED
 - DIM-D: 3 new findings (CO-D-001..003); docs_sync_check.sh RC=0 PASS recorded; 4 verified-consistent categories
-- DIM-E: 0 findings (not yet run)
-- DIM-F: 0 findings (not yet run)
+- DIM-E: 3 findings (CO-E-001 MED 0.4.0 AWS-IP policy violated by 28 stray copies incl. 3 active tickets; CO-E-002 MED 0.4.0 Mixed-status docs keep pre-ledger-sharing premise; CO-E-003 verified-consistent no-finding)
+- DIM-F: 3 findings (CO-F-001 LOW 0.5.0, CO-F-002 MED 0.5.0, CO-F-003 PROCESS UNVERIFIED)
 - DIM-G: 0 findings (not yet run)
 - TOTAL: 0 (this file updated each milestone; counts must match iteration files)
 
@@ -51,6 +52,8 @@ Status: IN PROGRESS
 - DIM-D added: MED x2 (CO-D-001 0.4.0, CO-D-002 0.4.0/NEEDS-HUMAN), LOW x1 (CO-D-003 process)
 - NEEDS-HUMAN count: 2 (CO-A-005, CO-D-002)
 - Targets cumulative: 0.4.0 x9, 0.5.0 x1, 1.0.0 x2, process x1, unknown x1
+- DIM-E/F added: MED x3 (CO-E-001, CO-E-002 0.4.0; CO-F-002 0.5.0), LOW x1 (CO-F-001 0.5.0), PROCESS x1 (CO-F-003)
+- Targets cumulative: 0.4.0 x11, 0.5.0 x3, 1.0.0 x2, process x2, unknown x1
 
 ## Open BLOCKER-0.4.0 list
 
@@ -63,3 +66,4 @@ Status: IN PROGRESS
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter2_DONE_2026-09-19.md (M2)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter3_DONE_2026-09-19.md (M3)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter4_DONE_2026-09-19.md (M4)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter5_DONE_2026-09-19.md (M5)
