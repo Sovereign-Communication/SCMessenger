@@ -23,11 +23,12 @@ Status: IN PROGRESS
 
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter0.md (M0 baseline)
 - HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter1.md (M1, DIM-A)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter2.md (M2, DIM-B)
 
 ## Cumulative counts by dimension
 
 - DIM-A: 5 new findings (CO-A-001..005) + 12 STILL-OPEN prior rows re-verified + 3 reclassifications
-- DIM-B: 0 findings (not yet run)
+- DIM-B: 6 new findings (CO-B-001..006) + 2 prior rows re-verified RESOLVED (SHADOW CLI-03, CORE-02) + 2 verified-consistent categories
 - DIM-C: 0 findings (not yet run)
 - DIM-D: 0 findings (not yet run)
 - DIM-E: 0 findings (not yet run)
@@ -41,6 +42,10 @@ Status: IN PROGRESS
 - LOW: 3 (CO-A-003, CO-A-004 Target 0.4.0; CO-A-005 Target 0.4.0/PROCESS)
 - NEEDS-HUMAN: 1 (CO-A-005, rename touches inbound links)
 - Targets so far: 0.4.0 x4, 1.0.0 x1
+- HIGH: 2 (CO-B-001 wasm outbox dual-key strand, CO-B-002 orphan doc non-canonical instruction; both Target 0.4.0)
+- MED: +3 (CO-B-003 0.4.0, CO-B-004 1.0.0, CO-B-005 0.5.0)
+- LOW: +1 (CO-B-006, unknown)
+- Targets cumulative: 0.4.0 x7, 0.5.0 x1, 1.0.0 x2, unknown x1
 
 ## Open BLOCKER-0.4.0 list
 
@@ -50,3 +55,4 @@ Status: IN PROGRESS
 
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter0_DONE_2026-09-19.md (M0)
 - HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter1_DONE_2026-09-19.md (M1)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter2_DONE_2026-09-19.md (M2)
