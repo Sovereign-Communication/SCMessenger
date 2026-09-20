@@ -27,6 +27,7 @@ import uniffi.api.*
 import com.scmessenger.android.R
 import com.scmessenger.android.utils.displayName
 import com.scmessenger.android.utils.toEpochMillis
+import com.scmessenger.android.utils.inCausalOrder
 import com.scmessenger.android.ui.viewmodels.ConversationsViewModel
 import com.scmessenger.android.ui.viewmodels.ContactsViewModel
 import com.scmessenger.android.ui.viewmodels.ChatViewModel
@@ -80,7 +81,8 @@ fun ChatScreen(
     val chatMessages = remember(messages, conversationId) {
         // MSG-ORDER-002: locally-assigned timestamps only (see ChatViewModel);
         // senderTimestamp is sender provenance and must never drive ordering.
-        messages.filter { it.peerId == conversationId }.sortedBy { it.timestamp }
+        // MSG-ORDER-003: inCausalOrder() also breaks a same-second tie.
+        messages.filter { it.peerId == conversationId }.inCausalOrder()
     }
 
     // Wire updateInputText/clearInput into ChatViewModel

@@ -486,7 +486,10 @@ pub fn is_self_certifying_binding(peer_id: &str, public_key_hex: &str) -> bool {
 // UNIFICATION: live canonicalization helper — mirrors load() migration 747-817.
 // Converts libp2p 12D3 peer_id to canonical 30d0fa public_key_hex on every write,
 // preventing duplicate nodes where ledger.json already collapsed to hex.
-fn canonical_ledger_peer_id(peer_id: &str, public_key: Option<&str>) -> Option<String> {
+/// Also the single owner for "which key is this peer's queue stored under":
+/// `store::outbox` calls this (with no public-key hint) so a queue written under
+/// one representation of a peer is still drainable under another.
+pub(crate) fn canonical_ledger_peer_id(peer_id: &str, public_key: Option<&str>) -> Option<String> {
     let trimmed = peer_id.trim();
     if trimmed.is_empty() {
         return None;
