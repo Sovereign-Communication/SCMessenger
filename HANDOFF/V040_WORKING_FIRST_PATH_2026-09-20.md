@@ -117,6 +117,10 @@ Queue status gate before every paste wave: `python scripts/check_queue_status.py
 6. Rule-8 before merge on `core/src/{crypto,transport,routing,privacy}`.
 7. Everything the lane must see must land on **`origin/main`**.
 8. New work in **worktrees** (`tmp/wt-*`), not the dirty shared main checkout.
+9. **CI queue hygiene (operator 2026-09-20, standing):** after merges or
+   branch updates, cancel superseded Actions runs (older main SHAs, merged-PR
+   heads) so the candidate is not blocked behind dead work. Keep artifact
+   jobs on the deploy/candidate SHA. Policy: `docs/rules/BUILD_AND_CI.md`.
 
 ---
 

@@ -5,6 +5,26 @@ Rule: CI artifacts only; binaries under `tmp/radio-<sha>/`, never `target/`.
 Disk: prefer artifacts; `python scripts/disk_budget.py` before downloads.
 Pixel: `adb install -r` allowed; **no UI driving**.
 
+## CI queue hygiene (mandatory before waiting on artifacts)
+
+Operator 2026-09-20: **always clear superseded GitHub Actions runs** so deploy
+is not stuck behind work that can no longer land. Full policy:
+`docs/rules/BUILD_AND_CI.md` ("CI queue hygiene").
+
+Before/while waiting for deploy artifacts:
+
+```
+gh run list --limit 40 --status queued
+gh run list --limit 40 --status in_progress
+gh run cancel <run-id>   # superseded main SHAs, merged-PR branches, idle docs PRs
+```
+
+**Keep:** `CI` / `Mobile` / `Docker Publish` on the **target deploy SHA** only.
+**Cancel:** older main-tip runs, pull_request runs on merged branches, non-candidate
+docs CI when the queue is saturated.
+**Do not cancel:** artifact-producing jobs on the deploy SHA.
+Record run ids you cancelled in the deploy report (evidence contract).
+
 ## Target SHA
 
 Deploy **one** SHA to all three nodes after Wave-1 merges that are green.
