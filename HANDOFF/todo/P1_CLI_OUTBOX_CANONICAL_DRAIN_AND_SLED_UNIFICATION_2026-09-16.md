@@ -1,10 +1,10 @@
-﻿# P1: Outbox Canonical Addressing Drain & IronCore Outbox Unification (CLI-03 & CORE-02)
+# P1: Outbox Canonical Addressing Drain & IronCore Outbox Unification (CLI-03 & CORE-02)
 
-**Status:** OPEN
-**Priority:** P1 (v0.4.0 Release Blocker)
-**Target Branch:** `feat/v040-multi-transport-store-forward`
-**Components:** `cli/src/main.rs`, `core/src/iron_core.rs`, `core/src/store/outbox.rs`
-**Reference Audit:** `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`
+**Status:** RE-SCOPED 2026-09-20 (CO-G-002) — CLI-03 + CORE-02 **FIXED ON MAIN** (canonical drain + persistent IronCore outbox). **Residual OPEN = core/wasm single-form flush** tracked as `HANDOFF/freebuff/queue/V040_T_COB001_WASM_OUTBOX_DUAL_DRAIN.md` (audit CO-B-001). Do not re-implement CLI-03/CORE-02 from this ticket body.
+**Priority:** P1 residual only (was: v0.4.0 Release Blocker for the already-fixed CLI/CORE defects)
+**Target Branch:** residual work on `main` via freebuff PR
+**Components:** residual: `core/src/iron_core.rs` `flush_outbox_for_peer`
+**Reference Audit:** SHADOW 2026-09-16 + CANONICAL_OUTLIER CO-B-001/CO-G-002 + CTO disposition `HANDOFF/audit/V040_CTO_AUDIT_DISPOSITIONS_2026-09-20.md`
 
 ## Problem Description
 1. **Outbox Drain Addressing Mismatch (CLI-03)**: In `cli/src/main.rs:4623`, messages queued for offline delivery are keyed under the recipient's canonical 64-hex public key (`contact.peer_id`), written to Sled with prefix `queue:<64-hex>_`. In `cli/src/main.rs:3746`, `flush_outbox_for_peer` queries `ob.drain_for_peer(&peer_id.to_string())` with base58 `12D3KooW...`. The prefix `queue:12D3KooW..._` never matches the 64-hex key, leaving messages stranded forever in the persistent outbox (159 undelivered backlog).
