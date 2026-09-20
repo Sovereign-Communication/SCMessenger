@@ -24,8 +24,11 @@ inputs:
     required: true
   keystore-base64:
     description: >-
-      Base64 of the pinned debug keystore, normally
-      ${{ secrets.SCMESSENGER_DEBUG_KEYSTORE_BASE64 }}. Empty means no pinned
+      Base64 of the pinned debug keystore. Callers must pass the repository
+      secret SCMESSENGER_DEBUG_KEYSTORE_BASE64 as this input. Do not reference
+      the secrets context inside this action.yml -- composite actions cannot
+      evaluate secrets.* here and GitHub fails template validation if the
+      expression appears (even in a description). Empty means no pinned
       identity is configured.
     required: false
     default: ""
