@@ -28,6 +28,10 @@ done/    completed; Status records the PR number
 
 **Before any paste wave:** `python scripts/check_queue_status.py` must exit 0.
 
+**CI queue hygiene (operator 2026-09-20):** cancel superseded GitHub Actions
+runs after merges/branch updates — see `docs/rules/BUILD_AND_CI.md`. Orchestrator
+clears the queue; freebuff reports blocked waits with run ids in `inbox/`.
+
 ---
 
 ## DISPATCHABLE -- Wave 1 paste order (2026-09-20)
