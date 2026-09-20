@@ -1,17 +1,19 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-09-20 (working-first rewrite)
+Last updated: 2026-09-20 (CTO merge-train update)
 Rules: `docs/rules/FREEBUFF.md` -- read it before adding a task file here.
-**Order authority:** `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
-(overrides tag-pressure sequencing in older path docs).
+**Order authority:** `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md` (includes
+working-first path + concurrent audit dispositions + 0.4.0 tag checklist).
 Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-09-20.md`.
 
 ## Direction (operator 2026-09-20)
 
-**No tag, no secrets pressure. Get the reliable day-to-day mesh working first.**
-Do not paste keystore/release/tag tasks. Do not re-dispatch tickets marked
-CODE ON MAIN / MERGED / DO NOT PASTE.
+1. **Working-first:** reliable day-to-day mesh on Windows + AWS + Pixel.
+2. **Then 0.4.0 tag readiness** via master plan checklist + 3-node log analysis.
+Do not paste keystore/release/tag chores as freebuff implementation tasks.
+Do not re-dispatch CODE ON MAIN / MERGED tickets. Pinned debug keystore
+secret is **operator-owned** (device `adb install -r`).
 
 ## Durable CTO continuation
 
@@ -34,23 +36,25 @@ clears the queue; freebuff reports blocked waits with run ids in `inbox/`.
 
 ---
 
-## DISPATCHABLE -- Wave 1 paste order (2026-09-20)
+## DISPATCHABLE -- paste order (2026-09-20 CTO update)
 
 Paste only after the ticket exists on **`origin/main`**. One ticket per paste.
+Authority: `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`.
+#325/#322 already merged to main — do not wait on them.
 
 | Order | Task file | What it fixes | Review gate |
 |---|---|---|---|
 | 1 | `queue/V040_T_CONN_LIMITS_MULTIPORT.md` | Live multi-port dials denied (`connection_limits` cap 4) | **Rule-8** |
-| 2 | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` | A-lite: collapse redundant Kotlin Ed25519 copies to one path | none if android-only |
-| 3 | `queue/V040_T_AND06_UNIFI_CUTOVER.md` | A full: wire validation to core UniFFI; delete remaining curve math | Rule-8 if core/FFI surface |
-| 4 | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | N-03: healthy-quiet node must not be watchdog-killed | test-only preferred |
-| 5 | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | Cloud node IP change must remesh without manual bootstrap edits | **Rule-8** likely |
-| 6 | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Operator pulled Phase 0-1 forward (spec + hotspot share) | Phase 2-3 still Rule-8 later |
+| 2 | `queue/V040_T_COB001_WASM_OUTBOX_DUAL_DRAIN.md` | Audit CO-B-001 HIGH: IronCore flush single-form key | Orchestrator; harness if not a CLI-pattern port |
+| 3 | `queue/V040_T_ANDROIDTEST_COMPILE_FIX.md` | Mobile instrumented-test compile red | none if androidTest-only |
+| 4 | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` | A-lite: collapse redundant Kotlin Ed25519 copies | none if android-only |
+| 5 | `queue/V040_T_AND06_UNIFI_CUTOVER.md` | A full: UniFFI cutover; delete curve math | Rule-8 if FFI/core |
+| 6 | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | N-03 healthy-quiet node watchdog | test-only preferred |
+| 7 | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | Cloud IP change remesh without manual edits | **Rule-8** likely |
+| 8 | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Beach-join Phase 0-1 (operator pull-forward) | Phase 2-3 later |
 
-Orchestrator (not freebuff paste): merge **#325** and **#322** when green.
-
-Scoring after the wave: harness + logs + **operator** phone session.
-**No scoring mid-wave** per operator ruling.
+Orchestrator merge train: **#337** (audit lineage) + CTO docs PR + freebuff code PRs after gates.
+Scoring after the wave: harness + 3-node logs + **operator** phone session.
 
 ---
 
