@@ -1,7 +1,7 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-08-31
+Last updated: 2026-09-19
 Rules: `docs/rules/FREEBUFF.md` -- read it before adding a task file here.
 Plan this queue executes: `SHIP_PLAN.md` section 6.
 
@@ -38,6 +38,7 @@ orchestrator session when a reply lands. See `inbox/README.md` for the format.
 
 | # | Task file | What it fixes | Order | Review gate |
 |---|---|---|---|---|
+| CO-AUDIT | `AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` | Canonical-outlier inventory pass FINAL 2026-09-19 (iter 0-6). Reports: `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md`. Tracking PR **#335** | Pass complete; operator triage / remediation follow-on | Audit PR: none for docs inventory; remediation may need Rule-8 |
 | T1 | `V040_T1_NODE_BOOT_SEED_DIAL.md` | The CLI node never dials known peers on boot, and its seed list is empty anyway. A node that changed address can never rejoin | **3rd** (Half 2 only) | none if confined to `cli/` |
 | T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | **2nd** | **Rule-8 mandatory** -- changes what the node discloses |
 | T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Any time -- touches nothing T1/T2 touch | **Rule-8 mandatory** |

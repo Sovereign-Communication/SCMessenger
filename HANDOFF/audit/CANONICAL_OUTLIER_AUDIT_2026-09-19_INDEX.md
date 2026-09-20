@@ -4,6 +4,8 @@ Task: HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.
 Branch: glm/canonical-outlier-audit
 Mode: REPORT-ONLY. Findings feed 0.4.0 gate / 0.5.0 parity / 1.0.0 unification ledger.
 Status: FINAL for this pass (2026-09-19, iterations 0-6 complete)
+Tracking PR: https://github.com/Sovereign-Communication/SCMessenger/pull/335
+Tracking branch: `glm/canonical-outlier-audit` (pushed; Freebuff may open/update PR, may NOT merge)
 
 ## HEAD snapshot
 
@@ -64,6 +66,26 @@ Status: FINAL for this pass (2026-09-19, iterations 0-6 complete)
 ## Open BLOCKER-0.4.0 list
 
 - (empty -- zero BLOCKER-0.4.0 findings; see iter6 triage reasoning)
+
+## Finalize / tracking record (operator-directed 2026-09-19)
+
+- Iterations 0-6 reports and inbox DONE notes are committed on
+  `glm/canonical-outlier-audit` and present on `origin/glm/canonical-outlier-audit`.
+- Tip at finalize start: `63047f1b` (`docs(audit): canonical outlier iter 6 FINAL`).
+- Tracking PR: **#335** OPEN, base `main`, head `glm/canonical-outlier-audit`.
+  URL: https://github.com/Sovereign-Communication/SCMessenger/pull/335
+- Branch base deviation (recorded in iter0/M0): created from
+  `feat/v040-multi-transport-store-forward`, not `main`. At finalize time
+  `git rev-list --left-right --count origin/main...HEAD` showed main ahead of
+  the merge-base by a large margin; PR #335 therefore carries this branch tip
+  vs current `main` and may show non-audit commits that already exist only on
+  this lineage. Operator/orchestrator owns any rebase/merge decision.
+- This finalize commit adds: Freebuff task file in `queue/`, Freebuff README
+  CO-AUDIT index row, this INDEX tracking section, and the FINAL inbox note.
+- No source files under `core/`, `cli/`, `android/`, `iOS/` were modified by
+  the audit pass or this finalize step.
+- Unrelated dirty working-tree files (Android/Kotlin/`iron_core.rs`/etc.)
+  belong to other sessions and were NOT staged.
 
 ## Inbox messages written
 
