@@ -64,6 +64,7 @@ Scoring after the wave: harness + logs + **operator** phone session.
 | Keystore / release / tag tasks | Operator deferred -- working first |
 | C4 identity-aware relay admission | 0.5.0 |
 | Beach-join Phase 2-3 | After Phase 0-1 + working bar |
+| `queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` | Inventory pass FINAL -- reference only; see `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md`. Do not paste as a Wave 1 implementation task |
 
 ---
 
@@ -74,6 +75,17 @@ Scoring after the wave: harness + logs + **operator** phone session.
 | **A** | AWS + Windows CLI | Drive Wave 1 reliability; install anytime from CI artifacts |
 | **B** | Pixel 6a | Operator drives UI; agents install + passive logs only |
 | **C** | iOS/macOS | Out of Wave 1 |
+
+## Reference -- canonical outlier audit (landed inventory)
+
+| Item | Path |
+|---|---|
+| Master index (FINAL) | `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md` |
+| Iterations 0-6 | `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter0.md` .. `iter6.md` |
+| Queue task file | `HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` |
+| Tracking note | `HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_FINAL_TRACKING_2026-09-19.md` |
+| Docs landing branch | `docs/canonical-outlier-audit-2026-09-19` (from `origin/main`) |
+| Superseded mixed PR | #335 (`glm/canonical-outlier-audit`) -- do not force-push; lineage split after docs land |
 
 ## Adding a task
 
