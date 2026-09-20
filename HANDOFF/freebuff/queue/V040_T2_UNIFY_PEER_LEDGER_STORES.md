@@ -1,6 +1,12 @@
 # V040-T2 -- Unify the two peer ledgers into one store
 
-Status: OPEN (filed 2026-08-31, CEO audit). **Supersedes the earlier V040-T2
+Status: CODE ON MAIN -- do not re-dispatch the 2026-08-31 unification diff.
+Evidence 2026-09-20: `cli/src/ledger.rs` documents the process-lifetime core
+ledger store, one-time legacy `peers.json` import + archive, and
+`locally_verified: e.is_bootstrap` disclosure seeding. Residual = T13
+follow-ups and live hygiene, not a second store implementation. Unified path:
+`HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md` §3.
+**Supersedes the earlier V040-T2
 (ledger hygiene) and V040-T3 (address supersession)** -- both were fixes to
 symptoms of this duplication and are folded in here.
 Priority: P0 -- the v0.4.0 cloud-node parity gate depends on it

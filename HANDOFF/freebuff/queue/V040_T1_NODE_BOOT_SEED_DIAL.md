@@ -1,6 +1,11 @@
 # V040-T1 -- The CLI node never dials its known peers on boot
 
-Status: OPEN (filed 2026-08-31, CEO audit)
+Status: CODE ON MAIN -- do not re-dispatch implementation. Evidence 2026-09-20:
+`cli/src/seed_dial.rs` implements boot/recheck `[SEED-DIAL]`; `core/src/transport/swarm.rs`
+has `build_seed_dial_candidates` and `connect_to_seed_peers` (production boot path).
+Pre-merge notes retained below. Residual work is live cadence scoring on the
+tag candidate SHA, not a new dial feature. Unified path:
+`HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md` §3.
 Priority: P0 -- this is the v0.4.0 cloud-node parity gate
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `cli/src/main.rs` (startup path). Do not modify `core/src/transport/swarm.rs`

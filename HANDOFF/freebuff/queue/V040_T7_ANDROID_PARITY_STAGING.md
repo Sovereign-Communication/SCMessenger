@@ -1,8 +1,9 @@
 # V040-T7 -- Stage the Android work so device time is verification, never authoring
 
-Status: PR FILED -- #312 open (branch `freebuff/t7-android-parity-staging`, commit
-`4878eab5`); acceptance 1-3 met and exercised without the handset, acceptance 4
-left to CI (shell and markdown only, no Rust or Kotlin). Awaiting review.
+Status: MERGED -- PR #312 merged 2026-09-19T23:05:21Z (verified `gh pr view 312`
+2026-09-20). Pre-merge note: branch `freebuff/t7-android-parity-staging`, commit
+`4878eab5`; staging scripts remain the device-verification path. Do not
+re-dispatch implementation.
 Priority: P1 -- runs whenever the handset is away, which is most of the time
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `android/`, plus new verification scripts under `scripts/device/`. No

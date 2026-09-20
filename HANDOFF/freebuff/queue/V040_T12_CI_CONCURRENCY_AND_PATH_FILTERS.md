@@ -1,9 +1,9 @@
 # V040-T12 -- Stop burning the CI queue on superseded and irrelevant runs
 
-Status: IN REVIEW -- PR #319 (platform-relevance half, 2026-09-19). Filed
-2026-08-31 on the operator's CI-pacing directive; acceptance 1 landed on main
-earlier and is not re-verified here, acceptance 2 landed and is extended by
-this pass, acceptance 3-4 are unverified on this branch.
+Status: MERGED -- platform path-filter work landed via PR #319 (merged
+2026-09-19) and related CI lane filter work via PR #328 (merged 2026-09-19).
+Verified 2026-09-20. Do not re-dispatch path-filter authoring. Residual CI
+cost questions are orchestrator/ops, not this ticket.
 Priority: P2 -- costs no correctness, costs a lot of wall-clock for everyone
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `.github/workflows/*.yml`. **Read the trap in section 3 before editing a
