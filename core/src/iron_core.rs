@@ -3890,9 +3890,7 @@ impl IronCore {
     pub fn flush_outbox_for_peer(&self, peer_id: &str) -> Vec<QueuedMessage> {
         let mut messages = self.outbox.write().drain_for_peer(peer_id);
         if let Ok(pid) = peer_id.parse::<libp2p::PeerId>() {
-            if let Ok(pk) =
-                crate::transport::extract_ed25519_public_key_from_peer_id(&pid)
-            {
+            if let Ok(pk) = crate::transport::extract_ed25519_public_key_from_peer_id(&pid) {
                 let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
                 if hex_pk != peer_id {
                     let mut canonical = self.outbox.write().drain_for_peer(&hex_pk);
@@ -5522,8 +5520,7 @@ mod tests {
         use crate::store::outbox::{MessageState, QueuedMessage};
 
         const BASE58_PEER: &str = "12D3KooWD776DQdWh6iHV8Qcnpj9jvTXhpJAgSsFPbMCaRtQpFmn";
-        const HEX_PEER: &str =
-            "30dce2bb779b4f1419f6d7d9e91b3ae201aed9e3b181aef674a9496f340a0645";
+        const HEX_PEER: &str = "30dce2bb779b4f1419f6d7d9e91b3ae201aed9e3b181aef674a9496f340a0645";
 
         let core = IronCore::new();
         core.grant_consent();
@@ -5555,19 +5552,21 @@ mod tests {
         assert_eq!(core.outbox_count(), 0);
 
         // Hex flush still works for hex-keyed entries.
-        core.outbox.write().enqueue(QueuedMessage {
-            message_id: "cob001-msg2".to_string(),
-            recipient_id: HEX_PEER.to_string(),
-            envelope_data: vec![1],
-            version: 1,
-            queued_at: 2,
-            attempts: 0,
-            next_retry_at: None,
-            in_custody: false,
-            custody_established_at: 0,
-            state: MessageState::Enqueued,
-        })
-        .unwrap();
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                message_id: "cob001-msg2".to_string(),
+                recipient_id: HEX_PEER.to_string(),
+                envelope_data: vec![1],
+                version: 1,
+                queued_at: 2,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: MessageState::Enqueued,
+            })
+            .unwrap();
         let drained_hex = core.flush_outbox_for_peer(HEX_PEER);
         assert_eq!(drained_hex.len(), 1);
         assert_eq!(core.outbox_count(), 0);
