@@ -1,10 +1,8 @@
 # V040-T4 -- D6 is unprovable: the routing engine is never told a connection happened
 
-Status: OPEN (filed 2026-08-31, CEO audit)
-Priority: P1 -- this is exit criterion D6 (transport racing)
-Lane: Freebuff / DeepSeek V4 Flash
-Scope: `core/src/transport/swarm.rs`. **Merge-blocked until adversarial review
-returns APPROVE** -- see the review gate below.
+Status: OPEN -- premise contradicted on main (checked 2026-09-19); see the
+premise check at the bottom. The D6 exit-criterion sign-off is the operator's,
+not this lane's, so the status is left OPEN rather than declared done.
 
 ## The defect
 
@@ -90,3 +88,25 @@ this task. Recommend closing it with that reason once this lands.
 - Never `unwrap()` in production paths.
 - State behind `Arc<RwLock<..>>` (parking_lot). `IronCore` is the only entry point.
 - Shared checkout: touch only what this task requires.
+
+### Premise check (2026-09-19) -- contradicted on main
+
+This ticket's premise is "the routing engine is never told a connection
+happened". On main, the transport feeds the routing engine from the connection
+path:
+
+```
+git grep -n "routing_peer_seen" origin/main -- core/src/transport/swarm.rs
+#  core/src/transport/swarm.rs:7114:  core_arc.routing_peer_seen(peer_id.to_string(), ...)
+```
+
+That call sits in the connection handler, above a comment reading "Feed the
+routing engine: a real connection now exists", and the reason is spelled out
+there (LocalCell accumulates transports, peer_seen clears the negative-cache
+entry). It is production code: the last `#[cfg(test)]` / `mod tests` marker
+before line 7114 is at line 3159, and the enclosing function is
+`start_swarm_with_config` (line 3779), not a test module.
+
+[WARNING] This contradicts the filed premise; it does not by itself prove exit
+criterion D6. Treat D6 as "implemented, unproven" and get the operator's ruling
+rather than closing this on the strength of one call site.

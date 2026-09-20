@@ -163,6 +163,17 @@ jobs:
           cd android
           ./gradlew assembleDebug
 
+      # Both APK-producing lanes share one signing rule (see
+      # .github/actions/sign-debug-apk). Without a pinned identity each runner
+      # generates its own ~/.android/debug.keystore, so consecutive runs emit
+      # different certificates and `adb install -r` over a previous install
+      # fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+      - name: Sign debug APK with the pinned identity
+        uses: ./.github/actions/sign-debug-apk
+        with:
+          apk-path: android/app/build/outputs/apk/debug/app-debug.apk
+          keystore-base64: ${{ secrets.SCMESSENGER_DEBUG_KEYSTORE_BASE64 }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
