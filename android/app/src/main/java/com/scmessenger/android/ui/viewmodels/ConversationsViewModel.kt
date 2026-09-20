@@ -9,6 +9,7 @@ import com.scmessenger.android.ui.chat.DeliveryStateMapper
 import com.scmessenger.android.ui.chat.DeliveryStatePresentation
 import com.scmessenger.android.ui.chat.PendingDeliverySnapshot
 import com.scmessenger.android.utils.PeerIdValidator
+import com.scmessenger.android.utils.newestFirst
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
@@ -38,7 +39,7 @@ class ConversationsViewModel @Inject constructor(
             .groupBy { it.peerId }
             // MSG-ORDER-002: locally-assigned timestamps only (see ChatViewModel);
             // senderTimestamp is provenance and must never drive ordering.
-            .mapValues { (_, msgs) -> msgs.sortedByDescending { it.timestamp } }
+            .mapValues { (_, msgs) -> msgs.newestFirst() }
             .toList()
             .sortedByDescending { (_, msgs) -> msgs.firstOrNull()?.timestamp ?: 0u }
     }.stateIn(
