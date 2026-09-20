@@ -1,0 +1,101 @@
+# Canonical Outlier Audit -- MASTER INDEX (2026-09-19)
+
+Task: HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md
+Branch: glm/canonical-outlier-audit
+Mode: REPORT-ONLY. Findings feed 0.4.0 gate / 0.5.0 parity / 1.0.0 unification ledger.
+Status: FINAL for this pass (2026-09-19, iterations 0-6 complete)
+Docs landing branch: `docs/canonical-outlier-audit-2026-09-19` (based on `origin/main`)
+Docs landing PR: https://github.com/Sovereign-Communication/SCMessenger/pull/336
+Mixed lineage PR (superseded for docs): https://github.com/Sovereign-Communication/SCMessenger/pull/335
+Original Freebuff branch: `glm/canonical-outlier-audit` -- do not force-push (PR head is shared)
+Split policy (operator 2026-09-20): land canonical-audit docs first; then rebase remaining lineage on a new branch
+
+## HEAD snapshot
+
+- M0 HEAD: `1acb63531aaa1e7c22071bb7430c72b5a9753210` (branch
+  `glm/canonical-outlier-audit`, created from `feat/v040-multi-transport-store-forward`
+  HEAD; main is an ancestor: `git rev-list --left-right --count main...HEAD` = `0 85`).
+- Task-directed main-based base was NOT possible (would overwrite other sessions'
+  dirty files that differ HEAD..main: HANDOFF/CTO_STATE.md, MeshRepository.kt,
+  NotificationHelper.kt, core/src/iron_core.rs) -- deviation recorded in iter0.
+- Tags (ALL): freebuff-snapshot/245d21ce-450f-4f3b-90d5-eb6b7c119d89,
+  freebuff-snapshot/d4ad9f34-e5c0-4bdd-8a18-1911adefd62a,
+  v0.1.0, v0.1.1, v0.1.9, v0.2.1, v0.3.5, v0.4.0-rc.1. No final v0.4.0 tag.
+- Versions: Cargo.toml:9 workspace `version = "0.4.0"`;
+  android/build.gradle:24-25 versionCode = 15, versionName = '0.4.0'.
+
+## Iteration report paths
+
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter0.md (M0 baseline)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter1.md (M1, DIM-A)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter2.md (M2, DIM-B)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter3.md (M3, DIM-C -- check_wiring.py RC=0, full output in file)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter4.md (M4, DIM-D -- docs_sync_check RC=0)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter5.md (M5, DIM-E + DIM-F)
+- HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter6.md (M6 FINAL, DIM-G + whole-pass triage)
+
+## Cumulative counts by dimension
+
+- DIM-A: 5 new findings (CO-A-001..005) + 12 STILL-OPEN prior rows re-verified + 3 reclassifications
+- DIM-B: 6 new findings (CO-B-001..006) + 2 prior rows re-verified RESOLVED (SHADOW CLI-03, CORE-02) + 2 verified-consistent categories
+- DIM-C: 0 findings; check_wiring.py RC=0 (full output in iter3); manifest cross-check OK; iOS reachability UNVERIFIED
+- DIM-D: 3 new findings (CO-D-001..003); docs_sync_check.sh RC=0 PASS recorded; 4 verified-consistent categories
+- DIM-E: 3 findings (CO-E-001 MED 0.4.0 AWS-IP policy violated by 28 stray copies incl. 3 active tickets; CO-E-002 MED 0.4.0 Mixed-status docs keep pre-ledger-sharing premise; CO-E-003 verified-consistent no-finding)
+- DIM-F: 3 findings (CO-F-001 LOW 0.5.0, CO-F-002 MED 0.5.0, CO-F-003 PROCESS UNVERIFIED)
+- DIM-G: 3 findings (CO-G-001 MED process 18 unindexed queue files; CO-G-002 MED 0.4.0 stale-premise P1 ticket, NEEDS-HUMAN; CO-G-003 STILL-OPEN confirmation: 4 MULTIDIM rows re-verified with current evidence)
+- TOTAL new findings: 23 rows = 22 substantive + 1 verified-consistent record (CO-E-003). Counts match iter1-iter6 files exactly; no "and N more".
+
+## Cumulative counts by severity / target
+
+- MED: 2 (CO-A-001 Target 1.0.0, CO-A-002 Target 0.4.0)
+- LOW: 3 (CO-A-003, CO-A-004 Target 0.4.0; CO-A-005 Target 0.4.0/PROCESS)
+- NEEDS-HUMAN: 1 (CO-A-005, rename touches inbound links)
+- Targets so far: 0.4.0 x4, 1.0.0 x1
+- HIGH: 2 (CO-B-001 wasm outbox dual-key strand, CO-B-002 orphan doc non-canonical instruction; both Target 0.4.0)
+- MED: +3 (CO-B-003 0.4.0, CO-B-004 1.0.0, CO-B-005 0.5.0)
+- LOW: +1 (CO-B-006, unknown)
+- Targets cumulative: 0.4.0 x7, 0.5.0 x1, 1.0.0 x2, unknown x1
+- DIM-D added: MED x2 (CO-D-001 0.4.0, CO-D-002 0.4.0/NEEDS-HUMAN), LOW x1 (CO-D-003 process)
+- NEEDS-HUMAN count: 2 (CO-A-005, CO-D-002)
+- Targets cumulative: 0.4.0 x9, 0.5.0 x1, 1.0.0 x2, process x1, unknown x1
+- DIM-E/F added: MED x3 (CO-E-001, CO-E-002 0.4.0; CO-F-002 0.5.0), LOW x1 (CO-F-001 0.5.0), PROCESS x1 (CO-F-003)
+- Targets cumulative: 0.4.0 x11, 0.5.0 x3, 1.0.0 x2, process x2, unknown x1
+- DIM-G added: MED x2 (CO-G-001 process, CO-G-002 0.4.0), STILL-OPEN confirmation x1 (CO-G-003, 0.4.0)
+- FINAL: 0.4.0 x13 | 0.5.0 x3 | 1.0.0 x2 | process x3 | unknown x1 = 22 substantive rows; HIGH 2 | MED 12 | LOW 6 | PROCESS 1; verified-record 1 (CO-E-003)
+- STILL-OPEN prior rows re-verified with current evidence: 16 (12 DIM-A inventory spots + 4 MULTIDIM rows)
+- Prior rows re-verified RESOLVED: 2 (SHADOW CLI-03, CORE-02); reclassifications: 3 (DIM-A)
+- BLOCKER-0.4.0 count: 0 (reasoning in iter6 triage)
+
+## Open BLOCKER-0.4.0 list
+
+- (empty -- zero BLOCKER-0.4.0 findings; see iter6 triage reasoning)
+
+## Finalize / tracking record (operator-directed 2026-09-19)
+
+- Iterations 0-6 reports and inbox DONE notes are committed on
+  `glm/canonical-outlier-audit` and present on `origin/glm/canonical-outlier-audit`.
+- Tip at finalize start: `63047f1b` (`docs(audit): canonical outlier iter 6 FINAL`).
+- Tracking PR: **#335** OPEN, base `main`, head `glm/canonical-outlier-audit`.
+  URL: https://github.com/Sovereign-Communication/SCMessenger/pull/335
+- Branch base deviation (recorded in iter0/M0): created from
+  `feat/v040-multi-transport-store-forward`, not `main`. At finalize time
+  `git rev-list --left-right --count origin/main...HEAD` showed main ahead of
+  the merge-base by a large margin; PR #335 therefore carries this branch tip
+  vs current `main` and may show non-audit commits that already exist only on
+  this lineage. Operator/orchestrator owns any rebase/merge decision.
+- This finalize commit adds: Freebuff task file in `queue/`, Freebuff README
+  CO-AUDIT index row, this INDEX tracking section, and the FINAL inbox note.
+- No source files under `core/`, `cli/`, `android/`, `iOS/` were modified by
+  the audit pass or this finalize step.
+- Unrelated dirty working-tree files (Android/Kotlin/`iron_core.rs`/etc.)
+  belong to other sessions and were NOT staged.
+
+## Inbox messages written
+
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter0_DONE_2026-09-19.md (M0)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter1_DONE_2026-09-19.md (M1)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter2_DONE_2026-09-19.md (M2)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter3_DONE_2026-09-19.md (M3)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter4_DONE_2026-09-19.md (M4)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter5_DONE_2026-09-19.md (M5)
+- HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_iter6_DONE_2026-09-19.md (M6 FINAL)
