@@ -271,6 +271,10 @@ jobs:
             echo "[OK] No oversized tracked files detected"
           fi
 
+      - name: Verify required status contexts cannot be path-filtered
+        run: |
+          echo "Checking that branch-protection required contexts always report..."
+          python3 scripts/check_required_contexts.py
       # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
       # ------------------------------------------
       # A queue ticket whose status line advertises an open PR that has already
