@@ -100,33 +100,58 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # WHY THE STEPS ARE GATED AND THE JOB IS NOT
+      # -----------------------------------------
+      # This workflow triggers on the union of the Android and iOS path sets,
+      # because it owns jobs for both platforms, so an iOS-only diff -- which
+      # can change nothing this job compiles -- starts this multi-ABI APK
+      # build, measured at 50.2 minutes on a cold runner. The job is kept so
+      # its check still reports, while its steps are short-circuited by
+      # detect-platform-change, which fails open: an uncomputable or
+      # unrecognised diff runs the build.
+      #
+      # The sibling iOS job in this file has carried exactly this gate since
+      # the platform filters landed; the Android side was the unmirrored half.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.platform.outputs.android_relevant == 'true'
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
       - uses: Swatinem/rust-cache@v2
+        if: steps.platform.outputs.android_relevant == 'true'
         with:
           key: android-build
       - name: Install libdbus-1-dev
+        if: steps.platform.outputs.android_relevant == 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Install cargo-ndk
+        if: steps.platform.outputs.android_relevant == 'true'
         run: cargo install cargo-ndk
       - name: Install Android NDK
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r26b
       - name: Set up Android SDK
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
       - name: Install Android SDK components
+        if: steps.platform.outputs.android_relevant == 'true'
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Set up JDK 17
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
       - name: Build Android APK
+        if: steps.platform.outputs.android_relevant == 'true'
         working-directory: android
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -144,19 +169,23 @@ jobs:
       # different certificates and `adb install -r` over a previous install
       # fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
       - name: Sign debug APK with the pinned identity
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: ./.github/actions/sign-debug-apk
         with:
           apk-path: android/app/build/outputs/apk/debug/app-debug.apk
           keystore-base64: ${{ secrets.SCMESSENGER_DEBUG_KEYSTORE_BASE64 }}
       - name: Set up Python
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Verify APK contains core native libraries
+        if: steps.platform.outputs.android_relevant == 'true'
         run: |
           python scripts/test_verify_apk_native_libs.py
           python scripts/verify_apk_native_libs.py android/app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
+        if: steps.platform.outputs.android_relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-apk
@@ -180,6 +209,7 @@ jobs:
       # report exists: HANDOFF/done/P0_BUILD_005_Android_Test_Config_Audit.md),
       # narrow it to :app:compileDebugAndroidTestKotlin -- do not delete it.
       - name: Compile instrumented tests (no device)
+        if: steps.platform.outputs.android_relevant == 'true'
         working-directory: android
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
