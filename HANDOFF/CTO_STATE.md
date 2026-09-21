@@ -1,11 +1,59 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-17T20:05Z (MERGE TRAIN: #288 carrier + #289 + #283 merged to main after per-PR green verification; #295 in final CI; v0.4.0 tag STILL NOT READY per remaining-findings backlog; 3-node fleet re-audited read-only and found NOT same-candidate)
-Previous: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
-Entry point: `/CTO`. This file is the whole context load.
+Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
+Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
 
-# ===== RESUME HERE (2026-09-17, evening) =====
+# ===== RESUME HERE (2026-09-21, orchestrator session close) =====
+
+## Canonical Freebuff transition (read first after AGENTS.md + FREEBUFF.md)
+
+**`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`** is the sole post-session
+execution handoff until the operator replaces it.
+
+Supporting plans on `origin/main`:
+- `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+- `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+- `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+- `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+- `HANDOFF/freebuff/README.md` (DISPATCHABLE paste set)
+
+## Operator standing rulings (2026-09-20/21)
+
+1. **Working-first** — reliable day-to-day mesh before tag/secret pressure.
+2. **WP order** — identity/routing/inbound/delivery truth then WP5 live proof.
+3. **DONE** — mechanical gates + keyed JEV `jev_canonical_check.py` `is_passing`.
+4. **Harness** — SCMessenger-local `vendor/sovereign-harness` only; update via
+   `python scripts/update_local_harness.py`; do not edit external Harness trees.
+5. **OpenRouter Jev fallback** — `~typesafe/jev-latest` on
+   `https://openrouter.ai/api/alpha/decisions` when TypeSafe is unhealthy;
+   operator must allow OpenRouter provider `typesafe`.
+6. **CI hygiene** — cancel superseded Actions after merges (`BUILD_AND_CI.md`).
+7. **Pixel** — fresh install allowed; UI is operator-driven; agents: install + passive logs.
+8. **Scoring** — no mid-wave scoring; after wave: harness + logs + operator phone session.
+
+## Fleet at session close (re-derive before treating as live)
+
+| Node | Last orchestrator observation |
+|---|---|
+| Windows CLI | `51edac4` main, healthy, peer AWS, binary under `tmp/radio-candidates/51edac4b/` |
+| AWS cloud | `51edac4b` healthy, identity preserved, seed-dial + gossip + custody retention |
+| Pixel | `51edac4b` APK installed (authorized fresh install); ADB connected |
+
+`origin/main` at close: `9d37f9e6` (#345). Staged open work: **PR #347**
+(local harness + OpenRouter JEV fallback) — merge when required CI green.
+
+## Freebuff next steps
+
+1. Merge #347 if open and green (`scripts/pr_scope.sh 347`).
+2. Paste DISPATCHABLE tickets from `HANDOFF/freebuff/README.md`.
+3. Worktrees + PRs; Rule-8 as required; JEV DONE contract.
+4. After Wave-1 + WP5: master plan §4 checklist → operator 0.4.0 tag.
+
+# ===== END RESUME 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-17, evening) — HISTORY -----
+
 
 ## Merge train: carrier landed; #295 is the last member in flight
 

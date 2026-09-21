@@ -15,15 +15,24 @@ Read these tracked files before acting, in order:
 
 1. `AGENTS.md`
 2. `docs/rules/FREEBUFF.md`
-3. `HANDOFF/CTO_STATE.md`
-4. `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`
-5. `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`
-6. Every existing `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_*.md`
-7. Historical evidence under `tmp/` only when referenced by the tracked package
+3. `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+4. `HANDOFF/CTO_STATE.md`
+5. `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+6. `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+7. `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+8. `HANDOFF/freebuff/README.md`
+9. `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`
+10. `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`
+11. Every existing `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_*.md`
+12. Historical evidence under `tmp/` only when referenced by the tracked package
 
 The tracked package is the sole owner of the three-node procedure, provenance
 matrix, checkpoint schema, evidence gates, stop conditions, and closeout. Do not
 copy or invent a parallel procedure in this skill.
+
+**Freebuff transition:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+**WP DONE:** keyed `scripts/jev_canonical_check.py` `is_passing` + mechanical gates.
+**Harness:** `vendor/sovereign-harness` via `scripts/update_local_harness.py` only.
 
 ## Operating boundary
 
