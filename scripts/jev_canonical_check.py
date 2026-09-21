@@ -86,25 +86,50 @@ def main() -> int:
         action="store_true",
         help="Exit 0 on structural fallback only if explicitly allowed (still prints UNVERIFIED-JEV).",
     )
+    ap.add_argument(
+        "--no-openrouter",
+        action="store_true",
+        help="Disable OpenRouter ~typesafe/jev-latest fallback",
+    )
     args = ap.parse_args()
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from local_harness import (  # type: ignore
+        evaluate_jev_with_openrouter_fallback,
+        import_harness,
+        make_policy,
+    )
 
     state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
     state.setdefault("wp", args.wp)
-    JevEvaluator, _JevResult, harness_path, api_key = load_harness()
-    print(f"[INFO] harness: {harness_path} keyed={bool(api_key)}")
-    ev = JevEvaluator(api_key=api_key)
-    result = ev.evaluate(state, questions=CANON_QUESTIONS)
+    mod = import_harness()
+    print(f"[INFO] harness: {mod['root']} typesafe_key={bool(mod['key'])} "
+          f"openrouter_key={bool(mod.get('openrouter_key'))}")
+    _policy, _ = make_policy()
+    evaluator = _policy.evaluator
+    if args.no_openrouter:
+        result = evaluator.evaluate(state, questions=CANON_QUESTIONS)
+        meta = {"endpoint": "typesafe", "fallback_used": False}
+    else:
+        result, meta = evaluate_jev_with_openrouter_fallback(
+            evaluator, state, CANON_QUESTIONS
+        )
+    print(f"[INFO] endpoint={meta.get('endpoint')} fallback_used={meta.get('fallback_used')}")
+    if meta.get("openrouter_model"):
+        print(f"[INFO] openrouter_model={meta['openrouter_model']}")
     print(f"[INFO] verdict={result.verdict} supported={result.supported} confidence={result.confidence}")
-    print(f"[INFO] is_fallback={result.is_fallback} cost={result.cost} tokens_in={result.input_tokens}")
+    print(f"[INFO] is_fallback={result.is_fallback} cost={result.cost} tokens_in={result.input_tokens} model={result.model}")
     print(f"[INFO] answers={json.dumps(result.answers, ensure_ascii=False)}")
     for reason in result.reasons:
         print(f"[INFO] reason: {reason}")
 
+    # Canonical DONE requires a live keyed answer (TypeSafe or OpenRouter),
+    # never pure structural fallback / UNVERIFIED-JEV.
+    if result.is_fallback:
+        print("[FAIL] UNVERIFIED-JEV — fallback result is not canonical DONE")
+        return 0 if args.allow_fallback else 1
     if result.is_passing(args.min_confidence):
-        print(f"[OK] JEV canonical pass (min_confidence={args.min_confidence})")
-        return 0
-    if result.is_fallback and args.allow_fallback:
-        print("[WARNING] UNVERIFIED-JEV — structural fallback only; mechanical gates still required")
+        print(f"[OK] JEV canonical pass (min_confidence={args.min_confidence}) via {meta.get('endpoint')}")
         return 0
     print("[FAIL] JEV canonical check did not pass")
     return 1

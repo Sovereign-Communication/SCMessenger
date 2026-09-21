@@ -301,7 +301,12 @@ def run_batches(
     total_tokens = 0
     total_cost = 0.0
     for i, state in enumerate(batches):
-        res = evaluator.evaluate(state, questions)
+        try:
+            from local_harness import evaluate_jev_with_openrouter_fallback
+            res, jmeta = evaluate_jev_with_openrouter_fallback(evaluator, state, questions)
+        except Exception:
+            res = evaluator.evaluate(state, questions)
+            jmeta = {'endpoint': 'typesafe', 'fallback_used': False}
         total_tokens += int(res.input_tokens or 0)
         total_cost += float(res.cost or 0.0)
         results.append(
@@ -317,6 +322,8 @@ def run_batches(
                 "answers": res.answers,
                 "reasons": res.reasons,
                 "is_passing": res.is_passing(min_confidence),
+                "jev_endpoint": jmeta.get("endpoint"),
+                "openrouter_fallback": jmeta.get("fallback_used"),
                 "item_ids": [it.get("id") for it in state.get("items", [])],
             }
         )

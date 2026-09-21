@@ -6,6 +6,30 @@ Harness: use **origin/main** or worktree `C:\Users\SCM\Documents\GitHub\Harness-
   (tip `405bbc1` — JEV-P0/P1/P2 code present). Key: `~/.config/harness/jev.env`
   via `harness.config.resolve_jev_key()`.
 
+## OpenRouter Jev fallback (operator 2026-09-21)
+
+TypeSafe account returned **Internal Server Error**. Fallback:
+
+| Item | Value |
+|---|---|
+| Model | `~typesafe/jev-latest` (OpenRouter **decisions** model) |
+| Endpoint | `https://openrouter.ai/api/alpha/decisions` — **not** `chat/completions` |
+| Key | OpenRouter via harness `resolve_api_key()` / `OPENROUTER_API_KEY` |
+| Consumer code | `scripts/local_harness.py` `evaluate_jev_with_openrouter_fallback` |
+| Env override | `SCM_JEV_OPENROUTER_MODEL` |
+
+**Order:** TypeSafe primary → OpenRouter decisions fallback when TypeSafe is
+unhealthy (ISE / no answers / transport fail). Canonical DONE still requires
+a **non-fallback** typed pass (TypeSafe or OpenRouter parse that yields
+official answer shapes). Structural-only fallback remains `UNVERIFIED-JEV`.
+
+**Operator OpenRouter account requirement:** allow provider **`typesafe`**
+for model `~typesafe/jev-latest`. Probe 2026-09-21 returned:
+`No allowed providers are available ... Providers serving typesafe/jev-...:
+typesafe, but your account's allowed-providers setting permits only: ...`
+until that provider is enabled. Keys already present locally; no secret
+committed.
+
 ## Local harness in SCMessenger (operator rule 2026-09-21)
 
 **Do not edit the external Harness product tree** for SCMessenger work.
