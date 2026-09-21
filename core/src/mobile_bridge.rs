@@ -1692,40 +1692,6 @@ impl MeshService {
         self.on_data_received(peer_id, data);
     }
 
-    /// WP2: record a verified platform data link in the shared routing engine.
-    ///
-    /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
-    /// path that came up, is proof that a real link to `peer_id` exists, so it
-    /// feeds the same `IronCore::routing_peer_seen` entry the swarm's
-    /// ConnectionEstablished handler uses. That keeps transport derivation and
-    /// the engine's parser in lockstep, and lets the engine's LocalCell learn
-    /// non-swarm paths too. Discovery callbacks deliberately do not feed the
-    /// engine: a peer seen in an advert is not yet a reachable path.
-    ///
-    /// Fails closed, matching the swarm's block-check semantics: no core
-    /// handle, an unreadable block list, or a blocked peer never raises
-    /// routing confidence.
-    fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {
-        let Some(core) = self.get_core() else {
-            tracing::debug!(peer_id, transport, "No core handle; routing feed skipped");
-            return;
-        };
-        match core.is_peer_blocked(peer_id.to_string(), None) {
-            Ok(false) => core.routing_peer_seen(peer_id.to_string(), transport.to_string()),
-            Ok(true) => tracing::warn!(
-                peer_id,
-                transport,
-                "Blocked peer excluded from routing feed"
-            ),
-            Err(error) => tracing::warn!(
-                ?error,
-                peer_id,
-                transport,
-                "Block lookup failed; routing feed fails closed"
-            ),
-        }
-    }
-
     /// Helper to get the core instance exposed to UniFFI
     pub fn get_core(&self) -> Option<std::sync::Arc<crate::IronCore>> {
         self.core.lock().clone()
@@ -2092,6 +2058,40 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// WP2: record a verified platform data link in the shared routing engine.
+    ///
+    /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
+    /// path that came up, is proof that a real link to `peer_id` exists, so it
+    /// feeds the same `IronCore::routing_peer_seen` entry the swarm's
+    /// ConnectionEstablished handler uses. That keeps transport derivation and
+    /// the engine's parser in lockstep, and lets the engine's LocalCell learn
+    /// non-swarm paths too. Discovery callbacks deliberately do not feed the
+    /// engine: a peer seen in an advert is not yet a reachable path.
+    ///
+    /// Fails closed, matching the swarm's block-check semantics: no core
+    /// handle, an unreadable block list, or a blocked peer never raises
+    /// routing confidence.
+    fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {
+        let Some(core) = self.get_core() else {
+            tracing::debug!(peer_id, transport, "No core handle; routing feed skipped");
+            return;
+        };
+        match core.is_peer_blocked(peer_id.to_string(), None) {
+            Ok(false) => core.routing_peer_seen(peer_id.to_string(), transport.to_string()),
+            Ok(true) => tracing::warn!(
+                peer_id,
+                transport,
+                "Blocked peer excluded from routing feed"
+            ),
+            Err(error) => tracing::warn!(
+                ?error,
+                peer_id,
+                transport,
+                "Block lookup failed; routing feed fails closed"
+            ),
+        }
+    }
+
     /// Public-entry notification: deliver the event immediately, or stash
     /// it for the fixed-point drain when a notify window is open (R11-4).
     /// A same-event echo of the in-flight notification terminates inside
