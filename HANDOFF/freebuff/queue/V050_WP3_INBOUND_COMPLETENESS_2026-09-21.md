@@ -21,9 +21,14 @@ Scope: tests first; production only if a gap is proven on current main.
 
 ## Acceptance
 
+- [ ] Mechanical gates green (tests / greps / Rule-8 as applicable)
+- [ ] python scripts/jev_canonical_check.py --wp WP3 --state-file <state.json> exit 0
+      (
+esult.is_passing(0.70) on keyed JEV; **UNVERIFIED-JEV / fallback is NOT DONE**)
+- [ ] PR evidence: commands + outputs (include JEV answers/cost from the check)
+
 - [ ] Tests green
 - [ ] Rule-8 if `core/src/transport` changes
-- [ ] JEV canonical pack pass
 - [ ] Ticket P1_CORE_IDENTITY_SPOOF / P1_GHOST_GUARD updated with merge cites
 
 ## Review gate

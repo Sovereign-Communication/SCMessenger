@@ -24,11 +24,17 @@ as swarm.
 
 ## Acceptance
 
+- [ ] Mechanical gates green (tests / greps / Rule-8 as applicable)
+- [ ] python scripts/jev_canonical_check.py --wp WP2 --state-file <state.json> exit 0
+      (
+esult.is_passing(0.70) on keyed JEV; **UNVERIFIED-JEV / fallback is NOT DONE**)
+- [ ] PR evidence: commands + outputs (include JEV answers/cost from the check)
+
 - [ ] Grep: feed reachable from non-swarm establish paths
 - [ ] Unit test: blocked peer → no routing feed
 - [ ] Unit test: establish → routing engine LocalCell learns peer
 - [ ] Rule-8 APPROVE on file if transport/routing gated dirs touched
-- [ ] JEV canonical pack §3.3 — `canon_routing_feed` must pass
+- [ ] No "WiFi fixed" claim until WP5 live proof
 - [ ] No "WiFi fixed" claim until WP5 live proof
 
 ## Review gate

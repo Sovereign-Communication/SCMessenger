@@ -15,7 +15,10 @@ Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-0
 3. **Then 0.4.0 tag** checklist + WP5 3-node proof + operator phone session.
 
 **DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan §3).
-Never claim WiFi fixed without WP5 evidence on the P0 umbrella ticket.
+`UNVERIFIED-JEV` / unkeyed fallback is **not** DONE — Freebuff PRs that claim
+WP completion without a keyed `jev_canonical_check.py` exit 0 must be rejected
+by the orchestrator. Never claim WiFi fixed without WP5 evidence on the P0
+umbrella ticket.
 
 **JEV / harness integration (future work):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.

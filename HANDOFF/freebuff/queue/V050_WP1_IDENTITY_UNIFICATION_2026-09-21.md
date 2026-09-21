@@ -26,10 +26,14 @@ or WASM subscribe (already on main — tests only).
 
 ## Acceptance
 
+- [ ] Mechanical gates green (tests / greps / Rule-8 as applicable)
+- [ ] python scripts/jev_canonical_check.py --wp WP1 --state-file <state.json> exit 0
+      (
+esult.is_passing(0.70) on keyed JEV; **UNVERIFIED-JEV / fallback is NOT DONE**)
+- [ ] PR evidence: commands + outputs (include JEV answers/cost from the check)
+
 - [ ] Unit tests green (`cargo test -p scmessenger-core` relevant modules)
 - [ ] Greps in implementation plan §2 WP1 all pass
-- [ ] Harness JEV pack §3.3 `is_passing` **or** UNVERIFIED-JEV + mechanical evidence
-- [ ] PR evidence: commands + outputs
 
 ## Review gate
 

@@ -20,9 +20,15 @@ Refs (implement these; do not invent new RCs):
 
 ## Acceptance
 
+- [ ] Mechanical gates green (tests / greps / Rule-8 as applicable)
+- [ ] python scripts/jev_canonical_check.py --wp WP4 --state-file <state.json> exit 0
+      (
+esult.is_passing(0.70) on keyed JEV; **UNVERIFIED-JEV / fallback is NOT DONE**)
+- [ ] PR evidence: commands + outputs (include JEV answers/cost from the check)
+
 - [ ] Unit/integration tests for receipt vs transport-ACK distinction
 - [ ] Watchdog positive test green on Windows
-- [ ] JEV pack: `instruction_matches` + canonical rows pass
+- [ ] WP5 live 3-node receipts after WP1–3 land
 - [ ] WP5 live 3-node receipts after WP1–3 land
 
 ## Review gate
