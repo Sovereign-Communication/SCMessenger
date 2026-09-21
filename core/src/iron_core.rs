@@ -356,6 +356,37 @@ pub(crate) fn classify_storage_error(err: &str) -> IronCoreError {
     }
 }
 
+/// Rust-only surface for [`IronCore`]. Nothing here may move into the
+/// `uniffi::export`ed block below: `#[uniffi::export]` on an impl block exports
+/// the methods it contains whether or not they are `pub`, and the FFI surface is
+/// snapshot-checked by `scripts/ffi_surface.sh` (the CI job is "FFI Surface
+/// Contract"). A private helper that lands in that block silently becomes a new
+/// Kotlin/Swift binding and fails the job.
+impl IronCore {
+    /// Arm the ledger's self-entry filter (tier_a A8 / issue I-06) with this
+    /// node's own identity, in both spellings the store can hold.
+    ///
+    /// This MUST run in the hydrating constructors, not only in
+    /// `initialize_identity`: a real node starts with an identity that is
+    /// *loaded* from its store, so `initialize_identity` never runs there and a
+    /// filter armed only in it would never fire -- every unit test of the filter
+    /// would still pass while both always-on nodes stayed red. Callers hold no
+    /// identity lock; `initialize_identity` therefore arms the ledger directly
+    /// with the lock it already holds rather than calling this.
+    fn arm_ledger_self_filter(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let identity = self.identity.read();
+            if let Some(keys) = identity.keys() {
+                self.ledger_manager.set_own_identity(
+                    &keys.public_key_hex(),
+                    keys.to_libp2p_peer_id().ok().as_deref(),
+                );
+            }
+        }
+    }
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 impl IronCore {
     /// Create an in-memory IronCore with no persistent storage.
@@ -786,29 +817,6 @@ impl IronCore {
     pub fn grant_consent(&self) {
         *self.consent.write() = ConsentState::Granted;
         tracing::info!("Consent granted for identity initialization");
-    }
-
-    /// Arm the ledger's self-entry filter (tier_a A8 / issue I-06) with this
-    /// node's own identity, in both spellings the store can hold.
-    ///
-    /// This MUST run in the hydrating constructors, not only in
-    /// `initialize_identity`: a real node starts with an identity that is
-    /// *loaded* from its store, so `initialize_identity` never runs there and a
-    /// filter armed only in it would never fire -- every unit test of the filter
-    /// would still pass while both always-on nodes stayed red. Callers hold no
-    /// identity lock; `initialize_identity` therefore arms the ledger directly
-    /// with the lock it already holds rather than calling this.
-    fn arm_ledger_self_filter(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let identity = self.identity.read();
-            if let Some(keys) = identity.keys() {
-                self.ledger_manager.set_own_identity(
-                    &keys.public_key_hex(),
-                    keys.to_libp2p_peer_id().ok().as_deref(),
-                );
-            }
-        }
     }
 
     /// Initialize the identity (generate Ed25519 keys).
