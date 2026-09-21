@@ -57,19 +57,20 @@ stops you paying it twice for dead work.
 
 Standing practice for SCMessenger completion work:
 
-1. **Toolchain:** harness from origin/main worktree
-   (`C:\Users\SCM\Documents\GitHub\Harness-jev-use` or `HARNESS_REPO`).
-   Key via `harness.config.resolve_jev_key()`.
+1. **Toolchain:** **SCMessenger-local** harness only —
+   `python scripts/update_local_harness.py` refreshes
+   `vendor/sovereign-harness` from the official harness GitHub remote.
+   Do **not** edit `Documents/GitHub/Harness` product trees.
+   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
 2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
-   after merge trains; report under `HANDOFF/audit/`.
+   (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
+   `scripts/scmessenger_issue_sort_pack.json`).
 3. **WP / canonical DONE:** mechanical CI + greps **and**
    `python scripts/jev_canonical_check.py --wp WPn --state-file ...`
    (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
 4. **Clarification:** if confidence <99% on a claim/design, run harness verify
    or a typed JEV question pack — do not invent a new root-cause plan.
-5. **Do not** edit concurrent Harness WIP worktrees/PRs (P2 repair, jev-phase,
-   issue-sort). SCMessenger consumes the library; Harness owns its mission STATUS.
-6. Full design: `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+5. Full design: `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
 
 ## Windows parallelism (measured on this box)
 

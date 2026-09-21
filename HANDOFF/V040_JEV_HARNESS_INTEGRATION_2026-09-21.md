@@ -6,6 +6,48 @@ Harness: use **origin/main** or worktree `C:\Users\SCM\Documents\GitHub\Harness-
   (tip `405bbc1` — JEV-P0/P1/P2 code present). Key: `~/.config/harness/jev.env`
   via `harness.config.resolve_jev_key()`.
 
+## OpenRouter Jev fallback (operator 2026-09-21)
+
+TypeSafe account returned **Internal Server Error**. Fallback:
+
+| Item | Value |
+|---|---|
+| Model | `~typesafe/jev-latest` (OpenRouter **decisions** model) |
+| Endpoint | `https://openrouter.ai/api/alpha/decisions` — **not** `chat/completions` |
+| Key | OpenRouter via harness `resolve_api_key()` / `OPENROUTER_API_KEY` |
+| Consumer code | `scripts/local_harness.py` `evaluate_jev_with_openrouter_fallback` |
+| Env override | `SCM_JEV_OPENROUTER_MODEL` |
+
+**Order:** TypeSafe primary → OpenRouter decisions fallback when TypeSafe is
+unhealthy (ISE / no answers / transport fail). Canonical DONE still requires
+a **non-fallback** typed pass (TypeSafe or OpenRouter parse that yields
+official answer shapes). Structural-only fallback remains `UNVERIFIED-JEV`.
+
+**Operator OpenRouter account requirement:** allow provider **`typesafe`**
+for model `~typesafe/jev-latest`. Probe 2026-09-21 returned:
+`No allowed providers are available ... Providers serving typesafe/jev-...:
+typesafe, but your account's allowed-providers setting permits only: ...`
+until that provider is enabled. Keys already present locally; no secret
+committed.
+
+## Local harness in SCMessenger (operator rule 2026-09-21)
+
+**Do not edit the external Harness product tree** for SCMessenger work.
+
+| Item | Path / command |
+|---|---|
+| Consumer copy | `vendor/sovereign-harness/` (gitignored) |
+| Update from repo | `python scripts/update_local_harness.py` (clone/pull `Sovereign-Communication/harness` origin/main) |
+| Path resolver | `scripts/local_harness.py` |
+| Issue-sort pack (operator-frozen) | `scripts/scmessenger_issue_sort_pack.json` |
+| Issue-sort API used | `harness.jev_policy.JevPolicy.evaluate_issue_sort` + `harness.jev_packs` on **vendor** origin/main |
+
+Callers (`jev_canonical_check.py`, `jev_repo_insights.py`, `harness_gate.py`)
+default to `vendor/sovereign-harness`. `HARNESS_REPO` env can override.
+
+`harness_gate.py` outputs now default under `tmp/harness-runs/seat-gates/`
+inside SCMessenger (not external Harness audits/).
+
 ## WIP session audit (concurrent Harness lane) — expanded
 
 From Harness HANDOFF, busy session `ses_ffe5f3e6872afffe3U9yhXAFuo` task

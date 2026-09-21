@@ -390,3 +390,6 @@ scratch/*
 
 # Freebuff tool state (worktree tracking) - never commit
 .freebuff/
+
+# Local sovereign-harness consumer copy
+vendor/sovereign-harness/

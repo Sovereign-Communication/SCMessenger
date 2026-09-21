@@ -80,3 +80,24 @@ phone session**. Then the mesh may be called working.
 
 Recording complete. Orchestrator rewrote `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
 and freebuff README DISPATCHABLE set to match.
+
+---
+
+## R7 — OpenRouter Jev fallback (2026-09-21)
+
+**Ruling:** TypeSafe Jev ISE → use OpenRouter model `~typesafe/jev-latest`
+via **`https://openrouter.ai/api/alpha/decisions`** (not chat/completions).
+
+**Implemented (consumer):** `scripts/local_harness.py`
+`evaluate_jev_with_openrouter_fallback`; `jev_canonical_check.py` uses it
+unless `--no-openrouter`.
+
+**Operator action required (OpenRouter account):** allow provider
+**`typesafe`** for `~typesafe/jev-latest`. Current key already exists
+(~/.config/harness/jev.env / openrouter env); without typesafe in
+allowed-providers, OpenRouter returns provider-not-allowed and canonical
+checks stay on TypeSafe only (or UNVERIFIED if TypeSafe is down).
+
+**DONE rule unchanged:** keyed non-fallback `is_passing` (TypeSafe **or**
+OpenRouter decisions parse) + mechanical evidence. Structural fallback is
+never DONE.
