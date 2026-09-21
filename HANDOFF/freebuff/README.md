@@ -135,7 +135,7 @@ CO-B-001 dual-drain is **already merged** (#339) -- do not paste that ticket as 
 | Tier | Nodes | Now |
 |---|---|---|
 | **A** | AWS + Windows CLI | Drive the train (steps 1-4) + Wave-1 reliability; install anytime from CI artifacts; fleet on `51edac4b` (redeploy after merges) |
-| **B** | Pixel 6a | Operator drives UI; agents install + passive logs only |
+| **B** | Pixel 6a | Operator drives UI; agents install + passive logs only. After installing an Android build, run `scripts/pixel_stop_acceptance.sh`: a lifecycle change is not verified until the device confirms a stop completed and stayed completed (STOP-TEARDOWN-TIMEOUT-001) |
 | **C** | iOS/macOS | Out of Wave 1 / 0.5.0 |
 
 ## Adding a task
