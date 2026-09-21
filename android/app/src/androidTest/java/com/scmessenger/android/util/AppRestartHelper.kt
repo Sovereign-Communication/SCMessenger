@@ -81,12 +81,13 @@ object AppRestartHelper {
         val command = "am force-stop $packageName"
         try {
             val response = uiAutomation.executeShellCommand(command)
-            // Read and discard the response (usually empty or minimal)
-            response.use { stream ->
-                stream.readBytes()
+            // ParcelFileDescriptor: close the FD; do not call InputStream.readBytes()
+            // (receiver-type mismatch on this type) and do not UiAutomation.destroy().
+            try {
+                response.close()
+            } catch (_: Exception) {
+                // ignore — best-effort drain/close
             }
-            // Do not call UiAutomation.destroy(): it tears down the shared
-            // instrumentation automation for the rest of the process.
         } catch (e: Exception) {
             throw RuntimeException("Failed to force-stop package $packageName", e)
         }
