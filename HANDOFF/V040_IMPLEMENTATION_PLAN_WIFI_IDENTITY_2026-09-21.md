@@ -14,12 +14,12 @@ Audit inputs (product only — no other-lane work):
 - `HANDOFF/V040_CTO_HANDOFF_SCMESSENGER_IDENTITY_TRANSPORT_WIFI_2026-09-21.md`
 - `HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`
 
-Harness: `sovereign-harness` at `C:\Users\SCM\Documents\GitHub\Harness`.
-JEV client: `harness/jev.py` on **harness origin/main** (P0 cost-truth + typed
-noul/choice/score + `JevEvaluationResult.is_passing`). Local clone may be
-behind — **use `git -C Harness show origin/main:harness/jev.py`** or
-`git worktree` from origin/main; do not invent a second JEV plan
-(canon: harness `docs/jev-roadmap.md`).
+JEV: `sovereign-harness` at `C:\Users\SCM\Documents\GitHub\Harness-jev-use`
+(origin/main worktree preferred; `git show origin/main:harness/jev.py` if dirty).
+JEV key: `~/.config/harness/jev.env` via `harness.config.resolve_jev_key()`.
+**Full integration:** `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+**Repo insight packs:** `scripts/jev_packs.py` + `scripts/jev_repo_insights.py`
+(batched; run after merge trains and before paste waves).
 
 ---
 

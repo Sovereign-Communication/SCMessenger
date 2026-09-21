@@ -17,6 +17,17 @@ Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-0
 **DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan §3).
 Never claim WiFi fixed without WP5 evidence on the P0 umbrella ticket.
 
+**JEV / harness integration (future work):** see
+`HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+- Before paste waves / after merge trains:
+  `python scripts/jev_repo_insights.py --mode full`
+- Before marking any WP DONE:
+  `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
+- Clarification when <99% confident: harness `verify` + JEV typed questions
+  (`HARNESS_REPO=C:\Users\SCM\Documents\GitHub\Harness-jev-use`).
+- Unkeyed JEV = `is_fallback` — not canonical DONE.
+- Do not edit concurrent Harness WIP branches (P2/P3/jev-phase).
+
 ## Paste protocol
 
 - Operator is the transport into Freebuff desktop.

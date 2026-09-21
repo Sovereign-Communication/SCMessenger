@@ -53,6 +53,24 @@ Related: branch protection `strict: true` serializes merges and re-queues
 every other PR (SHIP_PLAN I-31). Queue hygiene does not remove that cost; it
 stops you paying it twice for dead work.
 
+## JEV / harness verification (orchestrator + implementers — 2026-09-21)
+
+Standing practice for SCMessenger completion work:
+
+1. **Toolchain:** harness from origin/main worktree
+   (`C:\Users\SCM\Documents\GitHub\Harness-jev-use` or `HARNESS_REPO`).
+   Key via `harness.config.resolve_jev_key()`.
+2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
+   after merge trains; report under `HANDOFF/audit/`.
+3. **WP / canonical DONE:** mechanical CI + greps **and**
+   `python scripts/jev_canonical_check.py --wp WPn --state-file ...`
+   (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
+4. **Clarification:** if confidence <99% on a claim/design, run harness verify
+   or a typed JEV question pack — do not invent a new root-cause plan.
+5. **Do not** edit concurrent Harness WIP worktrees/PRs (P2 repair, jev-phase,
+   issue-sort). SCMessenger consumes the library; Harness owns its mission STATUS.
+6. Full design: `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+
 ## Windows parallelism (measured on this box)
 
 Machine: AMD Ryzen 7 7730U, 16 logical / 8 physical cores, 11.8 GB RAM. The
