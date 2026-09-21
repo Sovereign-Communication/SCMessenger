@@ -61,19 +61,26 @@ CANON_QUESTIONS = {
 
 def load_harness():
     repo = os.environ.get(
-        "HARNESS_REPO", r"C:\Users\SCM\Documents\GitHub\Harness"
+        "HARNESS_REPO", r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"
     )
     for candidate in (
-        Path(repo) / "Harness-jev-use",
         Path(repo),
         Path(r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"),
+        Path(r"C:\Users\SCM\Documents\GitHub\Harness"),
     ):
         if (candidate / "harness" / "jev.py").is_file():
             sys.path.insert(0, str(candidate))
             try:
                 from harness.jev import JevEvaluator, JevEvaluationResult  # type: ignore
 
-                return JevEvaluator, JevEvaluationResult, candidate
+                key = None
+                try:
+                    from harness.config import resolve_jev_key  # type: ignore
+
+                    key = resolve_jev_key() or None
+                except Exception:  # noqa: BLE001
+                    key = None
+                return JevEvaluator, JevEvaluationResult, candidate, key
             except Exception as exc:  # noqa: BLE001
                 print(f"[WARNING] import harness from {candidate}: {exc}")
     raise SystemExit(
@@ -96,9 +103,9 @@ def main() -> int:
 
     state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
     state.setdefault("wp", args.wp)
-    JevEvaluator, _JevResult, harness_path = load_harness()
-    print(f"[INFO] harness: {harness_path}")
-    ev = JevEvaluator()
+    JevEvaluator, _JevResult, harness_path, api_key = load_harness()
+    print(f"[INFO] harness: {harness_path} keyed={bool(api_key)}")
+    ev = JevEvaluator(api_key=api_key)
     result = ev.evaluate(state, questions=CANON_QUESTIONS)
     print(f"[INFO] verdict={result.verdict} supported={result.supported} confidence={result.confidence}")
     print(f"[INFO] is_fallback={result.is_fallback} cost={result.cost} tokens_in={result.input_tokens}")
