@@ -6,10 +6,13 @@ Owner: CTO/orchestrator
 `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
 (code-verified WP matrix + harness/JEV completion gates). P0 umbrella:
 `HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`.
-Harness: `sovereign-harness` — use **harness `origin/main`** for JEV
-(`harness/jev.py`); local clone may lag. Clarification: harness verify +
-JEV typed questions when confidence < 99%. Canonical DONE requires JEV
-`is_passing` + mechanical evidence (see implementation plan §3).
+Harness: `sovereign-harness` — use **harness `origin/main`** / worktree
+`C:\Users\SCM\Documents\GitHub\Harness-jev-use` for JEV (`harness/jev.py`);
+local clone may lag. Clarification: harness verify + JEV typed questions when
+confidence < 99%. Canonical DONE requires JEV `is_passing` + mechanical
+evidence (implementation plan §3).
+**Repo insight packs / batched sentiment:** `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
++ `scripts/jev_repo_insights.py` + `scripts/jev_packs.py`.
 
 ## Direction (operator, cumulative)
 
