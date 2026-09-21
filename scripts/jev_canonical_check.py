@@ -61,32 +61,18 @@ CANON_QUESTIONS = {
 
 
 def load_harness():
-    repo = os.environ.get(
-        "HARNESS_REPO", r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"
-    )
-    for candidate in (
-        Path(repo),
-        Path(r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"),
-        Path(r"C:\Users\SCM\Documents\GitHub\Harness"),
-    ):
-        if (candidate / "harness" / "jev.py").is_file():
-            sys.path.insert(0, str(candidate))
-            try:
-                from harness.jev import JevEvaluator, JevEvaluationResult  # type: ignore
-
-                key = None
-                try:
-                    from harness.config import resolve_jev_key  # type: ignore
-
-                    key = resolve_jev_key() or None
-                except Exception:  # noqa: BLE001
-                    key = None
-                return JevEvaluator, JevEvaluationResult, candidate, key
-            except Exception as exc:  # noqa: BLE001
-                print(f"[WARNING] import harness from {candidate}: {exc}")
-    raise SystemExit(
-        "[FAIL] harness.jev not found. Set HARNESS_REPO to a clone that has "
-        "harness/jev.py on origin/main (see implementation plan section 3)."
+    """Import JEV from SCMessenger-local harness (vendor/sovereign-harness)."""
+    try:
+        from local_harness import import_harness  # type: ignore
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from local_harness import import_harness  # type: ignore
+    mod = import_harness()
+    return (
+        mod["JevEvaluator"],
+        None,
+        mod["root"],
+        mod["key"],
     )
 
 

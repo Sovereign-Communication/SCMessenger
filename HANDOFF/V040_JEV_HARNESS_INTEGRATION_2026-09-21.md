@@ -6,6 +6,24 @@ Harness: use **origin/main** or worktree `C:\Users\SCM\Documents\GitHub\Harness-
   (tip `405bbc1` — JEV-P0/P1/P2 code present). Key: `~/.config/harness/jev.env`
   via `harness.config.resolve_jev_key()`.
 
+## Local harness in SCMessenger (operator rule 2026-09-21)
+
+**Do not edit the external Harness product tree** for SCMessenger work.
+
+| Item | Path / command |
+|---|---|
+| Consumer copy | `vendor/sovereign-harness/` (gitignored) |
+| Update from repo | `python scripts/update_local_harness.py` (clone/pull `Sovereign-Communication/harness` origin/main) |
+| Path resolver | `scripts/local_harness.py` |
+| Issue-sort pack (operator-frozen) | `scripts/scmessenger_issue_sort_pack.json` |
+| Issue-sort API used | `harness.jev_policy.JevPolicy.evaluate_issue_sort` + `harness.jev_packs` on **vendor** origin/main |
+
+Callers (`jev_canonical_check.py`, `jev_repo_insights.py`, `harness_gate.py`)
+default to `vendor/sovereign-harness`. `HARNESS_REPO` env can override.
+
+`harness_gate.py` outputs now default under `tmp/harness-runs/seat-gates/`
+inside SCMessenger (not external Harness audits/).
+
 ## WIP session audit (concurrent Harness lane) — expanded
 
 From Harness HANDOFF, busy session `ses_ffe5f3e6872afffe3U9yhXAFuo` task

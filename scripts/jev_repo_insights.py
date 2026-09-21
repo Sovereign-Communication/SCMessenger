@@ -7,7 +7,7 @@ Batched calls keep input tokens and cost low; code owns mechanical facts,
 JEV owns bounded semantic judgments.
 
 Usage:
-  $env:HARNESS_REPO = "C:\\Users\\SCM\\Documents\\GitHub\\Harness-jev-use"
+  python scripts/update_local_harness.py
   python scripts/jev_repo_insights.py --mode full --out HANDOFF/audit/JEV_REPO_INSIGHTS.md
   python scripts/jev_repo_insights.py --mode pain,unification --batch-size 4
   python scripts/jev_repo_insights.py --mode dry-run   # harvest only, no JEV
@@ -38,24 +38,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_harness():
-    repo = os.environ.get(
-        "HARNESS_REPO", r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"
-    )
-    candidates = [
-        Path(repo),
-        Path(r"C:\Users\SCM\Documents\GitHub\Harness-jev-use"),
-        Path(r"C:\Users\SCM\Documents\GitHub\Harness"),
-    ]
-    for candidate in candidates:
-        if (candidate / "harness" / "jev.py").is_file():
-            sys.path.insert(0, str(candidate))
-            from harness.config import resolve_jev_key  # type: ignore
-            from harness.jev import JevEvaluator, jev_cost  # type: ignore
+    """SCMessenger-local harness only (vendor/sovereign-harness)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from local_harness import import_harness  # type: ignore
 
-            return JevEvaluator, jev_cost, resolve_jev_key, candidate
-    raise SystemExit(
-        "[FAIL] harness.jev not found. Set HARNESS_REPO to origin/main worktree."
-    )
+    mod = import_harness()
+    from harness.jev import jev_cost  # type: ignore
+
+    return mod["JevEvaluator"], jev_cost, (lambda: mod["key"]), mod["root"]
 
 
 def _run(cmd: List[str], cwd: Optional[Path] = None) -> str:
@@ -339,6 +329,54 @@ def run_batches(
     }
 
 
+ISSUE_SORT_PACK = ROOT / "scripts" / "scmessenger_issue_sort_pack.json"
+
+
+def run_issue_sort(signals: Dict[str, Any]) -> Dict[str, Any]:
+    """Sort harvested tickets via Harness JevPolicy.evaluate_issue_sort.
+
+    Operator pack is frozen in scripts/scmessenger_issue_sort_pack.json
+    (JEV-P5 contract: no invented buckets).
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from local_harness import make_policy  # type: ignore
+
+    if not ISSUE_SORT_PACK.is_file():
+        return {"pack": "missing", "results": [], "total_cost": 0.0}
+    pack = json.loads(ISSUE_SORT_PACK.read_text(encoding="utf-8"))
+    policy, mod = make_policy()
+    items = []
+    for trow in signals.get("todos", [])[:25]:
+        items.append({"id": trow["id"], "signal": trow.get("status", "") or trow["id"]})
+    for q in signals.get("queue", [])[:25]:
+        items.append({"id": q["id"], "signal": q.get("status", "") or q["id"]})
+    results = []
+    total_cost = 0.0
+    for item in items:
+        issue = f"{item['id']}: {item['signal']}"
+        _res, _st, combo = policy.evaluate_issue_sort({"issue": issue}, pack)
+        total_cost += float(getattr(_res, "cost", 0.0) or 0.0)
+        results.append(
+            {
+                "id": item["id"],
+                "bucket": combo.get("bucket"),
+                "path_id": combo.get("path_id"),
+                "attention": combo.get("attention"),
+                "is_fallback": combo.get("is_fallback"),
+                "suggested_next_action": combo.get("suggested_next_action"),
+            }
+        )
+    buckets = Counter(r["bucket"] or "unmatched" for r in results)
+    return {
+        "pack": pack.get("id"),
+        "harness_tip": str(mod["root"]),
+        "results": results,
+        "bucket_counts": dict(buckets),
+        "total_cost": round(total_cost, 6),
+    }
+
+
+
 def write_report(path: Path, signals: Dict[str, Any], runs: List[Dict[str, Any]], meta: Dict[str, Any]) -> None:
     lines = []
     lines.append("# JEV repo insight report — SCMessenger")
@@ -398,6 +436,22 @@ def write_report(path: Path, signals: Dict[str, Any], runs: List[Dict[str, Any]]
                 lines.append(f"- reason: {reason}")
             lines.append("")
 
+    iso = (meta or {}).get("issue_sort") or {}
+    if iso:
+        lines.append("## Issue-sort (Harness JevPolicy.evaluate_issue_sort)")
+        lines.append("")
+        lines.append(f"- pack: `{iso.get('pack')}` cost={iso.get('total_cost')}")
+        lines.append(f"- harness: `{iso.get('harness_tip')}`")
+        lines.append(f"- bucket_counts: `{json.dumps(iso.get('bucket_counts') or {}, ensure_ascii=False)}`")
+        lines.append("")
+        for row in (iso.get("results") or [])[:40]:
+            lines.append(
+                f"- `{row.get('id')}` -> bucket=`{row.get('bucket')}` "
+                f"attention=`{row.get('attention')}` path=`{row.get('path_id')}` "
+                f"fallback={row.get('is_fallback')} next=`{row.get('suggested_next_action')}`"
+            )
+        lines.append("")
+
     lines.append("## Insights for SCMessenger completion (orchestrator synthesis)")
     lines.append("")
     lines.append(
@@ -434,7 +488,7 @@ def main() -> int:
 
     modes = [m.strip() for m in args.mode.split(",") if m.strip()]
     if "full" in modes:
-        modes = ["pain_points", "unification", "orchestration", "historical_process"]
+        modes = ["pain_points", "unification", "orchestration", "historical_process", "issue_sort"]
 
     signals = harvest_signals()
     out_path = ROOT / args.out if not Path(args.out).is_absolute() else Path(args.out)
@@ -485,6 +539,19 @@ def main() -> int:
             f"tokens={run['total_input_tokens']} cost={run['total_cost']}"
         )
 
+    issue_sort_out = None
+    if "issue_sort" in modes or "full" in modes:
+        try:
+            issue_sort_out = run_issue_sort(signals)
+            print(
+                f"[OK] issue_sort pack={issue_sort_out.get('pack')} "
+                f"items={len(issue_sort_out.get('results') or [])} "
+                f"cost={issue_sort_out.get('total_cost')}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARNING] issue_sort failed: {exc}")
+            issue_sort_out = {"error": str(exc)}
+
     write_report(
         out_path,
         signals,
@@ -493,6 +560,7 @@ def main() -> int:
             "harness_path": str(harness_path),
             "keyed": bool(api_key),
             "model": evaluator.model,
+            "issue_sort": issue_sort_out,
         },
     )
     print(f"[OK] report: {out_path}")
