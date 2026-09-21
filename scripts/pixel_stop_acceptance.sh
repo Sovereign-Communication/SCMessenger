@@ -21,9 +21,11 @@
 #      or a deferred ENSURE.
 #
 # Usage:
-#   scripts/pixel_stop_acceptance.sh [--timeout 30] [--hold 20] [--manual]
+#   scripts/pixel_stop_acceptance.sh [--timeout 30] [--hold 20] [--manual] [--no-launch]
 #
-#   --manual   do not try to tap Stop; poll while you tap it yourself
+#   --manual     do not try to tap Stop; poll while you tap it yourself
+#   --no-launch  do not re-launch the app first (use when you have already
+#                navigated to Settings -> Mesh Service)
 #
 # Exit codes: 0 PASS, 1 FAIL, 2 could not run (no device / no package).
 #
@@ -37,13 +39,15 @@ OUT_DIR=tmp/pixel-stop-acceptance
 TIMEOUT=30
 HOLD=20
 MANUAL=0
+LAUNCH=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --timeout) TIMEOUT="$2"; shift 2 ;;
         --hold) HOLD="$2"; shift 2 ;;
         --manual) MANUAL=1; shift ;;
-        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        --no-launch) LAUNCH=0; shift ;;
+        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
         *) echo "[WARNING] unknown argument: $1"; shift ;;
     esac
 done
@@ -115,24 +119,80 @@ if ! service_up; then
 fi
 
 # --- 2. drive the stop -------------------------------------------------------
+# Resolve the Stop control's centre from a UI dump, refusing to guess.
+#
+# The first version of this script parsed the dump with tr/grep/awk. On the real
+# device that produced (12000,1080) for a 1080x2400 screen -- an off-screen tap
+# that does nothing, which the script would have reported as a successful tap.
+# A verification tool that can silently do nothing is worse than none, so the
+# rule here is: fail OPEN on what can be seen (print every label), fail CLOSED on
+# what gets acted on (never tap an unvalidated coordinate).
+resolve_stop_coords() {
+    local dump="$1"
+    command -v python >/dev/null 2>&1 || return 1
+    python - "$dump" "$DEVICE" <<'PY'
+import re, subprocess, sys
+
+dump, device = sys.argv[1], sys.argv[2]
+try:
+    xml = open(dump, encoding="utf-8", errors="replace").read()
+except OSError:
+    sys.exit(1)
+
+tags = re.findall(r"<node\b[^>]*?/?>", xml)
+visible = sorted({m.group(1) for m in re.finditer(r'text="([^"]+)"', xml)})
+
+hits = []
+for tag in tags:
+    text = re.search(r'text="([^"]*)"', tag)
+    bounds = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+    if not text or text.group(1) != "Stop" or not bounds:
+        continue
+    hits.append((tuple(int(v) for v in bounds.groups()), 'clickable="true"' in tag))
+
+clickable = [h for h in hits if h[1]]
+chosen = clickable[0] if len(clickable) == 1 else (hits[0] if len(hits) == 1 else None)
+
+if chosen is None:
+    print(f"[WARNING] {len(hits)} node(s) matched text='Stop' -- refusing to guess", file=sys.stderr)
+    print("[INFO] labels visible in this UI tree: " + ", ".join(visible), file=sys.stderr)
+    sys.exit(1)
+
+x1, y1, x2, y2 = chosen[0]
+x, y = (x1 + x2) // 2, (y1 + y2) // 2
+size = subprocess.run(["adb", "-s", device, "shell", "wm", "size"],
+                      capture_output=True, text=True).stdout
+match = re.search(r"(\d+)x(\d+)", size)
+width, height = (int(match.group(1)), int(match.group(2))) if match else (1080, 2400)
+if not (0 <= x < width and 0 <= y < height):
+    print(f"[WARNING] computed tap ({x},{y}) is outside {width}x{height} -- refusing",
+          file=sys.stderr)
+    sys.exit(1)
+print(f"{x} {y}")
+PY
+}
+
 if [ "$MANUAL" -eq 1 ]; then
     echo "[INFO] --manual: tap Stop in the app now; polling for $TIMEOUT s." | tee -a "$EVIDENCE"
 else
-    adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
-    sleep 3
+    if [ "$LAUNCH" -eq 1 ]; then
+        adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+        sleep 3
+    fi
     adb shell uiautomator dump /sdcard/pixel_stop_dump.xml >/dev/null 2>&1
     DUMP="$OUT_DIR/ui-$STAMP.xml"
     adb shell cat /sdcard/pixel_stop_dump.xml > "$DUMP" 2>/dev/null
-    BOUNDS=$(tr '>' '>\n' < "$DUMP" 2>/dev/null \
-        | grep 'text="Stop"' | head -1 \
-        | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"')
-    if [ -z "$BOUNDS" ]; then
-        echo "[WARNING] no Stop control in the current UI tree; the app must be on" | tee -a "$EVIDENCE"
-        echo "[WARNING] Settings -> Mesh Service. Tap Stop yourself now (polling for" | tee -a "$EVIDENCE"
-        echo "[WARNING] $TIMEOUT s). UI dump kept at $DUMP" | tee -a "$EVIDENCE"
+    COORDS=$(resolve_stop_coords "$DUMP" 2>>"$EVIDENCE") || COORDS=""
+    if [ -z "$COORDS" ]; then
+        # Fail open on visibility: say what IS on screen, so a human can see why.
+        echo "[WARNING] could not resolve a Stop control with confidence; the app must" | tee -a "$EVIDENCE"
+        echo "[WARNING] be on Settings -> Mesh Service. Tap Stop yourself now (polling" | tee -a "$EVIDENCE"
+        echo "[WARNING] for $TIMEOUT s). UI dump kept at $DUMP" | tee -a "$EVIDENCE"
+        grep -oE 'text="[^"]+"' "$DUMP" 2>/dev/null | sort -u \
+            | sed 's/^/[INFO] visible: /' | tee -a "$EVIDENCE"
     else
-        COORDS=$(echo "$BOUNDS" | tr -dc '0-9,' | awk -F, '{print int(($1+$3)/2), int(($2+$4)/2)}')
-        echo "[INFO] tapping Stop at $COORDS (from $BOUNDS)" | tee -a "$EVIDENCE"
+        echo "[INFO] tapping Stop at $COORDS" | tee -a "$EVIDENCE"
+        # shellcheck disable=SC2086
         adb shell input tap $COORDS
     fi
 fi
