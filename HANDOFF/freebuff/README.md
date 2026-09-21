@@ -24,16 +24,6 @@ umbrella ticket.
 
 **JEV / harness (local only):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
-<<<<<<< HEAD
-- Before paste waves / after merge trains:
-  `python scripts/jev_repo_insights.py --mode full`
-- Before marking any WP DONE:
-  `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
-- Clarification when <99% confident: harness `verify` + JEV typed questions
-  (`HARNESS_REPO=vendor/sovereign-harness after scripts/update_local_harness.py`).
-- Unkeyed JEV = `is_fallback` â€” not canonical DONE.
-- Do not edit concurrent Harness WIP branches (P2/P3/jev-phase).
-=======
 - `python scripts/update_local_harness.py` → `vendor/sovereign-harness`
 - `python scripts/jev_repo_insights.py --mode full`
 - `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
@@ -41,7 +31,6 @@ umbrella ticket.
   `https://openrouter.ai/api/alpha/decisions` if TypeSafe unhealthy
   (operator: allow OpenRouter provider `typesafe`).
 - Do **not** edit external Harness product trees / WIP PRs.
->>>>>>> origin/main
 
 ## Paste protocol
 
