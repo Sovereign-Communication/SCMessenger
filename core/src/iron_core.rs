@@ -389,7 +389,7 @@ impl IronCore {
         let transport_memory =
             crate::store::transport_memory::TransportMemoryStore::new(backend.clone());
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(IdentityManager::new())),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -439,7 +439,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -517,7 +519,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -563,7 +565,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent storage and a log directory.
@@ -648,7 +652,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -694,7 +698,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -782,6 +788,29 @@ impl IronCore {
         tracing::info!("Consent granted for identity initialization");
     }
 
+    /// Arm the ledger's self-entry filter (tier_a A8 / issue I-06) with this
+    /// node's own identity, in both spellings the store can hold.
+    ///
+    /// This MUST run in the hydrating constructors, not only in
+    /// `initialize_identity`: a real node starts with an identity that is
+    /// *loaded* from its store, so `initialize_identity` never runs there and a
+    /// filter armed only in it would never fire -- every unit test of the filter
+    /// would still pass while both always-on nodes stayed red. Callers hold no
+    /// identity lock; `initialize_identity` therefore arms the ledger directly
+    /// with the lock it already holds rather than calling this.
+    fn arm_ledger_self_filter(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let identity = self.identity.read();
+            if let Some(keys) = identity.keys() {
+                self.ledger_manager.set_own_identity(
+                    &keys.public_key_hex(),
+                    keys.to_libp2p_peer_id().ok().as_deref(),
+                );
+            }
+        }
+    }
+
     /// Initialize the identity (generate Ed25519 keys).
     /// Requires consent to have been granted first.
     pub fn initialize_identity(&self) -> Result<(), IronCoreError> {
@@ -814,6 +843,21 @@ impl IronCore {
 
         // Initialize drift engine now that we have a public key
         if let Some(keys) = identity.keys() {
+            // tier_a A8 (issue I-06): the ledger must know whose identity is
+            // "self" before any peer is recorded, or it stores our own key and
+            // listen addresses as a peer and then dials itself, spending the
+            // same per-peer connection budget real peers need. Both stored
+            // spellings are supplied because the ledger holds hex (current
+            // writes) as well as libp2p PeerIds (pre-hex-migration rows).
+            //
+            // Armed here with the guard this scope already holds (the helper
+            // takes a read lock, which would deadlock against it).
+            #[cfg(not(target_arch = "wasm32"))]
+            self.ledger_manager.set_own_identity(
+                &keys.public_key_hex(),
+                keys.to_libp2p_peer_id().ok().as_deref(),
+            );
+
             let pk_bytes = keys.signing_key.verifying_key().to_bytes();
             {
                 let mut engine = self.drift_engine.write();
@@ -5027,6 +5071,67 @@ mod tests {
         assert!(
             res.is_err(),
             "try_with_storage must return Err on open failure"
+        );
+    }
+
+    /// tier_a A8 (issue I-06): the ledger's self-entry filter must be armed by
+    /// the HYDRATING constructor, not only by `initialize_identity`. A deployed
+    /// node loads an existing identity, so `initialize_identity` never runs
+    /// there -- a filter armed only in it is dead code on every real node while
+    /// every unit test of the filter itself still passes.
+    #[test]
+    fn reopened_core_arms_ledger_self_filter_without_initialize_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+
+        // First run: mint and persist an identity.
+        let created = IronCore::with_storage(path.clone());
+        created.grant_consent();
+        created
+            .initialize_identity()
+            .expect("identity must initialise on healthy storage");
+        let me_hex = created.public_key_hex().expect("identity has a public key");
+        drop(created);
+
+        // Second run: the identity is HYDRATED. Nothing calls
+        // initialize_identity on this instance.
+        let reopened = IronCore::with_storage(path);
+        assert!(
+            !reopened.is_storage_degraded(),
+            "reopened storage must be healthy, not degraded: {:?}",
+            reopened.storage_error()
+        );
+        assert_eq!(
+            reopened.public_key_hex().as_deref(),
+            Some(me_hex.as_str()),
+            "the second core must have hydrated the first core's identity"
+        );
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "a fresh ledger starts empty"
+        );
+
+        // The regression under test: this is our OWN identity, so it must be
+        // refused even though initialize_identity never ran here.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.7/tcp/9001".to_string(), me_hex.clone());
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "the hydrated core must refuse to record itself as a peer"
+        );
+
+        // Control: a foreign peer still records, so the assertion above cannot
+        // pass by refusing every write.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.8/tcp/9002".to_string(), "ab".repeat(32));
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            1,
+            "a foreign peer must still be recorded"
         );
     }
 
