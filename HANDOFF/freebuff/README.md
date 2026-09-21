@@ -1,26 +1,30 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-09-20 (CTO merge-train update)
-Rules: `docs/rules/FREEBUFF.md` -- read it before adding a task file here.
-**Order authority:** `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md` (includes
-working-first path + concurrent audit dispositions + 0.4.0 tag checklist).
+Last updated: 2026-09-21
+Rules: `docs/rules/FREEBUFF.md`
+**Implementation authority (identity/transport/WiFi):**
+`HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+**0.4.0 master plan:** `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
 Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-09-20.md`.
 
-## Direction (operator 2026-09-20)
+## Direction
 
-1. **Working-first:** reliable day-to-day mesh on Windows + AWS + Pixel.
-2. **Then 0.4.0 tag readiness** via master plan checklist + 3-node log analysis.
-Do not paste keystore/release/tag chores as freebuff implementation tasks.
-Do not re-dispatch CODE ON MAIN / MERGED tickets. Pinned debug keystore
-secret is **operator-owned** (device `adb install -r`).
+1. **Working-first:** reliable day-to-day mesh (Windows + AWS + Pixel).
+2. **WiFi/identity WP1–5** from the implementation plan matrix (no guesswork).
+3. **Then 0.4.0 tag** checklist + WP5 3-node proof + operator phone session.
 
-## Durable CTO continuation
+**DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan §3).
+Never claim WiFi fixed without WP5 evidence on the P0 umbrella ticket.
 
-Tracked `/cto` entry: `.claude/commands/CTO.md`.
-Package: `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`.
-Freebuff has no headless mode -- operator pastes task files. No ignored
-`.freebuff/` file is authoritative.
+## Paste protocol
+
+- Operator is the transport into Freebuff desktop.
+- Paste only tickets that exist on **`origin/main`** and are DISPATCHABLE.
+- One ticket per paste. Premise-check first; wrong premise → inbox note.
+- Freebuff opens PRs; no self-merge; Rule-8 on
+  `core/src/{crypto,transport,routing,privacy}`.
+- CI hygiene: cancel superseded Actions runs (`docs/rules/BUILD_AND_CI.md`).
 
 ```
 queue/   ready to paste
@@ -28,33 +32,63 @@ inbox/   Freebuff replies
 done/    completed; Status records the PR number
 ```
 
-**Before any paste wave:** `python scripts/check_queue_status.py` must exit 0.
-
-**CI queue hygiene (operator 2026-09-20):** cancel superseded GitHub Actions
-runs after merges/branch updates — see `docs/rules/BUILD_AND_CI.md`. Orchestrator
-clears the queue; freebuff reports blocked waits with run ids in `inbox/`.
+`python scripts/check_queue_status.py` must exit 0 before paste waves.
 
 ---
 
-## DISPATCHABLE -- paste order (2026-09-20 CTO update)
+## DISPATCHABLE — P0 WiFi/identity first (2026-09-21)
 
-Paste only after the ticket exists on **`origin/main`**. One ticket per paste.
-Authority: `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`.
-#325/#322 already merged to main — do not wait on them.
-
-| Order | Task file | What it fixes | Review gate |
+| Order | Task file | WP | Gate |
 |---|---|---|---|
-| 1 | `queue/V040_T_CONN_LIMITS_MULTIPORT.md` | Live multi-port dials denied (`connection_limits` cap 4) | **Rule-8** |
-| 2 | `queue/V040_T_COB001_WASM_OUTBOX_DUAL_DRAIN.md` | Audit CO-B-001 HIGH: IronCore flush single-form key | Orchestrator; harness if not a CLI-pattern port |
-| 3 | `queue/V040_T_ANDROIDTEST_COMPILE_FIX.md` | Mobile instrumented-test compile red | none if androidTest-only |
-| 4 | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` | A-lite: collapse redundant Kotlin Ed25519 copies | none if android-only |
-| 5 | `queue/V040_T_AND06_UNIFI_CUTOVER.md` | A full: UniFFI cutover; delete curve math | Rule-8 if FFI/core |
-| 6 | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | N-03 healthy-quiet node watchdog | test-only preferred |
-| 7 | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | Cloud IP change remesh without manual edits | **Rule-8** likely |
-| 8 | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Beach-join Phase 0-1 (operator pull-forward) | Phase 2-3 later |
+| 1 | `queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md` | WP1 | tests + JEV |
+| 2 | `queue/V050_WP2_ROUTING_FEED_ALL_TRANSPORTS_2026-09-21.md` | WP2 | **Rule-8** + JEV |
+| 3 | `queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md` | WP3 | Rule-8 if gated + JEV |
+| 4 | `queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md` | WP4 | tests + JEV |
 
-Orchestrator merge train: **#337** (audit lineage) + CTO docs PR + freebuff code PRs after gates.
-Scoring after the wave: harness + 3-node logs + **operator** phone session.
+WP5 live 3-node proof is **not** a freebuff paste — evidence lands on
+`HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`.
+
+## DISPATCHABLE — parallel Wave-1 / mesh reliability
+
+| Order | Task file | Gate |
+|---|---|---|
+| A | `queue/V040_T_CONN_LIMITS_MULTIPORT.md` | **Rule-8** |
+| B | `queue/V040_T_ANDROIDTEST_COMPILE_FIX.md` | CI Mobile (PR #341 may already cover) |
+| C | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` then UNIFI cutover | Rule-8 if FFI/core |
+| D | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | test-only |
+| E | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | **Rule-8** likely |
+| F | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Phase 2-3 later |
+
+CO-B-001 dual-drain is **already merged** (#339) — do not paste that ticket as impl.
+
+---
+
+## DO NOT PASTE
+
+| Ticket | Why |
+|---|---|
+| T1/T2/T4 impl, T5–T12/T14 | CODE ON MAIN / MERGED |
+| Completed `V040_REVIEW_DISPATCH_*` | Reviews filed |
+| Keystore / release / tag | Operator / post-working-bar |
+| C4 / beach-join Phase 2-3 | Post-wave |
+| Canonical outlier audit task file | Reference only |
+
+---
+
+## Never idle — tiers
+
+| Tier | Nodes | Now |
+|---|---|---|
+| **A** | AWS + Windows | Wave + WP code; fleet on `51edac4b` (redeploy after merges) |
+| **B** | Pixel | Operator drives UI; agents install + passive logs |
+| **C** | iOS/macOS | 0.5.0 |
+
+## Adding a task
+
+1. Premise-verify against `origin/main`.
+2. File in `queue/` + index here + implementation plan if it is WP work.
+3. Merge dispatch packets to `main` before paste.
+
 
 ---
 

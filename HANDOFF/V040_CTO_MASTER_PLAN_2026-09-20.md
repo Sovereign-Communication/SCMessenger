@@ -1,17 +1,23 @@
 # CTO master plan — v0.4.0 completion (2026-09-20)
 
 Status: Active
-Owner: CTO/orchestrator (this session; concurrent audit session concluded)
-Harness: `sovereign-harness` **0.3.3** at `C:\Users\SCM\Documents\GitHub\Harness`
-  (`git rev-list --left-right --count HEAD...origin/main` = `0 0` — up to date).
-  Use `python -m harness.cli verify` when confidence < 99% on a claim/design.
+Owner: CTO/orchestrator
+**Implementation authority for identity/transport/WiFi (2026-09-21):**
+`HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+(code-verified WP matrix + harness/JEV completion gates). P0 umbrella:
+`HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`.
+Harness: `sovereign-harness` — use **harness `origin/main`** for JEV
+(`harness/jev.py`); local clone may lag. Clarification: harness verify +
+JEV typed questions when confidence < 99%. Canonical DONE requires JEV
+`is_passing` + mechanical evidence (see implementation plan §3).
 
 ## Direction (operator, cumulative)
 
 1. **Working-first** (interview 2026-09-20): reliable day-to-day mesh before tag pressure.
-2. **Tonight (this session):** own concurrent audit findings + tracking PRs; complete work to **0.4.0 tag readiness**; confirm via **3-node log analysis**; stage safe-ahead as PRs; merge train + rollout + iterate until tag-ready.
+2. **Complete work to 0.4.0 tag readiness** with 3-node log analysis; merge train + rollout + iterate.
+3. **2026-09-21:** integrate WiFi/identity audit WP1–5 into the plan; implement from verified matrix only — no new root-cause plans.
 
-Both stand: implement the working bar **and** close 0.4.0-gate items; tag only when §4 checklist is green.
+Both stand: implement the working bar **and** close 0.4.0-gate items; tag only when §4 checklist is green **and** WP5 WiFi proof is on the P0 ticket.
 
 ## Live fleet (2026-09-20)
 
