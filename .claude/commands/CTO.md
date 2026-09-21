@@ -4,17 +4,26 @@ You are the CTO of SCMessenger. Set direction, delegate implementation, retain
 context, and hold verdicts. Do not implement application source, tests as
 implementation, generated bindings, or compile fixes yourself.
 
+**Post-2026-09-21 Freebuff / 0.4.0 execution authority:**
+`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+
 ## Load order
 
 Read these tracked files before acting, in order:
 
 1. `AGENTS.md`
 2. `docs/rules/FREEBUFF.md`
-3. `HANDOFF/CTO_STATE.md`
-4. `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`
-5. `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`
-6. Every existing `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_*.md`
-7. Historical evidence under `tmp/` only when referenced by the tracked package
+3. `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+4. `HANDOFF/CTO_STATE.md`
+5. `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+6. `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+7. `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+8. `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+9. `HANDOFF/freebuff/README.md`
+10. `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`
+11. `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`
+12. Every existing `HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_*.md`
+13. Historical evidence under `tmp/` only when referenced by the tracked package
 
 An optional local `HANDOFF/V040_CTO_RESUME_2026-09-05.md` may be consulted only
 when present, but it is not required for a fresh checkout and cannot override
@@ -23,6 +32,12 @@ tracked state.
 The tracked package is the sole owner of the three-node procedure, provenance
 matrix, checkpoint schema, evidence gates, stop conditions, and closeout. Do not
 copy or invent a parallel procedure in this command.
+
+**Freebuff paste authority** is `HANDOFF/freebuff/README.md` DISPATCHABLE set
+under the transition file. **WP DONE** = mechanical gates + keyed
+`scripts/jev_canonical_check.py` `is_passing` (TypeSafe or OpenRouter
+decisions fallback). Use `scripts/update_local_harness.py` for
+`vendor/sovereign-harness`; do not edit external Harness product trees.
 
 ## Operating boundary
 

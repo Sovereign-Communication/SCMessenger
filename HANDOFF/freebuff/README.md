@@ -3,6 +3,8 @@
 Status: Active
 Last updated: 2026-09-21
 Rules: `docs/rules/FREEBUFF.md`
+**SESSION HANDOFF (canonical, read first):**
+`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
 **Implementation authority (identity/transport/WiFi):**
 `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
 **0.4.0 master plan:** `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
@@ -20,8 +22,9 @@ WP completion without a keyed `jev_canonical_check.py` exit 0 must be rejected
 by the orchestrator. Never claim WiFi fixed without WP5 evidence on the P0
 umbrella ticket.
 
-**JEV / harness integration (future work):** see
+**JEV / harness (local only):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+<<<<<<< HEAD
 - Before paste waves / after merge trains:
   `python scripts/jev_repo_insights.py --mode full`
 - Before marking any WP DONE:
@@ -30,6 +33,15 @@ umbrella ticket.
   (`HARNESS_REPO=vendor/sovereign-harness after scripts/update_local_harness.py`).
 - Unkeyed JEV = `is_fallback` â€” not canonical DONE.
 - Do not edit concurrent Harness WIP branches (P2/P3/jev-phase).
+=======
+- `python scripts/update_local_harness.py` → `vendor/sovereign-harness`
+- `python scripts/jev_repo_insights.py --mode full`
+- `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
+- TypeSafe first; OpenRouter `~typesafe/jev-latest` on
+  `https://openrouter.ai/api/alpha/decisions` if TypeSafe unhealthy
+  (operator: allow OpenRouter provider `typesafe`).
+- Do **not** edit external Harness product trees / WIP PRs.
+>>>>>>> origin/main
 
 ## Paste protocol
 
