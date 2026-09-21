@@ -1,0 +1,97 @@
+{
+  "id": "scmessenger_v040_completion",
+  "buckets": {
+    "identity_transport": {
+      "label": "Identity / transport / WiFi delivery",
+      "kind": "trouble_area",
+      "path_id": "HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md",
+      "keywords": [
+        "identity",
+        "hex",
+        "peer id",
+        "peer_id",
+        "public-key",
+        "routing_peer_seen",
+        "wifi",
+        "wasm",
+        "spoof",
+        "canonical"
+      ],
+      "suggested_next_action": "paste V050_WP1 then WP2 (Rule-8)",
+      "attention": "P0"
+    },
+    "delivery_truth": {
+      "label": "Receipts / honest delivered / wedge",
+      "kind": "trouble_area",
+      "path_id": "HANDOFF/freebuff/queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md",
+      "keywords": [
+        "receipt",
+        "delivered",
+        "outbox",
+        "wedge",
+        "watchdog",
+        "crypto fail"
+      ],
+      "suggested_next_action": "paste V050_WP4 + watchdog test",
+      "attention": "P0"
+    },
+    "connection_limits": {
+      "label": "connection_limits / multi-port dials",
+      "kind": "trouble_area",
+      "path_id": "HANDOFF/freebuff/queue/V040_T_CONN_LIMITS_MULTIPORT.md",
+      "keywords": [
+        "connection_limits",
+        "limit 4",
+        "multi-port",
+        "denied",
+        "sub-stream"
+      ],
+      "suggested_next_action": "paste V040_T_CONN_LIMITS_MULTIPORT (Rule-8)",
+      "attention": "P0"
+    },
+    "process_dispatch": {
+      "label": "Orchestration / freebuff dispatch",
+      "kind": "orchestration_driver",
+      "path_id": "HANDOFF/freebuff/README.md",
+      "keywords": [
+        "dispatch",
+        "stale",
+        "queue",
+        "freebuff",
+        "paste",
+        "status line"
+      ],
+      "suggested_next_action": "check_queue_status then paste DISPATCHABLE only",
+      "attention": "P1"
+    },
+    "device_release": {
+      "label": "Device / signing / APK / keystore",
+      "kind": "trouble_area",
+      "path_id": "HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md",
+      "keywords": [
+        "keystore",
+        "apk",
+        "signing",
+        "install",
+        "androidtest",
+        "mobile"
+      ],
+      "suggested_next_action": "operator secrets or androidTest PR train",
+      "attention": "P1"
+    },
+    "unification_docs": {
+      "label": "Docs / plan unification",
+      "kind": "alternate_path",
+      "path_id": "HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md",
+      "keywords": [
+        "plan",
+        "ticket",
+        "docs",
+        "contradict",
+        "supersede"
+      ],
+      "suggested_next_action": "update implementation plan + README index",
+      "attention": "P2"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# Freebuff lane -- live queue
+﻿# Freebuff lane -- live queue
 
 Status: Active
 Last updated: 2026-09-21
@@ -13,11 +13,11 @@ Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-0
 ## Direction
 
 1. **Working-first:** reliable day-to-day mesh (Windows + AWS + Pixel).
-2. **WiFi/identity WP1–5** from the implementation plan matrix (no guesswork).
+2. **WiFi/identity WP1â€“5** from the implementation plan matrix (no guesswork).
 3. **Then 0.4.0 tag** checklist + WP5 3-node proof + operator phone session.
 
-**DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan §3).
-`UNVERIFIED-JEV` / unkeyed fallback is **not** DONE — Freebuff PRs that claim
+**DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan Â§3).
+`UNVERIFIED-JEV` / unkeyed fallback is **not** DONE â€” Freebuff PRs that claim
 WP completion without a keyed `jev_canonical_check.py` exit 0 must be rejected
 by the orchestrator. Never claim WiFi fixed without WP5 evidence on the P0
 umbrella ticket.
@@ -36,7 +36,7 @@ umbrella ticket.
 
 - Operator is the transport into Freebuff desktop.
 - Paste only tickets that exist on **`origin/main`** and are DISPATCHABLE.
-- One ticket per paste. Premise-check first; wrong premise → inbox note.
+- One ticket per paste. Premise-check first; wrong premise â†’ inbox note.
 - Freebuff opens PRs; no self-merge; Rule-8 on
   `core/src/{crypto,transport,routing,privacy}`.
 - CI hygiene: cancel superseded Actions runs (`docs/rules/BUILD_AND_CI.md`).
@@ -51,7 +51,7 @@ done/    completed; Status records the PR number
 
 ---
 
-## DISPATCHABLE — P0 WiFi/identity first (2026-09-21)
+## DISPATCHABLE â€” P0 WiFi/identity first (2026-09-21)
 
 | Order | Task file | WP | Gate |
 |---|---|---|---|
@@ -60,10 +60,10 @@ done/    completed; Status records the PR number
 | 3 | `queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md` | WP3 | Rule-8 if gated + JEV |
 | 4 | `queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md` | WP4 | tests + JEV |
 
-WP5 live 3-node proof is **not** a freebuff paste — evidence lands on
+WP5 live 3-node proof is **not** a freebuff paste â€” evidence lands on
 `HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`.
 
-## DISPATCHABLE — parallel Wave-1 / mesh reliability
+## DISPATCHABLE â€” parallel Wave-1 / mesh reliability
 
 | Order | Task file | Gate |
 |---|---|---|
@@ -74,7 +74,7 @@ WP5 live 3-node proof is **not** a freebuff paste — evidence lands on
 | E | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | **Rule-8** likely |
 | F | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Phase 2-3 later |
 
-CO-B-001 dual-drain is **already merged** (#339) — do not paste that ticket as impl.
+CO-B-001 dual-drain is **already merged** (#339) â€” do not paste that ticket as impl.
 
 ---
 
@@ -82,7 +82,7 @@ CO-B-001 dual-drain is **already merged** (#339) — do not paste that ticket as
 
 | Ticket | Why |
 |---|---|
-| T1/T2/T4 impl, T5–T12/T14 | CODE ON MAIN / MERGED |
+| T1/T2/T4 impl, T5â€“T12/T14 | CODE ON MAIN / MERGED |
 | Completed `V040_REVIEW_DISPATCH_*` | Reviews filed |
 | Keystore / release / tag | Operator / post-working-bar |
 | C4 / beach-join Phase 2-3 | Post-wave |
@@ -90,7 +90,7 @@ CO-B-001 dual-drain is **already merged** (#339) — do not paste that ticket as
 
 ---
 
-## Never idle — tiers
+## Never idle â€” tiers
 
 | Tier | Nodes | Now |
 |---|---|---|
