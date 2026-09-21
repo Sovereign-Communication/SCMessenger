@@ -1,8 +1,9 @@
 # CEO state — live handoff
 
 Status: Active
-Last updated: 2026-09-14T08:30Z (CEO audit: Multi-transport store-and-forward breakthrough confirmed live; Windows <-> Cellular Pixel verified; BoD 5/5 unanimous approval)
+Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CEO command added)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
+**Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
 
 ## Role
 
@@ -12,7 +13,34 @@ state, holds the consensus rule, and never bypasses the CTO package's gates.
 Key strategic and architectural alignment is adjudicated by the Board of
 Directors (`/bod`, tracked in `HANDOFF/BOD_STATE.md`).
 
-# ===== RESUME HERE (2026-09-14) =====
+# ===== RESUME HERE (2026-09-21, session close) =====
+
+## Audit posture for incoming CEO
+
+1. Load order: `AGENTS.md` → transition file → this file → `CTO_STATE.md` →
+   BLE package → master plan → WiFi implementation plan → freebuff README.
+2. Verify Freebuff/orchestrator claims with **fresh commands** (git origin/main,
+   `gh pr list`, node `/version` + `/api/diagnostics`, AWS `docker logs`).
+3. **WP / WiFi / 0.4.0-complete claims** require:
+   - mechanical gates + `scripts/jev_canonical_check.py` keyed `is_passing`
+   - WP5 evidence on P0 umbrella for WiFi-fixed
+   - master plan checklist for tag
+4. Fleet at prior close (re-derive before quoting as live): Windows+AWS
+   `51edac4b`, Pixel APK same tree family after authorized fresh install.
+5. Open merge train item from orchestrator: **PR #347** (local harness +
+   OpenRouter JEV fallback) — confirm CI before treating as landed.
+6. Operator OpenRouter: allow provider `typesafe` for `~typesafe/jev-latest`
+   decisions API if JEV fallback must succeed when TypeSafe ISE.
+
+## Hand-off to Freebuff
+
+Single packet: `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+Do not accept parallel plans that contradict that file without operator ruling.
+
+# ===== END RESUME 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-14) — HISTORY -----
+
 
 ## Major Breakthrough Live Audit
 
