@@ -911,17 +911,32 @@ impl IronCore {
             return Err(IronCoreError::InvalidInput);
         }
 
-        // Fast path first: if the recipient resolves to a known contact by
-        // PUBLIC KEY, it is the right kind of value and we are done. Only when
-        // that misses do we pay for a scan, so the common send path stays O(1)
-        // against the contact store rather than hashing every contact.
+        // Fast path first: if the recipient IS a known contact's PUBLIC KEY,
+        // it is the right kind of value and we are done. Only when that misses
+        // do we pay for a scan, so the common send path stays O(1) against the
+        // contact store rather than hashing every contact.
+        //
+        // `ContactManager::get` alone must NOT decide this. `get` falls back to
+        // `resolve_identity_id` (core/src/store/contacts.rs), an
+        // identity_id -> public_key index, so once a contact is stored its HASH
+        // resolves too. That satisfied this fast path, which left the
+        // hash-confusion guard below unreachable for exactly the input it was
+        // written for: the hash flowed on to be hex-decoded into `recipient_pk`
+        // and used as the X25519 key, encrypting to something nobody holds.
+        // So the fast path demands a public key match. The identity_id index is
+        // untouched and still resolves for every other consumer.
         let contacts = self.contact_manager.read();
         let known_by_pubkey = contacts
             .get(recipient_id.to_string())
             .ok()
             .flatten()
-            .or_else(|| contacts.get_by_public_key(recipient_id).ok().flatten())
-            .is_some();
+            .map(|contact| contact.public_key.eq_ignore_ascii_case(recipient_id))
+            .unwrap_or(false)
+            || contacts
+                .get_by_public_key(recipient_id)
+                .ok()
+                .flatten()
+                .is_some();
 
         if !known_by_pubkey {
             // Miss. Determine whether this is the hash/pubkey confusion, which
@@ -5875,26 +5890,19 @@ mod tests {
             "identity_id must be the blake3 hash of the public key"
         );
 
-        // 3. The hash case, pinned by MECHANISM rather than by outcome.
+        // 3. The hash case: CLOSED, and now asserted by outcome.
         //
-        // The send path's hash-confusion guard
-        // (`prepare_message_internal`, core/src/iron_core.rs) fires inside its
-        // `if !known_by_pubkey` branch, and that branch is decided FIRST by
-        // `ContactManager::get(recipient)`. `get` falls back to
-        // `resolve_identity_id` (core/src/store/contacts.rs), an
-        // identity_id -> public_key index, so once a contact is stored, its
-        // HASH resolves and the fast path is satisfied by a hash -- leaving the
-        // guard for exactly the input it was written for unreachable, with the
-        // eventual refusal coming from key validity instead. That behaviour is
-        // asserted here, deterministically, because the send OUTCOME is not
-        // assertable: a blake3 hash is 32 arbitrary bytes, so whether the
-        // encryptor accepts it as a curve point is roughly a coin flip, and a
-        // test that flips is worse than no test.
-        //
-        // Filed separately rather than fixed here: repairing it means editing
-        // the send path in this file, which is beyond WP1's stated scope
-        // (`core/src/contacts_bridge.rs`, `core/src/store/contacts.rs`, CLI send
-        // regression tests) and is crypto-adjacent.
+        // A stored contact still resolves by its identity_id through
+        // `ContactManager::resolve_identity_id`. That index is deliberate and
+        // stays. What must not happen is a hash satisfying the send path's
+        // fast path in `prepare_message_internal`, because that function
+        // hex-decodes `recipient_id` straight into the X25519 `recipient_pk`.
+        // The fast path therefore demands a PUBLIC KEY match, which puts the
+        // hash-confusion guard back in reach of the input it was written for --
+        // and makes the refusal deterministic instead of depending on whether
+        // 32 hash bytes happen to parse as a curve point (roughly a coin flip,
+        // which is why this could only be pinned by mechanism before).
+        // See HANDOFF/audit/IDENTITY_HASH_VS_PUBKEY_CONFLICT.md.
         core.contact_manager
             .read()
             .add(crate::store::Contact::new(
@@ -5908,8 +5916,30 @@ mod tests {
                 .get(my_identity_id.clone())
                 .unwrap()
                 .is_some(),
-            "a stored contact resolves by its identity_id, so the send-path \
-             hash-confusion guard is bypassed by the fast path"
+            "the identity_id index still resolves a stored contact"
+        );
+        assert!(
+            core.prepare_message(
+                my_identity_id.clone(),
+                "wp1 hash".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_err(),
+            "a recipient_id that is the identity_id of a known contact must be \
+             refused, not encrypted to"
+        );
+        // The control above still stands: sending to the real public key of the
+        // same contact works, so this is a discrimination, not a blanket ban.
+        assert!(
+            core.prepare_message(
+                my_public_key.clone(),
+                "wp1 control 2".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_ok(),
+            "the same contact must remain sendable by public key"
         );
     }
 
