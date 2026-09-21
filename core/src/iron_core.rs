@@ -3825,12 +3825,23 @@ impl IronCore {
         }
 
         let content = String::from_utf8(message.payload.clone()).unwrap_or_default();
+        // Ordering fix (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK): this store's row is
+        // stamped with the LOCAL clock, so a conversation merged from two
+        // devices sorts by one device's receive order. The sender's own stamp
+        // is preserved in sender_timestamp as provenance ("sent at" on the
+        // bubble). Stamping rows with the REMOTE clock here made a reply render
+        // BEFORE the message that caused it whenever the sender's clock ran
+        // even one second ahead of ours (measured on the Pixel, 09-17).
+        let local_now_secs = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let _ = self.history_manager.add(MessageRecord {
             id: message.id.clone(),
             direction: MessageDirection::Received,
             peer_id: canonical_peer_id.clone(),
             content,
-            timestamp: message.timestamp,
+            timestamp: local_now_secs,
             sender_timestamp: message.timestamp,
             delivered: true,
             hidden: any_blocked,

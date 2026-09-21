@@ -165,7 +165,13 @@ class MainActivity : ComponentActivity() {
                     Timber.d("Opening requests inbox on cold start")
                     mainViewModel.navigateToRequestsInbox()
                 }
-                else -> {}
+                else -> {
+                    // NOTIF-TAP-001: same handling for cold start.
+                    intent.getStringExtra(NotificationHelper.EXTRA_PEER_ID)?.let { peerId ->
+                        Timber.d("Notification tap (cold start) navigating to chat for $peerId")
+                        mainViewModel.navigateToChat(peerId)
+                    }
+                }
             }
         }
 
@@ -411,7 +417,16 @@ class MainActivity : ComponentActivity() {
                     Timber.d("Opening requests inbox on intent")
                     mainViewModel.navigateToRequestsInbox()
                 }
-                else -> {}
+                else -> {
+                    // NOTIF-TAP-001: DM notification taps arrive via the plain
+                    // launch intent carrying EXTRA_PEER_ID. Forward it so MeshApp
+                    // can navigate to that conversation instead of dropping the
+                    // user on a dashboard (the "some won't click" symptom).
+                    intent.getStringExtra(NotificationHelper.EXTRA_PEER_ID)?.let { peerId ->
+                        Timber.d("Notification tap navigating to chat for $peerId")
+                        mainViewModel.navigateToChat(peerId)
+                    }
+                }
             }
         }
     }

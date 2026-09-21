@@ -111,27 +111,45 @@ object PeerIdValidator {
      */
     fun isValidEd25519Point(hex: String): Boolean {
         return try {
-            val bytes = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-            if (bytes.size != 32) return false
-            // Sign bit is high bit of last byte; y is little-endian 255-bit.
-            val y = java.math.BigInteger(1, bytes.reversedArray().let { arr ->
-                val copy = arr.copyOf()
-                copy[31] = (copy[31].toInt() and 0x7f).toByte()
-                copy
-            })
+            if (hex.length != 64) return false
+            val bytes = ByteArray(32)
+            for (i in 0 until 32) {
+                val hi = Character.digit(hex[i * 2], 16)
+                val lo = Character.digit(hex[i * 2 + 1], 16)
+                if (hi == -1 || lo == -1) return false
+                bytes[i] = ((hi shl 4) or lo).toByte()
+            }
+            val yBytes = bytes.clone()
+            val signBit = (yBytes[31].toInt() and 0x80) != 0
+            yBytes[31] = (yBytes[31].toInt() and 0x7f).toByte()
             val p = java.math.BigInteger("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed", 16)
             val d = java.math.BigInteger("52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3", 16)
+            val y = java.math.BigInteger(1, yBytes.reversedArray())
+            if (y >= p) return false
             val one = java.math.BigInteger.ONE
-            val two = java.math.BigInteger.valueOf(2)
             val zero = java.math.BigInteger.ZERO
             val yy = y.multiply(y).mod(p)
             val u = yy.subtract(one).mod(p)
             val v = one.add(d.multiply(yy)).mod(p)
-            // Edwards: x^2 = (y^2-1)/(1+d y^2)
-            val denomInv = v.modInverse(p)
-            val x2 = u.multiply(denomInv).mod(p)
-            val legendre = x2.modPow(p.subtract(one).divide(two), p)
-            legendre == zero || legendre == one
+            if (v == zero) return false
+            val x2 = try {
+                u.multiply(v.modInverse(p)).mod(p)
+            } catch (_: ArithmeticException) {
+                return false
+            }
+            if (x2 == zero) return !signBit
+            val sqrtM1 = java.math.BigInteger.valueOf(2)
+                .modPow(p.subtract(one).divide(java.math.BigInteger.valueOf(4)), p)
+            val exponent = p.add(java.math.BigInteger.valueOf(3))
+                .divide(java.math.BigInteger.valueOf(8))
+            var x = x2.modPow(exponent, p)
+            var check = x.multiply(x).mod(p)
+            if (check != x2) {
+                x = x.multiply(sqrtM1).mod(p)
+                check = x.multiply(x).mod(p)
+                if (check != x2) return false
+            }
+            true
         } catch (_: Exception) {
             false
         }

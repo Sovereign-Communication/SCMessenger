@@ -8,6 +8,7 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.service.MeshEventBus
 import com.scmessenger.android.service.StatusEvent
 import com.scmessenger.android.utils.toEpochSeconds
+import com.scmessenger.android.utils.PeerIdValidator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -19,61 +20,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
-import java.math.BigInteger
 import javax.inject.Inject
-
-// UNIFICATION P1-1: Ed25519 field constants for curve-point validation.
-// Roughly 50% of blake3 identity_id hashes are valid 64-hex but not valid curve points;
-// Rust's is_valid_public_key checks VerifyingKey::from_bytes. We mirror that here.
-private val ED25519_P: BigInteger = BigInteger("57896044618658097711785492504343953926634992332820282019728792003956564819949")
-private val ED25519_D: BigInteger by lazy {
-    val p = ED25519_P
-    val inv121666 = BigInteger.valueOf(121666).modInverse(p)
-    BigInteger.valueOf(121665).negate().mod(p).multiply(inv121666).mod(p)
-}
-private val ED25519_SQRT_M1: BigInteger by lazy {
-    BigInteger.valueOf(2).modPow(ED25519_P.subtract(BigInteger.ONE).divide(BigInteger.valueOf(4)), ED25519_P)
-}
-private val ED25519_P_PLUS3_OVER8: BigInteger by lazy {
-    ED25519_P.add(BigInteger.valueOf(3)).divide(BigInteger.valueOf(8))
-}
-
-private fun isValidEd25519Point(hex: String): Boolean {
-    try {
-        if (hex.length != 64) return false
-        val bytes = ByteArray(32)
-        for (i in 0 until 32) {
-            val hi = Character.digit(hex[i * 2], 16)
-            val lo = Character.digit(hex[i * 2 + 1], 16)
-            if (hi == -1 || lo == -1) return false
-            bytes[i] = ((hi shl 4) or lo).toByte()
-        }
-        val yBytes = bytes.clone()
-        val signBit = (yBytes[31].toInt() and 0x80) != 0
-        yBytes[31] = (yBytes[31].toInt() and 0x7F).toByte()
-        // little-endian -> BigInteger (big-endian)
-        val be = yBytes.reversedArray()
-        val y = BigInteger(1, be)
-        if (y >= ED25519_P) return false
-        val yy = y.multiply(y).mod(ED25519_P)
-        val u = yy.subtract(BigInteger.ONE).mod(ED25519_P)
-        val v = ED25519_D.multiply(yy).add(BigInteger.ONE).mod(ED25519_P)
-        if (v == BigInteger.ZERO) return false
-        val vInv = try { v.modInverse(ED25519_P) } catch (_: ArithmeticException) { return false }
-        val x2 = u.multiply(vInv).mod(ED25519_P)
-        if (x2 == BigInteger.ZERO) return !signBit
-        var x = x2.modPow(ED25519_P_PLUS3_OVER8, ED25519_P)
-        var check = x.multiply(x).mod(ED25519_P)
-        if (check != x2) {
-            x = x.multiply(ED25519_SQRT_M1).mod(ED25519_P)
-            check = x.multiply(x).mod(ED25519_P)
-            if (check != x2) return false
-        }
-        return true
-    } catch (_: Exception) {
-        return false
-    }
-}
 
 /**
  * ViewModel for the dashboard screen.
@@ -711,8 +658,7 @@ class DashboardViewModel @Inject constructor(
         val trimmed = value?.trim() ?: return null
         if (trimmed.length != 64) return null
         if (!trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
-        if (!isValidEd25519Point(trimmed)) return null
-        return trimmed.lowercase()
+        return PeerIdValidator.normalizePublicKeyHex(trimmed)
     }
 
     /**
