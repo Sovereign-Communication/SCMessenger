@@ -3196,3 +3196,75 @@ Adversarial security audits were conducted for all concurrent work-ahead PRs, ac
    - `PR #300` (APK host lifecycle, HEAD, query strip — FIXED via `5d2ea2f4`)
    - `PR #302` (Install QR payload & SHA lowercase — FIXED via `263eab0a`)
    - `PR #301` (iOS release link typed URL share — FIXED via `d50e0cef`)
+
+---
+
+## 2026-09-17 — Merge train executed: Phase 1 complete (6/7), Rule-8 verdicts filed, two carrier CI defects fixed
+
+Session: CTO seat (Freebuff), operator directive: clear duplicate CI, run the
+merge train green-to-green, harness review for unreviewed PRs (paid cap $0.05).
+
+### Executed this session (every item command-verified)
+1. **Phase 1 merges into carrier #288**: #290, #293, #294, #292 (all CLEAN,
+   green, non-gated) then **#296 and #297 after harness Rule-8 review** (below).
+   #291 CLOSED as superseded by #295 (documented disposition, closure comment
+   posted). #295 held: its own replay test NPE'd on CI
+   (NotificationCompatBuilder via showMessageNotification at
+   NotificationHelper.kt:481 reached from the new replay path).
+2. **#295 fix verified and pushed** (`bdd8aa71` on
+   fix/android-coldstart-and-scaffold-remediation): the replay test violated
+   the module's documented no-Robolectric contract by building a real
+   NotificationCompat object; pinned the replay at the DM kind gate
+   (dmEnabled=false) exactly like the sibling enabled-gate test; local
+   `:app:testDebugUnitTest NotificationHelperGateTest` green (BUILD
+   SUCCESSFUL, 44 tasks, 0 FAILED). CI re-run in flight at session end.
+3. **Rule-8 gate for #296/#297 — harness structured-claims reviews on file**:
+   `HANDOFF/review/RULE8_PR296_VERDICT_2026-09-17.md` (APPROVE-WITH-NOTES;
+   3/3 panel voted; judge: only the WASM no-inline-key else-branch real,
+   severity medium, dispositioned LOW by seat — deliberate degrade on an
+   impossible config with warn tripwire) and
+   `HANDOFF/review/RULE8_PR297_VERDICT_2026-09-17.md` (APPROVE-WITH-NOTES;
+   judge-flagged c1 duplicate-delivery and c4 key-mismatch VERIFIED NOT REAL
+   against cli/src/main.rs:4581/:4621 — single enqueue site, canonical-key
+   only; c3 replay-after-crash accepted as at-least-once with id-keyed
+   receipts per UNIFICATION_V3 D1). Method: free tier attempted first
+   (saturated — reasoning-only/truncated outputs), paid escalation under the
+   operator $0.05 authorization; total paid spend ~$0.0146 across 6 verify
+   runs; roster shortfall runs preserved in Harness artifacts, nothing
+   truncated. Known harness quirks recorded: CLI drops --panel silently
+   (service.run_verify honors it); use HARNESS_USE_FREE=0 + HARNESS_PANEL/
+   HARNESS_JUDGE env overrides; gpt-5-mini/luna preflight above small caps.
+4. **Carrier CI defects found and fixed at `2585ddb0`**: (a) trailing
+   whitespace in the five remediation HANDOFF tickets — Repository Hygiene
+   lane never ran in their PR CI (path filters); (b) cargo fmt violation at
+   cli/src/main.rs:3762 landed with #297 — Rust Linting lane filtered on
+   core/ only, so cli/ fmt slips through PR gates. Both fixed on the carrier
+   branch; full CI cycle re-running. PROCESS GAP: PR path filters let lanes
+   that only run post-merge pass silently — recommend running Hygiene+fmt on
+   every PR or at least on the carrier.
+5. **Queue hygiene**: 21 superseded/stale queued runs cancelled across the
+   session; remaining queue is only live-head verification runs plus one
+   uncancellable zombie (Repository Hygiene on deleted-workflow branch
+   fix/h2-rustsec-2026-0258, GitHub API 409 — never dispatches, zero cost).
+
+### Phase 2/3 status and next actions
+- **#288 -> main (Phase 2)**: gated files' review coverage is complete (09-14
+  BoD APPROVE bod-9ee86618 for the original body + today's #296/#297
+  verdicts). Blocked only on the re-run CI going green on `2585ddb0` (Lint +
+  Repository Hygiene fixed; iOS lanes were queued/in-progress at session
+  end). Merge when green; tag decision stays with the operator (standing
+  order; SEC-01/SEC-02: SCMESSENGER_KEY_ALIAS secret still operator-owned).
+- **Phase 3 (post-#288, onto main)**: #289 android-only + RUSTSEC waiver
+  (green, UNSTABLE-queued only), #283 docs, then #298-#302 work-aheads (all
+  drafts; the #288 merge supersedes some queued CI on their bases). Legacy
+  open PRs (#156, #209, #212-#214, dependabot wave, Apple docs #207/#208,
+  old drafts #215-#228) remain out of today's train and need rebase-vs-close
+  rulings — do not bulk-merge.
+- **Harness/MCP answer for the operator**: the harness ships a NATIVE MCP
+  stdio server (`python -m harness.mcp`, JSON-RPC over stdio, tools in
+  harness/mcp_schemas.py, one governor/ledger per stdio peer). It is NOT
+  registered in this session's toolset, so I drove it via CLI
+  (`python -m harness.cli verify`). CLI is one command with --out artifacts;
+  the MCP server adds lane-scheduled tools (verify/apply/panel) over stdio
+  but needs a client registration to be usable from a session — wiring it
+  into the Freebuff client config is an operator-side settings change.

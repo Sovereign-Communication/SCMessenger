@@ -1,163 +1,148 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-09-19
-Rules: `docs/rules/FREEBUFF.md` -- read it before adding a task file here.
-Plan this queue executes: `SHIP_PLAN.md` section 6.
+Last updated: 2026-09-21
+Rules: `docs/rules/FREEBUFF.md`
+**SESSION HANDOFF (canonical, read first):**
+`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+**Implementation authority (identity/transport/WiFi):**
+`HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+**0.4.0 master plan:** `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+Operator rulings: `HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-09-20.md`.
 
-## Durable CTO continuation
+## Direction
 
-The tracked `/cto` entry point is `.claude/commands/CTO.md`. Its single-owner
-three-node BLE workflow is `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`,
-with ownership/data flow in `HANDOFF/V040_CTO_BLE_ARCHITECTURE_2026-09-08.md`.
-Fresh sessions must read those tracked files and create append-only
-`HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_<UTC-BASIC>_<STAGE>.md` files. Files under
-`tmp/` are historical evidence references only. Freebuff is interactive and has
-no headless dispatch mode under the current lane rules, so the operator pastes
-the tracked command/package contents into Freebuff; no ignored `.freebuff/`
-file is authoritative.
+1. **Working-first:** reliable day-to-day mesh (Windows + AWS + Pixel).
+2. **WiFi/identity WP1–5** from the implementation plan matrix (no guesswork).
+3. **Then 0.4.0 tag** checklist + WP5 3-node proof + operator phone session.
 
-This is the unmetered implementation lane. Models: **DeepSeek V4 Flash**, MiMo,
-GLM 5.3 Flash. The `freebuff` CLI has no headless mode, so **the operator is the transport**: an agent writes the task file, the operator pastes it into Freebuff desktop. Every paste cycle costs operator attention -- a task file that sends the model down the wrong path is the expensive failure here.
+**DONE = mechanical gates + harness JEV canonical pack `is_passing`** (plan §3).
+`UNVERIFIED-JEV` / unkeyed fallback is **not** DONE — Freebuff PRs that claim
+WP completion without a keyed `jev_canonical_check.py` exit 0 must be rejected
+by the orchestrator. Never claim WiFi fixed without WP5 evidence on the P0
+umbrella ticket.
 
+**JEV / harness (local only):** see
+`HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+- `python scripts/update_local_harness.py` → `vendor/sovereign-harness`
+- `python scripts/jev_repo_insights.py --mode full`
+- `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
+- TypeSafe first; OpenRouter `~typesafe/jev-latest` on
+  `https://openrouter.ai/api/alpha/decisions` if TypeSafe unhealthy
+  (operator: allow OpenRouter provider `typesafe`).
+- Do **not** edit external Harness product trees / WIP PRs.
+
+## Paste protocol
+
+- Operator is the transport into Freebuff desktop.
+- Paste only tickets that exist on **`origin/main`** and are DISPATCHABLE.
+- One ticket per paste. Premise-check first; wrong premise → inbox note.
+- Freebuff opens PRs; no self-merge; Rule-8 on
+  `core/src/{crypto,transport,routing,privacy}`.
+- CI hygiene: cancel superseded Actions runs (`docs/rules/BUILD_AND_CI.md`).
 
 ```
-queue/   ready to paste, run in the order below
-inbox/   Freebuff writes back here -- questions, blocked reports, wrong premises
-done/    completed; Status line records the PR number
+queue/   ready to paste
+inbox/   Freebuff replies
+done/    completed; Status records the PR number
 ```
 
-**The return path matters.** If a task file's premise does not survive contact
-with the code, Freebuff should stop and write to `inbox/` rather than implement a
-fix to a problem that does not exist. A watcher on this folder wakes the
-orchestrator session when a reply lands. See `inbox/README.md` for the format.
+`python scripts/check_queue_status.py` must exit 0 before paste waves.
 
 ---
 
-## Queue -- v0.4.0
+## DISPATCHABLE — P0 WiFi/identity first (2026-09-21)
 
-| # | Task file | What it fixes | Order | Review gate |
-|---|---|---|---|---|
-| CO-AUDIT | `AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` | Canonical-outlier inventory pass FINAL 2026-09-19 (iter 0-6). Reports: `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md`. Tracking PR **#335** | Pass complete; operator triage / remediation follow-on | Audit PR: none for docs inventory; remediation may need Rule-8 |
-| T1 | `V040_T1_NODE_BOOT_SEED_DIAL.md` | The CLI node never dials known peers on boot, and its seed list is empty anyway. A node that changed address can never rejoin | **3rd** (Half 2 only) | none if confined to `cli/` |
-| T2 | `V040_T2_UNIFY_PEER_LEDGER_STORES.md` | Two peer stores that never converge: the gossiped one is empty (0 entries), the CLI one is uncapped and polluted (4,678). Cherry-pick and unify | **2nd** | **Rule-8 mandatory** -- changes what the node discloses |
-| T4 | `V040_T4_ROUTING_FEED_ON_CONNECTION_ESTABLISHED.md` | D6: routing confidence pinned at 0.0 because nothing tells the engine a connection happened | Any time -- touches nothing T1/T2 touch | **Rule-8 mandatory** |
-| T6 | `V040_T6_TIER_A_CONFORMANCE_HARNESS.md` | No single command answers "are the two always-on nodes conformant right now?" -- which is how a 13-hour peer outage and a 7-hour dead watcher both went unnoticed | Any time -- read-only, no source changes | none |
-| T5 | `V040_T5_DOCS_SYNC_GATE_IS_RED.md` | `docs_sync_check.sh` fails on clean `main`, so every agent's finalize gate is red | **1st** -- cheapest multiplier | none |
-| T8 | `V040_T8_RESTORE_DIAGNOSTICS_FORMATTER_TEST.md` | A WS11 test was deleted as "orphaned" but its class still exists and is used. `format()` has had no coverage since 2026-08-14 | Any time -- CI only, no handset | none |
-| T9 | `V040_T9_PR_QUEUE_BURNDOWN.md` | 29 open PRs, not one mergeable: all `BEHIND` the #234-#258 run, so their green checks were computed against a base that no longer exists | Any time -- CI only | escalate anything touching `core/src/{crypto,transport,routing,privacy}` |
-| T10 | `V040_T10_FFI_SURFACE_GATE_PASSES_VACUOUSLY.md` | The FFI Surface Contract check runs on every PR and exits 0 when the bindings are missing, verifying nothing | Any time -- CI only | none |
-| T11 | `V040_T11_CANONICAL_DOC_RECONCILE.md` | Canonical docs contradict each other and the code; a reader following DOCUMENTATION.md meets false claims | Any time -- docs only | none |
-| T12 | `V040_T12_CI_CONCURRENCY_AND_PATH_FILTERS.md` | No concurrency groups anywhere, so every push queues a fresh matrix and nothing cancels the superseded one; a one-file docs change runs 27 checks | Any time -- CI config only | none, but read its section 3 trap |
-| T14 | `V040_T14_EPHEMERAL_PORT_ADVERTISED_AS_EXTERNAL.md` | **P0.** The node advertises an ephemeral NAT source port as its external address, so peers dial a port where nothing listens. Observed live the moment the seed dial went in | Ahead of T13 rework | **Rule-8** |
-| T13 | `V040_T13_RULE8_FOLLOWUPS_262_263.md` | Rule-8 follow-ups: the `locally_verified` primitive is seeded from a legacy flag that meant the opposite; wire-supplied `last_seen` steers eviction in the now-capped store; the DHT bypasses the disclosure rule entirely | After #262/#263 merge | **Rule-8 again** |
-| T7 | `V040_T7_ANDROID_PARITY_STAGING.md` | Device time is spent authoring tests instead of gathering evidence. Stage the Android work so the handset session is verification only | Whenever the handset is away | none |
-| BJ | `V040_BEACH_JOIN_CONTINUATION_2026-09-05.md` | **Finish current mission first, then execute the beach-join plan** (QR hotspot share -> seed import -> trust wiring). Full audit: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md` | After the in-flight mission (incl. #276/3-node) reports DONE | **Rule-8 mandatory for Phases 2-3** |
-
-T1 + T2 together deliver the operator's 2026-08-31 requirement: a node that takes
-a new IP rejoins the mesh with no human action, and its new address propagates by
-ledger gossip to nodes that never contacted it directly.
-
-### Review dispatches -- qwen free lane (2026-09-01) -- PASTE FIRST, before any implementation task
-
-Five lane PRs are blocked on non-author adversarial reviewers. Three dispatch files
-sit in `queue/`; the operator routes each to the named qwen free model. Paste in
-this order: the F-DHT gate review unblocks the doctrine PR the other audits inherit.
-
-| Dispatch | Model | Quota left | Why |
+| Order | Task file | WP | Gate |
 |---|---|---|---|
-| `V040_REVIEW_DISPATCH_267_FDHT_QWEN_2026-09-01.md` | qwen3-coder-plus | 118,765 | hardest & rework; one deep pass fits |
-| `V040_REVIEW_DISPATCH_270_EPHEMERAL_QWEN_2026-09-01.md` | qwen-max | 754,647 | P0 transport; deep pass |
-| `V040_REVIEW_DISPATCH_268_269_QWEN_2026-09-01.md` | qwen3.5-plus-2026-02-15 | 1,000,000 | mechanical pair; fresh quota |
+| 1 | `queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md` | WP1 | tests + JEV |
+| 2 | `queue/V050_WP2_ROUTING_FEED_ALL_TRANSPORTS_2026-09-21.md` | WP2 | **Rule-8** + JEV |
+| 3 | `queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md` | WP3 | Rule-8 if gated + JEV |
+| 4 | `queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md` | WP4 | tests + JEV |
 
-### Order -- RULED 2026-08-31, revised after the lane's clarification
+WP5 live 3-node proof is **not** a freebuff paste — evidence lands on
+`HANDOFF/todo/P0_SCMESSENGER_WIFI_DELIVERY_IDENTITY_TRANSPORT_CANONICAL_2026-09-21.md`.
 
-**T5, then T2, then T1. T4 any time, in parallel.**
+## DISPATCHABLE — parallel Wave-1 / mesh reliability
 
-This revises the earlier T1-first ruling. The lane reported that the rig no
-longer matched T1's filed regression state; that report was correct and it
-changed the answer. Full reasoning:
-`inbox/RULING_2026-08-31_clarification_response.md`.
-
-| Order | Task | Why here |
+| Order | Task file | Gate |
 |---|---|---|
-| 1 | **T5** | 5-30 LoC, no dependencies, un-breaks every agent's finalize gate. Cheapest multiplier available -- do it before anything long |
-| 2 | **T2** | Now the primary fix, not a follow-up. Making the gossiped store real is the only thing that gives a moved node a recovery path |
-| 3 | **T1, Half 2 only** | **Half 1 is WITHDRAWN** -- T2's migration replaces that bridge. The boot dial is worthless until the core ledger holds real content |
-| any | **T4** | Touches nothing T1/T2 touch |
+| A | `queue/V040_T_CONN_LIMITS_MULTIPORT.md` | **Rule-8** |
+| B | `queue/V040_T_ANDROIDTEST_COMPILE_FIX.md` | CI Mobile (PR #341 may already cover) |
+| C | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` then UNIFI cutover | Rule-8 if FFI/core |
+| D | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | test-only |
+| E | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | **Rule-8** likely |
+| F | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Phase 2-3 later |
 
-**Why the correction matters.** T1 as filed claimed the CLI never dials on boot.
-It does -- promiscuously, from the polluted `peers.json`, while
-`connect_to_seed_peers()` (which reads the clean *gossiped* ledger) never runs
-at all: zero occurrences in the node log. The two nodes did reconnect unaided,
-but only because a stale local entry happened to still be correct, after ~40
-minutes of grinding dead addresses. A genuinely changed address still has no
-recovery path, because a new address is only learnable via gossip and the
-gossiped store is the empty one.
+CO-B-001 dual-drain is **already merged** (#339) — do not paste that ticket as impl.
 
-**Consequence for acceptance:** a live "we have peers" check would actively
-mislead on T1 -- the rig reconnects on its own regardless. The real gate is a
-`[SEED-DIAL]` line in the node log, which is checkable with no live rig.
+---
 
-**Superseded, do not run:** the original `V040_T2_LEDGER_HYGIENE_EPHEMERAL_AND_SELF`
-and `V040_T3_ADDRESS_SUPERSESSION_ON_CHURN` were fixes to symptoms of the
-duplication that T2 now removes at the root. Both are folded into
-`V040_T2_UNIFY_PEER_LEDGER_STORES.md`.
+## DO NOT PASTE
 
-## >> READ FIRST: `inbox/BRIEF_2026-08-31_state_pacing_and_next.md`
+| Ticket | Why |
+|---|---|
+| T1/T2/T4 impl, T5–T12/T14 | CODE ON MAIN / MERGED |
+| Completed `V040_REVIEW_DISPATCH_*` | Reviews filed |
+| Keystore / release / tag | Operator / post-working-bar |
+| C4 / beach-join Phase 2-3 | Post-wave |
+| Canonical outlier audit task file | Reference only |
 
-Carries the CI pacing rules (the queue is deep -- batch pushes, do not rebase
-speculatively, **hold T9**), the corrected test fleet (Windows CLI + Android
-handset + AWS relay -- there is no second phone), and the current order.
+---
 
-**Order: T12, then T10. Hold T9 until T12 lands. Do not touch #262** -- it is
-awaiting a Rule-8 decision and one rebase at merge time, neither of which is the
-lane's call.
+## Never idle — tiers
 
-## >> CONTINUATION (2026-09-05): `queue/V040_BEACH_JOIN_CONTINUATION_2026-09-05.md`
-
-Finish the in-flight mission first (report DONE per the inbox contract), then
-execute the beach-join plan Phase 0 -> 1 -> 2 -> 3, one PR per step, no
-self-merge. Design authority: `HANDOFF/plans/BEACH_JOIN_AUDIT_AND_PLAN_2026-09-05.md`
-(read it whole before coding). Operator rulings: auto-hotspot flow; trust
-(verify_bundle wiring + Rule-8 APPROVE) ships in the same package and blocks
-beach use. Device proofs need the Pixel 6a + a second handset.
-
-## Never idle -- node availability tiers
-
-Operator directive 2026-08-31. Full policy: `docs/rules/CONTINUOUS_EXECUTION.md`.
-
-| Tier | Nodes | Obligation |
+| Tier | Nodes | Now |
 |---|---|---|
-| **A** | AWS (Linux) + Windows CLI | Always available. Driven to **full v1.0.0 conformance**, continuously |
-| **B** | Android (Pixel 6a) | Intermittent. **Coded to parity now, verified later** -- device time is for verification and log capture, never for writing code |
-| **C** | iOS / macOS | v0.5.0 scope. Do not start |
-
-**"Blocked on hardware" is not a terminal state.** It means descend the ladder:
-restore Tier A -> v0.4.0 gate items -> Tier A v1.0.0 conformance -> Tier B parity
-coding -> owned-issue burn-down (`SHIP_PLAN.md` section 7) -> PR queue. Take the
-first item actionable right now.
-
-## The live rig these tasks were written against
-
-Both nodes run `main`@`69a8ba57` and reproduce the T1 failure on demand -- start
-them, touch nothing, and both sit at `connection_path_state: Bootstrapping` with
-`peers: []` indefinitely.
-
-| Node | Address | Identity |
-|---|---|---|
-| AWS (Amazon Linux 2023, Docker) | discovered via `scripts/aws_deploy.sh`; was `54.235.20.24` on 2026-08-31 | `640a5dc8...` / `12D3KooW9uRM...` / pubkey `014b8105...` |
-| Windows CLI | `127.0.0.1:9876` local API | `985a25f9...` / `12D3KooWD6vZQrUqpyGa` / pubkey `30d0fa67...` |
-
-The node's public IP **changes on every instance replacement** -- that is the
-design constraint these tasks exist to satisfy, not an incident. Never hardcode
-it; `scripts/aws_deploy.sh` discovers it from the EC2 API.
+| **A** | AWS + Windows | Wave + WP code; fleet on `51edac4b` (redeploy after merges) |
+| **B** | Pixel | Operator drives UI; agents install + passive logs |
+| **C** | iOS/macOS | 0.5.0 |
 
 ## Adding a task
 
-1. Write the file into `queue/` following the contract in
-   `docs/rules/FREEBUFF.md` section 3.
-2. Add its row to the table above. An unindexed task file is invisible.
-3. Verify the premise end to end **before** dispatching. T1 was first written
-   with an incomplete premise -- the fix as specified would have been a no-op --
-   and was corrected before it cost a cycle.
+1. Premise-verify against `origin/main`.
+2. File in `queue/` + index here + implementation plan if it is WP work.
+3. Merge dispatch packets to `main` before paste.
+
+
+---
+
+## DO NOT PASTE
+
+| Ticket | Why |
+|---|---|
+| T1 / T2 / T4 implementation | CODE ON MAIN -- scoring/residual only |
+| T5 / T6 / T7 / T8 / T10 / T11 / T12 / T14 | DONE or MERGED |
+| Completed `V040_REVIEW_DISPATCH_*` | Reviews already filed |
+| Keystore / release / tag tasks | Operator deferred -- working first |
+| C4 identity-aware relay admission | 0.5.0 |
+| Beach-join Phase 2-3 | After Phase 0-1 + working bar |
+| `queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` | Inventory pass FINAL -- reference only; see `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md`. Do not paste as a Wave 1 implementation task |
+
+---
+
+## Never idle -- tiers
+
+| Tier | Nodes | Now |
+|---|---|---|
+| **A** | AWS + Windows CLI | Drive Wave 1 reliability; install anytime from CI artifacts |
+| **B** | Pixel 6a | Operator drives UI; agents install + passive logs only |
+| **C** | iOS/macOS | Out of Wave 1 |
+
+## Reference -- canonical outlier audit (landed inventory)
+
+| Item | Path |
+|---|---|
+| Master index (FINAL) | `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md` |
+| Iterations 0-6 | `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter0.md` .. `iter6.md` |
+| Queue task file | `HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md` |
+| Tracking note | `HANDOFF/freebuff/inbox/AUDIT_CANONICAL_OUTLIER_FINAL_TRACKING_2026-09-19.md` |
+| Docs landing branch | `docs/canonical-outlier-audit-2026-09-19` (from `origin/main`) |
+| Superseded mixed PR | #335 (`glm/canonical-outlier-audit`) -- do not force-push; lineage split after docs land |
+
+## Adding a task
+
+1. Premise-verify end to end.
+2. File in `queue/` per FREEBUFF.md section 3.
+3. Index here + ensure on `origin/main` before paste.
+4. Keep `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` consistent.
