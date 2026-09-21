@@ -145,4 +145,3 @@ CO-B-001 dual-drain is **already merged** (#339) â€” do not paste that tick
 2. File in `queue/` per FREEBUFF.md section 3.
 3. Index here + ensure on `origin/main` before paste.
 4. Keep `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` consistent.
-

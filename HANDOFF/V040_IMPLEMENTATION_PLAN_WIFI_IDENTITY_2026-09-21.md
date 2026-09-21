@@ -266,4 +266,3 @@ Exit 0 = JEV `is_passing`. Without a key or with `--allow-fallback`, may print
 - Canonical model single identity + single routing feed â€” Â§0
 
 *End of comprehensive plan.*
-
