@@ -6,20 +6,45 @@ Harness: use **origin/main** or worktree `C:\Users\SCM\Documents\GitHub\Harness-
   (tip `405bbc1` — JEV-P0/P1/P2 code present). Key: `~/.config/harness/jev.env`
   via `harness.config.resolve_jev_key()`.
 
-## WIP session audit (concurrent Harness lane)
+## WIP session audit (concurrent Harness lane) — expanded
 
-From Harness HANDOFF + busy session `ses_ffe5f3e6872afffe3U9yhXAFuo`:
+From Harness HANDOFF, busy session `ses_ffe5f3e6872afffe3U9yhXAFuo` task
+journals T2/T6/T7, and origin/main docs (2026-09-21):
 
 | Track | Truth |
 |---|---|
-| JEV-P0 / P1 | Complete on harness origin/main |
-| JEV-P2 | PR #36 repair; STATUS in progress; jury deferred |
-| JEV completion gate | PR #39 `harness jev-phase` (worktree Harness-jev-completion) — dogfood score ≥85 + hard gates |
-| Planned JEV-P5 | issue-sort / operator-declared buckets / `jev_packs.py` — **after** P2 |
-| HUL TrackB | After P2+completion merge |
+| JEV-P0 / P1 | Complete on harness origin/main (PR #34/#35) |
+| JEV-P2 | PR #36 repair; STATUS **in progress**; `JEV-P2-jury` deferred |
+| JEV completion gate | PR #39 `harness jev-phase` — score ≥85 + hard gates; worktree `Harness-jev-completion` |
+| Planned JEV-P5 | issue-sort / operator-declared buckets — **after** P2 merge |
+| HUL TrackB | Mission packs `missions/<id>/`; **blocked** until P2 green; no product code yet |
+| SCMessenger burndown in Harness | Sep 13 P0/P1/P3 harness bugs fixed (judge rotation, gpt-5 reasoning hints) |
 
-**SCMessenger rule:** do not edit Harness P2/P3/P39 worktrees. Consume
-`harness.jev.JevEvaluator` + local packs. Do not invent parallel Harness plans.
+### JEV-P5 design (from WIP T6 — do not implement in Harness now)
+
+- IDs: `JEV-P5-buckets`, `issue-sort`, `envelope`, `orchestration`, `cli`
+- **0-hallucination:** choice criteria only from **operator-declared** buckets
+- Extend `jev_policy` + new `jev_packs.py` — not a second client
+- Template: `triage_question_pack` + `evaluate_triage`
+- Unmatched → `bucket=None`; unkeyed → `is_fallback=true`
+- `session.jev_for` is orphan — do not extend
+- Hermetic tests later: `tests/test_jev_issue_sort.py`
+
+### SCMessenger alignment (this repo)
+
+Our `scripts/jev_packs.py` uses **operator-declared** criteria maps only —
+same 0-hallucination rule. Packs may later migrate to Harness `jev_packs.py`
+after JEV-P5 lands; until then SCMessenger packs are local and explicit.
+
+**Do not touch:** `Harness-jev-p2`, `Harness-jev-completion`, P1 worktrees,
+Harness PR #36/#39 branches.
+
+**SCMessenger rule:** consume `harness.jev.JevEvaluator` + local packs. WP
+DONE = mechanical gates + `jev_canonical_check.py`. Harness `jev-phase` is a
+Harness mission STATUS gate, not SCMessenger D1–D7.
+
+**WIP consult:** message queued to busy session `ses_ffe5f3e6872afffe3U9yhXAFuo`;
+reply will land async — pack design already matches their T6 constraints.
 
 ## What we want from JEV (full picture)
 
