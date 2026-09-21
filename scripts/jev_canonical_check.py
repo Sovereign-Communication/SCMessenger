@@ -2,15 +2,16 @@
 """JEV canonical completion helper for SCMessenger WP tickets (orchestrator tool).
 
 Usage (Windows host):
-  $env:HARNESS_REPO = "C:\\Users\\SCM\\Documents\\GitHub\\Harness"
-  # Prefer a clean origin/main worktree of harness if the clone is dirty.
+  $env:HARNESS_REPO = "C:\\Users\\SCM\\Documents\\GitHub\\Harness-jev-use"
+  # Prefer a clean origin/main worktree of harness (or HARNESS_REPO).
   python scripts/jev_canonical_check.py --wp WP1 --state-file path/to/state.json
 
 State JSON should include: wp, instruction, files, acceptance, evidence
 (commands/outputs), canon rows claimed.
 
-Exit 0 only if JEV result.is_passing(min_confidence) is true OR --allow-fallback
-is passed AND result.is_fallback is true (records UNVERIFIED-JEV in output).
+Exit 0 only if keyed JEV `result.is_passing(min_confidence)` is true.
+`--allow-fallback` prints UNVERIFIED-JEV and is **not** canonical DONE
+(mechanical gates still required; freebuff/orchestrator must not mark WP DONE).
 
 This script does not replace mechanical gates (rules_check, tests, pr_scope).
 It implements HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md section 3.
