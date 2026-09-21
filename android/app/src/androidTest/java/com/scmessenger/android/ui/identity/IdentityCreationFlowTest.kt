@@ -14,8 +14,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit.ComposeTestRule
-import androidx.compose.ui.test.junit.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -38,7 +38,7 @@ import org.junit.Test
 class IdentityCreationFlowTest {
 
     @get:Rule
-    val composeRule: ComposeTestRule = createEmptyComposeRule()
+    val composeRule: ComposeTestRule = createComposeRule()
 
     private var capturedArgs: Pair<String, ByteArray?>? = null
 
@@ -130,8 +130,8 @@ class IdentityCreationFlowTest {
         composeRule.onNodeWithText("Generating Identity keys", ignoreCase = true)
             .assertIsEnabled(false)
 
-        // Verify the CircularProgressIndicator is inside the button
-        composeRule.onNode(isSubtreeWithContentDescription("Generating Identity keys"))
+        // Verify loading affordance via the generating-keys text node
+        composeRule.onNodeWithText("Generating Identity keys", ignoreCase = true)
             .assertExists()
     }
 

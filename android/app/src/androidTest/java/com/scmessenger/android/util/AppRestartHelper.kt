@@ -3,7 +3,6 @@ package com.scmessenger.android.util
 import android.content.Intent
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.UiAutomatorInstrumentation
 
 /**
  * Helper utility for force-stopping and restarting the test app.
@@ -86,7 +85,8 @@ object AppRestartHelper {
             response.use { stream ->
                 stream.readBytes()
             }
-            instrumentation.uiAutomation.destroy()
+            // Do not call UiAutomation.destroy(): it tears down the shared
+            // instrumentation automation for the rest of the process.
         } catch (e: Exception) {
             throw RuntimeException("Failed to force-stop package $packageName", e)
         }
