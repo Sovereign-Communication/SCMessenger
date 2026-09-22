@@ -272,6 +272,7 @@ fun `recommendedTransport`(`peerId`: kotlin.String): ProximityTransport {
 fun `reconcileFromHistory`(`history`: HistoryManager): kotlin.UInt
 fun `recordAbuseSignal`(`peerId`: kotlin.String, `signal`: kotlin.String)
 fun `recordConnection`(`multiaddr`: kotlin.String, `peerId`: kotlin.String)
+fun `recordDataLinkForRouting`(`peerId`: kotlin.String, `transport`: kotlin.String)
 fun `recordFailure`(`multiaddr`: kotlin.String)
 fun `recordLog`(`line`: kotlin.String)
 fun `registerBlockedDevice`(`peerId`: kotlin.String, `deviceId`: kotlin.String)
