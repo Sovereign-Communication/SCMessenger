@@ -243,7 +243,11 @@ mod tests {
         let wide: Vec<u32> = (1..=16).collect();
         let closing = connections_to_close(&wide, |id| *id as u64);
         assert_eq!(closing, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        let retained: Vec<u32> = wide.iter().filter(|id| !closing.contains(id)).copied().collect();
+        let retained: Vec<u32> = wide
+            .iter()
+            .filter(|id| !closing.contains(id))
+            .copied()
+            .collect();
         assert_eq!(retained, vec![13, 14, 15, 16]);
     }
 

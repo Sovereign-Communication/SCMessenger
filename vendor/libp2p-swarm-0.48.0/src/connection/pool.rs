@@ -858,7 +858,9 @@ impl NewConnection {
     }
 
     fn extract(mut self) -> StreamMuxerBox {
-        self.connection.take().expect("connection must be present while being dropped")
+        self.connection
+            .take()
+            .expect("connection must be present while being dropped")
     }
 }
 

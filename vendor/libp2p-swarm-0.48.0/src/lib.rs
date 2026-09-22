@@ -776,7 +776,8 @@ where
                     .iter_established_connections_of_peer(&peer_id)
                     .collect::<Vec<_>>();
                 let num_established = NonZeroU32::new(
-                    u32::try_from(other_established_connection_ids.len() + 1).expect("established connection count fits u32"),
+                    u32::try_from(other_established_connection_ids.len() + 1)
+                        .expect("established connection count fits u32"),
                 )
                 .expect("n + 1 is always non-zero; qed");
 
@@ -895,8 +896,8 @@ where
                 }
                 let peer_id = connected.peer_id;
                 let endpoint = connected.endpoint;
-                let num_established =
-                    u32::try_from(remaining_established_connection_ids.len()).expect("established connection count fits u32");
+                let num_established = u32::try_from(remaining_established_connection_ids.len())
+                    .expect("established connection count fits u32");
 
                 self.behaviour
                     .on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {

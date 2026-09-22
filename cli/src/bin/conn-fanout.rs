@@ -21,8 +21,8 @@ use clap::Parser;
 use futures::StreamExt;
 use libp2p::core::upgrade::Version;
 use libp2p::multiaddr::Protocol;
-use libp2p::swarm::dummy;
 use libp2p::swarm::dial_opts::DialOpts;
+use libp2p::swarm::dummy;
 use libp2p::swarm::{Config as SwarmConfig, Swarm, SwarmEvent};
 use libp2p::{identity, noise, tcp, yamux, Multiaddr, PeerId, Transport as _};
 use std::collections::HashSet;
@@ -188,12 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Ok(SwarmEvent::OutgoingConnectionError { peer_id, error, .. }) => {
                     failures += 1;
-                    println!(
-                        "[{}] DIAL-FAILED peer={:?} error={}",
-                        ts(),
-                        peer_id,
-                        error
-                    );
+                    println!("[{}] DIAL-FAILED peer={:?} error={}", ts(), peer_id, error);
                 }
                 Ok(_) => {}
                 Err(_) => break,
