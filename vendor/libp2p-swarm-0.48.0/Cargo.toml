@@ -49,6 +49,9 @@ tokio = ["dep:tokio"]
 [lib]
 name = "libp2p_swarm"
 path = "src/lib.rs"
+# Upstream doc-tests import libp2p_identify/libp2p_ping, dev-deps upstream does
+# not publish; skipped so workspace doc-test runs stay compilable.
+doctest = false
 
 [dependencies.either]
 version = "1.16"
