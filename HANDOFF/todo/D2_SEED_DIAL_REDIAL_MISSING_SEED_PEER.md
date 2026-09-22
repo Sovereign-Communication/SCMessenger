@@ -43,6 +43,12 @@ getting the review.
 
 ## References
 
+- Live confirmation 2026-09-22T09:05:10Z: the Windows node logged
+  `[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts` against a
+  peer id (`12D3KooWMFSh...`) absent from the OC audit's counts — the
+  mechanism is continuous, not a one-day artifact. Independent JEV sort
+  of the live line landed it in `backoff` (keyed, jev-1.13.0); record:
+  `HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md` extension 2.
 - OC audit `~/Documents/GitHub/OC/SCM_NODES_AUDIT.md` section 2 (D2).
 - D3's self-dial loop interacts with this backoff state; fix ordering with
   D3 in mind.

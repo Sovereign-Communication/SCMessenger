@@ -112,3 +112,124 @@ commit).
 One line: paste the `harness` MCP server into Freebuff desktop config
 (exact values in `docs/runbooks/HARNESS_MCP_SETUP.md`) so future sessions
 call `issue_sort` as an MCP tool instead of shelling the CLI.
+
+---
+
+# Extension 2 (same day) — Completion Gate (jev-phase) + Live-Node Sorts
+
+Second dogfood pass: the pass/fail-replacement completion gate
+(`harness jev-phase`, jev_completion.py, merged Harness PR #39) exercised
+for the first time here, plus a sort pass over genuinely live node logs.
+Sync re-checked first: Harness main `f07c814` still == `origin/main`
+(already newest). Freebuff MCP config surface re-checked once more: still
+not file-discoverable (only `update-state.json` under `$APPDATA/Freebuff`)
+— CLI path stands; the operator paste-step remains the one manual item.
+
+## A. Completion-gate runs (jev-phase)
+
+Surface as it actually exists (read from source before running):
+`--phase <id> --repo-root <root> --evidence <json> --min-score N`, six hard
+gates (pr_merged 25, origin_evidence 10, required_tests_present 20,
+local_gates_green 15, ci_green 15, no_open_blockers 15 = 100),
+`combined = 0.7*mechanical + 0.3*semantic` when all gates pass, else
+`min(mechanical, semantic, min_score - 0.01)` — hard fail can never clear
+the threshold regardless of prose. Native phase contracts read a
+`docs/jev-roadmap.md` STATUS row; SCM has none, so SCM work items go
+through the documented `--evidence` override surface (values below were
+fact-checked this session: gh pr view 351 -> 0 fail / 33 total).
+
+### A1. Native control run: Harness's own JEV-COMPLETION phase
+
+`harness.exe jev-phase --phase JEV-COMPLETION --repo-root <Harness> --json`
+
+- Hard gates: ALL PASS (pr_merged=true — PR #39 MERGED, roadmap STATUS row
+  read natively). Mechanical score: 100.0.
+- Keyed semantic (`jev-1.13.0`, is_fallback=false, cost 0.022176, conf
+  0.76): **2.76** -> combined 70.83 < 85 -> `can_mark_complete: false`,
+  exit 1, `[FATAL] ... do not mark complete`.
+
+**Finding (upstream, Harness): the semantic-scale anomaly.** A phase that
+is 100/100 mechanical and gate-green is blocked solely because the keyed
+semantic score of 2.76 is blended as if it were 0-100. `jev_completion.py`
+maps 0<=raw<=1 to x100 and takes anything >1 at face value — but the typed
+score legend appears to run 0-5 (or similar), so a good answer scores ~2-4
+"raw" and reads as catastrophic on the 0-100 blend. On a correct 0-100
+semantic this phase would score ~97 and complete. Fail-closed direction is
+right (nothing wrongly marked complete); the scale contract between
+`_COMPLETION_PACK` and `jev-1.13.0` is the defect. Reported here for the
+Harness maintainer; no SCM code involved.
+
+### A2. SCM work item via override mode: PR #351 (green, unmerged)
+
+`harness.exe jev-phase --phase JEV-P3 --repo-root <SCMessenger> --evidence
+tmp/jev-dogfood/phase351_evidence.json --json` (phase id JEV-P3 = neutral
+contract slot; the evidence JSON carries the real SCM facts: status_row
+"PR #351 OPEN ... 33/33 green", pr_merged=false, ci_green=true,
+local_gates_green=false).
+
+- Hard gates: pr_merged=false, local_gates_green=false (honest: not merged,
+  local gates not run per CI-primary doctrine), origin_evidence=true,
+  required_tests_present=true, ci_green=true, no_open_blockers=true.
+- Mechanical 60.0; keyed semantic 1.55 (conf 0.36, cost 0.022302);
+  combined 1.55 -> `can_mark_complete: false`, blockers named:
+  "hard gate failed: pr_merged", "hard gate failed: local_gates_green".
+
+**Verdict: the gate's SCM verdict is CORRECT and useful** — PR #351 is
+exactly "green but not complete" (merge review pending), and the gate says
+so structurally, naming the two missing gates, immune to a green CI
+looking like completion. The semantic number itself is unreliable pending
+the A1 scale finding; the hard-gate layer carried the verdict here.
+
+## B. Live-node sort pass (3 genuine lines from the running Windows node)
+
+Source: `tmp/radio-candidates/56d66f7/node-stdout.log` + `node-stderr.log`
+(this is the live node's own log, PID 5924, read this session). Health
+endpoint `http://127.0.0.1:9876/health` -> `{"status":"healthy"}`;
+`/peers` returned empty body at read time.
+
+| line | tool verdict | keyed | agreement |
+|---|---|---|---|
+| 09:05:10Z WARN dial_policy `[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts peer_id=12D3KooWMFSh...` | `backoff` conf (keyed) | yes, jev-1.13.0 | AGREE (manual: D2 mechanism) |
+| recurring ERROR `warp::server::run: server connection error: hyper::Error(Parse(Method))` (~10s cadence through 09:06:53Z) | `unmatched`, "no declared pack keyword match" | structural-only | AGREE (honest; no API-noise bucket exists) |
+| paired WARN `yamux::connection: ... (os error 10053)` | `capacity` conf 0.72, attention high | yes, jev-1.13.0 | DEFENSIBLE-BUT-QUESTIONED (no capacity keyword in text; see B1) |
+
+**New live finding, D2 confirmation**: the 09:05:10Z DIAL-BACKOFF line is
+D2 firing in real time on the Windows node, against a peer id
+(`12D3KooWMFSh...`) not present in the OC audit's 15/4/2/1 counts — the
+mechanism is continuous, not a one-day artifact. D2 ticket updated with
+this live confirmation (no duplicate filed).
+
+**B1 observation (bounded-judgment discipline, one data point each)**: the
+warp line's full output shows the keyed model privately chose `capacity`
+at conf 0.38 while the code-owned layer held the line to the pack and
+returned honest `unmatched`; the yamux line was accepted as `capacity` at
+0.72 with zero keyword support. Observed acceptance discipline therefore
+sits somewhere between 0.38 (rejected) and 0.72 (accepted) — hypothesis
+only, two data points, flagged as such. Worth pinning in Harness tests if
+the threshold is meant to be deterministic.
+
+## C. Read-only intel: the uncommitted Cargo.toml/Cargo.lock diff (rule 11)
+
+Not mine, not touched. What it contains (read via `git diff` this
+session): the OC session's **D9 fix in flight** — a
+`[patch.crates-io] libp2p-swarm = { path = "vendor/libp2p-swarm-0.48.0" }`
+fork whose vendored copy degrades the `unreachable!()` mismatches to
+logged drops (`"D9-DEGRADE"`) instead of panicking, matched-side routing
+unchanged; workspace.members gains the vendored crate; the lock's +273
+lines are that crate's dev-dependencies (criterion, ciborium, env_logger,
+...) entering via the new member. Note: this supersedes the earlier
+"vendor/ is a pristine read-only research copy" disposition in the OC lane
+audit — the session evolved from research to patch fork. Implication for
+the operator: when this lands it changes transport behavior and needs the
+Rule-8 adversarial review on merge, and the D9 ticket's fix-options list
+should be read alongside this in-flight direction.
+
+## Extension-2 verdicts
+
+- Completion gate: real, usable on SCM work items via evidence overrides;
+  correct structural verdict on PR #351; one upstream scale-contract
+  defect found and documented (A1).
+- Live sorts: the pack+keyed pipeline sorts real node logs correctly and
+  refuses to invent buckets on out-of-pack noise; one live D2 confirmation
+  captured; one borderline keyed acceptance (B1) flagged for Harness.
+- Sync: already newest. MCP: CLI path; operator paste-step unchanged.
