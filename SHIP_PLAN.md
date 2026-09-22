@@ -138,6 +138,12 @@ count. This satisfies D4, D6, and D7.
 
 ### S4 -- After the tag (do not start before it)
 
+- **Post-tag Reticulum-derived workstream.** The 2026-09-21 Reticulum audit and
+  its sequenced borrow list (diagnostics commands, gossip governance, custody
+  peering design note, paper-message QR, envelope v3 wish list) are canonically
+  planned in `HANDOFF/plans/V050_PHILOSOPHY_AND_BORROW_PLAN.md`; audit basis:
+  `HANDOFF/plans/RETICULUM_AUDIT_2026-09-21.md`. Governing rule there: adopt
+  philosophy, adopt zero code. Nothing starts before this tag.
 - **External crypto audit.** Hybrid X25519 + ML-KEM-768 is the differentiator and
   the liability. Self-review by the fleet that wrote it is not a credential.
   Budget real money here, not tokens.
