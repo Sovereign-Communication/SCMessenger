@@ -14,6 +14,7 @@ import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.SecurityUtils
 import com.scmessenger.android.utils.BackoffStrategy
 import com.scmessenger.android.utils.inCausalOrder
+import com.scmessenger.android.utils.releaseCoreReferencesFromLoggingTrees
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -4432,6 +4433,14 @@ open class MeshRepository(
         coreDelegate = null
         swarmBridge = null
         ironCore = null
+        // MESSAGE-STORE-LOCK-001: the summary logging tree is process-wide
+        // (Timber.forest()) and startMeshService() injects the core into it.
+        // Until this line existed, that tree was the ONE reference a stop never
+        // released: the Rust IronCore -- and with it sled's file lock on the
+        // message store -- stayed alive for the life of the process, so the
+        // next Start opened a still-locked store, fell back to DegradedStorage,
+        // and showed "Message Store Unavailable" until the app was killed.
+        releaseCoreReferencesFromLoggingTrees()
         meshService = null
         bleScanner = null
         bleAdvertiser = null
@@ -6679,6 +6688,10 @@ open class MeshRepository(
             Timber.w("Failed to flush managers during shutdown: ${e.message}")
         }
         ironCore = null
+        // Same release as stopMeshService(): a reset discards every manager and
+        // then wipes the store, so nothing may keep the old core -- and the
+        // sled lock it owns -- alive. See MESSAGE-STORE-LOCK-001.
+        releaseCoreReferencesFromLoggingTrees()
 
         contactManager = null
         historyManager = null
