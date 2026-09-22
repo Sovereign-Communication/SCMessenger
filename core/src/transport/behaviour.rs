@@ -520,16 +520,31 @@ impl IronCoreBehaviour {
         // Relay server - all nodes act as relays for NAT traversal
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
 
-        // Connection limits to prevent resource exhaustion
+        // Connection limits to prevent resource exhaustion.
+        //
+        // V040-T-CONN-04 (live field defect, 2026-09-22): one hard number used to
+        // gate BOTH admission and retention (`Some(4)`), so a single device's own
+        // multi-address dial fan-out spent its per-peer budget on probe sockets and
+        // was then refused — `connection_limits: limit 4 reached` — on every later
+        // dial: 169 refusals from one phone between 01:32Z and 03:09:10Z, after
+        // which it could not re-attach and its custody could not drain.
+        //
+        // Admission is now a higher (still hard) ceiling so a legitimate fan-out
+        // completes its handshake; the bound that actually keeps sockets is the
+        // RETAINED ceiling, enforced by actively closing redundant newest paths in
+        // the swarm loop. See `super::per_peer_cap` for the policy and its tests.
+        //
+        // Do NOT collapse the two tiers back into one number: the deny log still
+        // names whichever ceiling is hit, so a single tier reads well in logs while
+        // locking out the peer that dials more than once.
         let connection_limits = connection_limits::Behaviour::new(
             connection_limits::ConnectionLimits::default()
                 .with_max_pending_outgoing(Some(32))
                 .with_max_established_outgoing(Some(128))
                 .with_max_established_incoming(Some(64))
-                // Keep direct path, relay path, and headroom for mobile interface
-                // handover (Wi-Fi to Cellular transition) before dead sockets time out,
-                // while keeping per-peer connection count bounded.
-                .with_max_established_per_peer(Some(4)),
+                .with_max_established_per_peer(Some(
+                    super::per_peer_cap::ADMISSION_MAX_ESTABLISHED_PER_PEER,
+                )),
         );
 
         Ok(Self {

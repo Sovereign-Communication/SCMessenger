@@ -3635,6 +3635,21 @@ pub async fn start_swarm_with_config(
         // Track connections and address observations (Phase 1 & 2)
         let mut connection_tracker = ConnectionTracker::new();
         let mut address_observer = AddressObserver::new();
+        // V040-T-CONN-04: established paths per peer, oldest-first (one entry per
+        // live connection id). Admission is bounded by connection_limits
+        // (ADMISSION_MAX_ESTABLISHED_PER_PEER); THIS map enforces the RETAINED
+        // bound by closing redundant paths after a fan-out has been admitted.
+        // Keeping the bound here — rather than in the admission cap — is what
+        // stops a peer's own multi-port dial from locking it out.
+        let mut peer_established_paths: HashMap<PeerId, Vec<libp2p::swarm::ConnectionId>> =
+            HashMap::new();
+        // V040-T-CONN-04: last time each live path carried anything, seeded at
+        // establishment. The retained-bound trim chooses the least-recently-active
+        // paths, so a stale path left over from a peer's previous session is
+        // reaped before the fresh dial that peer is using to re-attach — which is
+        // exactly the lockout the admission cap used to cause.
+        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, std::time::Instant> =
+            HashMap::new();
 
         // Track successful relay reservations by ListenerId
         let mut successful_relay_reservations: HashMap<
@@ -4770,6 +4785,9 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                // V040-T-CONN-04: this path carried traffic, so it
+                                // outranks a silent path when the retained bound trims.
+                                path_last_activity.insert(connection_id, std::time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         if peer_is_blocked(&core_handle, peer) {
@@ -5209,6 +5227,8 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                // V040-T-CONN-04: count this path as recently active.
+                                path_last_activity.insert(connection_id, std::time::Instant::now());
                                 if peer_is_blocked(&core_handle, peer) {
                                     tracing::warn!(
                                         "Blocked peer {} attempted ledger exchange; refusing topology disclosure",
@@ -5814,6 +5834,9 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
                                 match event.result {
                                     Ok(rtt) => {
+                                        // V040-T-CONN-04: a successful ping is the
+                                        // cheapest proof a path is still live.
+                                        path_last_activity.insert(event.connection, std::time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6467,6 +6490,41 @@ pub async fn start_swarm_with_config(
                                     connection_id.to_string(),
                                 );
 
+                                // V040-T-CONN-04: ConnectionEstablished is emitted in
+                                // establishment order, so the vector is oldest-first.
+                                // Enforce the retained bound by closing the
+                                // least-recently-active redundant paths, so a stale
+                                // path never survives at the expense of the fresh dial
+                                // a peer is using to re-attach (and a path that is
+                                // still carrying traffic outranks a silent probe).
+                                // Closures are idempotent with the ConnectionClosed
+                                // bookkeeping below.
+                                {
+                                    let established_at = std::time::Instant::now();
+                                    path_last_activity.insert(connection_id, established_at);
+                                    let paths = peer_established_paths.entry(peer_id).or_default();
+                                    paths.push(connection_id);
+                                    let redundant: Vec<libp2p::swarm::ConnectionId> =
+                                        super::per_peer_cap::connections_to_close(paths, |id| {
+                                            path_last_activity
+                                                .get(id)
+                                                .copied()
+                                                .unwrap_or(established_at)
+                                        });
+                                    for extra in redundant {
+                                        paths.retain(|id| *id != extra);
+                                        path_last_activity.remove(&extra);
+                                        tracing::info!(
+                                            peer = %peer_id,
+                                            closed_connection = ?extra,
+                                            retained = paths.len(),
+                                            retained_bound = super::per_peer_cap::RETAINED_MAX_ESTABLISHED_PER_PEER,
+                                            "[CONN-CAP] closing redundant per-peer path to hold the retained bound"
+                                        );
+                                        let _ = swarm.close_connection(extra);
+                                    }
+                                }
+
                                 // Add to bootstrap capability (potential relay node)
                                 // ALL peers are mandatory relays
                                 bootstrap_capability.add_peer(peer_id);
@@ -6654,6 +6712,12 @@ pub async fn start_swarm_with_config(
                                     &peer_id,
                                     &connection_id.to_string(),
                                 );
+                                // V040-T-CONN-04: drop this path from the retained-bound
+                                // bookkeeping (the entry is removed on last close).
+                                if let Some(paths) = peer_established_paths.get_mut(&peer_id) {
+                                    paths.retain(|id| *id != connection_id);
+                                }
+                                path_last_activity.remove(&connection_id);
                                 // A different live path may now be selected. Force a
                                 // fresh ledger exchange so failover cannot leave this
                                 // peer with stale topology knowledge.
@@ -6714,6 +6778,7 @@ pub async fn start_swarm_with_config(
                                 // a peer after its last direct path closes.
                                 mdns_dial_attempted.remove(&peer_id);
                                 connection_tracker.remove_connection(&peer_id);
+                                peer_established_paths.remove(&peer_id);
                                 // Allow re-exchange if they reconnect
                                 ledger_exchanged_peers.remove(&peer_id);
                                 pending_ledger_exchanges.remove(&peer_id);
