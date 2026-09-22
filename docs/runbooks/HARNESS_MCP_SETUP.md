@@ -17,11 +17,11 @@ Source session: harness WIP handoff (PR #360 branch, pack `scm-ops-issues-v1`)
   tools** advertised, including `issue_sort`, `log_judgment`,
   `panel_verify`, `apply_edit`, `plan_and_execute`, `ledger_status`,
   `trust_status`.
-- **Bucketed issue sort verified end-to-end against SCM's own pack**:
-  `HANDOFF/harness/packs/scm-ops-issues-v1.json` — 7/7 realistic log lines
-  sorted into `capacity`, `supply-chain`, `storage`, `android-build`
-  buckets with path_id + suggested action, and honest no-match fallback
-  (`attention` bucket).
+- **Bucketed issue sort verified for real on genuine SCM failure data**:
+  first real JEV dogfood run 2026-09-22 — 5/5 agreement on real failure
+  lines (D9 panic, D1 refusals, MESSAGE-STORE-LOCK, aapt2 XML), keyed
+  mode (`jev-1.13.0`, is_fallback false). Full record:
+  `HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md`.
 
 ## The bucket feature (replaces pass/fail for completion/quality)
 
@@ -31,17 +31,37 @@ matching). Buckets carry `suggested_action` and `path_id` so each item
 becomes a dispatchable task rather than a red X. SCM's pack lives in-repo at
 `HANDOFF/harness/packs/scm-ops-issues-v1.json` with these buckets:
 
-| bucket | matches | suggested action |
-|---|---|---|
-| `capacity` | connection_limits, per-peer cap, max peers | file D-series ticket, assign transport |
-| `supply-chain` | libp2p, crate panic, vendor | vendor-source read, upstream issue, D9-style fix |
-| `storage` | sled, lock, store, message store unavailable | RCA first (MESSAGE-STORE-LOCK pattern), then fix |
-| `android-build` | aapt2, gradle, XML parse, keystore | fix on lane worktree, push, CI re-run |
-| `attention` | fallback for anything unmatched | human triage |
+Current buckets (ids exactly as declared in the pack; unmatched input
+returns honest `status: "unmatched"` — there is no catch-all bucket):
 
-To extend: edit the JSON, run the pack validator
-(`python -c "import json,sys; sys.path.insert(0,'C:/Users/SCM/Documents/GitHub/Harness'); from harness.src.jev_policy import validate_pack; validate_pack(json.load(open('HANDOFF/harness/packs/scm-ops-issues-v1.json'))); print('pack OK')"`),
-commit. The code owns matching; the pack only declares buckets.
+| bucket | label |
+|---|---|
+| `capacity` | connection, rate, or budget saturation |
+| `backoff` | dial/retry policy starving reconnection |
+| `poison_queue` | self-addressed or stuck queue entries |
+| `crypto_noise` | ratchet, decrypt, or envelope anomalies |
+| `ble_lane` | BLE / proximity transport health |
+| `storage` | sled / persistence / degraded store |
+| `identity_device` | identity or device registry anomalies |
+| `orchestration` | agent-orchestration / harness process issue |
+| `android_build` | Android build, resource, or signing failure |
+| `supply_chain` | upstream crate or dependency defect |
+
+Pack keyword caution (learned the hard way in dogfood run 001): the code-
+owned matcher is substring-based (`kw.lower() in text.lower()`), so never
+declare short generic keywords — bare `ble` once matched inside
+"unreacha-ble". Write distinctive phrases.
+
+To extend: edit the JSON, validate it through the real validator, commit.
+The code owns matching; the pack only declares buckets.
+
+```bash
+cd "$USERPROFILE/Documents/GitHub/Harness" && python -c "
+import sys, json; sys.path.insert(0, '.')
+from harness.jev_packs import validate_operator_pack
+validate_operator_pack(json.load(open('C:/Users/SCM/Documents/GitHub/SCMessenger/HANDOFF/harness/packs/scm-ops-issues-v1.json')))
+print('pack OK')"
+```
 
 ## The one manual step (Freebuff desktop MCP config)
 
@@ -52,7 +72,7 @@ that is not file-discoverable from the agent side (no `mcp*.json` found under
 - **name**: `harness`
 - **command**: `C:\Users\SCM\AppData\Roaming\Python\Python314\Scripts\harness-mcp.exe`
 - **args**: `[]`
-- **env**: `HARNESS_REPO=C:/Users/SCM/Documents/GitHub/Harness`, `HARNESS_PACK=SCMessenger/HANDOFF/harness/packs/scm-ops-issues-v1.json`
+- **env**: `HARNESS_REPO=C:/Users/SCM/Documents/GitHub/Harness`, `HARNESS_PACK=C:/Users/SCM/Documents/GitHub/SCMessenger/HANDOFF/harness/packs/scm-ops-issues-v1.json`
 
 After saving, a new Freebuff session should show `issue_sort` and the other
 11 tools as callable MCP tools. If they do not appear, re-check the exe path
@@ -60,19 +80,22 @@ After saving, a new Freebuff session should show `issue_sort` and the other
 
 ## Dogfood loop for SCM (stay in sync with newest Harness dev)
 
-1. **Sync check** (weekly or before any JEV run):
-   `git -C "$USERPROFILE/Documents/GitHub/Harness" log --oneline -3` vs
-   `python -m pip show sovereign-harness` (editable install tracks the
-   checkout automatically, so a `git pull` in the Harness repo IS the
-   upgrade; re-run the smoke below after pulling).
+1. **Sync check** (weekly or before any JEV run): fetch in the Harness
+   repo; if `origin/main` moved past the installed commit, pull (editable
+   install tracks the checkout automatically, so a pull IS the upgrade)
+   and re-validate the pack + smoke the MCP server. Latest verdict:
+   2026-09-22, `f07c814` == origin/main, **already newest**.
 2. **Smoke after any pull**:
    `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | harness-mcp.exe`
-   (expects the 12-tool list) — or the fuller handshake driver in this
-   session's transcript.
-3. **Run JEV on SCM work**: use `issue_sort` with recent SCM log lines
-   (CI failure logs, node logs, OC audit findings) -> items land in buckets
-   -> convert each bucket item into a HANDOFF ticket referencing the pack's
-   `suggested_action`.
+   (expects the 12-tool list).
+3. **Run JEV on SCM work**: `harness.exe issue-sort --issue <line> --pack
+   <pack>` (or the MCP `issue_sort` tool once configured) with recent SCM
+   log lines (CI failure logs, node logs, OC audit findings) -> items land
+   in buckets -> convert each bucket item into a HANDOFF ticket referencing
+   the pack's `suggested_next_action`. Update existing tickets; do not
+   duplicate. Record every real run as a dated doc under
+   `HANDOFF/harness/` (see `JEV_DOGFOOD_RUN_2026-09-22.md` for the
+   template: per-line outputs in full, sources cited, defects surfaced).
 4. **Pack changes** follow the table above; keep pack edits in the same PR
    as any doctrine change they reflect (the pack encodes repo doctrine).
 
@@ -80,7 +103,9 @@ After saving, a new Freebuff session should show `issue_sort` and the other
 
 - Freebuff-side MCP config is a manual paste step (see above); everything
   else is file-managed in-repo.
-- The installed CLI is not on PATH by default; scripts should call
-  `python -m harness ...` or the full exe path.
+- The installed CLI is not on PATH by default; call the full exe path
+  (`%APPDATA%\Python\Python314\Scripts\harness.exe`). `python -m harness`
+  does NOT work (the package has no `__main__`).
 - The bucket pack encodes SCM doctrine as of 2026-09-22 — review it when
   doctrine changes (it is versioned `scm-ops-issues-v1` for this reason).
+  Run history: `HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md`.

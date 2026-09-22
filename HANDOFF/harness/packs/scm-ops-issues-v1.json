@@ -51,8 +51,8 @@
       "kind": "alternate_path",
       "path_id": "core/src/transport/ble",
       "keywords": [
-        "ble", "gatt", "bluetooth", "advertise", "sneakernet", "proximity",
-        "android transport"
+        "ble transport", "ble gatt", "ble advertise", "gatt", "bluetooth",
+        "sneakernet", "proximity", "android transport"
       ],
       "suggested_next_action": "Cross-check against the farm transport-continuity priorities (mDNS, QUIC/TCP bridge, BLE sneakernet as one flow).",
       "attention": "low"
@@ -89,6 +89,29 @@
       ],
       "suggested_next_action": "Route to the orchestration lanes doc; check whether the failure is a lane property (quota, model) or a process violation (gate skipped).",
       "attention": "low"
+    },
+    "android_build": {
+      "label": "Android build, resource, or signing failure",
+      "kind": "trouble_area",
+      "path_id": "android/app/src/main",
+      "keywords": [
+        "aapt2", "resource compilation failed", "xmlstreamexception",
+        "xml parse", "gradle", "keystore", "signature mismatch",
+        "manifest merger", "versioncode", "lint failed"
+      ],
+      "suggested_next_action": "Fix on the lane worktree, push, let CI re-run. If the failure is a signature mismatch on device install: STOP per docs/runbooks/CI_APK_TO_PHONE.md -- uninstall wipes the device identity.",
+      "attention": "medium"
+    },
+    "supply_chain": {
+      "label": "Upstream crate or dependency defect",
+      "kind": "trouble_area",
+      "path_id": "Cargo.lock",
+      "keywords": [
+        "libp2p", "panicked at", "entered unreachable code", "crate panic",
+        "cargo", "upstream", "dependency failure"
+      ],
+      "suggested_next_action": "Read the vendored crate source first (vendor/ pattern). Crate-side: upstream issue + pin/patch. Product-side: file a D-series ticket with the exact frame.",
+      "attention": "high"
     }
   }
 }

@@ -83,6 +83,10 @@ touches behaviour composition or the swarm event loop.
 
 ## References
 
+- JEV dogfood run 001 (2026-09-22) independently sorted this defect's real
+  log line into the `supply_chain` bucket at confidence 0.97 (keyed mode,
+  model jev-1.13.0) — tool agrees with manual analysis. Record:
+  `HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md`.
 - OC audit (local, outside repo):
   `~/Documents/GitHub/OC/SCM_NODES_AUDIT.md` section 9 (evidence) and
   `NODE.md` (deployment context).
