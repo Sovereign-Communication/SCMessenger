@@ -1,0 +1,94 @@
+{
+  "id": "scm-ops-issues-v1",
+  "buckets": {
+    "capacity": {
+      "label": "Connection, rate, or budget saturation",
+      "kind": "trouble_area",
+      "path_id": "core/src/transport",
+      "keywords": [
+        "connection_limits", "limit reached", "denied", "refused",
+        "saturation", "connection cap", "too many connections", "budget",
+        "rate limit", "throttl"
+      ],
+      "suggested_next_action": "Triage against the two-tier per-peer policy (V040-T-CONN-04); check admission vs retained ceilings and per-hour denial rates.",
+      "attention": "high"
+    },
+    "backoff": {
+      "label": "Dial or retry policy starving reconnection",
+      "kind": "alternate_path",
+      "path_id": "cli/src/seed_dial.rs",
+      "keywords": [
+        "dial-backoff", "marked as dead", "watchonly", "seed sweep",
+        "re-dial", "redial", "backoff", "no known peers", "bootstrap"
+      ],
+      "suggested_next_action": "Check D2 (seed sweep never re-dials a missing seed-tier peer) and D5/D6 (bootstrap_nodes persistence).",
+      "attention": "high"
+    },
+    "poison_queue": {
+      "label": "Self-addressed or stuck queue entries",
+      "kind": "trouble_area",
+      "path_id": "core/src/drift",
+      "keywords": [
+        "poison", "self-addressed", "outbox", "own peer id", "self dial",
+        "loop", "cancel", "recipient == own"
+      ],
+      "suggested_next_action": "Check D3 (self-recipient guard at enqueue, drain guard, queue-cancel route).",
+      "attention": "medium"
+    },
+    "crypto_noise": {
+      "label": "Ratchet, decrypt, or envelope anomalies",
+      "kind": "trouble_area",
+      "path_id": "core/src/crypto",
+      "keywords": [
+        "ratchet", "failed to decrypt", "decrypt", "envelope_len", "session key",
+        "root_key", "kex", "handshake"
+      ],
+      "suggested_next_action": "Classify per the RCA doctrine: identify whether the failure gates custody (it must not), whether it is device-side, and whether a session reset route exists.",
+      "attention": "medium"
+    },
+    "ble_lane": {
+      "label": "BLE / proximity transport health",
+      "kind": "alternate_path",
+      "path_id": "core/src/transport/ble",
+      "keywords": [
+        "ble", "gatt", "bluetooth", "advertise", "sneakernet", "proximity",
+        "android transport"
+      ],
+      "suggested_next_action": "Cross-check against the farm transport-continuity priorities (mDNS, QUIC/TCP bridge, BLE sneakernet as one flow).",
+      "attention": "low"
+    },
+    "storage": {
+      "label": "Sled / persistence / degraded store",
+      "kind": "trouble_area",
+      "path_id": "core/src/store",
+      "keywords": [
+        "sled", "database lock", "message store unavailable", "degraded",
+        "storage error", "store failed to open", "lock contention"
+      ],
+      "suggested_next_action": "Check MESSAGE-STORE-LOCK-001 (FileLoggingTree retention fixed; shared open_with_lock_retry budget) and whether the failure is stop->Start or a genuinely foreign holder.",
+      "attention": "high"
+    },
+    "identity_device": {
+      "label": "Identity or device registry anomalies",
+      "kind": "trouble_area",
+      "path_id": "core/src/identity",
+      "keywords": [
+        "device_id", "identity_id", "ghost", "ghost-identity", "triad",
+        "not initialized", "registration"
+      ],
+      "suggested_next_action": "Check the ghost-identity guards and whether a triad (peer_id/public_key/identity_id) is being derived from the wrong field.",
+      "attention": "medium"
+    },
+    "orchestration": {
+      "label": "Agent-orchestration / harness process issue",
+      "kind": "orchestration_driver",
+      "path_id": "HANDOFF/orchestration",
+      "keywords": [
+        "orchestrat", "lane", "dispatch", "harness", "gate", "quota",
+        "worker", "verdict", "rule-8", "audit-gate"
+      ],
+      "suggested_next_action": "Route to the orchestration lanes doc; check whether the failure is a lane property (quota, model) or a process violation (gate skipped).",
+      "attention": "low"
+    }
+  }
+}
