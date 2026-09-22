@@ -50,24 +50,6 @@ tokio = ["dep:tokio"]
 name = "libp2p_swarm"
 path = "src/lib.rs"
 
-[[test]]
-name = "connection_close"
-path = "tests/connection_close.rs"
-
-[[test]]
-name = "listener"
-path = "tests/listener.rs"
-
-[[test]]
-name = "swarm_derive"
-path = "tests/swarm_derive.rs"
-required-features = ["macros"]
-
-[[bench]]
-name = "connection_handler"
-path = "benches/connection_handler.rs"
-harness = false
-
 [dependencies.either]
 version = "1.16"
 
@@ -174,3 +156,10 @@ version = "0.48.0"
 
 [dev-dependencies.quickcheck]
 version = "1.0"
+
+# Upstream integration tests (tests/) were removed from this vendor copy:
+# they import libp2p-swarm-test, a dev-dep upstream does not publish.
+# Our D9 regression tests live in src/ and run under the upstream-tests gate.
+# Upstream benches (benches/) were removed for the same reason: they import
+# libp2p-swarm-test, which upstream does not publish; criterion stays declared
+# for the gated upstream-tests modules that still reference it.
