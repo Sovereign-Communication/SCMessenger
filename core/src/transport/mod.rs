@@ -31,7 +31,7 @@ pub mod wifi_aware;
 pub mod wifi_direct;
 
 pub use crate::store::ledger_entry::{
-    LedgerExchangeRequest, LedgerExchangeResponse, SharedPeerEntry,
+    dialable_transport_peer_id, LedgerExchangeRequest, LedgerExchangeResponse, SharedPeerEntry,
 };
 pub use addr_filter::{
     is_acceptable_peer_address, is_dialable_multiaddr, is_dialable_multiaddr_parsed,

@@ -29,6 +29,19 @@ use libp2p::{
 use uuid::Uuid;
 use web_time::Duration;
 
+/// Outbound dial budget while handshakes are in flight.
+pub const MAX_PENDING_OUTGOING: u32 = 32;
+/// Established outbound connection ceiling (all peers).
+pub const MAX_ESTABLISHED_OUTGOING: u32 = 128;
+/// Established inbound connection ceiling (all peers).
+pub const MAX_ESTABLISHED_INCOMING: u32 = 64;
+/// Established connections allowed per remote peer.
+///
+/// Multiport LAN discovery + relay circuit + mobile handover ghosts need more
+/// than the historical 4; live 3-node evidence 2026-09-19 showed WiFi delivery
+/// stalls when this cap was hit by multiport dial bursts.
+pub const MAX_ESTABLISHED_PER_PEER: u32 = 8;
+
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
@@ -520,16 +533,22 @@ impl IronCoreBehaviour {
         // Relay server - all nodes act as relays for NAT traversal
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
 
-        // Connection limits to prevent resource exhaustion
+        // Connection limits to prevent resource exhaustion.
+        //
+        // Per-peer budget: multiport discovery alone dials 6+ LAN ports at a
+        // peer (80/443/8080/9001/9002/9090/...), plus the circuit-relay path,
+        // plus interface-handover ghosts until zombie reap (RCA
+        // WIFI_TRANSPORT_REGRESSION_2026-09-18). A cap of 4 denied live WiFi
+        // peers on 2026-09-19: `connection_limits: limit 4 reached` was the
+        // hour's dominant WARN on both Windows and AWS while messages sat.
+        // 8 admits multiport + relay + handover headroom without unbounded
+        // growth; zombies are still reaped by the tracker in `swarm.rs`.
         let connection_limits = connection_limits::Behaviour::new(
             connection_limits::ConnectionLimits::default()
-                .with_max_pending_outgoing(Some(32))
-                .with_max_established_outgoing(Some(128))
-                .with_max_established_incoming(Some(64))
-                // Keep direct path, relay path, and headroom for mobile interface
-                // handover (Wi-Fi to Cellular transition) before dead sockets time out,
-                // while keeping per-peer connection count bounded.
-                .with_max_established_per_peer(Some(4)),
+                .with_max_pending_outgoing(Some(MAX_PENDING_OUTGOING))
+                .with_max_established_outgoing(Some(MAX_ESTABLISHED_OUTGOING))
+                .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
+                .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER)),
         );
 
         Ok(Self {
@@ -679,5 +698,23 @@ mod tests {
         );
 
         assert_eq!(result, Err("deregistration_target_matches_source"));
+    }
+
+    /// Fail-before / pass-after for the multiport WiFi delivery cap.
+    /// Live 3-node baseline 2026-09-19: `connection_limits: limit 4 reached`
+    /// denied phone dials on WiFi while messages sat 4.5–8 minutes.
+    #[test]
+    fn per_peer_connection_budget_admits_multiport_wifi_dial_set() {
+        assert!(
+            MAX_ESTABLISHED_PER_PEER >= 8,
+            "MAX_ESTABLISHED_PER_PEER={} must admit multiport LAN dial set \
+             (6+ ports) + relay circuit + handover headroom",
+            MAX_ESTABLISHED_PER_PEER
+        );
+        // Still bounded — not an unbounded resource leak.
+        assert!(MAX_ESTABLISHED_PER_PEER <= 16);
+        assert_eq!(MAX_PENDING_OUTGOING, 32);
+        assert_eq!(MAX_ESTABLISHED_OUTGOING, 128);
+        assert_eq!(MAX_ESTABLISHED_INCOMING, 64);
     }
 }

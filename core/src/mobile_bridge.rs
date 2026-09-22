@@ -3755,9 +3755,16 @@ impl SwarmBridge {
             .clone()
             .ok_or(crate::IronCoreError::NetworkError)?;
 
-        // Parse peer ID
-        let peer_id_parsed =
-            PeerId::from_str(&peer_id).map_err(|_| crate::IronCoreError::InvalidInput)?;
+        // ONE transport selection path: accept either the dialable libp2p
+        // PeerId OR the canonical public_key_hex storage form, converting
+        // hex → self-certifying PeerId via dialable_transport_peer_id.
+        // Fail closed when neither form is dialable (never invent a PeerId).
+        let peer_id_parsed = match PeerId::from_str(&peer_id) {
+            Ok(pid) => pid,
+            Err(_) => crate::store::ledger_entry::dialable_transport_peer_id(&peer_id)
+                .and_then(|s| PeerId::from_str(&s).ok())
+                .ok_or(crate::IronCoreError::InvalidInput)?,
+        };
 
         // P0_MESH_004: Dual-stack delivery via BLE if peer is nearby
         if self.nearby_ble_peers.lock().contains(&peer_id) {
@@ -3795,9 +3802,15 @@ impl SwarmBridge {
             None => return Some("swarm_bridge_unavailable".to_string()),
         };
 
+        // Same ONE transport selection path as send_message: hex or libp2p.
         let peer_id_parsed = match PeerId::from_str(&peer_id) {
-            Ok(peer_id) => peer_id,
-            Err(_) => return Some("invalid_peer_id".to_string()),
+            Ok(pid) => pid,
+            Err(_) => match crate::store::ledger_entry::dialable_transport_peer_id(&peer_id)
+                .and_then(|s| PeerId::from_str(&s).ok())
+            {
+                Some(pid) => pid,
+                None => return Some("invalid_peer_id".to_string()),
+            },
         };
 
         // P0_MESH_004: Dual-stack delivery via BLE if peer is nearby

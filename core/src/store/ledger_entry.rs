@@ -471,6 +471,31 @@ pub fn public_key_hex_from_libp2p_peer_id(peer_id: &str) -> Option<String> {
     Some(key_hex)
 }
 
+/// ONE transport-identity conversion (canonical send-path gate).
+///
+/// Storage / crypto SoT is `public_key_hex` (UNIFICATION_V2, `message::types`).
+/// Transport dialing (libp2p) requires the self-certifying PeerId derived from
+/// that key. Accept either form; never invent a peer id from identity_id or
+/// unrelated base58 values.
+///
+/// Returns the dialable libp2p PeerId string, or `None` when the input is not
+/// a self-certifying Ed25519 identity the swarm can address.
+pub fn dialable_transport_peer_id(identity: &str) -> Option<String> {
+    let trimmed = identity.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Already a self-certifying Ed25519 libp2p PeerId — re-derive, never trust.
+    if let Some(hex) = public_key_hex_from_libp2p_peer_id(trimmed) {
+        return peer_id_from_public_key_hex(&hex);
+    }
+    // Canonical storage form: 64-char lowercase hex public key.
+    if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return peer_id_from_public_key_hex(&trimmed.to_ascii_lowercase());
+    }
+    None
+}
+
 /// A ledger `public_key` may only be bound to a transport `peer_id` when the
 /// binding is SELF-CERTIFYING (the peer id re-derives from the key).
 ///
@@ -5264,6 +5289,58 @@ mod tests {
         );
         mgr.record_connection("/ip4/198.51.100.70/tcp/9001".to_string(), p.clone());
         assert!(mgr.find_by_peer_id(&p).expect("entry").locally_verified);
+    }
+
+    /// ONE identity→transport conversion: hex storage SoT and libp2p PeerId
+    /// both resolve to the same dialable PeerId; identity_id / garbage fail closed.
+    #[test]
+    fn dialable_transport_peer_id_accepts_hex_and_libp2p_forms() {
+        use libp2p::identity::Keypair;
+        let kp = Keypair::generate_ed25519();
+        let public = kp.public();
+        let libp2p_pid = public.to_peer_id().to_string();
+        let hex = hex::encode(
+            public
+                .clone()
+                .try_into_ed25519()
+                .expect("ed25519")
+                .to_bytes(),
+        );
+
+        // Storage SoT (hex) → dialable libp2p PeerId
+        let from_hex =
+            dialable_transport_peer_id(&hex).expect("hex public key must yield dialable peer id");
+        assert_eq!(from_hex, libp2p_pid);
+
+        // Transport form passes through (self-certifying re-derive)
+        let from_pid = dialable_transport_peer_id(&libp2p_pid)
+            .expect("libp2p peer id must yield dialable peer id");
+        assert_eq!(from_pid, libp2p_pid);
+
+        // Case-insensitive hex
+        let upper = hex.to_ascii_uppercase();
+        assert_eq!(
+            dialable_transport_peer_id(&upper).expect("upper hex"),
+            libp2p_pid
+        );
+
+        // Fail closed: empty, short, non-hex, non-PeerId base58
+        assert!(dialable_transport_peer_id("").is_none());
+        assert!(dialable_transport_peer_id("deadbeef").is_none());
+        assert!(dialable_transport_peer_id("not-a-peer-id").is_none());
+        assert!(dialable_transport_peer_id("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG").is_none());
+    }
+
+    /// identity_id (blake3 of pubkey) must NOT be treated as a dialable key
+    /// when it fails curve-point validation — never invent a peer id.
+    #[test]
+    fn dialable_transport_peer_id_rejects_non_curve_hex() {
+        // 32 zero bytes are not a valid Ed25519 public key.
+        let zeros = "0".repeat(64);
+        assert!(dialable_transport_peer_id(&zeros).is_none());
+        // Non-hex of correct length
+        let junk = "z".repeat(64);
+        assert!(dialable_transport_peer_id(&junk).is_none());
     }
 
     /// Review triage (qwen3.8-max-0902, finding 1): the pair predicate must
