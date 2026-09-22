@@ -37,6 +37,35 @@ binding constraint for cargo is **RAM, not core count**.
 - Never run two build-tool invocations concurrently. Multiple agent sessions
   share this repo, and Gradle can spawn cargo-ndk upstream.
 
+## CI-Primary Build Doctrine (operator directive, 2026-09-22)
+
+**CI is the primary verifier. Local builds are the failover.** A push that
+carries the applicable gates is how work is verified; a local build is the
+exception, not the default.
+
+- **Default loop:** commit scoped work -> push -> `gh run watch <run-id>` ->
+  triage failures from `gh run view <run-id> --log-failed` -> download any
+  needed artifact (`gh run download <run-id> -n <name> -D tmp/<dir>`, always
+  under `tmp/`). Do not build locally what CI is already building.
+- **Local build is justified only by:** CI unavailable/red for infra reasons,
+  a failover debugging session CI cannot reproduce, or a gate the workflows
+  do not run. Everything else waits for CI.
+- **If you do build locally, reclaim immediately afterwards.** The build is
+  not done when the command exits -- it is done when the disk is given back:
+  `python scripts/disk_budget.py` before, `python scripts/reclaim_safe.py --reclaim`
+  (or `scripts/clean_target.sh` for scoped output) after, same session.
+  Holding a warm `target/` "for later" is a rules violation, not a convenience.
+- **Fail closed on BLOCKED disk.** `scripts/disk_budget.py` exit 2 means no
+  local build, no exceptions: pull the artifact from CI instead. A build that
+  would fill the disk is how 2026-09-17 happened.
+- **Prefer committing over building.** An uncommitted fix has no provenance
+  and cannot be deployed or verified by CI. When in doubt: commit to a branch,
+  push, let CI run the wide sweep. (This lesson was paid for 2026-09-22: the
+  V040-T-CONN-04 fix was cross-built and deployed to two live nodes from an
+  uncommitted working tree before anyone committed it.)
+- The one-build-at-a-time rule, `build_lock.py`, and `CARGO_INCREMENTAL=0`
+  apply to failover builds exactly as before.
+
 ## Build Verification (Mandatory)
 
 Scoped to what changed, before finalizing any run (prefer the `build-verify`
@@ -189,8 +218,10 @@ iOS lane is unblocked.
 
 ## Windows shell notes
 
-- Shell scripts need Git Bash/WSL; CI is ubuntu/macos only -- Windows builds are
-  verified locally.
+- Shell scripts need Git Bash/WSL. CI is ubuntu/macos only. Since
+  2026-09-22 CI is the PRIMARY verifier and local Windows builds are the
+  FAILOVER -- see "CI-Primary Build Doctrine" above and
+  `docs/runbooks/CI_PRIMARY_BUILD.md`.
 - `python3` is a shim at `~/.local/bin/python3.exe`; orchestrator scripts
   hardcode `python3` but only `python` exists natively.
 

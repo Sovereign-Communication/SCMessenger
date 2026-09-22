@@ -296,10 +296,16 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
 `docs/rules/FREEBUFF.md`. Queue: `HANDOFF/freebuff/`. Rules:
 - You have the repo and a toolchain. You MAY run `cargo`/`gradlew`, but check
   first that no other build is live -- this host serializes builds.
-- You MAY open a PR for your own work. You may NOT merge it: green CI is
+- You MAY commit your own task's files to a scoped branch and push it
+  (fast-forward only; the pre-push hook binds every lane equally). You MAY
+  open a PR for your own work. You may NOT merge it: green CI is
   necessary, not sufficient, and anything touching
   `core/src/{crypto,transport,routing,privacy}` needs a recorded adversarial
   APPROVE from a reviewer that did not author the change.
+- CI is the PRIMARY build verifier for this lane (operator directive
+  2026-09-22): push to CI instead of building locally; local builds are the
+  failover, with mandatory immediate reclaim afterwards. See
+  `docs/rules/BUILD_AND_CI.md` (CI-Primary Build Doctrine).
 - Do NOT revert, stash, delete, or commit a file you did not create. This
   checkout is shared. A clean `git status` is not a goal.
 - Your task file is the whole brief. If its premise does not survive contact
@@ -318,6 +324,10 @@ Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
   Windows side).
 - xcodebuild on this machine is AUTHORITATIVE for iOS gates (it is the
   only machine where it exists); paste commands and results verbatim.
+- GPT-5.1 is authorized in this lane when the operator selects it. The
+  lane's rules bind whichever model runs; model choice does not change the
+  lane's authority (own `gpt/*` branches) or its limits (no merges to
+  main, no HANDOFF moves, core/ routes through the Windows AUDIT-GATE).
 - Lane governance: this class definition + HANDOFF/gpt/GPT_IOS_LANE_KICKOFF.md
   (rules of engagement) + the task packets in HANDOFF/gpt/. IMPORTANT: if
   the rules in your current session context predate 2026-07-28, RE-READ
