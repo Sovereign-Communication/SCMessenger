@@ -153,18 +153,9 @@ class MeshApplication : Application() {
                 // Never let the crash handler itself crash.
             }
 
-            if (isComposeCrash) {
-                // For the known Compose prefetch race we attempt to keep the process alive:
-                // log the crash, do NOT stop the foreground service, and do NOT chain to the
-                // system handler (which would kill the process). The Compose runtime will
-                // recover on next recomposition; the user can navigate away and back.
-                // If the crash recurs, it will be logged again; after 3 rapid recurrences
-                // the system will still kill the process via the next non-compose crash path.
-                try {
-                    Timber.w("COMPOSE_PREFETCH_CRASH swallowed — process kept alive for recovery")
-                } catch (_: Throwable) {}
-                return@setDefaultUncaughtExceptionHandler
-            }
+            // AND-02: Do NOT swallow compose crashes. Swallowing an unhandled
+            // exception on the main thread kills the looper and leaves the app in an
+            // unrecoverable zombie ANR state. All crashes must chain to the system handler.
 
             // Best-effort: stop the foreground service so the OS does not
             // restart it in a half-broken state.

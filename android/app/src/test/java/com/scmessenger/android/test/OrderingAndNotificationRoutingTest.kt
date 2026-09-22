@@ -1,6 +1,7 @@
 package com.scmessenger.android.test
 
 import com.scmessenger.android.utils.NotificationHelper
+import com.scmessenger.android.utils.inCausalOrder
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import uniffi.api.MessageDirection
@@ -29,7 +30,8 @@ class OrderingAndNotificationRoutingTest {
         id: String,
         direction: MessageDirection,
         timestamp: ULong,
-        senderTimestamp: ULong
+        senderTimestamp: ULong,
+        storedAtMillis: ULong = 0uL
     ) = MessageRecord(
         id = id,
         direction = direction,
@@ -39,30 +41,93 @@ class OrderingAndNotificationRoutingTest {
         senderTimestamp = senderTimestamp,
         delivered = true,
         status = uniffi.api.MessageStatus.DELIVERED,
-        hidden = false
+        hidden = false,
+        storedAtMillis = storedAtMillis
     )
 
     @Test
-    fun `reply never sorts before its trigger under one-second sender clock skew`() {
-        // Device A (Pixel) sends "baseline test"; its own row is stamped with
-        // the phone clock at 21:19:45 (as measured in the 09-17 RCA). Windows
-        // answers within the same second and stamps the reply with the node
-        // clock 21:19:44 — one second BEHIND the trigger. Under the old
-        // senderTimestamp sort the reply rendered first.
-        val sent = record(
-            id = "trigger", direction = MessageDirection.SENT,
-            timestamp = 1_789_679_985uL, senderTimestamp = 1_789_679_985uL
+    fun `reply never sorts before its trigger on a same-second reload`() {
+        // The store hands the UI a newest-first list, so a stable single-key
+        // sort on `timestamp` leaves a same-second reply ABOVE its trigger --
+        // the P1_ANDROID_CHAT_ORDER_CROSS_CLOCK symptom, still live for 24 of
+        // 332 real auto-reply pairs on the operator's Pixel. storedAtMillis is
+        // the tie-break that fixes it, and the reply's id is deliberately BELOW
+        // the trigger's so no id order can fake the result.
+        val trigger = record(
+            id = "zz-trigger", direction = MessageDirection.SENT,
+            timestamp = 1_789_841_591uL, senderTimestamp = 1_789_841_591uL,
+            storedAtMillis = 1_000uL
         )
         val reply = record(
-            id = "reply", direction = MessageDirection.RECEIVED,
-            // locally-stamped receive time (>= send time), sender claims 1s earlier
-            timestamp = 1_789_679_985uL, senderTimestamp = 1_789_679_984uL
+            id = "aa-reply", direction = MessageDirection.RECEIVED,
+            // same local second; the sender's own clock claims 1s earlier
+            timestamp = 1_789_841_591uL, senderTimestamp = 1_789_841_590uL,
+            storedAtMillis = 1_270uL
         )
 
-        val sorted = listOf(reply, sent).sortedBy { it.timestamp }
-        assertEquals("trigger", sorted.first().id)
-        // stable sort keeps the later-arriving row second when keys tie
-        assertEquals("reply", sorted.last().id)
+        // newest first, exactly as the store returns the conversation
+        val fromStore = listOf(reply, trigger)
+        assertEquals(
+            listOf("zz-trigger", "aa-reply"),
+            fromStore.inCausalOrder().map { it.id }
+        )
+        // the pre-fix expression cannot order these rows at all, so this guard
+        // is not vacuous: the same data still shows the defect under the old key
+        assertEquals(
+            listOf("aa-reply", "zz-trigger"),
+            fromStore.sortedBy { it.timestamp }.map { it.id }
+        )
+        // and sender provenance is not a sort key either
+        assertEquals(
+            listOf("aa-reply", "zz-trigger"),
+            fromStore.sortedBy { it.senderTimestamp }.map { it.id }
+        )
+    }
+
+    @Test
+    fun `a full tie is decided by id, not by the order the list was built in`() {
+        // The last key makes the ordering total, so two rows nothing can separate
+        // (same second, same direction, no insertion fact, same sender stamp)
+        // display in one deterministic order whatever the input looked like.
+        val a = record(
+            "a-dupe", MessageDirection.RECEIVED,
+            timestamp = 1_789_841_592uL, senderTimestamp = 1_789_841_592uL
+        )
+        val b = record(
+            "b-dupe", MessageDirection.RECEIVED,
+            timestamp = 1_789_841_592uL, senderTimestamp = 1_789_841_592uL
+        )
+
+        assertEquals(listOf("a-dupe", "b-dupe"), listOf(a, b).inCausalOrder().map { it.id })
+        assertEquals(listOf("a-dupe", "b-dupe"), listOf(b, a).inCausalOrder().map { it.id })
+    }
+
+    @Test
+    fun `legacy rows without an insertion fact still render the trigger first`() {
+        // Rows written before the store recorded an insertion fact (storedAtMillis
+        // is 0 on both) still have to put a same-second reply below its trigger.
+        // The trigger's id sorts ABOVE the reply's, so id order cannot produce
+        // this result and the direction rank is what does.
+        val trigger = record(
+            id = "zz-trigger", direction = MessageDirection.SENT,
+            timestamp = 1_789_841_591uL, senderTimestamp = 1_789_841_591uL
+        )
+        val reply = record(
+            id = "aa-reply", direction = MessageDirection.RECEIVED,
+            timestamp = 1_789_841_591uL, senderTimestamp = 1_789_841_590uL
+        )
+
+        // newest first, as the store returns it under the same keys
+        val fromStore = listOf(reply, trigger)
+        assertEquals(
+            listOf("zz-trigger", "aa-reply"),
+            fromStore.inCausalOrder().map { it.id }
+        )
+        // and the pre-fix expression still shows the defect on this data
+        assertEquals(
+            listOf("aa-reply", "zz-trigger"),
+            fromStore.sortedBy { it.timestamp }.map { it.id }
+        )
     }
 
     @Test
@@ -75,16 +140,6 @@ class OrderingAndNotificationRoutingTest {
 
         val sorted = listOf(sent2, inbound, sent1).sortedBy { it.timestamp }
         assertEquals(listOf("s1", "r1", "s2"), sorted.map { it.id })
-    }
-
-    @Test
-    fun `zero sender timestamp falls back to local time instead of sorting to the top`() {
-        // Latent second defect from the RCA: inbound records applied the
-        // zero-fallback to `timestamp` but not to the provenance field. The fix
-        // keeps provenance normalized (mirrors core adjust_legacy_timestamps).
-        val fallbackNow = 1_789_679_985uL
-        val provenance = if (0uL > 0uL) 0uL else fallbackNow
-        assertEquals(fallbackNow, provenance)
     }
 
     @Test

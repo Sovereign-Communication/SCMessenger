@@ -1,11 +1,76 @@
 # Build & CI Rules
 
 Status: Active
-Last updated: 2026-08-08 (extracted from `.claude/rules/build.md` for Tier 1
-on-demand loading; Windows parallelism section added)
+Last updated: 2026-09-20 (extracted from `.claude/rules/build.md` for Tier 1
+on-demand loading; Windows parallelism section added; CI queue hygiene added
+per operator directive 2026-09-20)
 
 Loaded on demand. The always-on summary lives in `CLAUDE.md`; this file holds
 the detail. Prefer the `build-verify` skill over running these commands by hand.
+
+## CI queue hygiene (standing practice — operator 2026-09-20)
+
+GitHub Actions runners are a **shared finite resource**. A merge train that
+leaves superseded runs queued makes every later gate wait for work that can no
+longer land. **Common practice, not an emergency measure:**
+
+1. **After every merge to `main` (or update-branch on a PR), cancel superseded
+   runs** that cannot contribute evidence for the SHA you still care about:
+   - push/workflow runs on **older `main` SHAs** that are no longer tip
+   - pull_request runs on **branches whose PR is already MERGED or CLOSED**
+   - docs-only PR runs when the PR is not being merged this hour (optional;
+     free the slot for the candidate SHA)
+2. **Keep only the live candidate.** For fleet deploy that is usually one
+   `main` tip SHA. Required contexts + artifact jobs (CI Windows CLI, Mobile
+   Android APK, Docker Publish) on that SHA are what you wait on — not the
+   full history of the merge train.
+3. **Cancel commands (orchestrator / host agents):**
+
+```
+gh run list --limit 40 --status queued
+gh run list --limit 40 --status in_progress
+gh run cancel <run-id>
+```
+
+   List **all** live runs (do not assume the API default page is the total —
+   rule 15). Cancel by run id; a cancel that returns "already completed" is
+   fine.
+4. **Zombie runs:** a run stuck `queued` for days on a deleted workflow branch
+   (e.g. historical `fix/h2-rustsec-*` Hygiene) may be uncancellable
+   (`Cannot cancel a workflow run that is completed` or never dispatches).
+   Record it; it does not consume runners when it never starts. Do not treat
+   it as a reason to wait.
+5. **Never cancel required contexts on the SHA you are about to merge** or
+   artifact jobs you need for deploy (`windows-cli-<sha>`, `android-debug-apk`,
+   Docker Publish on the deploy SHA).
+6. **When waiting on CI, say what you are waiting for** (workflow name +
+   head SHA + run id), not "CI is slow."
+7. Same rule applies **before** a long `update-branch` storm: one PR at a
+   time when the queue is saturated; cancel that PR's old head runs after the
+   new push.
+
+Related: branch protection `strict: true` serializes merges and re-queues
+every other PR (SHIP_PLAN I-31). Queue hygiene does not remove that cost; it
+stops you paying it twice for dead work.
+
+## JEV / harness verification (orchestrator + implementers — 2026-09-21)
+
+Standing practice for SCMessenger completion work:
+
+1. **Toolchain:** **SCMessenger-local** harness only —
+   `python scripts/update_local_harness.py` refreshes
+   `vendor/sovereign-harness` from the official harness GitHub remote.
+   Do **not** edit `Documents/GitHub/Harness` product trees.
+   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
+2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
+   (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
+   `scripts/scmessenger_issue_sort_pack.json`).
+3. **WP / canonical DONE:** mechanical CI + greps **and**
+   `python scripts/jev_canonical_check.py --wp WPn --state-file ...`
+   (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
+4. **Clarification:** if confidence <99% on a claim/design, run harness verify
+   or a typed JEV question pack — do not invent a new root-cause plan.
+5. Full design: `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
 
 ## Windows parallelism (measured on this box)
 

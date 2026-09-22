@@ -1,8 +1,108 @@
 # CTO state — live handoff
 
 Status: Active
-Last updated: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
-Entry point: `/CTO`. This file is the whole context load.
+Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
+Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+
+# ===== RESUME HERE (2026-09-21, orchestrator session close) =====
+
+## Canonical Freebuff transition (read first after AGENTS.md + FREEBUFF.md)
+
+**`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`** is the sole post-session
+execution handoff until the operator replaces it.
+
+Supporting plans on `origin/main`:
+- `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+- `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+- `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+- `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+- `HANDOFF/freebuff/README.md` (DISPATCHABLE paste set)
+
+## Operator standing rulings (2026-09-20/21)
+
+1. **Working-first** — reliable day-to-day mesh before tag/secret pressure.
+2. **WP order** — identity/routing/inbound/delivery truth then WP5 live proof.
+3. **DONE** — mechanical gates + keyed JEV `jev_canonical_check.py` `is_passing`.
+4. **Harness** — SCMessenger-local `vendor/sovereign-harness` only; update via
+   `python scripts/update_local_harness.py`; do not edit external Harness trees.
+5. **OpenRouter Jev fallback** — `~typesafe/jev-latest` on
+   `https://openrouter.ai/api/alpha/decisions` when TypeSafe is unhealthy;
+   operator must allow OpenRouter provider `typesafe`.
+6. **CI hygiene** — cancel superseded Actions after merges (`BUILD_AND_CI.md`).
+7. **Pixel** — fresh install allowed; UI is operator-driven; agents: install + passive logs.
+8. **Scoring** — no mid-wave scoring; after wave: harness + logs + operator phone session.
+
+## Fleet at session close (re-derive before treating as live)
+
+| Node | Last orchestrator observation |
+|---|---|
+| Windows CLI | `51edac4` main, healthy, peer AWS, binary under `tmp/radio-candidates/51edac4b/` |
+| AWS cloud | `51edac4b` healthy, identity preserved, seed-dial + gossip + custody retention |
+| Pixel | `51edac4b` APK installed (authorized fresh install); ADB connected |
+
+`origin/main` at close: `9d37f9e6` (#345). Staged open work: **PR #347**
+(local harness + OpenRouter JEV fallback) — merge when required CI green.
+
+## Freebuff next steps
+
+1. Merge #347 if open and green (`scripts/pr_scope.sh 347`).
+2. Paste DISPATCHABLE tickets from `HANDOFF/freebuff/README.md`.
+3. Worktrees + PRs; Rule-8 as required; JEV DONE contract.
+4. After Wave-1 + WP5: master plan §4 checklist → operator 0.4.0 tag.
+
+# ===== END RESUME 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-17, evening) — HISTORY -----
+
+
+## Merge train: carrier landed; #295 is the last member in flight
+
+Merged to main on 2026-09-17, each verified green immediately before merge:
+- #288 — V040 multi-transport store-and-forward carrier (absorbs #290/#292/
+  #293/#294/#296/#297) — 34/34 checks green; merge commit d9c576e1.
+- #289 — Android Ed25519 curve-check consolidation — all lanes green.
+- #283 — V1.0.0 readiness audit + Linux-first takeover plan (docs only).
+- #295 (AND-01/02/03) — final CI in flight at handoff time; the Android JVM
+  lane that had been red is green on the fixed head.
+
+main tip at handoff: eb55756957e2d01f558321b374258a3c05750181 (was 1e2fb747).
+
+Rule-8 review evidence on file for today's gated merges:
+- HANDOFF/review/RULE8_PR296_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+- HANDOFF/review/RULE8_PR297_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+- HANDOFF/review/RULE8_PR289_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+The carrier's own gated body remains covered by the 2026-09-14 APPROVE
+(bod-9ee86618).
+
+Repo constraint worth remembering: branch protection requires up-to-date
+branches, so merges serialize — each merge invalidates every other open PR's
+cycle on the same base, and GitHub auto-merge is DISABLED repo-wide
+(`enablePullRequestAutoMerge` blocked), so landings must be polled manually.
+
+## Tag gate: NOT READY — remaining-findings backlog
+
+HANDOFF/V040_REMAINING_FINDINGS_BACKLOG_2026-09-17.md carries per-finding
+verification status measured against live main. Closed today: CLI-01 and
+SEC-01 (verified fixed on main), CRYPTO-01 / TRN-03 / CLI-03 / CORE-02
+(merged PRs), TRN-01 (PR #292), TRN-08 (audited site no longer matches the
+code). Still open: TRN-04 (sender auth + TTL), TRN-07 (global relay budget),
+AND-06 (Kotlin BigInteger), SEC-03 (sled waivers); eight further findings
+need a re-baseline pass because the audit's line refs have drifted.
+
+## Fleet re-audit (read-only, 2026-09-17T19:54Z) — live, NOT same-candidate
+
+HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260917T195444Z_PREFLIGHT.md
+- Windows CLI: core 597e2c72 / git_hash 7a2c16c3, exe sha256 9b251c27...
+  (68 and 43 commits behind main); PID 18124 on 127.0.0.1:9876.
+- AWS i-0b41aab756eabd514 (18.234.62.247, private 172.31.18.74): image
+  testbotz/scmessenger:sha-6acaa23 equals its runtime hash 6acaa231 (44 behind
+  main); nickname null; /version build_time empty.
+- Pixel 6a `bluejay` (Android 17): app 0.4.0 / versionCode 15; pulled base.apk
+  sha256 4a0972b2... byte-identical to the 2026-09-16 local build.
+- Live evidence today: Pixel -> cloud node delivery in 265 ms, gossipsub
+  received from BOTH other nodes, 29 ledger-canonicalization events.
+- A redeploy of all three nodes is required before any same-candidate
+  certification run; BLE isolation/probe phases were NOT executed.
 
 # ===== RESUME HERE (2026-09-15, evening) =====
 

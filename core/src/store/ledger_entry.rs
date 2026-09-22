@@ -233,6 +233,11 @@ static SAVE_TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 struct SharedLedgerState {
     entries: Arc<Mutex<Vec<LedgerEntry>>>,
     save_lock: Arc<Mutex<()>>,
+    /// The owning node's own identity, shared for the same reason `entries` is:
+    /// two handles over one storage path write the SAME ledger, so a filter
+    /// armed on one handle and inert on the other would be a hole in this same
+    /// rule rather than a separate behaviour.
+    own_identity_forms: Arc<Mutex<Vec<String>>>,
 }
 
 fn ledger_state_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedLedgerState>>> {
@@ -317,6 +322,7 @@ fn shared_ledger_state(storage_path: &Path) -> Arc<SharedLedgerState> {
     let state = Arc::new(SharedLedgerState {
         entries: Arc::new(Mutex::new(Vec::new())),
         save_lock: Arc::new(Mutex::new(())),
+        own_identity_forms: Arc::new(Mutex::new(Vec::new())),
     });
     registry.insert(storage_path.to_path_buf(), Arc::downgrade(&state));
     state
@@ -486,7 +492,10 @@ pub fn is_self_certifying_binding(peer_id: &str, public_key_hex: &str) -> bool {
 // UNIFICATION: live canonicalization helper — mirrors load() migration 747-817.
 // Converts libp2p 12D3 peer_id to canonical 30d0fa public_key_hex on every write,
 // preventing duplicate nodes where ledger.json already collapsed to hex.
-fn canonical_ledger_peer_id(peer_id: &str, public_key: Option<&str>) -> Option<String> {
+/// Also the single owner for "which key is this peer's queue stored under":
+/// `store::outbox` calls this (with no public-key hint) so a queue written under
+/// one representation of a peer is still drainable under another.
+pub(crate) fn canonical_ledger_peer_id(peer_id: &str, public_key: Option<&str>) -> Option<String> {
     let trimmed = peer_id.trim();
     if trimmed.is_empty() {
         return None;
@@ -821,6 +830,13 @@ pub struct LedgerManager {
     /// Serializes durable snapshots so concurrent mutators cannot write out of
     /// snapshot order. Held from before the entries mutation until after rename.
     save_lock: Arc<Mutex<()>>,
+    /// Every accepted spelling of THIS node's own identity, supplied by
+    /// [`Self::set_own_identity`] once identity initialisation knows it.
+    ///
+    /// Empty until then, and an empty set means the self-filter is INERT --
+    /// exactly the pre-existing behaviour, which is what a ledger with no owner
+    /// identity (ephemeral cores, tests, binding consumers) should get.
+    own_identity_forms: Arc<Mutex<Vec<String>>>,
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
@@ -838,6 +854,7 @@ impl LedgerManager {
             storage_path: Some(storage_path),
             entries: Arc::clone(&shared_state.entries),
             save_lock: Arc::clone(&shared_state.save_lock),
+            own_identity_forms: Arc::clone(&shared_state.own_identity_forms),
             _shared_state: Some(shared_state),
         }
     }
@@ -1222,6 +1239,25 @@ impl LedgerManager {
             }
         }
 
+        // tier_a A8 (issue I-06): the node must never store ITSELF as a peer.
+        // Observed on both always-on nodes as entries whose peer_id is the
+        // node's own public key at its own listen addresses, which makes the
+        // node dial itself and spend the same per-peer connection budget real
+        // peers need. Uses the same identity rule as the legacy import; see
+        // `is_own_identity` for why the address half is not applied here.
+        if self.is_own_identity(&peer_id) {
+            // INFO, not DEBUG, matching the neighbouring write-path decision
+            // (`ledger_canonical_hex_live`) and because this is the answer to a
+            // real question: why is this peer missing from our peer store?
+            tracing::info!(
+                event = "ledger_self_entry_rejected",
+                path = "record_connection",
+                multiaddr = %multiaddr,
+                "refusing to record a ledger entry for our own identity"
+            );
+            return;
+        }
+
         let snapshot = {
             let mut entries = self.entries.lock();
             let target_port = get_multiaddr_port(&multiaddr);
@@ -1346,6 +1382,20 @@ impl LedgerManager {
             tracing::debug!(
                 "Refusing to annotate a DNS-form or transport-less multiaddr: {}",
                 multiaddr
+            );
+            return;
+        }
+        // tier_a A8 (issue I-06): identity learned from ANY source -- a seed, an
+        // invite, an identity-sync hint -- may not be our own. Otherwise the
+        // hint path can rewrite an existing row to our identity and the node is
+        // back to storing itself, with the same self-dial cost. Same rule as the
+        // three write paths.
+        if self.is_own_identity(&peer_id) {
+            tracing::info!(
+                event = "ledger_self_entry_rejected",
+                path = "annotate_identity",
+                multiaddr = %multiaddr,
+                "refusing to annotate an entry with our own identity"
             );
             return;
         }
@@ -1567,6 +1617,63 @@ impl LedgerManager {
 /// [`NetworkMode`] or exist purely to keep the swarm event loop bounded, and
 /// neither concept belongs in the mobile binding.
 impl LedgerManager {
+    /// Teach the ledger this node's own identity, so the runtime write paths can
+    /// refuse to store the node as one of its own peers (tier_a A8 / issue I-06).
+    ///
+    /// Rust-only, like the rest of this block: it is an internal rule, not a
+    /// binding concept, and it is what the write paths consult.
+    ///
+    /// Both stored spellings are recorded, because the store holds both: entries
+    /// written before the hex migration carry the libp2p PeerId, current writes
+    /// carry the canonical public-key hex. Canonicalisation goes through
+    /// [`canonical_ledger_peer_id`], the same function the write path and the
+    /// load-time migration use, so the three cannot drift apart.
+    ///
+    /// Until this is called the filter is inert and behaviour is unchanged.
+    /// Existing entries are NOT retroactively reaped here: removing already
+    /// stored rows is the load-time migration's job, not a setter's.
+    pub fn set_own_identity(&self, public_key_hex: &str, libp2p_peer_id: Option<&str>) {
+        let mut forms: Vec<String> = Vec::new();
+        let hex = public_key_hex.trim().to_lowercase();
+        if !hex.is_empty() {
+            forms.push(hex);
+        }
+        if let Some(peer_id) = libp2p_peer_id {
+            let peer_id = peer_id.trim().to_string();
+            if !peer_id.is_empty() {
+                if let Some(canonical) = canonical_ledger_peer_id(&peer_id, None) {
+                    forms.push(canonical);
+                }
+                forms.push(peer_id);
+            }
+        }
+        forms.sort();
+        forms.dedup();
+        *self.own_identity_forms.lock() = forms;
+    }
+
+    /// The IDENTITY half of the self-entry rule that
+    /// [`Self::import_legacy_cli_entries`] already applies, expressed once so
+    /// the legacy import and the runtime write paths cannot disagree about what
+    /// "self" means.
+    ///
+    /// The ADDRESS half of that rule is deliberately NOT reproduced here. An
+    /// entry whose `peer_id` is a *different* node but whose multiaddr traverses
+    /// this node's own address is how a relay records a circuit through itself
+    /// (`/p2p/<self>/p2p-circuit`); dropping those would delete relay routes.
+    /// Which of those rows tier_a's A8 should count is an operator ruling, not
+    /// something this filter may decide by deleting them.
+    fn is_own_identity(&self, peer_id: &str) -> bool {
+        let peer_id = peer_id.trim();
+        if peer_id.is_empty() {
+            return false;
+        }
+        self.own_identity_forms
+            .lock()
+            .iter()
+            .any(|form| form.eq_ignore_ascii_case(peer_id))
+    }
+
     fn save_with_entries(&self, entries: &[LedgerEntry]) -> Result<(), crate::IronCoreError> {
         if self.storage_path.is_none() {
             return Ok(());
@@ -1638,6 +1745,7 @@ impl LedgerManager {
             _shared_state: None,
             entries: Arc::new(Mutex::new(Vec::new())),
             save_lock: Arc::new(Mutex::new(())),
+            own_identity_forms: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1880,6 +1988,18 @@ impl LedgerManager {
         if listen_addrs.is_empty() || peer_id.is_empty() {
             return 0;
         }
+        // tier_a A8 (issue I-06): an Identify advertisement cannot make us one
+        // of our own peers either. Same identity rule as `record_connection`.
+        if self.is_own_identity(peer_id) {
+            // INFO, for the reason given on the twin guard in `record_connection`.
+            tracing::info!(
+                event = "ledger_self_entry_rejected",
+                path = "record_identified_peer",
+                peer_id = %peer_id,
+                "refusing to record an advertised identity that is our own"
+            );
+            return 0;
+        }
         let mut recorded = 0usize;
         for addr in listen_addrs {
             let stripped = strip_peer_id_component(addr);
@@ -2063,6 +2183,26 @@ impl LedgerManager {
         for shared in entries {
             let stripped = strip_peer_id_component(&shared.multiaddr);
             if stripped.is_empty() || !is_recordable_multiaddr(&stripped) {
+                continue;
+            }
+            // tier_a A8 (issue I-06): a peer's ledger share cannot hand us a row
+            // about OURSELVES. The wire is not authoritative about our identity,
+            // the address in such a row is at best a stale view of where we
+            // were, and the row is precisely what makes a node dial itself. Same
+            // rule as `record_connection`/`record_identified_peer` -- the merge
+            // path is simply the third writer, and it is the one peers actually
+            // reach now that discovery is ledger sharing.
+            if shared
+                .last_peer_id
+                .as_deref()
+                .is_some_and(|pid| self.is_own_identity(pid))
+            {
+                tracing::info!(
+                    event = "ledger_self_entry_rejected",
+                    path = "merge_shared_entries",
+                    multiaddr = %stripped,
+                    "refusing a shared ledger row that claims our own identity"
+                );
                 continue;
             }
             let _save_guard = self.save_lock.lock();
@@ -3209,6 +3349,159 @@ mod tests {
         assert_eq!(seeds[0].multiaddr, "/ip4/10.0.0.1/tcp/9001");
         // A peer id smuggled inside the multiaddr string must not survive.
         assert!(seeds[0].peer_id.is_none());
+    }
+
+    /// tier_a A8 / issue I-06: a node must not store ITSELF as one of its own
+    /// peers, on either runtime write path -- while a relay route that merely
+    /// TRAVERSES its own address for a different peer must survive, because that
+    /// is how a relay records a circuit through itself.
+    ///
+    /// The two halves are deliberately asserted together: a filter that just
+    /// refused everything containing our own address would pass the first half
+    /// and silently delete relay routes.
+    #[test]
+    fn own_identity_is_never_recorded_but_relay_routes_are_kept() {
+        let (_dir, ledger) = manager();
+        let (me, me_hex) = self_certifying_pair();
+        // The libp2p spelling the wire carries and the canonical hex the store
+        // actually writes are the same identity and must both be recognised.
+        let me_canonical = canonical_ledger_peer_id(&me, Some(&me_hex))
+            .expect("a self-certifying pair has a canonical hex form");
+        assert_eq!(
+            me_canonical, me_hex,
+            "a self-certifying peer id canonicalises to its own public-key hex"
+        );
+        ledger.set_own_identity(&me_hex, Some(&me));
+
+        // 1. A connection to ourselves, in both stored spellings.
+        ledger.record_connection("/ip4/192.168.0.121/tcp/443".to_string(), me.clone());
+        ledger.record_connection(
+            "/ip4/192.168.0.121/tcp/8080".to_string(),
+            me_canonical.clone(),
+        );
+        assert!(
+            ledger.entries.lock().is_empty(),
+            "a self connection must not be stored, got {:?}",
+            ledger
+                .entries
+                .lock()
+                .iter()
+                .map(|e| e.multiaddr.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // 2. An Identify advertisement of ourselves is refused the same way.
+        let advertised = ledger
+            .record_identified_peer(&me_canonical, &["/ip4/192.168.0.121/tcp/443".to_string()]);
+        assert_eq!(
+            advertised, 0,
+            "our own advertised identity must record nothing"
+        );
+        assert!(ledger.entries.lock().is_empty());
+
+        // 3. The divergence: another peer reached THROUGH our own address is a
+        //    relay circuit, not a self-entry, and must still be recorded.
+        let other = peer();
+        let relay_route = format!("/ip4/192.168.0.121/tcp/8080/p2p/{}/p2p-circuit", me);
+        ledger.record_connection(relay_route.clone(), other.clone());
+        let stored = ledger.entries.lock().clone();
+        assert_eq!(
+            stored.len(),
+            1,
+            "a relay route through our own address must survive, got {:?}",
+            stored
+                .iter()
+                .map(|e| e.multiaddr.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(stored[0].multiaddr, relay_route);
+
+        // 4. Control: a plain remote peer still records, so step 1 cannot pass
+        //    vacuously by refusing every write.
+        ledger.record_connection("/ip4/10.0.0.9/tcp/9001".to_string(), peer());
+        assert_eq!(ledger.entries.lock().len(), 2);
+    }
+
+    /// The filter is inert until an identity is supplied, so a ledger with no
+    /// owner (ephemeral core, binding consumer, test) keeps its previous
+    /// behaviour -- and teaching it later does not retroactively reap rows.
+    #[test]
+    fn self_filter_is_inert_until_identity_is_known() {
+        let (_dir, ledger) = manager();
+        let (me, me_hex) = self_certifying_pair();
+        ledger.record_connection("/ip4/192.168.0.121/tcp/443".to_string(), me.clone());
+        assert_eq!(ledger.entries.lock().len(), 1);
+
+        ledger.set_own_identity(&me_hex, Some(&me));
+
+        assert_eq!(
+            ledger.entries.lock().len(),
+            1,
+            "the setter must not retroactively reap existing rows"
+        );
+        ledger.record_connection("/ip4/192.168.0.121/tcp/444".to_string(), me.clone());
+        assert_eq!(
+            ledger.entries.lock().len(),
+            1,
+            "new self writes are refused once the identity is known"
+        );
+    }
+
+    /// tier_a A8 (issue I-06): the ledger is fed by PEERS as well as by our own
+    /// observations, and ledger sharing is now the discovery mechanism. A shared
+    /// row that claims our own identity, or an identity hint that names us, must
+    /// be refused by the same rule the local write paths use -- otherwise the
+    /// wire is a second way to make the node store itself.
+    #[test]
+    fn wire_supplied_identity_cannot_make_the_node_its_own_peer() {
+        let (_dir, ledger) = manager();
+        let (me, me_hex) = self_certifying_pair();
+        ledger.set_own_identity(&me_hex, Some(&me));
+
+        // 1. A shared row about ourselves is refused outright.
+        let merged = ledger.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: "/ip4/192.168.0.121/tcp/443".to_string(),
+            last_peer_id: Some(me_hex.clone()),
+            last_seen: 1_700_000_000,
+            known_topics: Vec::new(),
+        }]);
+        assert_eq!(
+            merged, 0,
+            "a shared row that claims our identity must not be merged"
+        );
+        assert!(
+            ledger.entries.lock().is_empty(),
+            "the wire must not be able to add a self row, got {:?}",
+            ledger
+                .entries
+                .lock()
+                .iter()
+                .map(|e| e.multiaddr.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // 2. Control: a foreign shared row still merges, so step 1 cannot pass
+        //    by refusing every shared row.
+        let (other, _other_hex) = self_certifying_pair();
+        let merged = ledger.merge_shared_entries(&[SharedPeerEntry {
+            multiaddr: "/ip4/10.0.0.9/tcp/9001".to_string(),
+            last_peer_id: Some(other.clone()),
+            last_seen: 1_700_000_000,
+            known_topics: Vec::new(),
+        }]);
+        assert_eq!(merged, 1, "a foreign shared row must still merge");
+        assert_eq!(ledger.entries.lock().len(), 1);
+
+        // 3. An identity hint naming US, aimed at an address we already hold, is
+        //    refused as well -- otherwise the hint rewrites the row to our id.
+        ledger.annotate_identity("/ip4/10.0.0.9/tcp/9001".to_string(), me, None, None);
+        let stored = ledger.entries.lock().clone();
+        assert_eq!(stored.len(), 1, "an identity hint must not add rows");
+        assert!(
+            stored[0].peer_id.as_deref() != Some(me_hex.as_str()),
+            "an identity hint must not stamp our identity onto a row, got {:?}",
+            stored[0].peer_id
+        );
     }
 
     #[test]

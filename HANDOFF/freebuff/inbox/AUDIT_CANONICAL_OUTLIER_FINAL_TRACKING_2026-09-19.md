@@ -2,10 +2,9 @@ Task: AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md
 Type: DONE
 Milestone: FINALIZE / TRACKING (operator-directed commit + push)
 
-PR: https://github.com/Sovereign-Communication/SCMessenger/pull/335
-    State: OPEN (confirmed this session: `gh pr view 335 --json number,state,url`)
-    Base: main
-    Head: glm/canonical-outlier-audit
+PR: docs-first landing on branch `docs/canonical-outlier-audit-2026-09-19`
+    (from origin/main). Mixed PR #335 is superseded for the audit package.
+    State: see DOCS_SPLIT note 2026-09-20 and the docs PR number in INDEX.
 
 Branch: glm/canonical-outlier-audit
 Origin tip before finalize commit: 63047f1b (iter 6 FINAL already on origin)

@@ -52,6 +52,14 @@ class NotificationHelperGateTest {
 
     @Before
     fun setUp() {
+        notificationManager = mockk(relaxed = true)
+        every { notificationManager.currentInterruptionFilter } returns
+            NotificationManager.INTERRUPTION_FILTER_ALL
+        context = mockk(relaxed = true)
+        every { context.getSystemService(Context.NOTIFICATION_SERVICE) } returns notificationManager
+        every { context.getSystemService(any<String>()) } returns notificationManager
+
+        NotificationHelper.resetNotificationStats()
         // Reset to known hydrated defaults before each test (object is process-global).
         NotificationHelper.updateSettings(
             enabled = true,
@@ -62,17 +70,11 @@ class NotificationHelperGateTest {
             sound = true,
             badge = true
         )
-        NotificationHelper.resetNotificationStats()
-        notificationManager = mockk(relaxed = true)
-        every { notificationManager.currentInterruptionFilter } returns
-            NotificationManager.INTERRUPTION_FILTER_ALL
-        context = mockk(relaxed = true)
-        every { context.getSystemService(Context.NOTIFICATION_SERVICE) } returns notificationManager
     }
 
     @After
     fun tearDown() {
-        setUp()
+        NotificationHelper.resetNotificationStats()
     }
 
     // ---------------------------------------------------------------- unhydrated
@@ -206,6 +208,44 @@ class NotificationHelperGateTest {
         assertEquals(false, NotificationHelper.shouldPostGroupSummary(true, false))
         assertEquals(false, NotificationHelper.shouldPostGroupSummary(false, true))
         assertEquals(true, NotificationHelper.shouldPostGroupSummary(true, true))
+    }
+
+    /**
+     * Replay pin under the module testability contract (no Robolectric): the
+     * replayed message must not reach NotificationCompat.Builder, so the DM
+     * kind gate is switched OFF before hydration. The replay still proves what
+     * matters: it runs, it is NOT re-suppressed at the settings gate, and it
+     * gets past DM classification (where the "dm" counter increments, the same
+     * pin as the `enabled gate passes the settings gate` test above). Full
+     * posting of a replayed notification is covered by on-device log evidence.
+     */
+    @Test
+    fun `unhydrated gate buffers message and replays when hydrated ON`() {
+        NotificationHelper.updateSettings(dmEnabled = false)
+        NotificationHelper.notificationsEnabled = null
+        showMessage()
+
+        assertEquals("unhydrated gate must record a settings suppression", 1, stat("suppressed_settings"))
+        assertEquals("message must not be posted as DM yet", 0, stat("dm"))
+
+        // Hydration finishes with notifications enabled:
+        NotificationHelper.updateSettings(enabled = true)
+
+        assertEquals("buffered message must replay upon hydration", 1, stat("dm"))
+    }
+
+    @Test
+    fun `unhydrated gate buffers message and discards when hydrated OFF`() {
+        NotificationHelper.notificationsEnabled = null
+        showMessage()
+
+        assertEquals("unhydrated gate must record a settings suppression", 1, stat("suppressed_settings"))
+        assertEquals("message must not be posted as DM yet", 0, stat("dm"))
+
+        // Hydration finishes with notifications disabled:
+        NotificationHelper.updateSettings(enabled = false)
+
+        assertEquals("buffered message must not be replayed when hydration is disabled", 0, stat("dm"))
     }
 
     // ---------------------------------------------------------------- helpers

@@ -8,7 +8,6 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.service.MeshEventBus
 import com.scmessenger.android.service.StatusEvent
 import com.scmessenger.android.utils.toEpochSeconds
-import com.scmessenger.android.utils.PeerIdValidator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +20,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import javax.inject.Inject
+import com.scmessenger.android.utils.PeerIdValidator
+
+// UNIFICATION P1: Ed25519 curve-point validation consolidated into
+// PeerIdValidator.isValidEd25519Point (single authoritative Kotlin copy,
+// pinned to Rust is_valid_public_key by shared dalek-derived test vectors).
 
 /**
  * ViewModel for the dashboard screen.
@@ -649,16 +653,12 @@ class DashboardViewModel @Inject constructor(
         )
     }
 
-    // UNIFICATION P1-1: Validate Ed25519 curve point — roughly 50% of blake3 identity_id hashes are valid 64-hex
-    // but NOT valid curve points. Rust's is_valid_public_key checks VerifyingKey::from_bytes; Kotlin previously
-    // treated any 64-hex as canonical pubkey, so identity_id was accepted as pubkey and failed to merge with 30d0fa.
-    // We replicate the Rust check via pure Kotlin (BigInteger decompression). If not a valid point, return null
-    // so caller treats it as identity_id, not pubkey.
     private fun normalizePublicKey(value: String?): String? {
         val trimmed = value?.trim() ?: return null
         if (trimmed.length != 64) return null
         if (!trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
-        return PeerIdValidator.normalizePublicKeyHex(trimmed)
+        if (!PeerIdValidator.isValidEd25519Point(trimmed)) return null
+        return trimmed.lowercase()
     }
 
     /**

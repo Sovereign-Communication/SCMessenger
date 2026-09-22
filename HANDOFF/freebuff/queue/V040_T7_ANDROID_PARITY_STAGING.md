@@ -1,6 +1,9 @@
 # V040-T7 -- Stage the Android work so device time is verification, never authoring
 
-Status: OPEN (filed 2026-08-31, operator directive)
+Status: MERGED -- PR #312 merged 2026-09-19T23:05:21Z (verified `gh pr view 312`
+2026-09-20). Pre-merge note: branch `freebuff/t7-android-parity-staging`, commit
+`4878eab5`; staging scripts remain the device-verification path. Do not
+re-dispatch implementation.
 Priority: P1 -- runs whenever the handset is away, which is most of the time
 Lane: Freebuff / DeepSeek V4 Flash
 Scope: `android/`, plus new verification scripts under `scripts/device/`. No
@@ -88,3 +91,62 @@ those devices does not survive it.
 - If an item cannot be made parity-ready without the device, say so explicitly
   in the inventory with the reason. `UNVERIFIED` and "needs device to author"
   are both acceptable answers; a silent omission is not.
+
+---
+
+## Hand-off -- 2026-09-19 (Freebuff lane)
+
+Landed in PR #312: `scripts/device/`, twelve new files, no source changes.
+
+- `README.md` -- the Step 1 inventory. Every device-gated item (D4, D6, D7, the
+  churn gate, P1-09, P1-14, P1-16, P1-17, P1-18) with the four elements marked,
+  plus the device-gated `HANDOFF/todo/` defect tickets listed with element 2 as
+  `[--]`; the device-day order of operations; the signing consequence per scored
+  item; the flag and env surface; and what this pass did not verify.
+- `lib.sh` -- the single owner of the device-day contract: preconditions (device
+  visible to adb, installed APK SHA against the intended build, signer digest,
+  physical-not-emulator where radios matter, CLI node reachable, build stamps
+  compared per P1-04), the verdict vocabulary, one artifact directory per run,
+  the operator gate for the handset's human path, and the passive evidence pull
+  per the Pixel runbook (UTF-16 `mesh.log` decoded).
+- One script per item, named for the item, plus `selftest.sh`.
+
+Evidence for acceptance 2, with no handset attached: every item script reaches
+its precondition and fails fast with `[FAIL] no device: adb reports no handset in
+'device' state`; `p1_17` exits 0 with `[SKIP]` because that cell is waived.
+`bash -n` clean on all eleven scripts; `docs_sync_check.sh` PASS;
+`scripts/device/selftest.sh` exit 0 with every machinery check passing.
+
+Two rules the scripts enforce rather than assume, both stricter than the plan's
+wording, because a device day that produces a confident wrong verdict wastes the
+window:
+
+- D6 and D7 prove the state they claim to test before accepting any delivery as
+  evidence: D6 polls until the path leaves `DirectPreferred` and fails the run if
+  it never does; D7 asserts public unreachability on both sides and that the CLI
+  node still answers its own API.
+- `g3_churn_gate.sh` refuses an unattributable rejoin. A healthy rig reports
+  `DirectPreferred` whether or not anything churned, so the first revision of
+  this script printed `[OK] Windows node rejoined the moved cloud node unaided`
+  on a run where no cloud address had been supplied at all. It now skips without
+  an address, warns when the path was already healthy, and passes only when the
+  new address is present in the node's own peer view.
+
+Deliberately not done in this pass:
+
+- **P1-16 is not marked ready.** Element 1 is unproven: P1-15's question -- is
+  CLI `ble_mesh` <-> Android BLE a data path today or discovery-only -- is
+  unsettled, and no source change for it is in this PR. Running the script is how
+  that question gets answered.
+- **P1-17 stays waived** (`HANDOFF/todo/_QUEUE.md:326`, one handset); the script
+  runs only under `--force` with two devices attached.
+- **The device-gated `HANDOFF/todo/` defect tickets get no per-ticket script**:
+  they need the handset to diagnose, and their pass/fail condition is not yet a
+  runnable assertion. They consume the same passive evidence the scripts pull.
+- **Acceptance 4's Rust and Android gates were not run locally.** This diff adds
+  only shell and markdown, and `df -h .` reports 4.7G free of 237G (99% used), so
+  rule 17 makes CI the verifier; CI on #312 is the verdict.
+
+Prerequisites for a device day: `scmessenger-cli` on `PATH` (otherwise
+`g3_churn_gate.sh`'s seed-list check warns instead of asserting), and an
+unrecognised flag exits 2 with the offending argument rather than being ignored.

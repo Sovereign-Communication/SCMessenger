@@ -356,6 +356,37 @@ pub(crate) fn classify_storage_error(err: &str) -> IronCoreError {
     }
 }
 
+/// Rust-only surface for [`IronCore`]. Nothing here may move into the
+/// `uniffi::export`ed block below: `#[uniffi::export]` on an impl block exports
+/// the methods it contains whether or not they are `pub`, and the FFI surface is
+/// snapshot-checked by `scripts/ffi_surface.sh` (the CI job is "FFI Surface
+/// Contract"). A private helper that lands in that block silently becomes a new
+/// Kotlin/Swift binding and fails the job.
+impl IronCore {
+    /// Arm the ledger's self-entry filter (tier_a A8 / issue I-06) with this
+    /// node's own identity, in both spellings the store can hold.
+    ///
+    /// This MUST run in the hydrating constructors, not only in
+    /// `initialize_identity`: a real node starts with an identity that is
+    /// *loaded* from its store, so `initialize_identity` never runs there and a
+    /// filter armed only in it would never fire -- every unit test of the filter
+    /// would still pass while both always-on nodes stayed red. Callers hold no
+    /// identity lock; `initialize_identity` therefore arms the ledger directly
+    /// with the lock it already holds rather than calling this.
+    fn arm_ledger_self_filter(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let identity = self.identity.read();
+            if let Some(keys) = identity.keys() {
+                self.ledger_manager.set_own_identity(
+                    &keys.public_key_hex(),
+                    keys.to_libp2p_peer_id().ok().as_deref(),
+                );
+            }
+        }
+    }
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 impl IronCore {
     /// Create an in-memory IronCore with no persistent storage.
@@ -389,7 +420,7 @@ impl IronCore {
         let transport_memory =
             crate::store::transport_memory::TransportMemoryStore::new(backend.clone());
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(IdentityManager::new())),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -439,7 +470,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -517,7 +550,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -563,7 +596,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent storage and a log directory.
@@ -648,7 +683,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -694,7 +729,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -814,6 +851,21 @@ impl IronCore {
 
         // Initialize drift engine now that we have a public key
         if let Some(keys) = identity.keys() {
+            // tier_a A8 (issue I-06): the ledger must know whose identity is
+            // "self" before any peer is recorded, or it stores our own key and
+            // listen addresses as a peer and then dials itself, spending the
+            // same per-peer connection budget real peers need. Both stored
+            // spellings are supplied because the ledger holds hex (current
+            // writes) as well as libp2p PeerIds (pre-hex-migration rows).
+            //
+            // Armed here with the guard this scope already holds (the helper
+            // takes a read lock, which would deadlock against it).
+            #[cfg(not(target_arch = "wasm32"))]
+            self.ledger_manager.set_own_identity(
+                &keys.public_key_hex(),
+                keys.to_libp2p_peer_id().ok().as_deref(),
+            );
+
             let pk_bytes = keys.signing_key.verifying_key().to_bytes();
             {
                 let mut engine = self.drift_engine.write();
@@ -3879,8 +3931,26 @@ impl IronCore {
     pub fn get_identity_keys(&self) -> Option<crate::identity::IdentityKeys> {
         self.identity.read().keys().cloned()
     }
+    /// Drain queued messages for `peer_id`.
+    ///
+    /// Key resolution (base58 PeerId vs canonical 64-hex public key) happens
+    /// inside `Outbox::drain_for_peer` via `resolve_queue_key` /
+    /// `canonical_peer_key` (PR #322). A second drain with the extracted hex
+    /// form is kept as a belt-and-suspenders path for callers that bypass
+    /// canonicalization (CO-B-001); if the outbox already resolved the key the
+    /// second drain is a no-op.
     pub fn flush_outbox_for_peer(&self, peer_id: &str) -> Vec<QueuedMessage> {
-        self.outbox.write().drain_for_peer(peer_id)
+        let mut messages = self.outbox.write().drain_for_peer(peer_id);
+        if let Ok(pid) = peer_id.parse::<libp2p::PeerId>() {
+            if let Ok(pk) = crate::transport::extract_ed25519_public_key_from_peer_id(&pid) {
+                let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
+                if hex_pk != peer_id {
+                    let mut canonical = self.outbox.write().drain_for_peer(&hex_pk);
+                    messages.append(&mut canonical);
+                }
+            }
+        }
+        messages
     }
     pub fn contacts_store_manager(&self) -> CoreContactManager {
         self.contact_manager.read().clone()
@@ -4364,6 +4434,23 @@ impl IronCore {
         &self,
     ) -> Option<crate::store::relay_custody::StoragePressureState> {
         self.relay_custody_store.read().storage_pressure_state()
+    }
+
+    /// TRN-04: run the custody retention sweep on demand.
+    ///
+    /// Removes undelivered custody records whose accepted-at time is older than
+    /// `max_age_ms` and returns a report. `max_age_ms == 0` disables retention
+    /// for the call. The swarm runs this on its 5-minute prune tick; this
+    /// entry point exists so a node operator (CLI, diagnostics) can run it
+    /// explicitly against a live node.
+    pub fn purge_expired_custody(
+        &self,
+        max_age_ms: u64,
+    ) -> Option<crate::store::relay_custody::CustodyRetentionReport> {
+        self.relay_custody_store
+            .read()
+            .purge_expired_custody(max_age_ms)
+            .ok()
     }
 
     /// Create a persistent relay custody store for the given peer ID.
@@ -4995,6 +5082,67 @@ mod tests {
         );
     }
 
+    /// tier_a A8 (issue I-06): the ledger's self-entry filter must be armed by
+    /// the HYDRATING constructor, not only by `initialize_identity`. A deployed
+    /// node loads an existing identity, so `initialize_identity` never runs
+    /// there -- a filter armed only in it is dead code on every real node while
+    /// every unit test of the filter itself still passes.
+    #[test]
+    fn reopened_core_arms_ledger_self_filter_without_initialize_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+
+        // First run: mint and persist an identity.
+        let created = IronCore::with_storage(path.clone());
+        created.grant_consent();
+        created
+            .initialize_identity()
+            .expect("identity must initialise on healthy storage");
+        let me_hex = created.public_key_hex().expect("identity has a public key");
+        drop(created);
+
+        // Second run: the identity is HYDRATED. Nothing calls
+        // initialize_identity on this instance.
+        let reopened = IronCore::with_storage(path);
+        assert!(
+            !reopened.is_storage_degraded(),
+            "reopened storage must be healthy, not degraded: {:?}",
+            reopened.storage_error()
+        );
+        assert_eq!(
+            reopened.public_key_hex().as_deref(),
+            Some(me_hex.as_str()),
+            "the second core must have hydrated the first core's identity"
+        );
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "a fresh ledger starts empty"
+        );
+
+        // The regression under test: this is our OWN identity, so it must be
+        // refused even though initialize_identity never ran here.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.7/tcp/9001".to_string(), me_hex.clone());
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "the hydrated core must refuse to record itself as a peer"
+        );
+
+        // Control: a foreign peer still records, so the assertion above cannot
+        // pass by refusing every write.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.8/tcp/9002".to_string(), "ab".repeat(32));
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            1,
+            "a foreign peer must still be recorded"
+        );
+    }
+
     #[test]
     fn lifecycle_concurrent_start_stop_keeps_running_and_drift_consistent() {
         let core = Arc::new(IronCore::new());
@@ -5477,6 +5625,64 @@ mod tests {
             "a recovered connection must re-drain the entry the race deferred (R9-F3)"
         );
         assert!(core.mark_message_sent(prepared_r9.message_id));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn flush_outbox_for_peer_drains_base58_flush_against_hex_queue_key() {
+        use crate::store::outbox::{MessageState, QueuedMessage};
+
+        const BASE58_PEER: &str = "12D3KooWD776DQdWh6iHV8Qcnpj9jvTXhpJAgSsFPbMCaRtQpFmn";
+        const HEX_PEER: &str = "30dce2bb779b4f1419f6d7d9e91b3ae201aed9e3b181aef674a9496f340a0645";
+
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let msg = QueuedMessage {
+            version: 1,
+            message_id: "cob001-msg".to_string(),
+            recipient_id: HEX_PEER.to_string(),
+            envelope_data: vec![9, 9, 9],
+            queued_at: 1,
+            attempts: 0,
+            next_retry_at: None,
+            in_custody: false,
+            custody_established_at: 0,
+            state: MessageState::Enqueued,
+        };
+        core.outbox.write().enqueue(msg).unwrap();
+        assert_eq!(core.outbox_count(), 1);
+
+        // Flush spelling used by wasm PeerDiscovered (base58), queue keyed as hex.
+        let drained = core.flush_outbox_for_peer(BASE58_PEER);
+        assert_eq!(
+            drained.len(),
+            1,
+            "base58 flush must drain a hex-keyed outbox entry (CO-B-001)"
+        );
+        assert_eq!(drained[0].message_id, "cob001-msg");
+        assert_eq!(core.outbox_count(), 0);
+
+        // Hex flush still works for hex-keyed entries.
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                message_id: "cob001-msg2".to_string(),
+                recipient_id: HEX_PEER.to_string(),
+                envelope_data: vec![1],
+                version: 1,
+                queued_at: 2,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: MessageState::Enqueued,
+            })
+            .unwrap();
+        let drained_hex = core.flush_outbox_for_peer(HEX_PEER);
+        assert_eq!(drained_hex.len(), 1);
+        assert_eq!(core.outbox_count(), 0);
     }
 
     #[test]

@@ -3,7 +3,6 @@ package com.scmessenger.android.util
 import android.content.Intent
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.UiAutomatorInstrumentation
 
 /**
  * Helper utility for force-stopping and restarting the test app.
@@ -82,11 +81,13 @@ object AppRestartHelper {
         val command = "am force-stop $packageName"
         try {
             val response = uiAutomation.executeShellCommand(command)
-            // Read and discard the response (usually empty or minimal)
-            response.use { stream ->
-                stream.readBytes()
+            // ParcelFileDescriptor: close the FD; do not call InputStream.readBytes()
+            // (receiver-type mismatch on this type) and do not UiAutomation.destroy().
+            try {
+                response.close()
+            } catch (_: Exception) {
+                // ignore — best-effort drain/close
             }
-            instrumentation.uiAutomation.destroy()
         } catch (e: Exception) {
             throw RuntimeException("Failed to force-stop package $packageName", e)
         }

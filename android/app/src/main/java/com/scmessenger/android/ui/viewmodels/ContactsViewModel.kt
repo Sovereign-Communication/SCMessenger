@@ -18,6 +18,10 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
+// UNIFICATION P1: Ed25519 curve-point validation consolidated into
+// PeerIdValidator.isValidEd25519Point (single authoritative Kotlin copy,
+// pinned to Rust is_valid_public_key by shared dalek-derived test vectors).
+
 /** A peer discovered on the mesh but not yet saved as a contact. */
 data class NearbyPeer(
     val peerId: String,
@@ -568,10 +572,9 @@ class ContactsViewModel @Inject constructor(
                     onComplete?.invoke(false)
                     return@launch
                 }
-                // UNIFICATION P1-1: Validate Ed25519 curve point — roughly 50% of blake3 identity_id hashes are valid
-                // 64-hex but NOT valid curve points. Rust's is_valid_public_key checks VerifyingKey::from_bytes;
-                // Kotlin must not accept identity_id as pubkey or merge with 30d0fa will fail. If not a valid point,
-                // treat as identity_id (not pubkey) and reject contact add as invalid pubkey.
+                // UNIFICATION P1: Ed25519 curve-point validation via PeerIdValidator (single authoritative
+                // Kotlin copy, pinned to Rust is_valid_public_key). If not a valid point, treat as identity_id
+                // (not pubkey) and reject contact add as invalid pubkey.
                 if (!PeerIdValidator.isValidEd25519Point(trimmedKey)) {
                     _error.value = "Public key is not a valid Ed25519 point (may be an identity_id hash, not a pubkey)"
                     onComplete?.invoke(false)

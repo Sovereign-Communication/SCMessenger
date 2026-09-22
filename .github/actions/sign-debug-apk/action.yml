@@ -1,0 +1,145 @@
+name: Sign debug APK with the pinned identity
+description: >-
+  Re-signs an AGP-produced debug APK with the repository's pinned debug signing
+  identity, so artifacts from consecutive CI runs share one certificate and can
+  be installed over previous builds with `adb install -r`.
+
+  Without a pinned identity every runner auto-generates its own
+  ~/.android/debug.keystore, so each run emits a different certificate and any
+  attempt to update an existing install fails with
+  INSTALL_FAILED_UPDATE_INCOMPATIBLE. See docs/ANDROID_RELEASE_SIGNING.md
+  ("Pinned debug signing for CI artifacts") for the keystore secret.
+
+  Fails closed as soon as a pinned keystore is supplied: if the re-signed APK's
+  certificate is not the keystore's own certificate, the step errors out rather
+  than publish an artifact that cannot install over previous installs. With no
+  keystore supplied it warns and leaves the APK as AGP produced it, so a
+  missing secret degrades the artifact instead of red-lighting the lane.
+
+inputs:
+  apk-path:
+    description: >-
+      Path of the debug APK to re-sign. Rewritten in place, so downstream steps
+      and the artifact upload path stay unchanged.
+    required: true
+  keystore-base64:
+    description: >-
+      Base64 of the pinned debug keystore. Callers must pass the repository
+      secret SCMESSENGER_DEBUG_KEYSTORE_BASE64 as this input. Do not reference
+      the secrets context inside this action.yml -- composite actions cannot
+      evaluate secrets.* here and GitHub fails template validation if the
+      expression appears (even in a description). Empty means no pinned
+      identity is configured.
+    required: false
+    default: ""
+  key-alias:
+    description: "Key alias inside the pinned keystore."
+    required: false
+    default: "androiddebugkey"
+  store-password:
+    description: >-
+      Keystore and key password. The default is the public Android debug
+      convention, which is not a secret; override it if the keystore was
+      generated with a different password.
+    required: false
+    default: "android"
+
+runs:
+  using: composite
+  steps:
+    - name: Re-sign debug APK with the pinned identity
+      shell: bash
+      env:
+        APK_PATH: ${{ inputs['apk-path'] }}
+        KEYSTORE_B64: ${{ inputs['keystore-base64'] }}
+        KEY_ALIAS: ${{ inputs['key-alias'] }}
+        STORE_PASSWORD: ${{ inputs['store-password'] }}
+      run: |
+        set -euo pipefail
+
+        SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+        APKSIGNER=$(find "$SDK_ROOT/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n 1 || true)
+        ZIPALIGN=$(find "$SDK_ROOT/build-tools" -name zipalign -type f 2>/dev/null | sort -V | tail -n 1 || true)
+
+        # Same extraction release.yml uses for the release APK: the digest is
+        # the last field of apksigner's "SHA-256 digest" line.
+        signer_digest() {
+          "$APKSIGNER" verify --print-certs "$1" 2>/dev/null \
+            | sed -nE 's/.*SHA-256 digest: ([0-9a-fA-F]+).*/\1/p' | head -n 1 | tr 'A-F' 'a-f'
+        }
+
+        if [ ! -f "$APK_PATH" ]; then
+          echo "::error::debug APK not found: $APK_PATH"
+          exit 1
+        fi
+
+        # No pinned identity configured: report what the artifact actually is
+        # rather than pretending it is shareable.
+        if [ -z "$KEYSTORE_B64" ]; then
+          ACTUAL=$(signer_digest "$APK_PATH" || true)
+          echo "::warning::SCMESSENGER_DEBUG_KEYSTORE_BASE64 is not set, so $APK_PATH keeps this runner's auto-generated debug signature (${ACTUAL:-unknown}). Every runner generates its own debug keystore, so this artifact cannot be installed over an existing install (adb install -r fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE). Set the secret per docs/ANDROID_RELEASE_SIGNING.md to make CI APKs installable over previous installs."
+          {
+            echo "### Android debug APK signing"
+            echo ""
+            echo "**No pinned identity.** \`SCMESSENGER_DEBUG_KEYSTORE_BASE64\` is not set, so this APK carries the runner's ephemeral debug signature (signer SHA-256 \`${ACTUAL:-unknown}\`)."
+            echo ""
+            echo "Usable for a fresh install on an unprovisioned device; **not** installable over an existing install."
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          exit 0
+        fi
+
+        if [ -z "$APKSIGNER" ] || [ -z "$ZIPALIGN" ]; then
+          echo "::error::apksigner/zipalign not found under $SDK_ROOT/build-tools; Android SDK build-tools are required to re-sign the debug APK"
+          exit 1
+        fi
+        if ! command -v keytool >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+          echo "::error::keytool and openssl are both required to read the pinned keystore certificate"
+          exit 1
+        fi
+
+        WORK="${RUNNER_TEMP:-/tmp}/pinned-debug-signing"
+        mkdir -p "$WORK"
+        KEYSTORE="$WORK/debug-pinned.keystore"
+        printf '%s' "$KEYSTORE_B64" | tr -d '\r' | base64 -d > "$KEYSTORE"
+        chmod 600 "$KEYSTORE"
+        if [ ! -s "$KEYSTORE" ]; then
+          echo "::error::SCMESSENGER_DEBUG_KEYSTORE_BASE64 did not decode to a keystore; re-generate it with 'base64 -w0 <keystore>'"
+          exit 1
+        fi
+
+        # Expected signer: the certificate inside the pinned keystore. Neither
+        # the alias nor the password is ever echoed.
+        EXPECTED=$(keytool -exportcert -rfc -alias "$KEY_ALIAS" -keystore "$KEYSTORE" \
+          -storepass "$STORE_PASSWORD" </dev/null 2>/dev/null \
+          | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed -nE 's/.*=//p' | tr -d ':' | tr 'A-F' 'a-f' || true)
+        if [ -z "$EXPECTED" ]; then
+          echo "::error::cannot read alias '$KEY_ALIAS' from the pinned debug keystore; generate it with the documented keytool command (docs/ANDROID_RELEASE_SIGNING.md) so the alias matches"
+          exit 1
+        fi
+
+        # Re-align, then re-sign: any rewrite of the file invalidates a v2/v3
+        # signature, so alignment has to come first.
+        "$ZIPALIGN" -p -f 4 "$APK_PATH" "$WORK/app-debug-aligned.apk"
+        "$APKSIGNER" sign \
+          --ks "$KEYSTORE" --ks-pass "pass:$STORE_PASSWORD" \
+          --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$STORE_PASSWORD" \
+          --out "$WORK/app-debug-signed.apk" "$WORK/app-debug-aligned.apk"
+
+        ACTUAL=$(signer_digest "$WORK/app-debug-signed.apk" || true)
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::re-signed APK signer is '$ACTUAL' but the pinned keystore certificate is '$EXPECTED'; refusing to publish an artifact that cannot install over previous installs"
+          exit 1
+        fi
+
+        mv -f "$WORK/app-debug-signed.apk" "$APK_PATH"
+        echo "[OK] $APK_PATH is signed by the pinned debug identity (SHA-256 $ACTUAL)"
+        {
+          echo "### Android debug APK signing"
+          echo ""
+          echo "Signed with the **pinned** debug identity: consecutive runs share this certificate, so this artifact installs over the previous one."
+          echo ""
+          echo "| field | value |"
+          echo "|---|---|"
+          echo "| artifact | \`$APK_PATH\` |"
+          echo "| signer SHA-256 | \`$ACTUAL\` |"
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

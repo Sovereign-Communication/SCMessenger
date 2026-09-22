@@ -1,9 +1,9 @@
 # CTO Handoff — SCMessenger identity / transport / WiFi delivery (2026-09-21)
 
-**To:** CTO / SCMessenger implementation lanes  
-**Date:** 2026-09-21  
-**Repo:** `C:\Users\SCM\Documents\GitHub\SCMessenger`  
-**Scope:** SCMessenger only — identity, transport, 3-node WiFi delivery  
+**To:** CTO / SCMessenger implementation lanes
+**Date:** 2026-09-21
+**Repo:** `C:\Users\SCM\Documents\GitHub\SCMessenger`
+**Scope:** SCMessenger only — identity, transport, 3-node WiFi delivery
 
 ---
 
@@ -44,13 +44,13 @@ Implement the listed OPEN tickets in the umbrella work packages; do not open par
 
 ## Acceptance (SCMessenger “WiFi fixed”)
 
-1. **One** identity flavor (public-key hex) on all nodes after restart  
-2. CLI send by hex **and** by contact name both succeed (no post-enqueue parse error)  
-3. Own-topic subscribed on native **and** WASM  
-4. Inbound delegate identity is **authenticated**, not payload `sender_id`  
-5. **Every** data-link transport feeds `routing_peer_seen` (same entry as swarm)  
-6. WiFi A↔B↔C delivered; receipts converge on all three nodes  
-7. 3-node logs for a failed send window attached on the P0 umbrella ticket  
+1. **One** identity flavor (public-key hex) on all nodes after restart
+2. CLI send by hex **and** by contact name both succeed (no post-enqueue parse error)
+3. Own-topic subscribed on native **and** WASM
+4. Inbound delegate identity is **authenticated**, not payload `sender_id`
+5. **Every** data-link transport feeds `routing_peer_seen` (same entry as swarm)
+6. WiFi A↔B↔C delivered; receipts converge on all three nodes
+7. 3-node logs for a failed send window attached on the P0 umbrella ticket
 
 ---
 

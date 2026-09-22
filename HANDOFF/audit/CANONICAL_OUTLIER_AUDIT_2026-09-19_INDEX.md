@@ -4,8 +4,11 @@ Task: HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.
 Branch: glm/canonical-outlier-audit
 Mode: REPORT-ONLY. Findings feed 0.4.0 gate / 0.5.0 parity / 1.0.0 unification ledger.
 Status: FINAL for this pass (2026-09-19, iterations 0-6 complete)
-Tracking PR: https://github.com/Sovereign-Communication/SCMessenger/pull/335
-Tracking branch: `glm/canonical-outlier-audit` (pushed; Freebuff may open/update PR, may NOT merge)
+Docs landing branch: `docs/canonical-outlier-audit-2026-09-19` (based on `origin/main`)
+Docs landing PR: https://github.com/Sovereign-Communication/SCMessenger/pull/336
+Mixed lineage PR (superseded for docs): https://github.com/Sovereign-Communication/SCMessenger/pull/335
+Original Freebuff branch: `glm/canonical-outlier-audit` -- do not force-push (PR head is shared)
+Split policy (operator 2026-09-20): land canonical-audit docs first; then rebase remaining lineage on a new branch
 
 ## HEAD snapshot
 

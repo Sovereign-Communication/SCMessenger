@@ -187,6 +187,19 @@ repo:
 - **Never `cargo clean --target <triple>`.** It wipes all of `target/` -- 44.7 GB.
   Use `scripts/clean_target.sh`.
 
+### CI queue hygiene (operator 2026-09-20 — standing)
+
+When this lane or the orchestrator is waiting on GitHub Actions, **cancel
+superseded runs** so the candidate SHA is not stuck behind dead work:
+
+- After a PR merges or a branch is updated, `gh run cancel <id>` for runs on
+  the old head / older `main` SHAs that are no longer the deploy candidate.
+- Do **not** cancel required checks or artifact jobs on the SHA still needed
+  (`CI` Windows CLI artifact, `Mobile` APK, `Docker Publish` on main tip).
+- Freebuff typically cannot cancel org runs; if the queue is blocked, say so
+  in `inbox/` with run ids — the orchestrator clears them. Full policy:
+  `docs/rules/BUILD_AND_CI.md` section "CI queue hygiene".
+
 ---
 
 ## 6. Choosing this lane

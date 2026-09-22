@@ -1,6 +1,7 @@
 name: Mobile
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -138,6 +139,16 @@ jobs:
           SCM_GIT_HASH: ${{ github.sha }}
           SCM_GIT_REF: ${{ github.ref_name }}
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      # Both APK-producing lanes share one signing rule (see
+      # .github/actions/sign-debug-apk). Without a pinned identity each runner
+      # generates its own ~/.android/debug.keystore, so consecutive runs emit
+      # different certificates and `adb install -r` over a previous install
+      # fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+      - name: Sign debug APK with the pinned identity
+        uses: ./.github/actions/sign-debug-apk
+        with:
+          apk-path: android/app/build/outputs/apk/debug/app-debug.apk
+          keystore-base64: ${{ secrets.SCMESSENGER_DEBUG_KEYSTORE_BASE64 }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -152,22 +163,65 @@ jobs:
           name: android-debug-apk
           path: android/app/build/outputs/apk/debug/
 
+      # WHY CI COMPILES THE INSTRUMENTED TESTS WITHOUT RUNNING THEM
+      # -----------------------------------------------------------
+      # Nothing in CI ever built android/app/src/androidTest, so guards there
+      # rotted unobserved: one asserted nothing while documenting a superseded
+      # ordering contract, and its replacement asserted a two-element list over
+      # a three-row conversation, i.e. it could not pass on any device. Neither
+      # is visible to :app:testDebugUnitTest (a different source set), which is
+      # why review found them and CI could not.
+      #
+      # assembleDebugAndroidTest compiles and packages the test APK -- so it
+      # also catches manifest/resource merge errors -- but starts no emulator
+      # and runs no test. A compile gate, not a runner. Kept last so a
+      # test-compile failure cannot withhold this job's installable APK.
+      #
+      # If it ever reds with a Kotlin daemon or JVM memory error (one local
+      # report exists: HANDOFF/done/P0_BUILD_005_Android_Test_Config_Audit.md),
+      # narrow it to :app:compileDebugAndroidTestKotlin -- do not delete it.
+      - name: Compile instrumented tests (no device)
+        working-directory: android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          SCM_GIT_HASH: ${{ github.sha }}
+          SCM_GIT_REF: ${{ github.ref_name }}
+        run: ./gradlew :app:assembleDebugAndroidTest --no-daemon --stacktrace
+
   ios:
     name: iOS Build
     runs-on: macos-latest
+    # WHY THE STEPS ARE GATED AND THE JOB IS NOT
+    # -----------------------------------------
+    # This workflow triggers on the union of the Android and iOS path sets,
+    # because it owns jobs for both platforms, so an Android-only diff starts
+    # this macOS job. The job is kept so its check still reports -- a skipped
+    # check is not a passed one, and T12 section 3 records what that costs --
+    # while its expensive steps are short-circuited by detect-platform-change,
+    # which fails open: an uncomputable or unrecognised diff runs the build.
     steps:
       - uses: actions/checkout@v7
+
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
+        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           key: ios-build
       - name: Build XCFramework and Swift bindings
+        if: steps.platform.outputs.ios_relevant == 'true'
         run: |
           chmod +x scripts/build_xcframework.sh
           scripts/build_xcframework.sh
       - name: Build Xcode project
+        if: steps.platform.outputs.ios_relevant == 'true'
         working-directory: iOS
         run: |
           xcodebuild build \
