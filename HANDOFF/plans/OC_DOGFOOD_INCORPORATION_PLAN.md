@@ -35,12 +35,12 @@ purposes.
 
 | OC finding | Disposition | Where |
 |---|---|---|
-| D1 per-peer cap lockout | **Fix committed this session** (V040-T-CONN-04, two-tier policy + LRA trim + 9 unit tests, live A/B evidence on file). Rule-8 review still required before merge to main. | `core/src/transport/{per_peer_cap.rs,behaviour.rs,swarm.rs}`, harness `cli/src/bin/conn-fanout.rs` |
+| D1 per-peer cap lockout | **Fix committed this session** (V040-T-CONN-04, two-tier policy + LRA trim + 9 unit tests, live A/B evidence on file) as `7810845b`, open as **PR #359**. Lane audit verdict: **APPROVED with conditions** (`HANDOFF/review/OC_LANE_AUDIT_2026-09-22.md`); Rule-8 review is the merge gate. | `core/src/transport/{per_peer_cap.rs,behaviour.rs,swarm.rs}`, harness `cli/src/bin/conn-fanout.rs` |
 | D2 no durable relay reconnect (`cli/src/seed_dial.rs::sweep_decision` returns WatchOnly whenever `peer_count > 0`) | **Ticket filed — HIGH** | `HANDOFF/todo/D2_SEED_DIAL_REDIAL_MISSING_SEED_PEER.md` |
 | D3 self-addressed poison message loops (16 self-dial failures + node marks itself dead; no cancel route) | **Ticket filed — MEDIUM** | `HANDOFF/todo/D3_SELF_RECIPIENT_POISON_GUARD.md` |
 | D5/D6 relay DHT bootstrap empty + `bootstrap_nodes` env-only | **Ticket filed — LOW-MEDIUM, config-first** | `HANDOFF/todo/D5_D6_BOOTSTRAP_NODES_PERSISTENCE.md` |
 | D8 custody-delivery sender status stays `delivered: false` | **Ticket filed — UNVERIFIED, evidence needed with Dx online** | `HANDOFF/todo/D8_CUSTODY_DELIVERY_RECEIPT_STATUS.md` |
-| D9 libp2p 0.48 either-handler task panic | **Ticket filed — HIGH, next up per operator** | `HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md` |
+| D9 libp2p 0.48 either-handler task panic | **Ticket filed — HIGH, next up per operator.** Root-cause anchor pinned 2026-09-22 from the session's pristine vendored source (`vendor/libp2p-swarm-0.48.0`, verified byte-identical to the registry): line 110 is the `_ => unreachable!()` in `EitherHandler::on_behaviour_event`. | `HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md` |
 | Version skew between the two cloud nodes | RESOLVED by OC (both on `v040tconn04-lru` artifact); future alignment goes through CI artifacts per the CI-primary doctrine | `docs/runbooks/CI_PRIMARY_BUILD.md` |
 | Contact-derive artifact (bogus `Lucas-Pixel` rows, no DELETE route) | Tracked as D3 adjacent cleanup; needs a contacts-remove route | inside D3 ticket |
 | Ops guardrails (snapshot before destructive ops, never terminate without operator approval, one-command redeploy) | OC-internal, recorded in its POSTMORTEM; no repo change required | OC NODE.md / POSTMORTEM.md |

@@ -35,6 +35,23 @@ connection_limits, request_response` — the generated `Either` nesting is what
 owns `handler/either.rs:110`. The panicking arm is an `unreachable!()` that
 an event-ordering corner across this composition can genuinely produce.
 
+## Root-cause anchor (pinned 2026-09-22, from source)
+
+The vendored pinned source sits at `vendor/libp2p-swarm-0.48.0/` in this
+checkout (verified byte-identical to the cargo registry copy). Line 110 is
+the `_ => unreachable!()` inside `EitherHandler::on_behaviour_event`
+(`vendor/libp2p-swarm-0.48.0/src/handler/either.rs`, lines 108-112): it
+fires when a behaviour event is routed to a connection handler that was
+instantiated from the OTHER side of the Either. With IronCoreBehaviour
+stacking nine sub-behaviours (`relay, dcutr, identify, ping, kad, gossipsub,
+autonat, connection_limits, request_response` -- derive at
+`core/src/transport/behaviour.rs:33`), the generated handler tree is a deep
+Either nest, and the logs' timing (fired at relay-reservation/identify
+activity the moment a peer attaches) points at a relay or dcutr event
+arriving for a connection whose handler arm was re-negotiated or is mid-
+transition. Verify against the exact generated nesting before designing the
+fix.
+
 ## Suspected mechanism (hypothesis to verify first, not a claim)
 
 The arm at `either.rs:110` is reached when one half of a composed handler is
