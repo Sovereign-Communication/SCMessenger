@@ -114,17 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut total_dials = 0u32;
-    let mut established = 0u32;
-    let mut failures = 0u32;
-    let mut closed_by_remote = 0u32;
     let mut live: HashSet<libp2p::swarm::ConnectionId> = HashSet::new();
     let mut peak_live = 0usize;
 
     for round in 0..args.rounds {
         live.clear();
-        established = 0;
-        failures = 0;
-        closed_by_remote = 0;
+        let mut established = 0u32;
+        let mut failures = 0u32;
+        let mut closed_by_remote = 0u32;
         let round_start = Instant::now();
         println!("[{}] --- round {} ---", ts(), round + 1);
 
