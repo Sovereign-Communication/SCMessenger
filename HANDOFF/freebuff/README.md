@@ -58,15 +58,21 @@ One order, one build, one proof. Sequencing authority is unchanged: plan S4 and
 is built and verified, so a WP ticket, its PR, its CI build and the fleet SHA
 stay in step.
 
-| Step | Action | Gate | State 2026-09-21 |
+| Step | Action | Gate | State 2026-09-21 (commands in `HANDOFF/freebuff/TRAIN_STATUS_2026-09-21.md`) |
 |---|---|---|---|
-| 1 | WP1 `queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md` | tests + JEV | not started |
-| 2 | WP2 `queue/V050_WP2_ROUTING_FEED_ALL_TRANSPORTS_2026-09-21.md` | Rule-8 + JEV | code complete, PR #349 open; keyed JEV **fail** (supported 0.13); Rule-8 row open |
-| 3 | WP3 `queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md` | Rule-8 if gated + JEV | not started |
-| 4 | WP4 `queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md` | tests + JEV | not started |
+| 1 | WP1 `queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md` | tests + JEV | **PR #352**: 0 failing checks, mergeable; keyed canonical JEV **pass** (0.81) |
+| 2 | WP2 `queue/V050_WP2_ROUTING_FEED_ALL_TRANSPORTS_2026-09-21.md` | Rule-8 + JEV | **PR #349**: 0 failing checks, mergeable; keyed canonical JEV **pass** (0.92); gate not triggered by path, reviewer still confirms feed semantics |
+| 3 | WP3 `queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md` | Rule-8 if gated + JEV | **PR #355** open; Rule-8 sign-off outstanding (`core/src/transport/swarm.rs`) |
+| 4 | WP4 `queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md` | tests + JEV | **PR #356** open; WP4.1 live convergence stays WP5 |
 | 5 | WP5 3-node live proof | operator phone + logs | not started; evidence lands on the P0 umbrella ticket, not a PR body |
-| 6 | Wave-1 leftovers (A-F below) | per ticket | A/E Rule-8; B covered by #341; C/D open |
-| 7 | Merge train + fleet redeploy + 0.4.0 checklist | master plan S4 | fleet still on `51edac4b` (observed on the running node) |
+| 6 | Wave-1 leftovers (A-F below) | per ticket | A open -- needs the operator ruling on the per-peer bound (rule 9); B landed #341; C/E/F open; D **met inside PR #356** |
+| 7 | Merge train + fleet redeploy + 0.4.0 checklist | master plan S4 | not started by this lane (no self-merge); fleet SHA is the README's last observation, not re-measured |
+
+The WP1/WP2 cells previously read "keyed JEV **fail**". Those two numbers came
+from the harness `diff_question_pack()`, not from the DONE gate the contract
+names; under `scripts/jev_canonical_check.py` both pass on a live key. Ruling:
+`HANDOFF/freebuff/inbox/JEV_CANONICAL_VS_DIFF_PACK_RULING_2026-09-21.md`.
+Recorded state files land with PR #354 under `HANDOFF/freebuff/jev/`.
 
 Build path -- a WP ticket is verified against **one** SHA, not three beliefs:
 
@@ -108,7 +114,7 @@ WP5 live 3-node proof is **not** a freebuff paste -- evidence lands on
 | A | `queue/V040_T_CONN_LIMITS_MULTIPORT.md` | **Rule-8** |
 | B | `queue/V040_T_ANDROIDTEST_COMPILE_FIX.md` | landed as PR #341 -- verify only |
 | C | `queue/V040_T_AND06_KOTLIN_COLLAPSE.md` then UNIFI cutover | Rule-8 if FFI/core |
-| D | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | test-only |
+| D | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | MET in PR #356 -- do not paste again |
 | E | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | **Rule-8** likely |
 | F | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Phase 2-3 later |
 
