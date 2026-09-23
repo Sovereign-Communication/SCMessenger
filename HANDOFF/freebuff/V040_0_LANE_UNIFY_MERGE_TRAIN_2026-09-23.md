@@ -67,3 +67,22 @@ convention.
    [OPERATOR-GATED per NODE_MODEL: cloud nodes run operator identity.
    Ask before touching cloud node state.]
 5. [seat] Post-rollout log audit + verdict update in this file (append-only).
+
+## Addendum 2026-09-23 ~17:20 UTC (seat update)
+
+- Docker Publish was broken for every post-D9 SHA: vendor/libp2p-swarm-0.48.0
+  (workspace member since the D9 vendored-swarm change) was missing from the
+  image build context. Fixed on #364 (45b0f8b8, DOCKER-VENDOR-001); the fix
+  must ride along with #361's merge or every cloud deploy fails.
+- PR #364 gained: fmt-only commit bdb5b256, docker fix 45b0f8b8.
+- Operator constraints for the Pixel (supersedes earlier install notes):
+  the app was UNINSTALLED -- next install is a FRESH install (new identity;
+  mesh peers that held the old phone identity 779e9ea3... will hold stale
+  entries). The seat may install the CI APK but must NOT drive the app:
+  no UI interaction, no am-start of components beyond the runbook install
+  step. Debug/RCA is by passive logcat/mesh.log pulls only.
+- Node rollout targets: AWS always-on via pinned image testbotz/scmessenger:sha-45b0f8b
+  (aws_deploy.sh, identity-preserved path); OpenClaw (13.217.204.112,
+  ec2-user, plain binary at /home/ec2-user/scm-main/scmessenger, version
+  v040d9degrade-672dffcb) gets the linux binary from the same image so all
+  nodes run one provenance.
