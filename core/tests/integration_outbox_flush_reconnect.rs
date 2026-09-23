@@ -480,7 +480,11 @@ fn test_sweep_reflushes_entry_after_grace_expiry_on_live_connection() {
         0,
         "sweep must not re-drain an entry inside its grace window"
     );
-    assert_eq!(outbox.total_count(), 1, "entry survives the premature sweep");
+    assert_eq!(
+        outbox.total_count(),
+        1,
+        "entry survives the premature sweep"
+    );
 
     // 3) Once the timer expires, the next sweep flush re-drains it.
     let mut outbox_expired = Outbox::new();
@@ -493,7 +497,9 @@ fn test_sweep_reflushes_entry_after_grace_expiry_on_live_connection() {
             .as_secs()
             .saturating_sub(1),
     );
-    outbox_expired.enqueue(stale).expect("enqueue expired-grace entry");
+    outbox_expired
+        .enqueue(stale)
+        .expect("enqueue expired-grace entry");
     let after_expiry = outbox_expired.flush_peer_messages(peer);
     assert_eq!(
         after_expiry.len(),
