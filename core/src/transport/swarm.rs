@@ -4372,6 +4372,18 @@ pub async fn start_swarm_with_config(
             // Mycorrhizal routing: periodic optimization tick (every 30s)
             let mut routing_optimization_interval = tokio::time::interval(Duration::from_secs(30));
 
+            // OUTBOX-SWEEP-001 (2026-09-23): re-flush outbox entries whose
+            // grace timer expired on peers that are STILL connected. The
+            // reconnect gate (register_and_flush_swarm_peer) fires once per
+            // connection; on an always-on mesh connections rarely drop, so a
+            // lost receipt left entries stranded (Windows node: outbox_count
+            // 118 / undelivered 259 with all links healthy). This sweep is the
+            // missing periodic retry; it reuses the single-owner flush path
+            // with the egress closure, so entries are only drained when they
+            // are due (flush_peer_messages checks next_retry_at) and only when
+            // the connection is live at send time.
+            let mut outbox_sweep_interval = tokio::time::interval(Duration::from_secs(120));
+
             // Check for pending relay reconnects frequently
             let mut relay_reconnect_interval = tokio::time::interval(Duration::from_secs(5));
             let mut custody_pull_interval = tokio::time::interval(Duration::from_secs(5));
@@ -4629,6 +4641,35 @@ pub async fn start_swarm_with_config(
                                 maintenance.timeout_budget_summary.elapsed,
                                 maintenance.timeout_budget_summary.current_phase,
                             );
+                        }
+                    }
+
+                    // OUTBOX-SWEEP-001: periodic re-flush for still-connected
+                    // peers whose grace window expired without a receipt.
+                    _ = outbox_sweep_interval.tick() => {
+                        if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                            let connected: Vec<(PeerId, String)> = registered_swarm_peers
+                                .iter()
+                                .filter(|(pid, _)| swarm.is_connected(pid))
+                                .map(|(pid, pk)| (*pid, pk.clone()))
+                                .collect();
+                            for (peer_id, pk_hex) in connected {
+                                let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+                                    flush_outbox_over_swarm(
+                                        &mut swarm,
+                                        &peer_id,
+                                        message_id,
+                                        envelope,
+                                        &mut reconnect_request_to_message,
+                                    )
+                                };
+                                core.handle_peer_connection_event_with_egress(
+                                    &pk_hex,
+                                    true,
+                                    false,
+                                    &mut egress,
+                                );
+                            }
                         }
                     }
 
