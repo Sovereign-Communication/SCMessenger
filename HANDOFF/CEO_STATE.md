@@ -5,6 +5,17 @@ Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
 
+## Harness-side audit note (2026-09-22, append-only)
+
+- An Antigravity session on the Harness repo (conversation a4439ee2) was audited from its
+  decoded trajectory: every git/PR operation stayed inside the Harness worktree family; no
+  SCMessenger files were touched (Harness CEO_STATE, 2026-09-22 15:30 HST).
+- Harness PRs #66–#70 merged with CI green; Harness `main` `412f7e1` green. Direct STATUS pushes
+  that had left Harness `main` red are now forbidden there (Harness AGENTS.md rule 7).
+- Items to watch when SCMessenger refreshes `vendor/sovereign-harness`: paid failover under
+  free tier (harness #69), `ledger verify` exit code (harness #70), Jev bar output shape (harness #67).
+- Audit status for SCMessenger claims: UNCHANGED — this note adds no SCMessenger verdicts.
+
 ## Role
 
 The CEO seat assists the operator and audits the CTO seat. It does not implement
