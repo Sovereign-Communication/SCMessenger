@@ -233,3 +233,105 @@ should be read alongside this in-flight direction.
   refuses to invent buckets on out-of-pack noise; one live D2 confirmation
   captured; one borderline keyed acceptance (B1) flagged for Harness.
 - Sync: already newest. MCP: CLI path; operator paste-step unchanged.
+
+## Extension 3 — 2026-09-23: node restored on the D9 build, first live D9-DEGRADE observation, prober attributed, batch B sorted
+
+Context: the Freebuff restart killed the unmanaged Windows node process AND
+its staging binary (`tmp/radio-candidates/56d66f7/` retained logs only).
+Restored per the CI-primary runbook instead of a local build:
+
+- CI artifact `windows-cli-1ec0c2424c9cd2a292a43c7f9c99d5168610430c`
+  (run 35787291590, success, PR #361 head `63f4a7d7` -> merge-sha build
+  `1ec0c24`, which contains D9-degrade + D1) downloaded to
+  `tmp/radio-candidates/1ec0c242/`; provenance printed by the binary:
+  `CLI Version: 0.4.0 (1ec0c24 2026-09-22T21:35:37Z)`.
+- Node relaunched under `scripts/run_node_supervised.ps1` (bounded restart,
+  double-start refusal) — an upgrade over the old unmanaged process.
+  `/health` -> `{"status":"healthy"}` at 08:00Z.
+
+### First live D9-DEGRADE observation (third node with live proof)
+
+Fresh log `scm.log.2026-09-23-08`, verbatim:
+
+```
+2026-09-23T08:00:27.111020Z  WARN libp2p_swarm::handler::either: D9-DEGRADE: Either on_behaviour_event event/handler side mismatch; dropping event
+2026-09-23T08:02:26.185793Z  WARN libp2p_swarm::handler::either: D9-DEGRADE: Either on_behaviour_event event/handler side mismatch; dropping event
+```
+
+Two side-mismatch events in the first two minutes — the exact sites where
+the old build panicked a tokio task — degraded to logged drops. Zero
+`panicked` lines on the new build so far.
+
+### Prober attribution closed -> new ticket D10
+
+Corrected facts (commands on file this session): the old log's
+Parse(Method) count is 96 over ~18h (~5/h, not the ~10s cadence extension 2
+inferred from a compressed window); `warp::server::run` is the node's
+**9001** HTTP+WS server (extension 2's "9876" attribution was wrong); the
+node's multi-port adaptive listener binds 0.0.0.0:80/443/8080/9002/9090 —
+internet/LAN TLS probes against those are the classic Parse(Method)
+trigger. Filed: `HANDOFF/todo/D10_PARSE_METHOD_SCANNER_NOISE_PUBLIC_PORTS.md`
+(exposure-scope question for the operator + noise-classification option;
+Rule-8 if the binding policy changes in `core/src/transport/`).
+
+### Batch B: three verbatim fresh-window lines, sorted
+
+Evidence discipline note: an earlier draft of the batch used assumed lines
+(zero actual Parse(Method) hits exist in the fresh window; today's
+DIAL-BACKOFF lines are healthy `Reset backoff state after successful
+connection` events, NOT dead-marks — D2's live confirmation remains
+yesterday's 09:05:10Z line). Rebuilt verbatim before sorting:
+
+| id | line (abbrev) | expected | sorted | conf | mode |
+|---|---|---|---|---|---|
+| LIVE-D9-DEGRADE-080027Z | D9-DEGRADE Either mismatch | supply_chain | **supply_chain** | 0.0 (fallback) | keyword, `is_fallback: true` |
+| LIVE-BLE-HRESULT0-080025Z | BLE GATT error HRESULT(0x0) "completed successfully" | unmatched | **ble_lane** | 1.0 | keyed, `is_fallback: false` |
+| LIVE-CUSTODY-SWEEP-INFO-080025Z | Custody retention sweep expired 0 of 115 (healthy) | unmatched | **storage** | 1.0 | keyed, attention=high |
+
+### New findings
+
+- **A2 (Harness, defect observed, handled):** the keyed model returned a
+  malformed probability vector on the D9 line ("invalid TypeSafe response:
+  bucket.probabilities must sum to 1"); Harness's TypeSafe layer caught it,
+  fell back to the keyword path, and recorded the reason in
+  `evidence_refs`. Honest degrade confirmed in production — the score
+  itself is fine, the model's schema adherence is not. Same upstream
+  maintainer audience as A1.
+- **B2 (feature-scope finding):** the sorter ROUTES but does not judge — a
+  healthy custody-sweep line landed in `storage` at confidence 1.0 with
+  attention=high. Bucket membership is not severity, and the pack has no
+  "benign/healthy" outcome. Either the pack needs an explicit healthy
+  bucket or issue-sort consumers must triage on the line's own level
+  (WARN/ERROR) before acting on the bucket. Recorded as a dogfood lesson;
+  no Harness change requested (the tool does what it documents).
+- **BLE HRESULT-0 line:** already known — evidence in
+  `HANDOFF/todo/P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md` (line 25); no
+  new ticket (the model's `ble_lane` @ 1.0 was the right triage route; my
+  `unmatched` expectation was too literal).
+
+### Merge-blocker flag (not acted on)
+
+#359 and #360 are now CONFLICTING with main (parallel doctrine-file edits:
+AGENTS.md rule 17, freebuff README rewrite, CTO_STATE appends). The local
+working tree's Cargo.toml/Cargo.lock/vendor/ are byte-identical to
+`origin/d9-libp2p-degrade` (#361), so resolving conflicts here would touch
+foreign working-tree state (rules 11/12) — flagged for the operator/merge
+seat; #361 itself is MERGEABLE and green.
+
+### MCP status (cheap re-check)
+
+Still no discoverable Freebuff MCP config surface — CLI path validated
+end-to-end again this session; the operator paste-step remains the one
+manual item (`docs/runbooks/HARNESS_MCP_SETUP.md`).
+
+## Extension-3 verdicts
+
+- CI-primary node restore worked exactly as canonized: artifact + provenance
+  check + supervised relaunch, zero local build minutes spent.
+- D9-degrade now has live third-node evidence; ticket already marked
+  DEPLOYED (no update needed).
+- The pack+keyed pipeline survived a malformed model response (A2) and an
+  author over-expectation (BLE route) without lying once — both degrade
+  paths visible in the saved outputs.
+- Tickets reconciled: D10 filed (new finding); BLE/HRESULT-0 mapped to the
+  existing P1 wedge ticket; D2 unchanged (fresh window healthy).
