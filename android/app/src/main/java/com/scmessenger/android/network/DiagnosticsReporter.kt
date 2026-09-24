@@ -173,7 +173,13 @@ open class DiagnosticsReporter @Inject constructor(
             recs.add("Connection refused -- the destination node may be unreachable right now, try again later")
         }
 
-        if (testResults.relayConnectivity.values.all { !it }) {
+        // `relayConnectivity` is empty whenever no node was actually probed (the
+        // production probe iterates an empty host map), and `all {}` is vacuously
+        // true for an empty collection. Without the isNotEmpty() guard this claims
+        // every node was unreachable on every report.
+        if (testResults.relayConnectivity.isNotEmpty() &&
+            testResults.relayConnectivity.values.all { !it }
+        ) {
             recs.add("No node could be reached for store-and-forward -- check firewall or try a different network")
         }
 
