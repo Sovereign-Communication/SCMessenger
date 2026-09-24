@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """JEV canonical completion helper for SCMessenger WP tickets (orchestrator tool).
 
-Usage (Windows host):
-  $env:HARNESS_REPO = "C:\\Users\\SCM\\Documents\\GitHub\\Harness-jev-use"
-  # Prefer a clean origin/main worktree of harness (or HARNESS_REPO).
+Usage:
   python scripts/jev_canonical_check.py --wp WP1 --state-file path/to/state.json
+
+The default source is the pinned admission in scripts/harness_admission.json.
+Set HARNESS_REPO only for an explicitly unpinned canary experiment.
 
 State JSON should include: wp, instruction, files, acceptance, evidence
 (commands/outputs), canon rows claimed.
@@ -20,10 +21,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
-
 
 CANON_QUESTIONS = {
     "canon_identity": {
@@ -103,8 +102,13 @@ def main() -> int:
     state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
     state.setdefault("wp", args.wp)
     mod = import_harness()
-    print(f"[INFO] harness: {mod['root']} typesafe_key={bool(mod['key'])} "
-          f"openrouter_key={bool(mod.get('openrouter_key'))}")
+    source = mod["source"]
+    print(
+        f"[INFO] harness: {source.root} sha={source.sha} "
+        f"status={source.status} pinned={source.pinned} "
+        f"typesafe_key={bool(mod['key'])} "
+        f"openrouter_key={bool(mod.get('openrouter_key'))}"
+    )
     _policy, _ = make_policy()
     evaluator = _policy.evaluator
     if args.no_openrouter:

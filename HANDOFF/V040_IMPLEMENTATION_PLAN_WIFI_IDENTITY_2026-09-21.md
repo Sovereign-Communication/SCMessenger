@@ -219,9 +219,11 @@ When the implementing model is <99% confident:
 
 ### 3.5 Helper script
 
-`scripts/jev_canonical_check.py` on SCMessenger main (lands with this plan)
-loads `harness.jev` from `HARNESS_REPO` (default `C:\Users\SCM\Documents\GitHub\Harness`
-or a `Harness-jev-use` worktree of origin/main) and evaluates the Â§3.3 pack.
+`scripts/jev_canonical_check.py` loads the declared Harness surface through
+`scripts/harness_source.py`. The default is the tracked production admission
+in `scripts/harness_admission.json`; `HARNESS_REPO` is an explicit unpinned
+canary override and is never release evidence. The helper evaluates the §3.3
+pack from that one source.
 
 ```text
 python scripts/jev_canonical_check.py --wp WP2 --state-file tmp/wp2_state.json
@@ -307,9 +309,10 @@ worktrees remain out of scope.
 ### Staged delivery sequence
 
 1. Land the documentation and admission policy on this isolated branch.
-2. Recreate the #360 guard on fresh `main` with immutable-tag checks,
-   exact-SHA output, and fail-closed refusal.
-3. Add the bounded-main canary and rollback tests without changing production
+2. The consumer architecture pass now provides the #360 intent on fresh
+   `main`: immutable-tag checks, exact-SHA output, and fail-closed refusal.
+3. The bounded-main canary and rollback lifecycle is implemented and covered
+   by `scripts/test_harness_admission.py` without changing production
    defaults.
 4. Independently review/merge the append-only #362 documentation if it remains
    clean and scoped.

@@ -56,10 +56,12 @@ stops you paying it twice for dead work.
 Standing practice for SCMessenger completion work:
 
 1. **Toolchain:** **SCMessenger-local** harness only —
-   `python scripts/update_local_harness.py` refreshes
-   `vendor/sovereign-harness` from the official harness GitHub remote.
-   Do **not** edit `Documents/GitHub/Harness` product trees.
-   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
+   `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1`
+   admits the immutable source into `vendor/sovereign-harness`.
+   `python scripts/update_local_harness.py --mode canary-main` creates only
+   an isolated exact-SHA candidate. Do **not** edit
+   `Documents/GitHub/Harness` product trees. All callers use
+   `scripts/harness_source.py`; `local_harness.py` is the JEV adapter.
 2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
    (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
    `scripts/scmessenger_issue_sort_pack.json`).
@@ -96,9 +98,9 @@ Harness CI. The SCMessenger orchestrator owns the 0.4.0 freeze and merge
 sequence; platform owners own Android, CLI, cloud, and native behavior. No
 external Harness worktree is edited by SCMessenger.
 
-The local update flow below is the required target behavior. The current
-floating updater is not yet compliant and must not be treated as admission
-until the modes and exact-SHA checks are implemented.
+The local update flow below is implemented by `harness_admission.py` and
+exposed by `update_local_harness.py`. The manifest and source resolver are
+implemented by `harness_source.py`; callers must not add another fallback.
 
 1. `bootstrap`: create a clean consumer copy from the admitted tag in
    `tmp/harness-admission/<tag>-<sha>`; never use the system temp directory.
@@ -114,9 +116,9 @@ A dirty vendor copy, unknown version, missing imported symbol, wrong remote,
 wrong SHA, report-schema mismatch, or unavailable required key is a refusal,
 not a warning. Structural JEV fallback is never a canonical pass. The existing
 consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
-`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) must all
-resolve the same admitted source; direct installed-package fallback is not
-allowed.
+`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) all resolve
+through `harness_source.py`; direct installed-package fallback is not allowed.
+The hermetic lifecycle tests are in `scripts/test_harness_admission.py`.
 
 ## Windows parallelism (measured on this box)
 

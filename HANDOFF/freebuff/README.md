@@ -24,8 +24,9 @@ umbrella ticket.
 
 **JEV / harness (local only):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
-- Planned production command: `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1` -> `vendor/sovereign-harness` (the current updater must be upgraded before use)
-- Planned canary command: `python scripts/update_local_harness.py --mode canary-main` -> isolated one-SHA `origin/main` candidate only
+- Production admission: `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1` -> `vendor/sovereign-harness`
+- Canary command: `python scripts/update_local_harness.py --mode canary-main` -> isolated one-SHA `origin/main` candidate only
+- `python scripts/harness_gate.py --kind version` -> pinned source identity
 - `python scripts/jev_repo_insights.py --mode full` (bucket/triage read)
 - `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
 - TypeSafe first; OpenRouter `~typesafe/jev-latest` on

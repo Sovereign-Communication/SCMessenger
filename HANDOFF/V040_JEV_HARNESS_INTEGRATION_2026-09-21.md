@@ -51,15 +51,36 @@ committed.
 | Item | Path / command |
 |---|---|
 | Consumer copy | `vendor/sovereign-harness/` (gitignored) |
-| Update from repo | `python scripts/update_local_harness.py` in `admit-tag` mode; production accepts the immutable `v0.4.1` tag only. `canary-main` is isolated and never release evidence. |
-| Path resolver | `scripts/local_harness.py` |
+| Update from repo | `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1`; production accepts the immutable `v0.4.1` tag only. `canary-main` is isolated and never release evidence. |
+| Path resolver | `scripts/harness_source.py` (the only source/import boundary) |
+| JEV adapter | `scripts/local_harness.py` (TypeSafe/OpenRouter behavior only) |
+| Admission state | `scripts/harness_admission.json` |
+| Admission lifecycle | `scripts/harness_admission.py` + `scripts/update_local_harness.py` |
 | Issue-sort pack (operator-frozen) | `scripts/scmessenger_issue_sort_pack.json` |
 | Issue-sort API used | `harness.jev_policy.JevPolicy.evaluate_issue_sort` + `harness.jev_packs` on the admitted source |
 
 Callers (`jev_canonical_check.py`, `jev_repo_insights.py`, `harness_gate.py`,
-and `bod_governance.py`) must all resolve the same admitted source. Direct
-installed-package fallback is forbidden for release evidence. `HARNESS_REPO`
-is an explicit canary override only and must be reported as unpinned.
+and `bod_governance.py`) all use `harness_source.py` and therefore resolve the
+same admitted source. Direct installed-package fallback is forbidden for
+release evidence. `HARNESS_REPO` is an explicit canary override only and is
+reported as unpinned.
+
+### Consumer architecture (implemented 2026-09-24)
+
+The consumer has four deliberately small boundaries:
+
+- `harness_source.py` owns the tracked manifest, source identity, package
+  version, clean-checkout checks, and the declared import surface.
+- `harness_admission.py` owns exact-ref resolution, staging, validation,
+  promotion, canary evidence, and rollback. The updater is its CLI adapter.
+- `local_harness.py` owns only JEV policy construction and the OpenRouter
+  fallback; it does not discover sources.
+- `harness_gate.py` and `bod_governance.py` are callers, not resolvers.
+
+Data flows one way: remote ref -> staged checkout -> hermetic probes ->
+validated source -> directory promotion -> manifest write. A failed candidate
+remains in `tmp/harness-admission/`; it cannot become active. The tracked
+manifest is the only persisted source/version/state owner.
 
 `harness_gate.py` outputs now default under `tmp/harness-runs/seat-gates/`
 inside SCMessenger (not external Harness audits/).
@@ -112,28 +133,43 @@ canonical completion result.
 
 ### Local update and bootstrap semantics
 
-The updater has four required modes. The current `origin/main` updater is
-floating and is not yet compliant with this interface; these modes are the
-next consumer implementation contract, not a claim that the current script
-already provides them:
+The updater implements four modes. Production promotion is accepted only
+after the exact tag and peeled commit match the pinned manifest baseline:
 
-- `bootstrap`: create a clean consumer copy from the admitted tag;
-- `admit-tag`: fetch and verify a tag, run admission, then promote the copy;
-- `canary-main`: resolve one exact `origin/main` SHA, run the same checks in a
-  separate staging path, and mark the result `CANARY`;
-- `rollback`: restore the previous admitted tag/SHA and manifest.
+- `bootstrap`: create a clean consumer copy from the admitted tag, or verify
+  the already-admitted copy;
+- `admit-tag`: resolve and verify `v0.4.1`, run admission, then promote the
+  candidate;
+- `canary-main`: resolve one exact `origin/main` SHA, run the same probe in a
+  separate staging path, and emit `CANARY` evidence without changing the
+  production manifest;
+- `rollback`: restore the retained previous source and update the manifest.
 
-Promotion is atomic from the consumer's perspective. The previous admitted
-copy and its provenance remain available until the new candidate passes. The
-updater must not use `checkout -B` on a dirty vendor copy, and it must never
-edit an external Harness worktree.
+The implementation was exercised locally with the immutable tag and a
+no-key JEV probe. Upstream and SCMessenger CI remain release gates.
+
+Local verification on the isolated consumer worktree:
+
+- `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1` -> exit 0;
+- `python scripts/update_local_harness.py --mode canary-main` -> exit 0 at exact `6d5a2f818d3029b10635566a8131c6e8be234371`, without changing production;
+- `python scripts/harness_gate.py --kind version` -> exit 0, `PRODUCTION`, `pinned: true`;
+- sanitized no-key `jev_canonical_check.py` -> exit 1 with `UNVERIFIED-JEV`, as required.
+
+Promotion is fail-closed and recoverable for handled filesystem or manifest
+errors. The candidate is fully validated before the active path changes; a
+manifest failure returns the candidate to staging and restores the previous
+active source. A failed rollback restores both the current active source and
+the retained previous source at the path recorded in the unchanged manifest.
+The updater must not use `checkout -B` on a dirty vendor copy, and it must
+never edit an external Harness worktree.
 
 ### Ownership boundaries
 
 - Harness maintainer: upstream tags, API/CLI compatibility, Harness CI, and
   release publication.
-- SCMessenger consumer owner: `local_harness.py`, the admission manifest,
-  updater, wrapper, tests, and this runbook.
+- SCMessenger consumer owner: `harness_source.py`, `harness_admission.py`,
+  the admission manifest, `local_harness.py`, the updater, wrappers, tests, and
+  this runbook.
 - SCMessenger orchestrator: 0.4.0 freeze, PR ordering, CI, and merge.
 - Platform owners: Android, Windows CLI, cloud node, and native behavior.
 - Security reviewer: independent review for gated core changes.
@@ -221,10 +257,14 @@ cost low (input tokens only; $42/Mtok).
 | `scripts/jev_canonical_check.py` | WP completion JEV gate (single pack) |
 
 ```text
-$env:HARNESS_REPO = "C:\Users\SCM\Documents\GitHub\Harness-jev-use"
+python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1
 python scripts/jev_repo_insights.py --mode full --batch-size 4
 python scripts/jev_canonical_check.py --wp WP2 --state-file tmp/wp2_state.json
 ```
+
+For a deliberately unpinned local experiment only, set `HARNESS_REPO` before
+the JEV command. The resolver reports that source as `CANARY`; it is not
+release evidence.
 
 ## Relation to 0.4.0 completion
 
