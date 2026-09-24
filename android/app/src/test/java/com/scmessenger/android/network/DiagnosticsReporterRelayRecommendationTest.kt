@@ -56,7 +56,7 @@ class DiagnosticsReporterRelayRecommendationTest {
 
     private fun stubHappyPath(results: NetworkDiagnostics.NetworkTestResults) {
         coEvery { networkDiagnostics.testNetworkConnectivity() } returns results
-        every { networkTypeDetector.detectNetworkType() } returns NetworkType.WIFI
+        coEvery { networkTypeDetector.detectNetworkType() } returns NetworkType.WIFI
         every { failureMetrics.getSummary() } returns cleanSummary
         every { networkDetector.getTransportPriority() } returns emptyList()
         coEvery { networkDetector.probePorts(any(), any()) } returns emptyMap()
