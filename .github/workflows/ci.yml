@@ -46,6 +46,20 @@ jobs:
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
 
+  orchestration:
+    name: Orchestration control plane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate orchestration contract
+        run: python scripts/orchestration_contract.py
+      - name: Run deterministic orchestration tests
+        run: python scripts/test_orchestration_v2.py
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -20,6 +20,7 @@ from orchestration_contract import (
     ContractError, load_manifest, protected_paths, requires_delivery_review,
     valid_transition,
 )
+from orchestration_completion_gate import run_completion_gate
 from orchestration_worktree import create as create_worktree
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -622,6 +623,7 @@ def complete_integration(manifest, state_dir, task_id, controller_root):
         "--holder", f"orchestrate_strict:{task_id}",
     ]
     result = run(command, cwd=controller_root)
+    mechanical_gate = {"command": verify_gate, "returncode": result.returncode}
     if result.returncode:
         reversed_patch = run(["git", "apply", "-R", "--index", str(patch_path)], cwd=controller_root)
         if reversed_patch.returncode:
@@ -631,11 +633,35 @@ def complete_integration(manifest, state_dir, task_id, controller_root):
         return write_state(manifest, state_dir, task_id, state, "RETRY",
                            integration_state="AUTHORITATIVE_GATE_FAILED",
                            escalation_reason="authoritative integration gate failed",
-                           authoritative_gate={"command": verify_gate, "returncode": result.returncode})
+                           authoritative_gate=mechanical_gate)
+    try:
+        completion_gate = run_completion_gate(
+            state,
+            state_dir,
+            controller_root,
+            mechanical_gate=mechanical_gate,
+        )
+    except Exception as exc:  # noqa: BLE001
+        evidence = getattr(exc, "evidence", None) or {
+            "status": "FAILED",
+            "failure": str(exc),
+        }
+        reversed_patch = run(["git", "apply", "-R", "--index", str(patch_path)], cwd=controller_root)
+        if reversed_patch.returncode:
+            return write_state(manifest, state_dir, task_id, state, "FAILED",
+                               integration_state="COMPLETION_GATE_FAILED_PATCH_RETAINED",
+                               escalation_reason=str(exc),
+                               authoritative_gate=mechanical_gate,
+                               completion_gate=evidence)
+        return write_state(manifest, state_dir, task_id, state, "RETRY",
+                           integration_state="COMPLETION_GATE_FAILED",
+                           escalation_reason=str(exc),
+                           authoritative_gate=mechanical_gate,
+                           completion_gate=evidence)
     return write_state(manifest, state_dir, task_id, state, "COMPLETE",
-                       integration_state="AUTHORITATIVE_GATE_PASSED",
-                       authoritative_gate={"command": verify_gate, "returncode": 0,
-                                           "completed_at": now()},
+                       integration_state="AUTHORITATIVE_AND_COMPLETION_GATES_PASSED",
+                       authoritative_gate={**mechanical_gate, "completed_at": now()},
+                       completion_gate=completion_gate,
                        integrated_worker_diff={"sha256": state["worker_diff"]["sha256"], "files": files})
 
 

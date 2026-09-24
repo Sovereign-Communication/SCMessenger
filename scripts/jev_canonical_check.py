@@ -91,6 +91,10 @@ def main() -> int:
         action="store_true",
         help="Disable OpenRouter ~typesafe/jev-latest fallback",
     )
+    ap.add_argument(
+        "--result-file",
+        help="Write structured JEV result JSON for a controller-owned evidence gate",
+    )
     args = ap.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -123,12 +127,38 @@ def main() -> int:
     for reason in result.reasons:
         print(f"[INFO] reason: {reason}")
 
+    canonical_pass = result.is_passing(args.min_confidence)
+    result_payload = {
+        "schema_version": "1.0.0",
+        "wp": args.wp,
+        "is_passing": bool(canonical_pass),
+        "is_fallback": bool(result.is_fallback),
+        "fallback_used": bool(meta.get("fallback_used")),
+        "keyed": bool(mod["key"]),
+        "endpoint": meta.get("endpoint"),
+        "model": result.model,
+        "confidence": result.confidence,
+        "supported": result.supported,
+        "answers": result.answers,
+        "reasons": result.reasons,
+        "cost": result.cost,
+        "input_tokens": result.input_tokens,
+        "output_tokens": getattr(result, "output_tokens", 0),
+    }
+    if args.result_file:
+        result_path = Path(args.result_file)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(result_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
     # Canonical DONE requires a live keyed answer (TypeSafe or OpenRouter),
     # never pure structural fallback / UNVERIFIED-JEV.
     if result.is_fallback:
         print("[FAIL] UNVERIFIED-JEV — fallback result is not canonical DONE")
         return 0 if args.allow_fallback else 1
-    if result.is_passing(args.min_confidence):
+    if canonical_pass:
         print(f"[OK] JEV canonical pass (min_confidence={args.min_confidence}) via {meta.get('endpoint')}")
         return 0
     print("[FAIL] JEV canonical check did not pass")
