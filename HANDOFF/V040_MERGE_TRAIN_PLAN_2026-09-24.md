@@ -166,6 +166,20 @@ reason not to" answer.
 - Blockers: (1) A3 merged; (2) Rule-8 APPROVE for the post-A3 head covering the sweep (`core/src/transport/swarm.rs`) and the vendor/docker delta; the D1/D9 verdict from A3 is scoped to `63f4a7d7` and is void for the sweep; (3) `Android JVM Unit Tests` green; (4) `pr_scope.sh 364` exit 0.
 - Reason not to: today the branch is red and its Rule-8 scope overlaps `#361`'s. After A3 and a fresh sweep verdict, none.
 
+Preferred shape (lane owner's call, orchestrator's approval): split `cc51e41a` into
+two focused PRs on top of the post-A3 main so the Android half never waits on a
+transport Rule-8 verdict:
+
+| Split PR | Source | Contents | Gates |
+|---|---|---|---|
+| A4a outbox sweep | new branch from post-A3 main, cherry-pick of the sweep hunk of `cc51e41a` + `bdb5b256` + `45b0f8b8` | `core/src/transport/swarm.rs` periodic re-flush, `integration_outbox_flush_reconnect.rs`, docker vendor copy | Rule-8 (transport) |
+| A4b Android stop/start | new branch from post-A3 main, cherry-pick of the `cc51e41a` Android hunk (`MeshForegroundService.kt`, `MeshServiceViewModel.kt`, `StopStartFloodTest.kt`) | AND-SS-001 | no Rule-8; `check_wiring.py`; this is the change `#367` already carries on a clean base, so `#367` is closed either way |
+
+If the split is not done, `#364` merges whole after A3 with one Rule-8 verdict
+covering the sweep; the Android half then carries an unnecessary transport
+dependency. The executor must not rebase `#364` onto main by hand; the branch
+owner produces the split.
+
 ### A5 -- #351 bounded stop teardown (lane rework, not a blind merge)
 
 - Source `origin/freebuff/android-stop-teardown-timeout` = `db475b23d1239ac3aed326a19a9f6c15285a3607` -> `origin/main`, re-applied onto post-A4 main by the lane owner. `#351` has no worktree; it is fetched into a fresh leg worktree.
