@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      git_branch:
+        description: "Branch that must resolve to candidate_sha"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Full lowercase commit SHA to verify and test"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +29,7 @@ env:
 jobs:
   lint:
     name: Lint
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -49,8 +60,41 @@ jobs:
   orchestration:
     name: Orchestration control plane
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+      - name: Verify dispatched branch and candidate identity
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          GIT_BRANCH: ${{ inputs.git_branch }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "[ERROR] candidate_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+          branch_sha="$(git ls-remote origin "refs/heads/$GIT_BRANCH" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$branch_sha" || "$branch_sha" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] dispatch branch does not resolve to candidate_sha" >&2
+            printf '[ERROR] branch=%s branch_sha=%s candidate_sha=%s\n' "$GIT_BRANCH" "$branch_sha" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          if [[ "$WORKFLOW_SHA" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] workflow source SHA does not match candidate_sha" >&2
+            printf '[ERROR] workflow_sha=%s candidate_sha=%s\n' "$WORKFLOW_SHA" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] checked-out SHA does not match candidate_sha" >&2
+            printf '[ERROR] checked_out_sha=%s candidate_sha=%s\n' "$checked_out_sha" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -62,6 +106,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -108,6 +153,7 @@ jobs:
 
   docs:
     name: Docs
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -129,6 +175,7 @@ jobs:
 
   ffi-surface:
     name: FFI Surface Contract
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -161,6 +208,7 @@ jobs:
 
   windows-cli-artifact:
     name: Windows CLI Artifact
+    if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
