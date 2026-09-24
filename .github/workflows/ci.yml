@@ -62,9 +62,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout dispatched candidate
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.candidate_sha || github.sha }}
+          ref: ${{ inputs.candidate_sha }}
+      - name: Checkout repository
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/checkout@v7
       - name: Verify dispatched branch and candidate identity
         if: github.event_name == 'workflow_dispatch'
         shell: bash
