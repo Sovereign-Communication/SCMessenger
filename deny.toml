@@ -28,8 +28,6 @@ ignore = [
     "RUSTSEC-2026-0104",
     # Transitive via proc-macro-error2 — unmaintained, transitive, no fix available
     "RUSTSEC-2026-0173",
-    # Transitive via libp2p -> quinn -> rustls 0.23.x — upstream fix in progress
-    "RUSTSEC-2026-0285",
 ]
 
 [licenses]
