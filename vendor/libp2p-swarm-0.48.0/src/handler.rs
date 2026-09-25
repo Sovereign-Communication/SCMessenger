@@ -766,6 +766,14 @@ mod test {
     ) -> HashSet<StreamProtocol> {
         ProtocolsChange::remove(existing, to_remove, &mut Vec::new())
             .into_iter()
+            // VENDORED PATCH NOTE (SCMessenger D9): this panic is left as-is
+            // deliberately, unlike the `Either` desync sites in
+            // handler/either.rs. It is a TEST-ONLY helper (this whole module is
+            // `#[cfg(all(test, feature = "upstream-tests"))]`, so it does not
+            // compile in this workspace), it removes from an explicit set rather
+            // than dispatching a peer-driven event, and a wrong answer here is a
+            // failing test rather than a dead connection. The classification
+            // rule is stated at the top of handler/either.rs.
             .flat_map(|c| match c {
                 ProtocolsChange::Added(_) => panic!("unexpected added"),
                 ProtocolsChange::Removed(r) => r.cloned(),

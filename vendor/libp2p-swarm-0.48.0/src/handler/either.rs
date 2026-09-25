@@ -37,6 +37,33 @@ where
     RIP: InboundUpgradeSend,
     LIP: InboundUpgradeSend,
 {
+    // VENDORED PATCH POLICY (SCMessenger D9) -- fatal vs drop, and why.
+    //
+    // Upstream treats every `Either` side desync as `unreachable!()`, which kills
+    // the tokio worker task carrying the connection. Twelve such panics were
+    // observed in the field, so the sites are converted rather than left to
+    // fire. The classification used throughout this file:
+    //
+    //   DROP (logged at warn!)  -- a desync that discards ONE event or ONE
+    //     upgrade for one connection. The connection itself stays in a defined
+    //     state and the peer can re-dial; the cost of a wrong guess is one
+    //     lost upgrade, not a dead task or a desynchronised pool.
+    //   PROPAGATE AS ERROR       -- a desync that would leave a connection's
+    //     protocol set disagreeing with the pool's. No such site exists here;
+    //     the one remaining hard failure, `ProtocolsChange::Added` in
+    //     handler.rs, is a TEST-ONLY helper behind
+    //     `#[cfg(all(test, feature = "upstream-tests"))]` and never compiles in
+    //     this workspace, so it is not a production inconsistency.
+    //
+    // Every drop below is at `warn!`, not `debug!`: a silently discarded
+    // fully-negotiated upgrade is a state divergence between two tasks, and it
+    // must be visible at default log levels for the field evidence that
+    // motivated this patch to be reproducible after the fact.
+    //
+    // Residual, deliberately NOT solved here: whether a remote peer can induce
+    // a desync (rather than local ordering causing it) is an open question in
+    // HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md. If it can, the DROP class
+    // above must be re-derived.
     // VENDORED PATCH (SCMessenger D9): returns Option so a protocol/info side desync
     // is reported to the caller instead of panicking (`_ => unreachable!()` upstream).
     // Panics were observed live on stock 0.48.0 right after identify.
@@ -53,7 +80,7 @@ where
                 info: Either::Right(info),
             } => Some(Either::Right(FullyNegotiatedInbound { protocol, info })),
             _ => {
-                tracing::debug!(
+                tracing::warn!(
                     "D9-DEGRADE: Either FullyNegotiatedInbound protocol/info side mismatch; dropping"
                 );
                 None
@@ -82,7 +109,7 @@ where
                 info: Either::Right(info),
             } => Some(Either::Right(ListenUpgradeError { error, info })),
             _ => {
-                tracing::debug!(
+                tracing::warn!(
                     "D9-DEGRADE: Either ListenUpgradeError error/info side mismatch; dropping"
                 );
                 None
@@ -189,7 +216,7 @@ where
                         handler.on_connection_event(ConnectionEvent::FullyNegotiatedInbound(fni))
                     }
                     // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
-                    (None, _) | (Some(_), _) => tracing::debug!(
+                    (None, _) | (Some(_), _) => tracing::warn!(
                         "D9-DEGRADE: Either FullyNegotiatedInbound handler side mismatch; dropping"
                     ),
                 }
@@ -205,7 +232,7 @@ where
                             fully_negotiated_outbound,
                         )),
                     // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
-                    _ => tracing::debug!(
+                    _ => tracing::warn!(
                         "D9-DEGRADE: Either FullyNegotiatedOutbound handler side mismatch; dropping"
                     ),
                 }
@@ -217,7 +244,7 @@ where
                     (Either::Right(dial_upgrade_error), Either::Right(handler)) => handler
                         .on_connection_event(ConnectionEvent::DialUpgradeError(dial_upgrade_error)),
                     // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
-                    _ => tracing::debug!(
+                    _ => tracing::warn!(
                         "D9-DEGRADE: Either DialUpgradeError handler side mismatch; dropping"
                     ),
                 }
@@ -231,7 +258,7 @@ where
                         handler.on_connection_event(ConnectionEvent::ListenUpgradeError(lue))
                     }
                     // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
-                    (None, _) | (Some(_), _) => tracing::debug!(
+                    (None, _) | (Some(_), _) => tracing::warn!(
                         "D9-DEGRADE: Either ListenUpgradeError handler side mismatch; dropping"
                     ),
                 }
