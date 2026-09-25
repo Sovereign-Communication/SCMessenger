@@ -1,0 +1,33 @@
+{
+  "wp": "WP3",
+  "ticket": "HANDOFF/freebuff/queue/V050_WP3_INBOUND_COMPLETENESS_2026-09-21.md",
+  "instruction": "WP3 inbound completeness: (WP3.1) add a regression test that fails if the WASM own-topic subscribe is removed, and fill test gaps around it; (WP3.2) assert that our own topic is never classified as a ghost when our own key is known; (WP3.3) grep every receive path and confirm none passes a payload-only sender_id as the authenticated sender_public_key_hex. Tests first; production only where a gap is proven on current main.",
+  "files_touched": [
+    "core/src/transport/swarm.rs (+178/-21): the auto-subscribe policy is extracted into one pure decision function used by BOTH the native and the wasm32 gossip loop, plus six new tests. No behaviour change."
+  ],
+  "acceptance": [
+    "WP3.1: a regression test that fails if the wasm own-topic subscribe is removed -- met by making both loops decide through topic_subscribe_decision and asserting the own-topic decision is Subscribe with no core handle at all",
+    "WP3.2: the own topic is never a ghost when the own key is known (and the case-insensitive match holds)",
+    "Ghost guard intact: an unproven 64-hex peer topic still fails closed on native",
+    "Self-certifying PeerId topics and mesh-wide topics still auto-negotiate",
+    "WP3.3: no receive path passes a payload-only sender_id as the authenticated sender"
+  ],
+  "evidence": {
+    "diff_stat": "$ git diff --stat origin/main...HEAD -> core/src/transport/swarm.rs | 199 ++++++--- ; 1 file changed, 178 insertions(+), 21 deletions(-)",
+    "tests_added": "wp3_own_topic_is_never_a_ghost_even_without_a_ledger; wp3_own_topic_exemption_ignores_hex_case; wp3_self_certifying_peer_id_topic_is_not_a_ghost; wp3_mesh_wide_topics_are_never_ghosts; wp3_unproven_hex_peer_topic_fails_closed_on_native; wp3_already_subscribed_topic_is_not_re_subscribed",
+    "grep_call_sites": "$ git grep -n topic_subscribe_decision -- core/src/transport/swarm.rs -> the definition plus ONE match in the native loop and ONE in the wasm loop (both cfg-gated), so neither loop can drift from the other",
+    "wp3_3_audit": "$ git grep -n on_message_received( --include=*.rs core/src -> trait decl (iron_core.rs:96), the single production delivery (iron_core.rs:3911), CoreDelegate passthrough (mobile_bridge.rs:2466). receive_message builds sender_public_key_hex from sender_pubkey (verified during decrypt) and stores sender_id: canonical_peer_id derived from it; the plaintext sender_id is not trusted for ingress authorization. No gap.",
+    "mechanical": "$ cargo fmt --all -- --check exit 0",
+    "ci": "CI on the PR head (see the PR for the run URLs). Local tests were not run: python scripts/disk_budget.py reports TIGHT (14.04 GB free of 236.25 GB, 95% used) with nothing reclaimable, and rule 17 makes CI the default verifier.",
+    "rule8": "core/src/transport/swarm.rs IS in the gated set. A non-author adversarial APPROVE is REQUIRED before this can be called done; it is outstanding and flagged in the PR body."
+  },
+  "canon_rows": {
+    "canon_identity": "untouched: no addressing change; contact identity stays public-key hex.",
+    "canon_routing_feed": "untouched: the single IronCore::routing_peer_seen entry is not modified or duplicated.",
+    "instruction_matches": "acceptance rows 1-5 are met: the own-topic removal-regression is real (asserting the decision with no ledger to consult), the ghost guard is pinned in both directions, and WP3.3 is a grep audit that found no gap rather than a speculative rewrite. The honest limit: a unit test can assert the decision, not that a cfg(wasm32) call site still exists -- that is covered by the grep above and by the wasm CI lane compiling the call."
+  },
+  "not_claimed": [
+    "Rule-8 sign-off for core/src/transport/swarm.rs (a non-author reviewer must file the APPROVE).",
+    "No 'WiFi fixed' claim: WP5 live 3-node proof is outstanding."
+  ]
+}

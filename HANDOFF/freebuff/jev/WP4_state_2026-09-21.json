@@ -1,0 +1,34 @@
+{
+  "wp": "WP4",
+  "ticket": "HANDOFF/freebuff/queue/V050_WP4_DELIVERY_TRUTH_2026-09-21.md",
+  "instruction": "WP4 delivery truth: (WP4.1) receipts converge -- the receiver's app verification is what the sender's 'delivered' means, and a transport ACK alone must not claim user-visible delivery; (WP4.2) a signature/verify failure never reports delivered=true; (WP4.3) the Windows wedge watchdog gets the positive test that a healthy-but-quiet node is not killed (ticket V040_T_WATCHDOG_POSITIVE_TEST).",
+  "files_touched": [
+    "cli/src/watchdog.rs (new, 219 lines): the log-silence watchdog's exit decision as a pure tested predicate",
+    "cli/src/lib.rs, cli/src/main.rs: the module is wired into the lib (so the tests run) and the bin's loop now consumes the verdict; behaviour unchanged",
+    "core/tests/integration_ironcore_roundtrip.rs: wp4_refused_envelope_leaves_no_delivery_state"
+  ],
+  "acceptance": [
+    "WP4.3: the watchdog decision is a value with a test that fails if the predicate is inverted; the positive case (quiet-but-healthy node never killed) is asserted directly",
+    "WP4.2: a refused (tampered) envelope leaves no inbox entry, no history record, no receipt, and no on_message_received callback -- with a positive control so it cannot pass vacuously",
+    "The watchdog is not deleted, no timeout was lengthened, no transport/swarm code touched (ticket scope correction)",
+    "WP4.1 is the WP5 live proof and is NOT claimed"
+  ],
+  "evidence": {
+    "diff_stat": "$ git diff --stat origin/main...HEAD -> cli/src/watchdog.rs (new, 219) ; cli/src/lib.rs (+1) ; cli/src/main.rs (rewritten loop) ; core/tests/integration_ironcore_roundtrip.rs (+96)",
+    "tests_added": "wp4_quiet_but_logging_node_is_never_killed (600 readings, streak stays 0); wp4_fresh_heartbeat_clears_a_warning_streak; wp4_unreadable_heartbeat_is_not_a_wedge; wp4_age_exactly_at_threshold_is_healthy; wp4_one_reading_never_exits_and_two_consecutive_do; wp4_poll_interval_tracks_the_threshold; wp4_refused_envelope_leaves_no_delivery_state",
+    "behaviour_unchanged": "the extracted predicate reproduces the inline loop exactly: Some(age) <= threshold -> Healthy with the streak cleared; None -> Healthy with the streak cleared; one reading above -> Warning; two consecutive -> Exit. The same log lines are emitted in the same cases.",
+    "test_target": "the predicate lives in the cli LIB target because the bin target has test = false (cargo metadata reports ['bin'] name=scmessenger-cli test=False); tests written in main.rs would never compile or run",
+    "mechanical": "$ cargo fmt --all -- --check exit 0; python scripts/rules_check.py exit 0",
+    "ci": "CI on the PR head (run URLs in the PR). Local tests were not run: disk_budget reports TIGHT (14.04 GB free, 95% used) with nothing reclaimable, and rule 17 makes CI the default verifier.",
+    "rule8": "no core/src/{crypto,transport,routing,privacy} path is touched, so the path-based Rule-8 gate does not fire for this PR"
+  },
+  "canon_rows": {
+    "canon_identity": "untouched.",
+    "canon_routing_feed": "untouched.",
+    "instruction_matches": "WP4.2 and WP4.3 are met with the named tests and a positive control. WP4.1 is explicitly NOT met: live receipt convergence needs the WP5 three-node proof, and no convergence claim is made. The Android delivered-semantics path (MeshRepository RECEIPT-RX) was read, not changed."
+  },
+  "not_claimed": [
+    "WP4.1 live receipt convergence (WP5).",
+    "No 'WiFi fixed' claim."
+  ]
+}
