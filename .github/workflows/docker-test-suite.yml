@@ -5,6 +5,21 @@
 # Runs the docker/docker-compose.test.yml suite (Rust workspace tests, Android
 # unit tests, cross-container integration tests, NAT simulation) on CI.
 #
+# NON-BLOCKING STATUS (v0.4.0-alpha.1 / SHIP_PLAN S1-4)
+# ---------------------------------------------------
+# Per CTO verdict, this suite is intentionally NON-BLOCKING for the v0.4.0 tag:
+#   - Root cause: docker/docker-compose.test.yml runs gen_kotlin against a
+#     --release cdylib whose UniFFI metadata is stripped by compiler optimization,
+#     causing KSP compilation to fail on error.NonExistentClass in the container.
+#   - Rationale: The suite is a 45-90 minute multi-arch matrix that duplicates
+#     coverage mobile.yml already provides faster, and Docker is not on the
+#     Android delivery path for this release.
+#   - The suite continues to run on push to main and report all artifacts and
+#     logs, with continue-on-error: true on the failing Android test execution step.
+#   - Follow-up: Issue #155 (https://github.com/Sovereign-Communication/SCMessenger/issues/155)
+#     tracks the real fix (retaining debuginfo in docker-compose.test.yml) to
+#     restore blocking status post-v0.4.0.
+#
 # WHY THIS FILE LOOKS THE WAY IT DOES
 # -----------------------------------
 # Every run before 2026-07-25 was cancelled by its own timeout-minutes, never
@@ -216,6 +231,11 @@ jobs:
             android-gradle-cargo-${{ runner.os }}-
 
       - name: Run Android tests
+        # NON-BLOCKING FOR v0.4.0 (SHIP_PLAN S1-4, Issue #155):
+        # Fails during :app:kspDebugKotlin with error.NonExistentClass because
+        # bindings are generated from a stripped release cdylib. mobile.yml
+        # provides primary Android CI coverage. Tracked in Issue #155.
+        continue-on-error: true
         working-directory: docker
         run: |
           set -euo pipefail
