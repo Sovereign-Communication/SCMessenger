@@ -539,35 +539,31 @@ mod tests {
         );
         let redundant =
             note_established_path(&mut peer_established_paths, &mut path_last_activity, 7, 13);
-        // The caller closes exactly the returned ids, in the returned order, so
-        // the closed log must mirror the return value element for element.
-        // Assert on the full log rather than its last element: the newest
-        // established path (13) is itself the least-recently-active probe and
-        // is the next trim target, so the last closed id is 13, not the 10
-        // this call trimmed.
+        // The helper retains the RETAINED_MAX most-recently-active paths, so
+        // the fresh probe 13 survives and the silent path 10 is the one closed.
+        // The caller mirrors the return value into its close log, so the log
+        // ends at 10.
         assert_eq!(redundant, vec![10]);
         closed.extend(redundant.iter().copied());
         assert_eq!(
             closed,
-            (1..=8)
-                .into_iter()
-                .chain([10u64, 13u64])
-                .collect::<Vec<u64>>()
+            (1..=8).into_iter().chain([10u64]).collect::<Vec<u64>>()
         );
-        assert_eq!(peer_established_paths[&7], vec![9, 11, 12]);
-        assert_eq!(path_last_activity.len(), 3);
+        assert_eq!(closed.last(), Some(&10));
+        assert_eq!(peer_established_paths[&7], vec![9, 11, 12, 13]);
+        assert_eq!(path_last_activity.len(), 4);
 
         // Partial close (num_established > 0) drops one path and its entry.
         let mut paths = peer_established_paths.get_mut(&7).unwrap();
         assert_eq!(release_path(&mut paths, &mut path_last_activity, 11), 1);
         drop(paths);
-        assert_eq!(peer_established_paths[&7], vec![9, 12]);
-        assert_eq!(path_last_activity.len(), 2);
+        assert_eq!(peer_established_paths[&7], vec![9, 12, 13]);
+        assert_eq!(path_last_activity.len(), 3);
 
         // Last close (num_established == 0) drops the peer entry and drains
         // the rest of its activity entries.
         let mut peer_paths = peer_established_paths.remove(&7);
-        assert_eq!(release_peer(&mut peer_paths, &mut path_last_activity), 2);
+        assert_eq!(release_peer(&mut peer_paths, &mut path_last_activity), 3);
         assert!(path_last_activity.is_empty());
         assert!(peer_established_paths.is_empty());
     }
