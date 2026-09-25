@@ -5170,6 +5170,11 @@ async fn cmd_test() -> Result<()> {
     let alice = IronCore::new();
     let bob = IronCore::new();
 
+    // Self-tests run non-interactively: grant consent programmatically, the
+    // same as every other CLI command path does before initializing.
+    alice.grant_consent();
+    bob.grant_consent();
+
     alice.initialize_identity()?;
     bob.initialize_identity()?;
 
