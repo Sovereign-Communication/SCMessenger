@@ -324,4 +324,3 @@ Mechanical harvest + JEV batches above are inputs. Final action orders stay in `
 4. WP5 live 3-node logs are mandatory before any WiFi-fixed claim.
 5. Freebuff paste authority is the implementation plan DISPATCHABLE set + JEV canonical DONE.
 6. Harness WIP (P2 repair / jev-phase / issue-sort) stays in Harness repo; SCMessenger consumes origin/main JEV + local packs.
-
