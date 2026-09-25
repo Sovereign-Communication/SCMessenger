@@ -4034,7 +4034,7 @@ pub async fn start_swarm_with_config(
         // paths, so a stale path left over from a peer's previous session is
         // reaped before the fresh dial that peer is using to re-attach — which is
         // exactly the lockout the admission cap used to cause.
-        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, std::time::Instant> =
+        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, web_time::Instant> =
             HashMap::new();
 
         // Track successful relay reservations by ListenerId
@@ -5241,7 +5241,7 @@ pub async fn start_swarm_with_config(
                             )) => {
                                 // V040-T-CONN-04: this path carried traffic, so it
                                 // outranks a silent path when the retained bound trims.
-                                path_last_activity.insert(connection_id, std::time::Instant::now());
+                                path_last_activity.insert(connection_id, web_time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         if peer_is_blocked(&core_handle, peer) {
@@ -5738,7 +5738,7 @@ pub async fn start_swarm_with_config(
                                 }
                             )) => {
                                 // V040-T-CONN-04: count this path as recently active.
-                                path_last_activity.insert(connection_id, std::time::Instant::now());
+                                path_last_activity.insert(connection_id, web_time::Instant::now());
                                 if peer_is_blocked(&core_handle, peer) {
                                     tracing::warn!(
                                         "Blocked peer {} attempted ledger exchange; refusing topology disclosure",
@@ -6346,7 +6346,7 @@ pub async fn start_swarm_with_config(
                                     Ok(rtt) => {
                                         // V040-T-CONN-04: a successful ping is the
                                         // cheapest proof a path is still live.
-                                        path_last_activity.insert(event.connection, std::time::Instant::now());
+                                        path_last_activity.insert(event.connection, web_time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -7034,7 +7034,6 @@ pub async fn start_swarm_with_config(
                                             &mut path_last_activity,
                                             peer_id,
                                             connection_id,
-                                            |_| {},
                                         );
                                     let retained =
                                         peer_established_paths.get(&peer_id).map_or(0, Vec::len);
@@ -8826,7 +8825,7 @@ pub async fn start_swarm_with_config(
         // `release_peer`) so the two event loops cannot drift apart again.
         let mut peer_established_paths: HashMap<PeerId, Vec<libp2p::swarm::ConnectionId>> =
             HashMap::new();
-        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, std::time::Instant> =
+        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, web_time::Instant> =
             HashMap::new();
         // R8-F4: same lifecycle contracts as the native loop -- canonical pk
         // (hex) this loop registered per wire peer, and the once-per-connection
@@ -9401,7 +9400,7 @@ pub async fn start_swarm_with_config(
                                             // V040-T-CONN-04: this path carried traffic, so it
                                             // outranks a silent path when the retained bound
                                             // trims (WASM parity with the native arm).
-                                            path_last_activity.insert(connection_id, std::time::Instant::now());
+                                            path_last_activity.insert(connection_id, web_time::Instant::now());
                                             if peer_is_blocked(&core_handle, peer) {
                                                 tracing::warn!(
                                                     "Blocked peer {} attempted address reflection (WASM); refusing",
@@ -9707,7 +9706,7 @@ pub async fn start_swarm_with_config(
                                     if let request_response::Message::Request { .. } = message {
                                         // V040-T-CONN-04: count this path as recently
                                         // active (WASM parity with the native arm).
-                                        path_last_activity.insert(connection_id, std::time::Instant::now());
+                                        path_last_activity.insert(connection_id, web_time::Instant::now());
                                     }
                                     if peer_is_blocked(&core_handle, peer) {
                                         tracing::warn!(
@@ -9877,7 +9876,7 @@ pub async fn start_swarm_with_config(
                                 // liveness event, so it is also the wasm ping-success
                                 // stamp for the retained bound (native stamps on
                                 // Ping::Success).
-                                path_last_activity.insert(connection_id, std::time::Instant::now());
+                                path_last_activity.insert(connection_id, web_time::Instant::now());
                                 // V040-T13 F-DHT (revised): wasm has no core
                                 // ledger, so it can never prove an (identity,
                                 // address) pair from OUR OWN store -- and the
@@ -9989,7 +9988,6 @@ pub async fn start_swarm_with_config(
                                             &mut path_last_activity,
                                             peer_id,
                                             connection_id,
-                                            |_| {},
                                         );
                                     let retained =
                                         peer_established_paths.get(&peer_id).map_or(0, Vec::len);

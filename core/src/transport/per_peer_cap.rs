@@ -145,7 +145,7 @@ where
 /// total.
 pub fn release_path<I>(
     paths: &mut Vec<I>,
-    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+    path_last_activity: &mut std::collections::HashMap<I, web_time::Instant>,
     connection_id: I,
 ) -> usize
 where
@@ -166,7 +166,7 @@ where
 /// and whatever ids it still carried are drained here.
 pub fn release_peer<I>(
     paths: &mut Option<Vec<I>>,
-    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+    path_last_activity: &mut std::collections::HashMap<I, web_time::Instant>,
 ) -> usize
 where
     I: Copy + std::hash::Hash + Eq,
@@ -196,21 +196,21 @@ where
 /// own `ConnectionClosed` arms use [`release_path`] / [`release_peer`]
 /// exactly as native does.
 ///
-/// `close` is a callback because the two loops close through their own
-/// `Swarm` handle; the policy itself never touches the swarm.
-pub fn note_established_path<C, I, F>(
+/// The activity clock is `web_time::Instant`, not `std::time::Instant`: the
+/// browser swarm drives this same helper and `std::time::Instant::now()` panics
+/// on `wasm32-unknown-unknown`. On native targets `web_time` re-exports the
+/// standard type, so this stays a single portable monotonic clock.
+pub fn note_established_path<C, I>(
     peer_established_paths: &mut std::collections::HashMap<C, Vec<I>>,
-    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+    path_last_activity: &mut std::collections::HashMap<I, web_time::Instant>,
     peer_id: C,
     connection_id: I,
-    mut close: F,
 ) -> Vec<I>
 where
     C: Copy + std::hash::Hash + Eq,
     I: Copy + std::hash::Hash + Eq,
-    F: FnMut(I),
 {
-    let established_at = std::time::Instant::now();
+    let established_at = web_time::Instant::now();
     path_last_activity.insert(connection_id, established_at);
     let paths = peer_established_paths.entry(peer_id).or_default();
     paths.push(connection_id);
@@ -223,9 +223,6 @@ where
     for &extra in &redundant {
         paths.retain(|id| *id != extra);
         path_last_activity.remove(&extra);
-    }
-    for &extra in &redundant {
-        close(extra);
     }
     redundant
 }
@@ -433,7 +430,7 @@ mod tests {
     /// returns to its starting size after a complete establish/close cycle.
     #[test]
     fn last_close_reclaims_every_activity_entry() {
-        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+        let mut path_last_activity: std::collections::HashMap<u64, web_time::Instant> =
             std::collections::HashMap::new();
         let mut peer_established_paths: std::collections::HashMap<u64, Vec<u64>> =
             std::collections::HashMap::new();
@@ -441,7 +438,7 @@ mod tests {
         // A peer establishes three paths, each seeded with activity at establishment.
         for id in [10u64, 11, 12] {
             peer_established_paths.entry(7).or_default().push(id);
-            path_last_activity.insert(id, std::time::Instant::now());
+            path_last_activity.insert(id, web_time::Instant::now());
         }
         assert_eq!(path_last_activity.len(), 3);
 
@@ -475,7 +472,7 @@ mod tests {
     /// ids already reclaimed by a trim.
     #[test]
     fn release_is_idempotent_for_untracked_and_missing_ids() {
-        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+        let mut path_last_activity: std::collections::HashMap<u64, web_time::Instant> =
             std::collections::HashMap::new();
         let mut empty: Vec<u64> = Vec::new();
 
@@ -489,7 +486,7 @@ mod tests {
         assert!(path_last_activity.is_empty());
 
         // Double release of the same id reclaims once, then no-ops.
-        path_last_activity.insert(5, std::time::Instant::now());
+        path_last_activity.insert(5, web_time::Instant::now());
         let mut paths = vec![5u64];
         assert_eq!(release_path(&mut paths, &mut path_last_activity, 5), 1);
         assert_eq!(release_path(&mut paths, &mut path_last_activity, 5), 0);
@@ -497,32 +494,31 @@ mod tests {
     }
 
     /// WASM PARITY (B4 regression). The wasm loop drives exactly the same
-    /// helper as native, so this is a full lifecycle exercise of the wasm
-    /// bookkeeping: a peer's fan-out is trimmed to the retained bound, the
-    /// `close_connection` callback fires once per redundant path, a partial
-    /// close reclaims only its own activity entry, and the last close drains
-    /// every remaining entry. If either loop ever stops calling the helper,
-    /// the next wasm build loses this and the divergence is visible here
-    /// rather than in the field.
+    /// helper as native, so this is a full lifecycle exercise of the shared
+    /// bookkeeping: a peer's fan-out is trimmed to the retained bound, each
+    /// redundant id is returned exactly once for the caller to close, a
+    /// partial close reclaims only its own activity entry, and the last close
+    /// drains every remaining entry. If either loop ever stops calling the
+    /// helper, the next wasm build loses this and the divergence is visible
+    /// here rather than in the field.
     #[test]
     fn note_established_path_trims_to_bound_and_close_cycle_reclaims() {
         let mut peer_established_paths: std::collections::HashMap<u64, Vec<u64>> =
             std::collections::HashMap::new();
-        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+        let mut path_last_activity: std::collections::HashMap<u64, web_time::Instant> =
             std::collections::HashMap::new();
         let mut closed: Vec<u64> = Vec::new();
 
-        // A wide fan-out: every new path beyond the retained bound is closed
-        // and its activity entry reclaimed at close time, exactly as the wasm
-        // `ConnectionEstablished` arm now does.
+        // A wide fan-out: every new path beyond the retained bound is returned
+        // for closing and its activity entry reclaimed, exactly as both
+        // `ConnectionEstablished` arms do.
         for id in 1..=12u64 {
-            note_established_path(
+            closed.extend(note_established_path(
                 &mut peer_established_paths,
                 &mut path_last_activity,
                 7,
                 id,
-                |c| closed.push(c),
-            );
+            ));
             let paths = &peer_established_paths[&7];
             assert!(paths.len() <= RETAINED_MAX_ESTABLISHED_PER_PEER);
             assert_eq!(paths.len(), path_last_activity.len());
@@ -539,15 +535,10 @@ mod tests {
         // target; the newest probe is the first to go when the bound is hit.
         path_last_activity.insert(
             9,
-            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            web_time::Instant::now() + web_time::Duration::from_secs(60),
         );
-        let redundant = note_established_path(
-            &mut peer_established_paths,
-            &mut path_last_activity,
-            7,
-            13,
-            |c| closed.push(c),
-        );
+        let redundant =
+            note_established_path(&mut peer_established_paths, &mut path_last_activity, 7, 13);
         assert_eq!(redundant, vec![10]);
         assert_eq!(closed.last(), Some(&10));
 
@@ -562,6 +553,24 @@ mod tests {
         assert_eq!(release_peer(&mut peer_paths, &mut path_last_activity), 3);
         assert!(path_last_activity.is_empty());
         assert!(peer_established_paths.is_empty());
+    }
+
+    /// The activity clock must be the browser-safe one on every target: a
+    /// native-only test cannot catch `std::time::Instant::now()` panicking in
+    /// the browser event loop. This compiles and runs under wasm CI too, and
+    /// asserts the helper writes the same portable type into its map.
+    #[test]
+    fn activity_clock_is_usable_on_native_and_wasm() {
+        let mut peer_established_paths: std::collections::HashMap<u64, Vec<u64>> =
+            std::collections::HashMap::new();
+        let mut path_last_activity: std::collections::HashMap<u64, web_time::Instant> =
+            std::collections::HashMap::new();
+        let redundant =
+            note_established_path(&mut peer_established_paths, &mut path_last_activity, 7, 1);
+        assert!(redundant.is_empty());
+        let stamp: web_time::Instant = *path_last_activity.get(&1).expect("activity seeded");
+        assert!(stamp <= web_time::Instant::now());
+        assert!(stamp.elapsed() < web_time::Duration::from_secs(5));
     }
 
     #[test]
