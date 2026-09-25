@@ -530,6 +530,9 @@ pub struct GlobalTransportMetrics {
     pub total_bytes_sent: u64,
     /// Total bytes received
     pub total_bytes_received: u64,
+    /// Average message latency in milliseconds (moving average)
+    #[serde(default)]
+    pub avg_latency_ms: u64,
     /// Current active connections
     pub current_active_connections: u32,
     /// Peak active connections
@@ -562,6 +565,7 @@ impl GlobalTransportMetrics {
             total_message_failures: 0,
             total_bytes_sent: 0,
             total_bytes_received: 0,
+            avg_latency_ms: 0,
             current_active_connections: 0,
             peak_active_connections: 0,
             connection_state_counts: HashMap::new(),
@@ -589,9 +593,17 @@ impl GlobalTransportMetrics {
     }
 
     /// Record message success
-    pub fn record_message_success(&mut self, bytes: u64, _latency_ms: u64) {
+    pub fn record_message_success(&mut self, bytes: u64, latency_ms: u64) {
         self.total_messages_sent += 1;
         self.total_bytes_sent += bytes;
+
+        // Update average latency (moving average), mirroring the per-peer
+        // TransportHealth::record_message_success.
+        if self.total_messages_sent > 1 {
+            self.avg_latency_ms = (self.avg_latency_ms + latency_ms) / 2;
+        } else {
+            self.avg_latency_ms = latency_ms;
+        }
     }
 
     /// Record message failure
@@ -755,6 +767,10 @@ mod tests {
             metrics.record_successful_connection();
             metrics.record_message_success(1024, 50);
         }
+        assert_eq!(
+            metrics.avg_latency_ms, 50,
+            "moving average of uniform latency"
+        );
 
         let score = metrics.health_score();
         assert!(

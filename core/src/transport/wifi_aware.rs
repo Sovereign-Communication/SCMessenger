@@ -234,6 +234,9 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(self.available)
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock of WifiAwarePlatformBridge;
+    // MockWifiAwareBridge is a fixed available/unavailable stub and does not
+    // model per-call arguments.
     async fn publish_service(
         &self,
         service_name: &str,
@@ -246,6 +249,7 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     async fn subscribe_to_services(
         &self,
         service_name: &str,
@@ -266,6 +270,7 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     async fn create_data_path(
         &self,
         peer_id: &str,
@@ -280,14 +285,17 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_service_discovered(
         &self,
         _callback: Box<dyn Fn(String, Vec<u8>, i32) + Send + Sync>,
     ) {
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_data_path_confirmed(&self, _callback: Box<dyn Fn(String, SocketAddr) + Send + Sync>) {
     }
 }
