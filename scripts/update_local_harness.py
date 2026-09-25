@@ -1,64 +1,64 @@
 #!/usr/bin/env python3
-"""Create/update the local sovereign-harness copy used by SCMessenger JEV tools.
+"""Admit and promote the SCMessenger-owned Harness consumer copy.
 
-Operator rule (2026-09-21):
-- Do **not** edit the external Harness product tree for SCMessenger work.
-- Use ``vendor/sovereign-harness`` inside this repo, refreshed from the
-  official harness GitHub remote (origin/main of Sovereign-Communication/harness).
-
-Usage:
-  python scripts/update_local_harness.py
-  python scripts/update_local_harness.py --remote <url>
-
-The vendor directory is gitignored (consumer copy only). SCMessenger scripts
-import from this path via ``scripts/local_harness.py``.
+The updater is intentionally an interface only.  Exact ref resolution,
+validation, staging, promotion, and rollback belong to ``harness_admission``.
 """
 from __future__ import annotations
 
 import argparse
-import subprocess
+import json
 import sys
-from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-VENDOR = REPO / "vendor" / "sovereign-harness"
-DEFAULT_REMOTE = "https://github.com/Sovereign-Communication/harness.git"
-
-
-def _run(cmd, cwd=None):
-    print("[INFO]", " ".join(cmd))
-    return subprocess.call(cmd, cwd=str(cwd) if cwd else None)
+try:
+    from .harness_admission import AdmissionError, run_mode
+    from .harness_source import DEFAULT_REMOTE, PRODUCTION_TAG, HarnessSourceError
+except ImportError:
+    from harness_admission import AdmissionError, run_mode
+    from harness_source import DEFAULT_REMOTE, PRODUCTION_TAG, HarnessSourceError
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--remote", default=DEFAULT_REMOTE)
-    ap.add_argument("--ref", default="origin/main")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("bootstrap", "admit-tag", "canary-main", "rollback"),
+        default="admit-tag",
+        help="admission lifecycle operation (default: admit-tag)",
+    )
+    parser.add_argument(
+        "--tag",
+        default=PRODUCTION_TAG,
+        help=f"immutable production tag (default: {PRODUCTION_TAG})",
+    )
+    parser.add_argument(
+        "--remote",
+        default=DEFAULT_REMOTE,
+        help="official Harness remote; production admission rejects other remotes",
+    )
+    parser.add_argument(
+        "--ref",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    args = parser.parse_args()
+    if args.ref:
+        if not args.ref.startswith("refs/tags/"):
+            parser.error("--ref is accepted only as refs/tags/<tag>; use --mode canary-main for branches")
+        args.tag = args.ref.removeprefix("refs/tags/")
 
-    VENDOR.parent.mkdir(parents=True, exist_ok=True)
-    if not (VENDOR / ".git").is_dir():
-        rc = _run(["git", "clone", args.remote, str(VENDOR)])
-        if rc != 0:
-            print("[FAIL] clone failed")
-            return rc
-    _run(["git", "-C", str(VENDOR), "fetch", "origin", "main", "--quiet"])
-    rc = _run(["git", "-C", str(VENDOR), "checkout", "-B", "consumer", "origin/main"])
-    if rc != 0:
-        print("[FAIL] checkout origin/main failed")
-        return rc
-    _run(["git", "-C", str(VENDOR), "pull", "--ff-only", "origin", "main"])
-    tip = subprocess.check_output(
-        ["git", "-C", str(VENDOR), "rev-parse", "HEAD"], text=True
-    ).strip()
-    print(f"[OK] local harness at {VENDOR}")
-    print(f"[OK] tip {tip}")
-    if not (VENDOR / "harness" / "jev.py").is_file():
-        print("[FAIL] harness/jev.py missing after update")
+    try:
+        result = run_mode(
+            args.mode,
+            tag=args.tag,
+            remote=args.remote,
+        )
+    except (AdmissionError, HarnessSourceError) as exc:
+        print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
-    has_p5 = (VENDOR / "harness" / "jev_packs.py").is_file()
-    print(f"[INFO] jev_packs.py present: {has_p5}")
-    print("[OK] HARNESS_REPO consumers can use:", VENDOR)
+
+    print(json.dumps(result, indent=2, sort_keys=True))
+    print("[OK] Harness admission operation complete")
     return 0
 
 

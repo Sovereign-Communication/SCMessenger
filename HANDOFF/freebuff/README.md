@@ -1,7 +1,7 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-09-21 (deduplicated; single train section added)
+Last updated: 2026-09-24 (immutable Harness admission; bounded main canary)
 Rules: `docs/rules/FREEBUFF.md`
 **SESSION HANDOFF (canonical, read first):**
 `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
@@ -24,13 +24,17 @@ umbrella ticket.
 
 **JEV / harness (local only):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
-- `python scripts/update_local_harness.py` -> `vendor/sovereign-harness`
+- Production admission: `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1` -> `vendor/sovereign-harness`
+- Canary command: `python scripts/update_local_harness.py --mode canary-main` -> isolated one-SHA `origin/main` candidate only
+- `python scripts/harness_gate.py --kind version` -> pinned source identity
 - `python scripts/jev_repo_insights.py --mode full` (bucket/triage read)
 - `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
 - TypeSafe first; OpenRouter `~typesafe/jev-latest` on
   `https://openrouter.ai/api/alpha/decisions` if TypeSafe unhealthy
   (operator: allow OpenRouter provider `typesafe`).
-- Do **not** edit external Harness product trees / WIP PRs.
+- Do **not** edit external Harness product trees / WIP PRs. Never treat a
+  local Harness checkout or moving `origin/main` as production evidence;
+  record the exact admitted tag/SHA for every gate.
 
 ## Paste protocol
 

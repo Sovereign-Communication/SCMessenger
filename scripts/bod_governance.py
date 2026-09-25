@@ -38,23 +38,54 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# Ensure harness is importable
+# The governance engine consumes the same declared Harness surface as every
+# other SCMessenger script.  Loading is lazy so --help and dry-run remain
+# usable before an operator has bootstrapped the consumer copy.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    import harness
-    from harness.config import (
-        HARD_MAX_COST,
-        load_settings,
-        FREE_PANEL_POOL,
-        FREE_JUDGE,
+    from .harness_source import (  # type: ignore
+        HarnessSourceError,
+        import_harness_modules,
     )
-    from harness.errors import HarnessError
-    from harness.panel import panel_judge
-    from harness.session import governor_for, ledger_for, router_for
-    from harness._http import HttpTransport
-except ImportError as err:
-    print(f"[ERROR] Failed to import sovereign-harness: {err}", file=sys.stderr)
-    print("[ERROR] Ensure sovereign-harness is installed or in PYTHONPATH.", file=sys.stderr)
-    sys.exit(1)
+except ImportError:
+    from harness_source import (  # type: ignore
+        HarnessSourceError,
+        import_harness_modules,
+    )
+
+_HARNESS_API = None
+HarnessError = RuntimeError
+FREE_PANEL_POOL = ()
+FREE_JUDGE = ""
+load_settings = None
+panel_judge = None
+governor_for = None
+ledger_for = None
+router_for = None
+HttpTransport = None
+
+
+def _load_harness_api():
+    global _HARNESS_API
+    global HarnessError, FREE_PANEL_POOL, FREE_JUDGE
+    global load_settings, panel_judge, governor_for, ledger_for, router_for, HttpTransport
+    if _HARNESS_API is not None:
+        return _HARNESS_API
+    try:
+        api = import_harness_modules()
+    except HarnessSourceError as exc:
+        raise RuntimeError(f"Harness source unavailable: {exc}") from exc
+    _HARNESS_API = api
+    HarnessError = api["HarnessError"]
+    FREE_PANEL_POOL = api["FREE_PANEL_POOL"]
+    FREE_JUDGE = api["FREE_JUDGE"]
+    load_settings = api["load_settings"]
+    panel_judge = api["panel_judge"]
+    governor_for = api["governor_for"]
+    ledger_for = api["ledger_for"]
+    router_for = api["router_for"]
+    HttpTransport = api["HttpTransport"]
+    return api
 
 MAX_BOD_COST_CEILING = 0.10
 REQUIRED_PANELISTS = 5
@@ -329,6 +360,7 @@ def evaluate_board_proposal(
             "notes": "Dry-run mode requested. No external API calls made.",
         }
 
+    _load_harness_api()
     os.environ["HARNESS_MAX_PANELISTS"] = str(REQUIRED_PANELISTS)
     overrides = {
         "max_panelists": REQUIRED_PANELISTS,
@@ -345,7 +377,7 @@ def evaluate_board_proposal(
 
     api_key, gov = governor_for(settings, cost_ceiling)
     ledger = ledger_for(settings, caller="bod-governance")
-    router = router_for(settings)
+    router_for(settings)
 
     prompt = BOD_PANEL_PROMPT_TEMPLATE.format(
         rubric=REPO_PHILOSOPHY_RUBRIC.strip(), proposal=proposal.strip()
@@ -405,7 +437,6 @@ def evaluate_board_proposal(
 
     # Check judge consensus
     judge_content = judge_synthesis.get("content", "") if isinstance(judge_synthesis, dict) else ""
-    judge_verdict_raw = consensus.get("verdict", "")
     judge_agreed = False
 
     if all_models_agreed:

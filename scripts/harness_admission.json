@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "PRODUCTION",
+  "remote": "https://github.com/Sovereign-Communication/harness.git",
+  "ref": "refs/tags/v0.4.1",
+  "tag": "v0.4.1",
+  "sha": "ad4a30052955e1f574c90f426edfc7a274e16ebf",
+  "package_version": "0.4.1",
+  "root": "vendor/sovereign-harness",
+  "previous": null,
+  "contract": "scmessenger-jev-v1"
+}
