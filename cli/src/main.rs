@@ -4518,7 +4518,7 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         Err(e) => {
             // If swarm startup fails, fall back to queuing
             tracing::warn!("Failed to start swarm: {}, falling back to queue", e);
-            return queue_message_for_later_delivery(&data_dir, &contact, &message).await;
+            return queue_message_for_later_delivery(&core, &data_dir, &contact, &message).await;
         }
     };
 
@@ -4607,29 +4607,21 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
         "[WARN]".yellow(),
         last_error.unwrap_or("unknown error".to_string())
     );
-    queue_message_for_later_delivery(&data_dir, &contact, &message).await
+    queue_message_for_later_delivery(&core, &data_dir, &contact, &message).await
 }
 
 /// Queue a message in the outbox for later delivery.
 /// Used when the swarm send fails or the API is unavailable.
+///
+/// Takes the caller's already-initialized `IronCore`: opening a second core
+/// on the same storage path would hit sled's file lock (the first core is
+/// still alive), degrade storage, and lose the message.
 async fn queue_message_for_later_delivery(
+    core: &IronCore,
     data_dir: &std::path::Path,
     contact: &Contact,
     message: &str,
 ) -> Result<()> {
-    let storage_path = data_dir.join("storage");
-    let core = IronCore::with_storage(path_to_string(&storage_path)?);
-    let info = core.get_identity_info();
-    if !info.initialized {
-        anyhow::bail!(
-            "No identity found for data directory: {}. Run 'scm init' first.",
-            data_dir.display()
-        );
-    }
-    core.grant_consent();
-    core.initialize_identity()
-        .context("Failed to initialize identity for queued send")?;
-
     // NOTE (UNIFICATION_V3 D1 fix): the envelope's wire message id MUST be
     // reused as the outbox entry key. A Delivered receipt returned by the
     // recipient carries the wire id, and `Outbox::remove` matches strictly on
