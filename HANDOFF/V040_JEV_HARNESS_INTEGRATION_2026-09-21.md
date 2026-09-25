@@ -1,5 +1,13 @@
 # JEV / harness integration — SCMessenger completion (2026-09-21)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-09-24 (immutable Harness admission and bounded-canary policy)
 Owner: CTO/orchestrator
