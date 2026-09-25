@@ -16,61 +16,61 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/either.rs tm
 +            }
          }
      }
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -84,7 +84,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
      use std::sync::LazyLock;
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -32,7 +32,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
      use libp2p_core::{multiaddr::Protocol, transport::ListenerId};
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -93,7 +93,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
      use std::{io, sync::LazyLock};
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -390,7 +390,7 @@
              || is_unicast_link_local(addr))
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
      use futures::FutureExt;
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -858,7 +858,9 @@
      }
- 
+
      fn extract(mut self) -> StreamMuxerBox {
 -        self.connection.take().unwrap()
 +        self.connection
@@ -78,14 +78,14 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool.rs tmp
 +            .expect("connection must be present while being dropped")
      }
  }
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -36,7 +36,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
@@ -97,7 +97,7 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection.rs tmp/rule
 @@ -471,7 +471,7 @@
          }
      }
- 
+
 -    #[cfg(test)]
 +    #[cfg(all(test, feature = "upstream-tests"))]
      fn poll_noop_waker(&mut self) -> Poll<Result<Event<THandler::ToBehaviour>, ConnectionError>> {
@@ -106,7 +106,7 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection.rs tmp/rule
 @@ -779,7 +779,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
@@ -192,7 +192,7 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/either.rs tmp/
 +            }
          }
      }
- 
+
 @@ -159,15 +182,16 @@
          match event {
              ConnectionEvent::FullyNegotiatedInbound(fully_negotiated_inbound) => {
@@ -394,24 +394,24 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/one_shot.rs tm
 @@ -212,7 +212,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
      use std::convert::Infallible;
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler.rs	2026-09-25 07:10:43.000000000 -1000
 @@ -750,7 +750,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod test {
      use super::*;
- 
+
 diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/lib.rs
 --- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs	2006-07-23 15:21:28.000000000 -1000
 +++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/lib.rs	2026-09-25 07:10:43.000000000 -1000
@@ -423,7 +423,7 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs tmp/rule8-pr372
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod test;
  mod upgrade;
- 
+
 @@ -776,7 +776,8 @@
                      .iter_established_connections_of_peer(&peer_id)
                      .collect::<Vec<_>>();
@@ -433,7 +433,7 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs tmp/rule8-pr372
 +                        .expect("established connection count fits u32"),
                  )
                  .expect("n + 1 is always non-zero; qed");
- 
+
 @@ -895,8 +896,8 @@
                  }
                  let peer_id = connected.peer_id;
@@ -442,13 +442,13 @@ diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs tmp/rule8-pr372
 -                    u32::try_from(remaining_established_connection_ids.len()).unwrap();
 +                let num_established = u32::try_from(remaining_established_connection_ids.len())
 +                    .expect("established connection count fits u32");
- 
+
                  self.behaviour
                      .on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
 @@ -1782,7 +1783,7 @@
      }
  }
- 
+
 -#[cfg(test)]
 +#[cfg(all(test, feature = "upstream-tests"))]
  mod tests {
