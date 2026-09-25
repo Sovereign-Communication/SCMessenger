@@ -53,11 +53,13 @@
 /// enforced by closing redundant paths. Admission is only a handshake
 /// ceiling, so it must be wide enough for one legitimate fan-out and no
 /// wider. The synthesised candidate ladder in `swarm.rs` is, exactly:
-///   * 3 direct TCP ports (443, 80, 8080)
-///   * 1 `last_good` transport address from transport memory
-///   * `super::dial_policy::MAX_RELAY_LADDER_ADDRS` relay-circuit addresses
-///     (capped there, newest relay first -- before this cap the ladder was
-///     unbounded, which is why 16 appeared to be defensible)
+///
+/// - 3 direct TCP ports (443, 80, 8080)
+/// - 1 `last_good` transport address from transport memory
+/// - `super::dial_policy::MAX_RELAY_LADDER_ADDRS` relay-circuit addresses
+///   (capped there, newest relay first -- before this cap the ladder was
+///   unbounded, which is why 16 appeared to be defensible)
+///
 /// so the ladder is 4 + MAX_RELAY_LADDER_ADDRS = 8 candidates. **8** admits
 /// that ladder whole, is exactly 2x the retained bound, and is the whole
 /// number the dial path can produce. The previous value of 16 was a 4x

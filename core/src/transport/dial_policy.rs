@@ -448,9 +448,9 @@ impl CircuitRelayLadder {
         // The cap counts RELAYS CONSIDERED, not addresses emitted: a relay
         // whose addresses are all nested or self-targeted contributes nothing,
         // and stopping on the emitted count would let one such relay eat the
-        // whole budget and hide the newer relays behind it.
-        let mut relays_considered = 0usize;
-        for (relay_pid, external_addrs) in relays.iter() {
+        // whole budget and hide the newer relays behind it. `relays` is
+        // newest-first, so the index is the recency rank.
+        for (relays_considered, (relay_pid, external_addrs)) in relays.iter().enumerate() {
             if relays_considered >= MAX_RELAY_LADDER_ADDRS {
                 debug!(
                     target_peer_id=%target_peer_id,
@@ -461,7 +461,6 @@ impl CircuitRelayLadder {
                 );
                 break;
             }
-            relays_considered += 1;
             // A relay cannot provide a useful circuit to itself. More
             // importantly, accepting a self-target here creates a circuit
             // path that returns to the originating node and multiplies during
