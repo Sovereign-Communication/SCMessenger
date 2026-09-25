@@ -296,16 +296,32 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
 `docs/rules/FREEBUFF.md`. Queue: `HANDOFF/freebuff/`. Rules:
 - You have the repo and a toolchain. You MAY run `cargo`/`gradlew`, but check
   first that no other build is live -- this host serializes builds.
-- You MAY open a PR for your own work. You may NOT merge it: green CI is
+- You MAY commit your own task's files to a scoped branch and push it
+  (fast-forward only; the pre-push hook binds every lane equally). You MAY
+  open a PR for your own work. You may NOT merge it: green CI is
   necessary, not sufficient, and anything touching
   `core/src/{crypto,transport,routing,privacy}` needs a recorded adversarial
   APPROVE from a reviewer that did not author the change.
+- CI is the PRIMARY build verifier for this lane (operator directive
+  2026-09-22): push to CI instead of building locally; local builds are the
+  failover, with mandatory immediate reclaim afterwards. See
+  `docs/rules/BUILD_AND_CI.md` (CI-Primary Build Doctrine).
 - Do NOT revert, stash, delete, or commit a file you did not create. This
   checkout is shared. A clean `git status` is not a goal.
 - Your task file is the whole brief. If its premise does not survive contact
   with the code, STOP and say so in the PR rather than implementing a fix to a
   problem that does not exist.
 - Every status line carries a command and its output, a run URL, or `UNVERIFIED`.
+
+## Dogfood override — product handoffs
+
+For an active Harness/SCMessenger dogfood run, these rules override capability-specific commit and push permissions:
+
+- **Never interrupt WIP.** Before any action that could change or terminate shared work, verify the current branch, `git status --short --branch`, and the relevant diff. Never reset, overwrite, clean, stash, kill/terminate, or delete unowned work. If status or ownership is unclear, stop and report the evidence.
+- **Docs-only commits and pushes.** Commit and push documentation only, including handoff findings and recommended remediations. Do not commit or push source, tests, generated files, or other code WIP; leave those changes in place and report them.
+- **Route handoffs to the owning product repository.** Commit SCMessenger handoff files and SCMessenger recommended remediations in this SCMessenger repository. Commit Harness handoff files and Harness recommended remediations in the Harness repository. Never place or commit one product's handoff in the other product's repository.
+- **Single-owner handoff gate (executable).** Every SCMessenger handoff must declare `scope: SCMessenger`, `owner: Sovereign-Communication/SCMessenger`, `purpose: SCMessenger-only findings and remediation handoff`, `foreign_material: NONE`, and the exact boundary line used by the repository-local gate. Before handoff delivery, run `python scripts/validate_handoff_scope.py --repo-root . --document <handoff>`. The active `.githooks/pre-commit` runs the same gate against staged Git-index bytes via `scripts/rules_check.py --staged`, and CI runs the changed-file gate before merge. A foreign-product reference outside the metadata block is a hard failure, not a warning. Legacy handoffs are not grandfathered: touching one requires owner cleanup and metadata first. Split mixed material into separate owner handoffs before delivery; do not bypass the hook.
+- **Verify before publishing.** Immediately before each commit or push, re-check the target repository status and staged diff, and confirm that it contains only the intended documentation.
 
 ### MAC LANE (GPT / Codex on the operator's MacBook — iOS platform work + adversarial review)
 Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
@@ -318,6 +334,10 @@ Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
   Windows side).
 - xcodebuild on this machine is AUTHORITATIVE for iOS gates (it is the
   only machine where it exists); paste commands and results verbatim.
+- GPT-5.1 is authorized in this lane when the operator selects it. The
+  lane's rules bind whichever model runs; model choice does not change the
+  lane's authority (own `gpt/*` branches) or its limits (no merges to
+  main, no HANDOFF moves, core/ routes through the Windows AUDIT-GATE).
 - Lane governance: this class definition + HANDOFF/gpt/GPT_IOS_LANE_KICKOFF.md
   (rules of engagement) + the task packets in HANDOFF/gpt/. IMPORTANT: if
   the rules in your current session context predate 2026-07-28, RE-READ
