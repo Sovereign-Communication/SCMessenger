@@ -4,6 +4,34 @@ Status: Active
 Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
 Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
 
+# ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
+
+Cross-repo facts for this seat; nothing in SCMessenger source changed. Every line
+carries its evidence. The SCMessenger execution authority and procedure above are
+unchanged; this block only records upstream Harness state.
+
+- Harness `origin/main` = `412f7e1`, CI 5/5 green (`gh run list --repo Sovereign-Communication/harness --branch main --limit 1`).
+- Harness agent lane migrated from Freebuff to Claude Code (harness PR #66 `6f00d38`):
+  `CLAUDE.md` + tool-neutral `AGENTS.md`, `/isolated-mission`, `/isolated-request`,
+  seats `/cto` `/ceo` `/bod`. The SCMessenger Freebuff transition doc is untouched;
+  whether SCMessenger follows is an operator decision.
+- Harness MCP now connects from Claude Code (harness PR #66 fixed `initialize` protocol
+  negotiation; it previously rejected `2025-11-25`). This supersedes the older note below
+  that the MCP server "needs a client registration": `claude mcp add harness --scope local
+  -e HARNESS_MCP_ALLOWED_ROOTS=<root> -- <python> -m harness.mcp` (observe-only by default).
+- Upstream behaviour changes relevant to `vendor/sovereign-harness` consumers (refresh only via
+  `python scripts/update_local_harness.py`):
+  - harness PR #67 `a9b58ab`: `harness jev-phase` Jev bar now scores six sentiment axes and
+    prints declared improvement buckets; `--all` board. SCMessenger's
+    `scripts/jev_canonical_check.py` gate is unaffected.
+  - harness PR #69 `e47001a`: with a paid key configured, free-tier runs fail over to the
+    cheapest paid rung (ceiling-bounded, ledgered). Ling was removed from the free apply
+    pool (open decision `DF-LING-2`).
+  - harness PR #70 `412f7e1`: `harness ledger verify` now exits 2 on a broken chain (was
+    always 0) — any script gating on it will now fail loudly as documented.
+- Not done here: no vendor refresh, no edit to the shared checkout (it holds another
+  session's uncommitted `vendor/`, `Cargo.*`, HANDOFF WIP on `glm/canonical-outlier-audit`).
+
 # ===== RESUME HERE (2026-09-21, orchestrator session close) =====
 
 ## Canonical Freebuff transition (read first after AGENTS.md + FREEBUFF.md)
