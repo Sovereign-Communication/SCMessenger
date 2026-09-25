@@ -47,7 +47,37 @@
 /// `connection_limits`. Bounded (not unbounded) so a hostile peer still
 /// cannot open an arbitrary number of sockets, but large enough that one
 /// device's own multi-port fan-out is no longer refused mid-handshake.
-pub const ADMISSION_MAX_ESTABLISHED_PER_PEER: u32 = 16;
+///
+/// Sizing (adversarial review 2026-09-24, B5). The retained bound below is
+/// the real per-peer resource cap: it is what actually holds sockets open,
+/// enforced by closing redundant paths. Admission is only a handshake
+/// ceiling, so it must be wide enough for one legitimate fan-out and no
+/// wider. The synthesised candidate ladder in `swarm.rs` is, exactly:
+///   * 3 direct TCP ports (443, 80, 8080)
+///   * 1 `last_good` transport address from transport memory
+///   * `super::dial_policy::MAX_RELAY_LADDER_ADDRS` relay-circuit addresses
+///     (capped there, newest relay first -- before this cap the ladder was
+///     unbounded, which is why 16 appeared to be defensible)
+/// so the ladder is 4 + MAX_RELAY_LADDER_ADDRS = 8 candidates. **8** admits
+/// that ladder whole, is exactly 2x the retained bound, and is the whole
+/// number the dial path can produce. The previous value of 16 was a 4x
+/// loosening with no evidence behind it: the ladder cannot produce 16
+/// candidates, so it bought no fan-out headroom while quadrupling the
+/// per-peer handshake exposure for the window between establishment and the
+/// first trim.
+pub const ADMISSION_MAX_ESTABLISHED_PER_PEER: u32 = 8;
+
+/// The direct half of the synthesised ladder: the 443/80/8080 port ladder plus
+/// one `last_good` transport-memory address, per `swarm.rs`.
+pub const DIRECT_LADDER_ADDRS: u32 = 3 + 1;
+
+/// The synthesised candidate ladder's full width, as produced by the dial path
+/// now that the relay half is bounded. The admission ceiling is sized against
+/// this; `admission_ceiling_covers_the_whole_synthesised_ladder` pins the
+/// relationship in both directions.
+pub fn synthesised_ladder_width() -> u32 {
+    DIRECT_LADDER_ADDRS + super::dial_policy::MAX_RELAY_LADDER_ADDRS as u32
+}
 
 /// Retained ceiling per peer once paths have been selected. The swarm loop
 /// actively closes redundant paths down to this bound, so the sockets a peer
@@ -99,6 +129,103 @@ where
         .take(excess)
         .map(|(_, _, id)| id)
         .collect()
+}
+
+/// Drop `connection_id` from a peer's established-path list and reclaim its
+/// activity entry, returning any activity keys that became unreachable.
+///
+/// The caller must invoke this on **every** `ConnectionClosed` arm, including
+/// the `num_established == 0` one. `ConnectionId` is monotonic and never
+/// reused, so an activity entry that is not removed here is never consulted
+/// again but is also never reclaimed: a peer that churns through full teardowns
+/// leaks one `Instant` per cycle, unbounded, with no correctness symptom to
+/// reveal it. Draining the ids out of the peer entry is what makes the reclaim
+/// total.
+pub fn release_path<I>(
+    paths: &mut Vec<I>,
+    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+    connection_id: I,
+) -> usize
+where
+    I: Copy + std::hash::Hash + Eq,
+{
+    paths.retain(|id| *id != connection_id);
+    if path_last_activity.remove(&connection_id).is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Reclaim every activity entry owned by a peer whose last path just closed.
+///
+/// Returns the number of entries reclaimed. Pair with [`release_path`] on the
+/// partial-close arm; on the last-close arm the whole peer entry is dropped
+/// and whatever ids it still carried are drained here.
+pub fn release_peer<I>(
+    paths: &mut Option<Vec<I>>,
+    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+) -> usize
+where
+    I: Copy + std::hash::Hash + Eq,
+{
+    match paths.take() {
+        Some(ids) => {
+            let mut reclaimed = 0;
+            for id in ids {
+                if path_last_activity.remove(&id).is_some() {
+                    reclaimed += 1;
+                }
+            }
+            reclaimed
+        }
+        None => 0,
+    }
+}
+
+/// The swarm loop's per-connection half of the CONN-CAP bookkeeping, in one
+/// place so native and wasm cannot drift apart again.
+///
+/// Both event loops call this from their `ConnectionEstablished` arm: it
+/// seeds the path's activity stamp, appends it to the peer's oldest-first
+/// list, and returns the redundant paths the caller must hand to
+/// `Swarm::close_connection`. A full lifecycle exercise (fan-out, trim,
+/// partial close, last close) is pinned by the tests below; the wasm loop's
+/// own `ConnectionClosed` arms use [`release_path`] / [`release_peer`]
+/// exactly as native does.
+///
+/// `close` is a callback because the two loops close through their own
+/// `Swarm` handle; the policy itself never touches the swarm.
+pub fn note_established_path<C, I, F>(
+    peer_established_paths: &mut std::collections::HashMap<C, Vec<I>>,
+    path_last_activity: &mut std::collections::HashMap<I, std::time::Instant>,
+    peer_id: C,
+    connection_id: I,
+    mut close: F,
+) -> Vec<I>
+where
+    C: Copy + std::hash::Hash + Eq,
+    I: Copy + std::hash::Hash + Eq,
+    F: FnMut(I),
+{
+    let established_at = std::time::Instant::now();
+    path_last_activity.insert(connection_id, established_at);
+    let paths = peer_established_paths.entry(peer_id).or_default();
+    paths.push(connection_id);
+    let redundant: Vec<I> = connections_to_close(paths, |id| {
+        path_last_activity
+            .get(id)
+            .copied()
+            .unwrap_or(established_at)
+    });
+    for &extra in &redundant {
+        paths.retain(|id| *id != extra);
+        path_last_activity.remove(&extra);
+    }
+    for &extra in &redundant {
+        close(extra);
+    }
+    redundant
 }
 
 /// Simulation of libp2p's admission check for one peer's concurrent dial
@@ -237,9 +364,10 @@ mod tests {
         assert!(connections_to_close(&empty, |id| *id as u64).is_empty());
     }
 
-    /// A full 16-path fan-out keeps the four most recently active paths.
+    /// A fan-out wider than the admission ceiling (the trim sees any slice of
+    /// established paths) keeps only the four most recently active ones.
     #[test]
-    fn full_fan_out_keeps_the_four_most_recently_active() {
+    fn wide_fan_out_keeps_the_four_most_recently_active() {
         let wide: Vec<u32> = (1..=16).collect();
         let closing = connections_to_close(&wide, |id| *id as u64);
         assert_eq!(closing, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
@@ -249,6 +377,189 @@ mod tests {
             .copied()
             .collect();
         assert_eq!(retained, vec![13, 14, 15, 16]);
+    }
+
+    /// BOUNDARY (adversarial review 2026-09-24, B5): the admission ceiling must
+    /// stay sized to the real candidate ladder, not inflate. The ladder in
+    /// `swarm.rs` is 3 direct ports + 1 last-good + one circuit per tracked
+    /// relay. Anything above 2x the retained bound buys no additional fan-out
+    /// headroom and only widens the window in which a peer holds sockets the
+    /// retained bound has not yet trimmed. This fails if the ceiling is raised
+    /// again without re-deriving it from the ladder.
+    #[test]
+    fn admission_ceiling_stays_within_two_times_the_retained_bound() {
+        assert_eq!(ADMISSION_MAX_ESTABLISHED_PER_PEER as usize, 8);
+        assert_eq!(
+            ADMISSION_MAX_ESTABLISHED_PER_PEER as usize,
+            RETAINED_MAX_ESTABLISHED_PER_PEER * 2,
+            "admission must stay at 2x the retained bound; raise it only with a documented fan-out measurement"
+        );
+    }
+
+    /// The ceiling must admit the WHOLE synthesised ladder: 3 direct ports plus
+    /// one last-good address is 4 candidates before any relay circuit is added,
+    /// so a ceiling at or below 4 would reintroduce the original mid-fan-out
+    /// refusal this policy exists to prevent.
+    #[test]
+    fn admission_ceiling_admits_the_direct_port_ladder() {
+        assert!(
+            ADMISSION_MAX_ESTABLISHED_PER_PEER > DIRECT_LADDER_ADDRS,
+            "a ceiling of {ADMISSION_MAX_ESTABLISHED_PER_PEER} would refuse a {DIRECT_LADDER_ADDRS}-address direct ladder mid-fan-out"
+        );
+        // And the pre-fix behaviour is still pinned as the regression it was.
+        assert!(ADMISSION_MAX_ESTABLISHED_PER_PEER > LEGACY_SINGLE_TIER_PER_PEER_LIMIT);
+    }
+
+    /// The ladder and the ceiling must agree exactly, in both directions: the
+    /// ceiling admits every candidate the dial path can synthesise (so no
+    /// legitimate dial is ever refused mid-fan-out), and it is not wider than
+    /// that (so it cannot be inflated past the ladder it exists to admit). This
+    /// is the test that makes "admission 16" unfalsifiable going forward.
+    #[test]
+    fn admission_ceiling_covers_the_whole_synthesised_ladder() {
+        assert_eq!(
+            synthesised_ladder_width(),
+            ADMISSION_MAX_ESTABLISHED_PER_PEER,
+            "the dial ladder and the admission ceiling must be the same number; widening the ladder must widen the ceiling in the same commit"
+        );
+    }
+
+    /// REGRESSION (F2): `path_last_activity` is keyed by `ConnectionId`, which is
+    /// monotonic and never reused. An entry that survives its peer's last close is
+    /// therefore never consulted again AND never reclaimed, so a peer churning
+    /// through full teardowns grows the map without bound. This asserts the map
+    /// returns to its starting size after a complete establish/close cycle.
+    #[test]
+    fn last_close_reclaims_every_activity_entry() {
+        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+            std::collections::HashMap::new();
+        let mut peer_established_paths: std::collections::HashMap<u64, Vec<u64>> =
+            std::collections::HashMap::new();
+
+        // A peer establishes three paths, each seeded with activity at establishment.
+        for id in [10u64, 11, 12] {
+            peer_established_paths.entry(7).or_default().push(id);
+            path_last_activity.insert(id, std::time::Instant::now());
+        }
+        assert_eq!(path_last_activity.len(), 3);
+
+        // One path closes while others remain (partial close).
+        let mut paths = peer_established_paths.get_mut(&7).unwrap();
+        assert_eq!(release_path(paths, &mut path_last_activity, 11), 1);
+        assert_eq!(
+            path_last_activity.len(),
+            2,
+            "partial close reclaims its own id"
+        );
+        drop(paths);
+
+        // The last path closes. The peer entry is dropped; its ids must be drained.
+        let mut peer_paths = peer_established_paths.remove(&7);
+        assert_eq!(
+            release_peer(&mut peer_paths, &mut path_last_activity),
+            2,
+            "last close reclaims the remaining ids the peer entry carried"
+        );
+        assert!(
+            path_last_activity.is_empty(),
+            "activity map must not retain entries for a peer that fully disconnected"
+        );
+        assert!(peer_established_paths.is_empty());
+    }
+
+    /// Boundary: releasing a peer that was never tracked, or an id with no
+    /// activity entry, must be a no-op rather than panicking. ConnectionClosed
+    /// can fire for a path established before this bookkeeping existed, and for
+    /// ids already reclaimed by a trim.
+    #[test]
+    fn release_is_idempotent_for_untracked_and_missing_ids() {
+        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+            std::collections::HashMap::new();
+        let mut empty: Vec<u64> = Vec::new();
+
+        // Unknown id: no activity entry to reclaim, no panic.
+        assert_eq!(release_path(&mut empty, &mut path_last_activity, 999), 0);
+        assert!(path_last_activity.is_empty());
+
+        // Peer entry absent entirely (last close for an untracked peer).
+        let mut absent: Option<Vec<u64>> = None;
+        assert_eq!(release_peer(&mut absent, &mut path_last_activity), 0);
+        assert!(path_last_activity.is_empty());
+
+        // Double release of the same id reclaims once, then no-ops.
+        path_last_activity.insert(5, std::time::Instant::now());
+        let mut paths = vec![5u64];
+        assert_eq!(release_path(&mut paths, &mut path_last_activity, 5), 1);
+        assert_eq!(release_path(&mut paths, &mut path_last_activity, 5), 0);
+        assert!(path_last_activity.is_empty());
+    }
+
+    /// WASM PARITY (B4 regression). The wasm loop drives exactly the same
+    /// helper as native, so this is a full lifecycle exercise of the wasm
+    /// bookkeeping: a peer's fan-out is trimmed to the retained bound, the
+    /// `close_connection` callback fires once per redundant path, a partial
+    /// close reclaims only its own activity entry, and the last close drains
+    /// every remaining entry. If either loop ever stops calling the helper,
+    /// the next wasm build loses this and the divergence is visible here
+    /// rather than in the field.
+    #[test]
+    fn note_established_path_trims_to_bound_and_close_cycle_reclaims() {
+        let mut peer_established_paths: std::collections::HashMap<u64, Vec<u64>> =
+            std::collections::HashMap::new();
+        let mut path_last_activity: std::collections::HashMap<u64, std::time::Instant> =
+            std::collections::HashMap::new();
+        let mut closed: Vec<u64> = Vec::new();
+
+        // A wide fan-out: every new path beyond the retained bound is closed
+        // and its activity entry reclaimed at close time, exactly as the wasm
+        // `ConnectionEstablished` arm now does.
+        for id in 1..=12u64 {
+            note_established_path(
+                &mut peer_established_paths,
+                &mut path_last_activity,
+                7,
+                id,
+                |c| closed.push(c),
+            );
+            let paths = &peer_established_paths[&7];
+            assert!(paths.len() <= RETAINED_MAX_ESTABLISHED_PER_PEER);
+            assert_eq!(paths.len(), path_last_activity.len());
+        }
+        assert_eq!(
+            closed,
+            (1..=8).collect::<Vec<u64>>(),
+            "only the oldest paths are closed, least-recently-active first"
+        );
+        assert_eq!(peer_established_paths[&7], vec![9, 10, 11, 12]);
+        assert_eq!(path_last_activity.len(), 4);
+
+        // Traffic on the oldest surviving path makes it the LEAST likely trim
+        // target; the newest probe is the first to go when the bound is hit.
+        path_last_activity.insert(
+            9,
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        );
+        let redundant = note_established_path(
+            &mut peer_established_paths,
+            &mut path_last_activity,
+            7,
+            13,
+            |c| closed.push(c),
+        );
+        assert_eq!(redundant, vec![10]);
+        assert_eq!(closed.last(), Some(&10));
+
+        // Partial close (num_established > 0) drops one path and its entry.
+        let mut paths = peer_established_paths.get_mut(&7).unwrap();
+        assert_eq!(release_path(&mut paths, &mut path_last_activity, 11), 1);
+        drop(paths);
+
+        // Last close (num_established == 0) drops the peer entry and drains
+        // the rest of its activity entries.
+        let mut peer_paths = peer_established_paths.remove(&7);
+        assert_eq!(release_peer(&mut peer_paths, &mut path_last_activity), 3);
+        assert!(path_last_activity.is_empty());
+        assert!(peer_established_paths.is_empty());
     }
 
     #[test]

@@ -1,9 +1,9 @@
 package com.scmessenger.android.ui.viewmodels
 
 import android.content.Context
+import android.content.Intent
 import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
-import com.scmessenger.android.service.MeshForegroundService
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -97,11 +97,16 @@ class MeshServiceViewModelTest {
         viewModel.toggleService()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        verify(exactly = 1) {
-            mockContext.startService(match {
-                it.action == MeshForegroundService.ACTION_STOP
-            })
-        }
+        // The stop path is the only one that calls Context.startService(..) with a
+        // non-null Intent; startService() uses startForegroundService(..) instead.
+        // `Intent.action` itself is NOT assertable in a JVM unit test here: the
+        // module sets `returnDefaultValues = true` and Robolectric was removed
+        // (android/app/build.gradle:315), so android.jar's Intent is a stub whose
+        // `action` getter always returns null. Asserting the action constant made
+        // this test unpassable by construction; the Context entry point is the
+        // observable contract that distinguishes stop from start.
+        verify(exactly = 1) { mockContext.startService(any<Intent>()) }
+        verify(exactly = 0) { mockContext.startForegroundService(any<Intent>()) }
     }
 
     @Test
@@ -113,11 +118,11 @@ class MeshServiceViewModelTest {
         viewModel.toggleService()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        verify(exactly = 1) {
-            mockContext.startForegroundService(match {
-                it.action == MeshForegroundService.ACTION_START
-            })
-        }
+        // Mirror of the STARTING case: resuming from STOPPING takes the start
+        // path, which is the only one that calls startForegroundService(..).
+        // See the STARTING test for why Intent.action cannot be asserted.
+        verify(exactly = 1) { mockContext.startForegroundService(any<Intent>()) }
+        verify(exactly = 0) { mockContext.startService(any<Intent>()) }
     }
 
     @Test

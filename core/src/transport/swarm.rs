@@ -7028,24 +7028,21 @@ pub async fn start_swarm_with_config(
                                 // Closures are idempotent with the ConnectionClosed
                                 // bookkeeping below.
                                 {
-                                    let established_at = std::time::Instant::now();
-                                    path_last_activity.insert(connection_id, established_at);
-                                    let paths = peer_established_paths.entry(peer_id).or_default();
-                                    paths.push(connection_id);
                                     let redundant: Vec<libp2p::swarm::ConnectionId> =
-                                        super::per_peer_cap::connections_to_close(paths, |id| {
-                                            path_last_activity
-                                                .get(id)
-                                                .copied()
-                                                .unwrap_or(established_at)
-                                        });
+                                        super::per_peer_cap::note_established_path(
+                                            &mut peer_established_paths,
+                                            &mut path_last_activity,
+                                            peer_id,
+                                            connection_id,
+                                            |_| {},
+                                        );
+                                    let retained =
+                                        peer_established_paths.get(&peer_id).map_or(0, Vec::len);
                                     for extra in redundant {
-                                        paths.retain(|id| *id != extra);
-                                        path_last_activity.remove(&extra);
                                         tracing::info!(
                                             peer = %peer_id,
                                             closed_connection = ?extra,
-                                            retained = paths.len(),
+                                            retained,
                                             retained_bound = super::per_peer_cap::RETAINED_MAX_ESTABLISHED_PER_PEER,
                                             "[CONN-CAP] closing redundant per-peer path to hold the retained bound"
                                         );
@@ -7241,11 +7238,17 @@ pub async fn start_swarm_with_config(
                                     &connection_id.to_string(),
                                 );
                                 // V040-T-CONN-04: drop this path from the retained-bound
-                                // bookkeeping (the entry is removed on last close).
+                                // bookkeeping AND reclaim its activity entry. Missing
+                                // the activity reclaim leaks one entry per churn cycle.
                                 if let Some(paths) = peer_established_paths.get_mut(&peer_id) {
-                                    paths.retain(|id| *id != connection_id);
+                                    super::per_peer_cap::release_path(
+                                        paths,
+                                        &mut path_last_activity,
+                                        connection_id,
+                                    );
+                                } else {
+                                    path_last_activity.remove(&connection_id);
                                 }
-                                path_last_activity.remove(&connection_id);
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
                                 // A different live path may now be selected. Force a
                                 // fresh ledger exchange so failover cannot leave this
@@ -7307,9 +7310,23 @@ pub async fn start_swarm_with_config(
                                 // a peer after its last direct path closes.
                                 mdns_dial_attempted.remove(&peer_id);
                                 connection_tracker.remove_connection(&peer_id);
-                                peer_established_paths.remove(&peer_id);
                                 // Last connection for this peer is gone (num_established
-                                // == 0): drop its whole tracker entry.
+                                // == 0). Drain the ids the peer entry still carried so
+                                // their activity entries are reclaimed too: ConnectionId
+                                // is never reused, so an entry left behind is never
+                                // consulted again but never freed either.
+                                let mut peer_paths = peer_established_paths.remove(&peer_id);
+                                let reclaimed = super::per_peer_cap::release_peer(
+                                    &mut peer_paths,
+                                    &mut path_last_activity,
+                                );
+                                if reclaimed > 0 {
+                                    tracing::trace!(
+                                        peer = %peer_id,
+                                        reclaimed,
+                                        "[CONN-CAP] reclaimed per-peer activity entries on last close"
+                                    );
+                                }
                                 zombie_tracker.clear_peer(&peer_id);
                                 // Allow re-exchange if they reconnect
                                 ledger_exchanged_peers.remove(&peer_id);
@@ -8802,6 +8819,15 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // V040-T-CONN-04 parity with the native loop: this loop now enforces the
+        // same retained bound by closing redundant paths and reclaims every
+        // activity entry on close. It calls the SAME `per_peer_cap` helpers the
+        // native loop calls (`note_established_path`, `release_path`,
+        // `release_peer`) so the two event loops cannot drift apart again.
+        let mut peer_established_paths: HashMap<PeerId, Vec<libp2p::swarm::ConnectionId>> =
+            HashMap::new();
+        let mut path_last_activity: HashMap<libp2p::swarm::ConnectionId, std::time::Instant> =
+            HashMap::new();
         // R8-F4: same lifecycle contracts as the native loop -- canonical pk
         // (hex) this loop registered per wire peer, and the once-per-connection
         // flush gate. Both are owned by this single-threaded select task.
@@ -9372,6 +9398,10 @@ pub async fn start_swarm_with_config(
                                 match ev {
                                     request_response::Event::Message { peer, connection_id, message } => match message {
                                         request_response::Message::Request { request, channel, .. } => {
+                                            // V040-T-CONN-04: this path carried traffic, so it
+                                            // outranks a silent path when the retained bound
+                                            // trims (WASM parity with the native arm).
+                                            path_last_activity.insert(connection_id, std::time::Instant::now());
                                             if peer_is_blocked(&core_handle, peer) {
                                                 tracing::warn!(
                                                     "Blocked peer {} attempted address reflection (WASM); refusing",
@@ -9673,7 +9703,12 @@ pub async fn start_swarm_with_config(
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::LedgerExchange(ev)) => {
                                 match ev {
-                                    request_response::Event::Message { peer, message, .. } => {
+                                    request_response::Event::Message { peer, connection_id, message } => {
+                                    if let request_response::Message::Request { .. } = message {
+                                        // V040-T-CONN-04: count this path as recently
+                                        // active (WASM parity with the native arm).
+                                        path_last_activity.insert(connection_id, std::time::Instant::now());
+                                    }
                                     if peer_is_blocked(&core_handle, peer) {
                                         tracing::warn!(
                                             "Blocked peer {} attempted ledger exchange (WASM); refusing",
@@ -9832,12 +9867,17 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
                                 // ZOMBIE tracker (wasm): identify is this loop's only
                                 // liveness stamp (no ping arm); the 60s identify cadence
                                 // keeps a healthy peer's stamps fresh.
                                 zombie_tracker.note_liveness(&peer_id, marker_now_ms());
+                                // V040-T-CONN-04: identify is the wasm loop's only
+                                // liveness event, so it is also the wasm ping-success
+                                // stamp for the retained bound (native stamps on
+                                // Ping::Success).
+                                path_last_activity.insert(connection_id, std::time::Instant::now());
                                 // V040-T13 F-DHT (revised): wasm has no core
                                 // ledger, so it can never prove an (identity,
                                 // address) pair from OUR OWN store -- and the
@@ -9937,6 +9977,33 @@ pub async fn start_swarm_with_config(
                                     remote_addr.to_string(),
                                     marker_now_ms(),
                                 );
+                                // V040-T-CONN-04: ConnectionEstablished is emitted in
+                                // establishment order, so the vector is oldest-first.
+                                // Enforce the same retained bound as the native loop
+                                // by closing the least-recently-active redundant paths
+                                // through the same helper (B4 parity).
+                                {
+                                    let redundant: Vec<libp2p::swarm::ConnectionId> =
+                                        super::per_peer_cap::note_established_path(
+                                            &mut peer_established_paths,
+                                            &mut path_last_activity,
+                                            peer_id,
+                                            connection_id,
+                                            |_| {},
+                                        );
+                                    let retained =
+                                        peer_established_paths.get(&peer_id).map_or(0, Vec::len);
+                                    for extra in redundant {
+                                        tracing::info!(
+                                            peer = %peer_id,
+                                            closed_connection = ?extra,
+                                            retained,
+                                            retained_bound = super::per_peer_cap::RETAINED_MAX_ESTABLISHED_PER_PEER,
+                                            "[CONN-CAP] closing redundant per-peer path to hold the retained bound (WASM)"
+                                        );
+                                        let _ = swarm.close_connection(extra);
+                                    }
+                                }
                                 // R8-F4: mirror the native register-and-flush lifecycle.
                                 // Without this the transport manager never learns swarm
                                 // peers on wasm, prepare_message's is_peer_connected gate
@@ -10062,6 +10129,17 @@ pub async fn start_swarm_with_config(
                                     &                                    connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
+                                // V040-T-CONN-04: drop this path from the retained-bound
+                                // bookkeeping AND reclaim its activity entry (WASM).
+                                if let Some(paths) = peer_established_paths.get_mut(&peer_id) {
+                                    super::per_peer_cap::release_path(
+                                        paths,
+                                        &mut path_last_activity,
+                                        connection_id,
+                                    );
+                                } else {
+                                    path_last_activity.remove(&connection_id);
+                                }
                                 if !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
@@ -10100,6 +10178,20 @@ pub async fn start_swarm_with_config(
                                 connection_tracker.remove_connection(&peer_id);
                                 // Last connection for this peer is gone (num_established
                                 // == 0): drop its whole tracker entry (WASM).
+                                // V040-T-CONN-04: drain the ids the peer entry still
+                                // carried so their activity entries are reclaimed too.
+                                let mut peer_paths = peer_established_paths.remove(&peer_id);
+                                let reclaimed = super::per_peer_cap::release_peer(
+                                    &mut peer_paths,
+                                    &mut path_last_activity,
+                                );
+                                if reclaimed > 0 {
+                                    tracing::trace!(
+                                        peer = %peer_id,
+                                        reclaimed,
+                                        "[CONN-CAP] reclaimed per-peer activity entries on last close (WASM)"
+                                    );
+                                }
                                 zombie_tracker.clear_peer(&peer_id);
                                 ledger_exchanged_peers.remove(&peer_id);
                                 pending_ledger_exchanges.remove(&peer_id);

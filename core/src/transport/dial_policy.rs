@@ -371,10 +371,33 @@ type RelayEntry = (PeerId, Vec<Multiaddr>);
 ///
 /// Once a peer is connected, we construct circuit-relay multiaddrs to that peer
 /// through known relay peers. This improves connectivity for future dials.
+///
+/// The ladder is bounded on both axes (`RELAY_TRACKING_CAP` tracked relays,
+/// [`MAX_RELAY_LADDER_ADDRS`] emitted circuits per target) so the synthesised
+/// candidate ladder a single peer can produce has a fixed width, and the
+/// per-peer admission ceiling in `per_peer_cap` is sized against that width.
+/// See that module for the derivation.
 pub struct CircuitRelayLadder {
-    /// List of known relay peers (peer ID + their external addresses).
+    /// List of known relay peers (peer ID + their external addresses), most
+    /// recently registered first (see `add_relay`).
     relays: Arc<RwLock<Vec<RelayEntry>>>,
 }
+
+/// How many relay peers one node tracks, newest-registration-wins. The
+/// circuit ladder is tried after the direct ports, so a bounded set of recent
+/// relays is the useful set; unbounded growth only widens every peer's dial
+/// ladder past what the admission ceiling can admit.
+pub const RELAY_TRACKING_CAP: usize = 8;
+
+/// Cap on relay peers CONSIDERED for ONE target peer (see
+/// `build_relay_addresses`), so the synthesised ladder stays inside the
+/// per-peer admission ceiling with room for the direct-port ladder (3 direct
+/// ports + 1 last-good). The most recently registered relays are considered
+/// first; a relay with no usable address yields nothing but still costs a
+/// slot, which is what keeps a dead relay from pushing fresh ones out. The cap
+/// is only ever reached by a node that tracks more relays than
+/// `RELAY_TRACKING_CAP`.
+pub const MAX_RELAY_LADDER_ADDRS: usize = 4;
 
 impl CircuitRelayLadder {
     /// Create a new circuit-relay ladder.
@@ -394,9 +417,15 @@ impl CircuitRelayLadder {
         debug!(
             relay_peer_id=%relay_peer_id,
             addr_count=external_addrs.len(),
+            tracked_relays=relays.len().saturating_add(1),
+            relay_tracking_cap=RELAY_TRACKING_CAP,
             "[CIRCUIT-RELAY] Registered relay peer"
         );
-        relays.push((relay_peer_id, external_addrs));
+        // Newest first, so the bounded set and the build-time cap both prefer
+        // the relays this node has seen most recently.
+        relays.insert(0, (relay_peer_id, external_addrs));
+        // Bounded: keep the most recently registered relays.
+        relays.truncate(RELAY_TRACKING_CAP);
     }
 
     /// Remove a relay after its authenticated connection is gone.
@@ -416,7 +445,23 @@ impl CircuitRelayLadder {
         let relays = self.relays.read();
         let mut relay_addrs = HashSet::new();
 
+        // The cap counts RELAYS CONSIDERED, not addresses emitted: a relay
+        // whose addresses are all nested or self-targeted contributes nothing,
+        // and stopping on the emitted count would let one such relay eat the
+        // whole budget and hide the newer relays behind it.
+        let mut relays_considered = 0usize;
         for (relay_pid, external_addrs) in relays.iter() {
+            if relays_considered >= MAX_RELAY_LADDER_ADDRS {
+                debug!(
+                    target_peer_id=%target_peer_id,
+                    considered=relays_considered,
+                    emitted=relay_addrs.len(),
+                    cap=MAX_RELAY_LADDER_ADDRS,
+                    "[CIRCUIT-RELAY] Relay ladder cap reached; newer relays take the remaining slots"
+                );
+                break;
+            }
+            relays_considered += 1;
             // A relay cannot provide a useful circuit to itself. More
             // importantly, accepting a self-target here creates a circuit
             // path that returns to the originating node and multiplies during
@@ -783,6 +828,57 @@ mod tests {
                 .to_string()
                 .contains(&format!("/p2p/{relay_pid}/p2p-circuit/p2p/{relay_pid}"))
         }));
+    }
+
+    /// BOUNDARY (B5): a node that has seen many relay peers must not produce an
+    /// unbounded candidate ladder for one target -- that is what made the
+    /// admission ceiling look like it needed to be 16. Both the tracked set and
+    /// the emitted circuits are capped, newest relay wins, and a relay already
+    /// selected is not displaced by a later one.
+    #[test]
+    fn circuit_relay_ladder_is_bounded_newest_first() {
+        let ladder = CircuitRelayLadder::new();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        // Register more relays than either cap.
+        let registered: Vec<PeerId> = (0..RELAY_TRACKING_CAP + 3)
+            .map(|i| {
+                let pid = libp2p::identity::Keypair::generate_ed25519()
+                    .public()
+                    .to_peer_id();
+                let addr: Multiaddr = format!("/ip4/192.168.1.{}/tcp/4001", 100 + i)
+                    .parse()
+                    .expect("direct relay fixture is valid");
+                ladder.add_relay(pid, vec![addr]);
+                pid
+            })
+            .collect();
+
+        let routes = ladder.build_relay_addresses(target_pid);
+        assert_eq!(routes.len(), MAX_RELAY_LADDER_ADDRS);
+        // The most recently registered relays take the slots (set iteration
+        // order of the emitted addresses is not defined, so assert on membership).
+        for pid in registered.iter().rev().take(MAX_RELAY_LADDER_ADDRS) {
+            assert!(
+                routes
+                    .iter()
+                    .any(|addr| addr.to_string().contains(&format!("/p2p/{pid}/"))),
+                "newest relay {pid} should be on the ladder"
+            );
+        }
+        for pid in registered
+            .iter()
+            .take(registered.len() - MAX_RELAY_LADDER_ADDRS)
+        {
+            assert!(
+                !routes
+                    .iter()
+                    .any(|addr| addr.to_string().contains(&format!("/p2p/{pid}/"))),
+                "relay {pid} fell out of the bounded ladder"
+            );
+        }
     }
 
     #[test]
