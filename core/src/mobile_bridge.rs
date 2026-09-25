@@ -3224,60 +3224,49 @@ impl HistoryManager {
         // and draining its background flusher when we get here -- an app
         // restart reopening its own store, or a caller that just dropped a
         // `HistoryManager`. That window is short but real, and it surfaced as
-        // a hard StorageError on macOS CI. Retry briefly before giving up: a
-        // handle mid-close is a transient, not a degraded store. An exhausted
-        // retry budget IS a degraded store, and still fails loud.
-        const OPEN_ATTEMPTS: u32 = 5;
-        let mut last_err: Option<sled::Error> = None;
-
-        for attempt in 0..OPEN_ATTEMPTS {
-            match sled::Config::default()
+        // a hard StorageError on macOS CI. Retry before giving up: a handle
+        // mid-close is a transient, not a degraded store. An exhausted retry
+        // budget IS a degraded store, and still fails loud.
+        //
+        // MESSAGE-STORE-LOCK-001 (2026-09-21): this used to be a private
+        // 5-attempt linear backoff (~0.5 s), which a stop -> Start on the Pixel
+        // exceeds: the previous store's lock is only released once the GC drops
+        // the prior UniFFI wrapper, bounded by the 5 s swarm-shutdown. Use the
+        // shared, teardown-sized budget so every store on the restart path
+        // tolerates the same window.
+        match crate::store::backend::open_with_lock_retry(|| {
+            sled::Config::default()
                 .path(&path)
                 .mode(sled::Mode::LowSpace)
                 .use_compression(false)
                 .open()
-            {
-                Ok(db) => {
-                    if attempt > 0 {
-                        tracing::warn!(
-                            "HistoryManager::new: opened {:?} on attempt {} of {}",
-                            path,
-                            attempt + 1,
-                            OPEN_ATTEMPTS
-                        );
-                    }
-                    return Ok(Self {
-                        db: Arc::new(Mutex::new(db)),
-                    });
+        }) {
+            Ok((db, attempt)) => {
+                if attempt > 1 {
+                    tracing::warn!(
+                        "HistoryManager::new: opened {:?} on attempt {} (previous holder still releasing)",
+                        path,
+                        attempt
+                    );
                 }
-                Err(err) => {
-                    if attempt + 1 < OPEN_ATTEMPTS {
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            50 * u64::from(attempt + 1),
-                        ));
-                    }
-                    last_err = Some(err);
-                }
+                Ok(Self {
+                    db: Arc::new(Mutex::new(db)),
+                })
+            }
+            Err((attempts, err)) => {
+                // Never discard the cause. This change exists to stop storage
+                // failing silently; a StorageError with no reason attached is
+                // only half of that, and it is what made this failure
+                // undiagnosable from CI logs.
+                tracing::error!(
+                    "HistoryManager::new: sled failed to open {:?} after {} attempts: {}",
+                    path,
+                    attempts,
+                    err
+                );
+                Err(crate::IronCoreError::StorageError)
             }
         }
-
-        // Never discard the cause. This change exists to stop storage failing
-        // silently; a StorageError with no reason attached is only half of
-        // that, and it is what made this failure undiagnosable from CI logs.
-        match last_err {
-            Some(err) => tracing::error!(
-                "HistoryManager::new: sled failed to open {:?} after {} attempts: {}",
-                path,
-                OPEN_ATTEMPTS,
-                err
-            ),
-            None => tracing::error!(
-                "HistoryManager::new: sled failed to open {:?} after {} attempts",
-                path,
-                OPEN_ATTEMPTS
-            ),
-        }
-        Err(crate::IronCoreError::StorageError)
     }
 
     pub fn add(&self, mut record: MessageRecord) -> Result<(), crate::IronCoreError> {

@@ -114,6 +114,7 @@ WP5 live 3-node proof is **not** a freebuff paste -- evidence lands on
 | D | `queue/V040_T_WATCHDOG_POSITIVE_TEST.md` | test-only |
 | E | `queue/V040_T_LEDGER_IP_CHURN_AUTONOMOUS.md` | **Rule-8** likely |
 | F | `queue/V040_BEACH_JOIN_PHASE0_1_2026-09-20.md` | Phase 2-3 later |
+| G | `queue/AND_LIFECYCLE_UNBOUNDED_WAITS_2026-09-21.md` | android-only; no Rule-8 (class audit after the stop regression) |
 
 CO-B-001 dual-drain is **already merged** (#339) -- do not paste that ticket as impl.
 
@@ -138,7 +139,7 @@ CO-B-001 dual-drain is **already merged** (#339) -- do not paste that ticket as 
 | Tier | Nodes | Now |
 |---|---|---|
 | **A** | AWS + Windows CLI | Drive the train (steps 1-4) + Wave-1 reliability; install anytime from CI artifacts; fleet on `51edac4b` (redeploy after merges) |
-| **B** | Pixel 6a | Operator drives UI; agents install + passive logs only |
+| **B** | Pixel 6a | Operator drives UI; agents install + passive logs only. After installing an Android build, run `scripts/pixel_stop_acceptance.sh`: a lifecycle change is not verified until the device confirms a stop completed and stayed completed (STOP-TEARDOWN-TIMEOUT-001) |
 | **C** | iOS/macOS | Out of Wave 1 / 0.5.0 |
 
 ## Adding a task

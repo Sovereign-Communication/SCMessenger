@@ -14,6 +14,7 @@ import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.SecurityUtils
 import com.scmessenger.android.utils.BackoffStrategy
 import com.scmessenger.android.utils.inCausalOrder
+import com.scmessenger.android.utils.releaseCoreReferencesFromLoggingTrees
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -631,6 +632,34 @@ open class MeshRepository(
     // meshService.start() + migrateToCanonicalIds (10-60s on device). A shared
     // @Synchronized(this) froze any main-thread path that touched outbox/permissions.
     private val serviceLifecycleLock = Any()
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: upper bound on the swarm shutdown await inside
+     * [stopMeshService]. The FFI call is a suspend function awaited under
+     * [serviceLifecycleLock]; an acknowledgement that never arrives used to hold
+     * that monitor for the life of the process and wedge every later stop.
+     */
+    private val SWARM_SHUTDOWN_TIMEOUT_MS = 5_000L
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: upper bound on the synchronous Rust
+     * MeshService::stop() call inside [stopMeshService]. Joined on a daemon
+     * thread because the call is blocking FFI and cannot be cancelled.
+     */
+    private val RUST_STOP_TIMEOUT_MS = 10_000L
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: bound for the swarm shutdown awaited inside
+     * [resetAllData], which must degrade to a warned reset rather than wedge the
+     * data-wipe that follows it.
+     */
+    private val RESET_SHUTDOWN_TIMEOUT_MS = 5_000L
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: bound for the [getTopics] bridge query. A wedged
+     * swarm must not be able to block a synchronous topic read forever.
+     */
+    private val TOPICS_QUERY_TIMEOUT_MS = 2_000L
     private val outboxIoLock = Any()
     private var pendingOutboxRetryJob: kotlinx.coroutines.Job? = null
     private var coverTrafficJob: kotlinx.coroutines.Job? = null
@@ -4337,13 +4366,55 @@ open class MeshRepository(
             .onFailure { Timber.w(it, "Failed to clean up TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }
 
         // shutdown() is now a suspend FFI call; teardown must complete before
-        // meshService.stop() below, so block here (bounded: it only awaits the
-        // swarm command-channel acknowledgement).
-        kotlin.runCatching { kotlinx.coroutines.runBlocking { swarmBridge?.shutdown() } }
-            .onFailure { Timber.w(it, "Failed to shutdown swarm bridge") }
+        // meshService.stop() below, so block here.
+        //
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): this await was UNBOUNDED. On
+        // the Pixel the swarm acknowledgement never arrived, so this call never
+        // returned while holding [serviceLifecycleLock] -- every later stop
+        // blocked behind the monitor, and stopForeground()/stopSelf() (which run
+        // after it) never executed. The service, its notification and the
+        // RUNNING state all survived, and no watchdog fired: the ANR watchdog
+        // only watches the main thread and this one is a Dispatchers.Default
+        // coroutine. Bound it so a missing acknowledgement costs one timeout
+        // instead of the whole lifecycle.
+        kotlin.runCatching {
+            kotlinx.coroutines.runBlocking {
+                val acknowledged = kotlinx.coroutines.withTimeoutOrNull(SWARM_SHUTDOWN_TIMEOUT_MS) {
+                    swarmBridge?.shutdown()
+                    true
+                }
+                if (acknowledged == null) {
+                    Timber.w(
+                        "Swarm shutdown not acknowledged within %d ms; continuing teardown",
+                        SWARM_SHUTDOWN_TIMEOUT_MS
+                    )
+                }
+            }
+        }.onFailure { Timber.w(it, "Failed to shutdown swarm bridge") }
 
-        kotlin.runCatching { meshService?.stop() }
-            .onFailure { Timber.w(it, "Failed to stop Rust mesh service") }
+        // STOP-TEARDOWN-TIMEOUT-001: same hazard one line further down.
+        // MeshService::stop() (core/src/mobile_bridge.rs:527-551) sets Stopping
+        // then calls into the same blocking swarm shutdown machinery
+        // (shutdown_blocking), so it can wedge for exactly the same reason. It is
+        // a synchronous FFI call, so a coroutine timeout cannot bound it: run it
+        // on a daemon thread and bound the JOIN. A teardown that does not confirm
+        // in time is logged and the stop continues -- the user's ability to stop
+        // the mesh must not depend on the Rust side agreeing to finish.
+        val rustStopConfirmed = kotlin.runCatching {
+            val stopThread = java.lang.Thread { meshService?.stop() }
+            stopThread.isDaemon = true
+            stopThread.name = "mesh-rust-stop"
+            stopThread.start()
+            stopThread.join(RUST_STOP_TIMEOUT_MS)
+            !stopThread.isAlive
+        }.onFailure { Timber.w(it, "Failed to stop Rust mesh service") }
+            .getOrDefault(false)
+        if (!rustStopConfirmed) {
+            Timber.w(
+                "Rust mesh service stop not confirmed within %d ms; continuing teardown",
+                RUST_STOP_TIMEOUT_MS
+            )
+        }
 
         identitySyncSentPeers.clear()
         historySyncSentPeers.clear()
@@ -4362,6 +4433,14 @@ open class MeshRepository(
         coreDelegate = null
         swarmBridge = null
         ironCore = null
+        // MESSAGE-STORE-LOCK-001: the summary logging tree is process-wide
+        // (Timber.forest()) and startMeshService() injects the core into it.
+        // Until this line existed, that tree was the ONE reference a stop never
+        // released: the Rust IronCore -- and with it sled's file lock on the
+        // message store -- stayed alive for the life of the process, so the
+        // next Start opened a still-locked store, fell back to DegradedStorage,
+        // and showed "Message Store Unavailable" until the app was killed.
+        releaseCoreReferencesFromLoggingTrees()
         meshService = null
         bleScanner = null
         bleAdvertiser = null
@@ -6577,9 +6656,25 @@ open class MeshRepository(
 
         // 1. Stop all active services and release UniFFI objects.
         // shutdown() is a suspend FFI call; the reset flow must not proceed to
-        // data wiping until the swarm has stopped, so block (bounded await).
-        kotlin.runCatching { kotlinx.coroutines.runBlocking { swarmBridge?.shutdown() } }
-            .onFailure { Timber.w(it, "Swarm shutdown failed during reset") }
+        // data wiping until the swarm has stopped, so block -- BOUNDED, per
+        // STOP-TEARDOWN-TIMEOUT-001: this comment claimed a bound that the code
+        // did not implement, and the same unbounded await in stopMeshService is
+        // what made the mesh impossible to stop on the Pixel. A reset that is
+        // waiting on an acknowledgement must degrade, not wedge.
+        kotlin.runCatching {
+            val acknowledged = kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeoutOrNull(RESET_SHUTDOWN_TIMEOUT_MS) {
+                    swarmBridge?.shutdown()
+                    true
+                }
+            }
+            if (acknowledged == null) {
+                Timber.w(
+                    "Swarm shutdown not acknowledged within %d ms; reset will continue",
+                    RESET_SHUTDOWN_TIMEOUT_MS
+                )
+            }
+        }.onFailure { Timber.w(it, "Swarm shutdown failed during reset") }
         swarmBridge = null
 
         meshService?.stop()
@@ -6593,6 +6688,10 @@ open class MeshRepository(
             Timber.w("Failed to flush managers during shutdown: ${e.message}")
         }
         ironCore = null
+        // Same release as stopMeshService(): a reset discards every manager and
+        // then wipes the store, so nothing may keep the old core -- and the
+        // sled lock it owns -- alive. See MESSAGE-STORE-LOCK-001.
+        releaseCoreReferencesFromLoggingTrees()
 
         contactManager = null
         historyManager = null
@@ -7786,10 +7885,17 @@ open class MeshRepository(
      *
      * Bounded blocking bridge query: the FFI is a suspend fun (Issue 5), but
      * legacy sync callers (TopicManager.refreshKnownTopics) need a value in
-     * place. The await is a fast in-process command-channel roundtrip.
+     * place. The await is a fast in-process command-channel roundtrip --
+     * BOUNDED, per STOP-TEARDOWN-TIMEOUT-001: when the bridge is wedged this is
+     * exactly the call that never returns, and a topic list is not worth an
+     * unbounded wait. A timeout degrades to the same empty list as a failure.
      */
     fun getTopics(): List<String> = try {
-        kotlinx.coroutines.runBlocking { swarmBridge?.getTopics() ?: emptyList() }
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(TOPICS_QUERY_TIMEOUT_MS) {
+                swarmBridge?.getTopics()
+            } ?: emptyList()
+        }
     } catch (e: Exception) {
         Timber.w("getTopics failed: ${e.message}")
         emptyList()
