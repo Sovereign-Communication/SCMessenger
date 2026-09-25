@@ -27,6 +27,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.util.Collections
@@ -49,6 +51,24 @@ import com.scmessenger.android.data.PreferencesRepository
 class MeshForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * AND-SS-001: serializes start and stop bodies so a racing stop cannot
+     * kill an in-flight start and a start cannot interleave with teardown.
+     * Evidence (tmp/pixel-logcat-20260921.txt, 2026-09-21 05:52 window): two
+     * concurrent ACTION_START deliveries both ran the repository start; the
+     * loser's failure path stopped the winner's mesh and both aborted with
+     * "Repository did not reach RUNNING state" / JobCancellationException,
+     * leaving the mesh dead after an explicit user Start.
+     */
+    private val lifecycleMutex = Mutex()
+
+    /**
+     * AND-SS-001: teardown coalescing flag. A STOP that arrives while a
+     * teardown is already running must not start a second concurrent teardown
+     * (six taps in two seconds on the Pixel produced six racing teardowns).
+     */
+    private val stopInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     @Inject
     lateinit var meshRepository: com.scmessenger.android.data.MeshRepository
@@ -190,38 +210,48 @@ class MeshForegroundService : Service() {
 
     private fun startMeshService() {
         serviceScope.launch {
-            val repoRunning = withContext(Dispatchers.Default) {
-                meshRepository.getServiceStateSync() == uniffi.api.ServiceState.RUNNING
+            lifecycleMutex.withLock {
+            startMeshServiceLocked()
             }
-            if (isRunning || repoRunning) {
-                isRunning = true
-                updateNotification()
-                Timber.w("Mesh service already running; notification refreshed")
-                return@launch
-            }
+        }
+    }
 
-            Timber.i("Starting mesh service")
-            // Foreground promotion already done synchronously in onStartCommand.
+    private suspend fun startMeshServiceLocked() {
+        val repoRunning = withContext(Dispatchers.Default) {
+            meshRepository.getServiceStateSync() == uniffi.api.ServiceState.RUNNING
+        }
+        // AND-SS-001: re-checked inside the lifecycle mutex, so a START that
+        // queued behind an in-flight START or STOP acts on the settled state
+        // instead of racing it.
+        if (isRunning || repoRunning) {
+            isRunning = true
+            updateNotification()
+            Timber.w("Mesh service already running; notification refreshed")
+            return
+        }
 
-            // BATTERY FIX (P0_ANDROID_STABILITY_001): Removed persistent WakeLock acquisition.
-            // startForeground() with a notification already keeps the process alive for a foreground service.
-            // A persistent PARTIAL_WAKE_LOCK causes Play Store battery-drain flags.
-            // If needed for active BLE scan windows, acquire selectively and release immediately.
+        Timber.i("Starting mesh service")
+        // Foreground promotion already done synchronously in onStartCommand.
 
-            // Initialize platform bridge to monitor system state
-            platformBridge.initialize()
+        // BATTERY FIX (P0_ANDROID_STABILITY_001): Removed persistent WakeLock acquisition.
+        // startForeground() with a notification already keeps the process alive for a foreground service.
+        // A persistent PARTIAL_WAKE_LOCK causes Play Store battery-drain flags.
+        // If needed for active BLE scan windows, acquire selectively and release immediately.
 
-            // Acquire WakeLock for BLE scan windows
-            acquireWakeLock()
+        // Initialize platform bridge to monitor system state
+        platformBridge.initialize()
 
-            // Create mesh service configuration
-            val config = uniffi.api.MeshServiceConfig(
-                discoveryIntervalMs = 30000u,  // 30 seconds
-                batteryFloorPct = 20u
-            )
+        // Acquire WakeLock for BLE scan windows
+        acquireWakeLock()
 
-            // Start mesh service via repository
-            try {
+        // Create mesh service configuration
+        val config = uniffi.api.MeshServiceConfig(
+            discoveryIntervalMs = 30000u,  // 30 seconds
+            batteryFloorPct = 20u
+        )
+
+        // Start mesh service via repository
+        try {
                 withContext(Dispatchers.Default) {
                     meshRepository.startMeshService(config)
                     meshRepository.setPlatformBridge(platformBridge)
@@ -236,7 +266,7 @@ class MeshForegroundService : Service() {
                     releaseWakeLock()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
-                    return@launch
+                    return
                 }
                 isRunning = true
 
@@ -249,14 +279,16 @@ class MeshForegroundService : Service() {
                 wireCoreDelegate()
 
                 // Listen for incoming messages and show notifications (WS14: with classification)
-                launch {
+                // AND-SS-001: this body now lives in startMeshServiceLocked (a plain
+                // suspend fun), so collectors are explicitly scoped to serviceScope.
+                serviceScope.launch {
                     meshRepository.incomingMessages.collect { message ->
                         showMessageNotificationWithClassification(message)
                     }
                 }
 
                 // Listen for peer events to update notification
-                launch {
+                serviceScope.launch {
                     MeshEventBus.peerEvents.collect { event ->
                         when (event) {
                             is PeerEvent.Connected -> {
@@ -279,7 +311,7 @@ class MeshForegroundService : Service() {
                 }
 
                 // Listen for status events to update relay stats
-                launch {
+                serviceScope.launch {
                     MeshEventBus.statusEvents.collect { event ->
                         when (event) {
                             is StatusEvent.StatsUpdated -> {
@@ -295,7 +327,7 @@ class MeshForegroundService : Service() {
                 startPeriodicAdjustments()
 
                 // Monitor UI state for notification suppression
-                launch {
+                serviceScope.launch {
                     MeshEventBus.uiEvents.collect { event ->
                         activeConversationId = when (event) {
                             is UiEvent.ConversationOpened -> event.peerId
@@ -337,7 +369,6 @@ class MeshForegroundService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
-        }
     }
 
     private fun wireCoreDelegate() {
@@ -407,49 +438,68 @@ class MeshForegroundService : Service() {
     }
 
     private fun stopMeshService() {
+        // AND-SS-001: if a teardown is already in flight, do not start another
+        // one. Evidence (tmp/pixel-logcat-20260921.txt, 2026-09-20 23:26:44-46):
+        // six STOP taps in two seconds produced six concurrent full teardowns
+        // (BLE/WiFi/mDNS stop, TransportManager cleanup, runBlocking swarm
+        // shutdown, meshService.stop() Rust FFI) racing on distinct threads;
+        // one teardown's meshService=null raced another's mid-stop() calls.
+        if (!stopInFlight.compareAndSet(false, true)) {
+            Timber.w("Mesh service stop already in progress; coalescing duplicate STOP")
+            return
+        }
         serviceScope.launch {
-            val repoRunning = withContext(Dispatchers.Default) {
-                meshRepository.getServiceStateSync() == uniffi.api.ServiceState.RUNNING
+            lifecycleMutex.withLock {
+                try {
+                    val repoRunning = withContext(Dispatchers.Default) {
+                        meshRepository.getServiceStateSync() == uniffi.api.ServiceState.RUNNING
+                    }
+                    if (!isRunning && !repoRunning) {
+                        Timber.w("Mesh service stop requested while already stopped")
+                    }
+
+                    Timber.i("Stopping mesh service")
+
+                    // Release WakeLock
+                    releaseWakeLock()
+
+                    // Stop mesh service via repository
+                    withContext(Dispatchers.Default) {
+                        kotlin.runCatching { meshRepository.stopMeshService() }
+                            .onFailure { Timber.e(it, "Error while stopping mesh repository") }
+                    }
+
+                    isRunning = false
+                    userStoppedForSession = true
+                    connectedPeers.clear()
+                    messagesRelayed.set(0)
+                    anrWatchdog.stop()
+
+                    // Record service stop for health metrics
+                    performanceMonitor.recordServiceStop()
+
+                    // Wire stopMonitoring + isServiceHealthy check into service lifecycle
+                    serviceHealthMonitor.stopMonitoring()
+
+                    // Mesh-stopped status is carried by removing the ongoing FGS
+                    // notification below. A separate "Mesh Service Stopped" toast
+                    // notification looked like a foreign app — removed.
+
+                    // Clean up
+                    withContext(Dispatchers.Default) {
+                        kotlin.runCatching { platformBridge.cleanup() }
+                            .onFailure { Timber.w(it, "Platform bridge cleanup failed during stop") }
+                    }
+
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                } finally {
+                    // Cleared only after teardown fully settles, so a STOP that
+                    // arrives DURING teardown still coalesces and a later START
+                    // (explicit ACTION_START only) can proceed.
+                    stopInFlight.set(false)
+                }
             }
-            if (!isRunning && !repoRunning) {
-                Timber.w("Mesh service stop requested while already stopped")
-            }
-
-            Timber.i("Stopping mesh service")
-
-            // Release WakeLock
-            releaseWakeLock()
-
-            // Stop mesh service via repository
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { meshRepository.stopMeshService() }
-                    .onFailure { Timber.e(it, "Error while stopping mesh repository") }
-            }
-
-            isRunning = false
-            userStoppedForSession = true
-            connectedPeers.clear()
-            messagesRelayed.set(0)
-            anrWatchdog.stop()
-
-            // Record service stop for health metrics
-            performanceMonitor.recordServiceStop()
-
-            // Wire stopMonitoring + isServiceHealthy check into service lifecycle
-            serviceHealthMonitor.stopMonitoring()
-
-            // Mesh-stopped status is carried by removing the ongoing FGS
-            // notification below. A separate "Mesh Service Stopped" toast
-            // notification looked like a foreign app — removed.
-
-            // Clean up
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { platformBridge.cleanup() }
-                    .onFailure { Timber.w(it, "Platform bridge cleanup failed during stop") }
-            }
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
         }
     }
 

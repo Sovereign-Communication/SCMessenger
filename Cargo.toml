@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "cli", "wasm", "mobile", "desktop_bridge"]
+members = ["core", "cli", "wasm", "mobile", "desktop_bridge", "vendor/libp2p-swarm-0.48.0"]
 # wasm excluded from default members: requires wasm32 target
 # Build with: cargo build -p scmessenger-wasm --target wasm32-unknown-unknown
 exclude = ["wasm"]
@@ -134,3 +134,13 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "unwind"
+
+# SCMessenger D9: vendored libp2p-swarm 0.48.0. Stock 0.48.0 panics with
+# `unreachable!()` in the Either handler/behaviour event routers when a
+# behaviour/handler event is routed to the wrong side of the tree — observed
+# live (tokio worker task died right after identify; ~2-3/hour on the bridge
+# node, pre-existing on the old build). 0.48.0 is the newest upstream release
+# with no fix. The vendored copy degrades those mismatches to logged drops
+# ("D9-DEGRADE") instead of panicking; matched-side routing is unchanged.
+[patch.crates-io]
+libp2p-swarm = { path = "vendor/libp2p-swarm-0.48.0" }

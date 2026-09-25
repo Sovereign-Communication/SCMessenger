@@ -1672,6 +1672,10 @@ impl MeshService {
         data: Vec<u8>,
     ) {
         tracing::info!("{} data received from {}", transport, peer_id);
+        // A successfully received proximity frame proves that the data link is
+        // live. Feed the same routing engine entry used by swarm connections;
+        // discovery callbacks alone are intentionally insufficient.
+        self.record_data_link_for_routing(&peer_id, &transport.to_string());
         if data.len() > transport.max_payload_size() {
             tracing::warn!(
                 "{} payload from {} exceeds max ({} > {}), dropping",
@@ -1686,6 +1690,30 @@ impl MeshService {
             self.nearby_ble_peers.lock().insert(peer_id.clone());
         }
         self.on_data_received(peer_id, data);
+    }
+
+    /// Record a verified platform data link in the shared routing engine.
+    /// Unknown, blocked, or unavailable peers fail closed and never increase
+    /// routing confidence.
+    fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {
+        let Some(core) = self.get_core() else {
+            tracing::debug!(peer_id, transport, "Skipping routing feed without core");
+            return;
+        };
+        match core.is_peer_blocked(peer_id.to_string(), None) {
+            Ok(false) => core.routing_peer_seen(peer_id.to_string(), transport.to_string()),
+            Ok(true) => tracing::warn!(
+                peer_id,
+                transport,
+                "Blocked peer excluded from routing feed"
+            ),
+            Err(error) => tracing::warn!(
+                ?error,
+                peer_id,
+                transport,
+                "Routing feed failed closed on block lookup"
+            ),
+        }
     }
 
     /// Helper to get the core instance exposed to UniFFI
@@ -1772,6 +1800,7 @@ impl MeshService {
         ip_address: String,
         port: u16,
     ) {
+        self.record_data_link_for_routing(&peer_id, "wifi_aware");
         if let Some(aware_bridge) = self.wifi_aware_bridge.lock().as_ref() {
             aware_bridge.handle_data_path_confirmed(peer_id, ip_address, port);
         }
@@ -1802,10 +1831,11 @@ impl MeshService {
 
     pub fn on_wifi_direct_connection_info(
         &self,
-        _peer_id: String,
+        peer_id: String,
         group_owner_ip: String,
         is_group_owner: bool,
     ) {
+        self.record_data_link_for_routing(&peer_id, "wifi_direct");
         let info = crate::transport::wifi_direct::GroupInfo {
             group_owner: is_group_owner,
             group_owner_ip: Some(group_owner_ip.clone()),
