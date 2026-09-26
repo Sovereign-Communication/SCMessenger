@@ -43,6 +43,14 @@ jobs:
             exit 2
           fi
           python scripts/validate_handoff_scope.py --repo-root . --changed-from "$base"
+      - name: Classify the gate itself
+        # The classification decides which documents are enforced at all, so a
+        # silent regression here is invisible from the outside: a gate that
+        # stops checking things looks exactly like a gate with nothing to
+        # check. This runs on every PR and every push, needs no repository
+        # state, and fails if the classifier drifts.
+        shell: bash
+        run: python scripts/validate_handoff_scope.py --repo-root . --self-test
 
   lint:
     name: Lint

@@ -229,12 +229,33 @@ def validate_document(
 
 
 def is_handoff_path(path: Union[Path, str]) -> bool:
-    """Treat every file below HANDOFF/ as a handoff, regardless of suffix."""
+    """True when a path is a handoff DOCUMENT, i.e. prose under HANDOFF/ (or
+    named *handoff* elsewhere).
+
+    The suffix test comes FIRST, and that ordering is the whole point. This
+    gate used to classify by LOCATION alone: anything below a `HANDOFF/`
+    directory was a handoff regardless of suffix, so it demanded an HTML scope
+    marker inside JSON, JSON Lines, unified-diff patches, and Rust source. The
+    Rule-8 evidence pack for PR #372 is exactly that shape, and the required
+    `Handoff ownership scope` check could not go green on it: a markup comment
+    is not valid JSON and not a valid Rust file, so satisfying the gate would
+    have meant corrupting a data file to pass a lint.
+
+    `scripts/backfill_handoff_scope.py` already refused to write anything but
+    prose for this reason. The validator now agrees with it, so the set of
+    documents the gate ENFORCES and the set the backfill can SATISFY are the
+    same set. Enforcing a rule the remediation tool cannot satisfy is a gate
+    that is permanently red, which trains people to ignore it.
+
+    Genuine prose handoffs are unaffected: every `.md`/`.markdown`/`.txt` file
+    below `HANDOFF/` is still a handoff, and a prose file elsewhere is still a
+    handoff when its name says so.
+    """
     candidate = Path(str(path).replace("\\", "/"))
-    if any(part.casefold() == "handoff" for part in candidate.parts[:-1]):
-        return True
     if candidate.suffix.casefold() not in HANDOFF_SUFFIXES:
         return False
+    if any(part.casefold() == "handoff" for part in candidate.parts[:-1]):
+        return True
     return "handoff" in candidate.name.casefold()
 
 
@@ -319,11 +340,79 @@ def validate_paths(
     return errors
 
 
+_WIN_SEP = chr(92)  # a single backslash, for Windows-style paths
+
+def self_test() -> int:
+    """Prove the classifier is not vacuous, with no repository and no network.
+
+    Deterministic: every case is a literal path string, so the verdict is the
+    same on every run and on every machine. Cases are drawn from the real
+    shapes that motivated the suffix-first ordering in `is_handoff_path` --
+    the Rule-8 evidence pack that could never satisfy a location-only gate.
+    """
+    # (path, expected) -- True means "enforced as a handoff document".
+    cases = [
+        # NEGATIVE: data and source files under HANDOFF/ must NOT be gated.
+        # The fix releases 24 tracked files from enforcement; these 12 cases
+        # are drawn from that set, by shape. A markup comment cannot go in
+        # any of them without corrupting or miscompiling it.
+        ("HANDOFF/WIRING_PATCH_MANIFEST.json", False),
+        ("HANDOFF/discovery/REPO_MAP.jsonl", False),
+        ("HANDOFF/audit/crit_iron_core.jsonl", False),
+        ("HANDOFF/review/B1_DNS_HARDENING_ATTEMPT1.patch", False),
+        ("HANDOFF/review/rule8-pr372/evidence/vendor_handler_either_v2.rs", False),
+        ("HANDOFF/review/rule8-pr372/evidence/d9_panel_result.json", False),
+        ("HANDOFF/freebuff/jev/WP1_state_2026-09-21.json", False),
+        # Extensionless state files and a dot-prefixed scratch file.
+        ("HANDOFF/STATE/2026-06-10_gradle_pid", False),
+        ("HANDOFF/STATE/.hermes-tmp.94124", False),
+        ("HANDOFF/done/P0_IOS_002_Parity_and_Cross_OS_Unification_COMPLETED", False),
+        # NEGATIVE: unrelated source outside HANDOFF/ stays ungated.
+        ("core/src/transport/swarm.rs", False),
+        ("Harness/harness.rs", False),
+        # POSITIVE: every genuine prose handoff is still enforced.
+        ("HANDOFF/ACTIVE_LEDGER.md", True),
+        ("HANDOFF/todo/_QUEUE.md", True),
+        ("HANDOFF/review/RULE8_PR372_PANEL_FINDINGS_2026-09-25.md", True),
+        ("HANDOFF/freebuff/README.md", True),
+        ("HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md", True),
+        # POSITIVE: prose named *handoff* outside a HANDOFF/ directory.
+        ("docs/historical/plans/HANDOFF_NEARBY_PEERS.md", True),
+        ("HANDOFF_AUDIT/.context_cache/P0_HANDOFF_BUNDLE.md", True),
+        # Case and separator handling: the rule is casefolded on both the
+        # directory part and the suffix.
+        ("handoff/review/thing.MD", True),
+        ("HANDOFF/review/thing.Markdown", True),
+        ("HANDOFF/review/thing.TXT", True),
+        # Backslash separators must behave like forward slashes (Git emits
+        # them on Windows, which is where this gate runs).
+        ("HANDOFF" + _WIN_SEP + "todo" + _WIN_SEP + "D9_TICKET.md", True),
+        ("HANDOFF" + _WIN_SEP + "todo" + _WIN_SEP + "data.json", False),
+    ]
+    failures = [
+        (path, is_handoff_path(path), expected)
+        for path, expected in cases
+        if is_handoff_path(path) is not expected
+    ]
+    for path, actual, expected in failures:
+        print(f"[FAIL] {path}: classified {actual}, expected {expected}")
+    if failures:
+        print(f"handoff scope self-test: {len(failures)} of {len(cases)} cases FAILED")
+        return 1
+    print(f"[OK] self-test: {len(cases)} classification cases behave as specified")
+    return 0
+
+
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument(
         "--document", type=Path, action="append", help="handoff document; repeatable"
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the deterministic is_handoff_path classification cases and exit",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -333,13 +422,17 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--changed-from", metavar="REF", help="validate handoffs changed from REF"
     )
     args = parser.parse_args(argv)
+    if args.self_test:
+        return args
     if not args.document and not args.staged and not args.changed_from:
-        parser.error("one of --document, --staged, or --changed-from is required")
+        parser.error("one of --document, --staged, --changed-from, or --self-test is required")
     return args
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
+    if args.self_test:
+        return self_test()
     root = args.repo_root.resolve()
     script_root = Path(__file__).resolve().parents[1]
     if root != script_root:
