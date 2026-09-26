@@ -301,9 +301,7 @@ async fn own_topic_subscribe_is_registered_on_the_running_node() {
     .expect("failed to start swarm");
 
     // Keep the event channel drained so the loop never blocks on a full queue.
-    let drain = tokio::spawn(async move {
-        while event_rx.recv().await.is_some() {}
-    });
+    let drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
 
     let topics = tokio::time::timeout(Duration::from_secs(30), handle.get_topics())
         .await
