@@ -1,5 +1,13 @@
 # S2/S3/S6/S7 Small Fixes — Status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Session:** native Cowork session, 2026-07-03. Sandboxed Linux environment
 mounting the real Windows repo — **no Rust toolchain available** (`cargo`,
 `rustc` not found), and a **git index lock (`.git/index.lock`) was held by a

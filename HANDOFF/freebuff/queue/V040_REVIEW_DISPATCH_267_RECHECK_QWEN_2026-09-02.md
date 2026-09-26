@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- #267 F-DHT gate re-review at head 80197ef5 (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DISPATCHED 2026-09-02 (confirmatory re-review after triage commit 79b4958c)
 Target: PR #267 freebuff/v040-t13-fdht-gate @ 80197ef5 (branch head incl. triage commit 79b4958c)
 Model: qwen3.8-2.4t-a95b (ledger-confirmed 100%, 1M context)

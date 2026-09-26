@@ -1,4 +1,13 @@
 # SCMessenger CLI Discovery Verification Report
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date**: 2026-05-06  
 **Test Environment**: Windows 11, SCMessenger CLI (Debug Build)  
 **Tester**: Automated via scm-expert CLI Driver

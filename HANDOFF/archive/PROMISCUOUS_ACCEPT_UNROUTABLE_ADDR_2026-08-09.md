@@ -1,5 +1,13 @@
 # Promiscuous mode accepted a peer identity at a non-routable Docker address
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P2 security (needs adversarial review; not yet shown exploitable)
 Discovered: 2026-08-09, Windows lane, live soak at anchor `49bc3f56`

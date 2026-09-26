@@ -1,5 +1,13 @@
 # V040 3-Node Checkpoint — PREFLIGHT (read-only readiness re-audit)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 UTC: 2026-09-17T19:54:44Z
 Stage: PREFLIGHT (nodes already live; no node was stopped, started, or
 reconfigured; no radio isolation and no probe phase was executed)

@@ -1,5 +1,13 @@
 # TASK: P1-06 follow-up - unit tests for mDNS self-loopback filter
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Core fix already applied+committed:
 android/app/src/main/java/com/scmessenger/android/transport/MdnsServiceDiscovery.kt
 `onServiceResolved` now filters any resolved peer-id matching `getLocalPeerId()`

@@ -1,5 +1,15 @@
 # V040 CANDIDATE #272 FINAL APPROVE -- delta addendum request for head 44fee3c4
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-03
 Status: **REQUESTED -- verdict pending.** Companion to
 V040_REVIEW_DISPATCH_272_DEFERRAL_REREVIEW_44fee3c4_2026-09-03.md (same inbox);

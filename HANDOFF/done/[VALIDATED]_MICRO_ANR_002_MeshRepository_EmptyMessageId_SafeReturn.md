@@ -8,6 +8,14 @@ time_limit_ms: 120000
 phase: "MICRO"
 ---
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 # MODEL: gemini-3-flash-preview:cloud
 # BUDGET: 120
 

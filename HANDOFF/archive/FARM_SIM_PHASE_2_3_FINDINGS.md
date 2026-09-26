@@ -1,5 +1,13 @@
 # FARM-SIM PHASE 2 & 3 COMPREHENSIVE TESTING — FINDINGS REPORT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** BLOCKED (contact provisioning required)  
 **Instance:** i-00e068c0837ac0857 at 32.197.246.78  
 **Date:** 2026-07-18 20:40 UTC  

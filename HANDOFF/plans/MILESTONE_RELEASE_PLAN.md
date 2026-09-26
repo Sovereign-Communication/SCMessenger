@@ -1,4 +1,13 @@
 # SCMessenger Milestone Release Plan
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 # v0.3.5 -> v0.4.0 -> v0.5.0 -> v1.0.0
 
 Status: Active planning document

@@ -11,6 +11,16 @@ metadata:
     related_skills: []
 ---
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 # Dreaming — Distilled Lessons Learned from the Historical Record
 
 A background-style reflection pass that reads the FULL Hermes session history

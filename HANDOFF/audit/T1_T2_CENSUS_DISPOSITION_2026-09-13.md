@@ -1,5 +1,13 @@
 # T1 + T2 CENSUS & DISPOSITION — Phase 3 (boot seed-dial, peer-store unification)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-13
 **Written by:** Buffy (Freebuff recovery session)
 **Tree verified:** origin/main `5f1cf702` (post-#282/#284), worktree

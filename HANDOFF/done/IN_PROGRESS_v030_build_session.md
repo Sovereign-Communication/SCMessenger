@@ -1,5 +1,13 @@
 # v0.3.0 Build Session  2026-06-08
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Status: [OK] COMPLETE  v0.3.0 PUSHED TO PIXEL 6a
 
 ### Timeline

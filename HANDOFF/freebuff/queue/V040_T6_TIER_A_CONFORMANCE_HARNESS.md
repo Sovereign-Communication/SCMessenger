@@ -1,5 +1,15 @@
 # V040-T6 -- Tier A two-node continuous conformance harness
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: MERGED -- the harness landed as PR #311 (main 1579b049, 2026-09-19), the
 same day this status line was corrected. Status corrected 2026-09-19 by the
 queue-reconcile pass; the ticket body below is unchanged.

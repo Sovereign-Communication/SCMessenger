@@ -1,4 +1,13 @@
 # SCMessenger Master Sprint Plan — Complete Wiring Execution
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 # Generated: 2026-05-09 | Baseline: 38 todo / 483 done
 
 > **Philosophy**: Rust-first sovereignty. Ed25519+Blake3+XChaCha20 immutable.

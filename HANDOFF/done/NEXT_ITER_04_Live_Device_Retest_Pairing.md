@@ -1,5 +1,13 @@
 # NEXT_ITER_04: Live-Device Retest — Android <-> Windows Pairing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 for the parity effort, but OPERATOR-GATED (needs the physical
 Pixel + Windows CLI daemon on the same LAN; a headless worker cannot do this alone)
 **Recommended worker:** any model, driven interactively with the operator, AFTER

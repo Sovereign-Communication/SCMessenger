@@ -1,5 +1,13 @@
 # TASK: A-04 Android Receipt Unification (U5)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: DISPATCH-READY
 Model: Qwen CODER tier
 Scope: Tight (platform unification, receipt pipeline)

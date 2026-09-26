@@ -1,5 +1,13 @@
 # SCMessenger PR #139 Unified Five-Node Field-Gate Reference
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Mac lane + Windows lane + headless infrastructure node + delivery reliability + merge gate**
 
 > **Purpose:** Provide one authoritative, repo-ready operational reference for reconciling PR #139, fixing known pre-freeze runtime blockers, rebuilding the five-node qualification harness, freezing one trustworthy runtime candidate, and proving it through two complete G1-G6 matrix passes plus one continuous 60-minute five-node soak.

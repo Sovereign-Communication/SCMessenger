@@ -1,5 +1,13 @@
 # Windows CLI Node Driver Log
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Monitoring Summary
 Monitoring period: 2026-08-03T22:02:45Z to 2026-08-03T22:11:28Z (~8.7 minutes)
 Total cycles: 8 at ~60 second intervals

@@ -1,5 +1,13 @@
 # V040-T-AND06-A1 — Collapse redundant Kotlin Ed25519 validator copies
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN (filed 2026-09-20; operator unification ruling)
 Priority: P1 -- Wave 1 step 2 (A-lite), before UniFFI cutover
 Lane: Freebuff

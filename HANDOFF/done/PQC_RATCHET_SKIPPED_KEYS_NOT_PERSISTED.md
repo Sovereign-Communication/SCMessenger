@@ -1,5 +1,15 @@
 # TASK [MEDIUM]: Skipped ratchet keys don't survive session persistence
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DONE 2026-07-13. Added `skipped_keys` to `SerializableRatchetSession`
 (hex-encoded `Vec<(String, u32, String)>`, `#[serde(default)]` so pre-existing
 persisted sessions without it still deserialize), a `skipped_keys_snapshot()`

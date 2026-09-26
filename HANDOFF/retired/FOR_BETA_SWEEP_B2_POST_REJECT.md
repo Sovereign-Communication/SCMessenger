@@ -1,5 +1,15 @@
 # [FOR BETA - SWEEP] B2 Core Transport & Routing — Post-Rejection Re-Verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Node:** Beta (QA & Systems Analyst)
 **Model:** `kimi-k2-thinking:cloud`
 **Task Type:** Sweep / State Analysis

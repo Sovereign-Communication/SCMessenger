@@ -1,5 +1,15 @@
 # Unification V4 -- Workflow Singularity Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: PROPOSED -- audit complete, gate built and calibrated, no runtime code
 touched. Awaiting CEO/CTO ratification of the four decisions in section 7.
 Created: 2026-09-11 (audit + gate), Freebuff audit seat.

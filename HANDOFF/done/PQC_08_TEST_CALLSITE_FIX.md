@@ -1,5 +1,13 @@
 # TASK: Fix 8 call sites in core/tests/integration_pq_session.rs (PQC-08 signature change)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 `encrypt_with_ratchet_fallback` in `core/src/crypto/encrypt.rs:472` was
 extended (PQC-08 gating work) from 7 to 9 parameters, adding two new
 trailing parameters:

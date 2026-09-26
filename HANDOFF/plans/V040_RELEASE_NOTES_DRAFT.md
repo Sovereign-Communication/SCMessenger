@@ -1,5 +1,13 @@
 # v0.4.0 Release Notes (DRAFT — not final until tag day)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## What SCMessenger is
 
 Sovereign end-to-end encrypted mesh messaging. No servers, no accounts.

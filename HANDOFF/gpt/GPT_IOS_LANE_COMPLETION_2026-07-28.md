@@ -1,5 +1,13 @@
 # GPT HANDOFF -- iOS parity lane completion
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: IMPLEMENTED AND MAC-VERIFIED; AWAITING ORCHESTRATOR COMMIT/PUBLISH
 Date: 2026-07-28
 Branch: `gpt/ios-lane-1`

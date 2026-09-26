@@ -1,4 +1,13 @@
 # MODEL: gemma4:31b:cloud
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 # BUDGET: 1800
 # TARGET: wasm/src/rpc.rs, wasm/src/daemon_bridge.rs
 

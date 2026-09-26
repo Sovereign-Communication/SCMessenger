@@ -1,5 +1,13 @@
 # v0.4.0 free-lane dispatch package -- READY TO FIRE
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: RETIRED 2026-07-28 -- all three dispatches (A outbox Site-1, B receipt
 round-trip, C ledger choke-point) landed via operator commits f521f142,
 8f866bfc, 22b921ca. Kept as the canonical tooling-trap reference

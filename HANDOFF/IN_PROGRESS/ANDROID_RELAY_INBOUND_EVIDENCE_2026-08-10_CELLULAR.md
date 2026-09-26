@@ -1,5 +1,13 @@
 # Evidence drop: Windows -> AWS relay -> Android (cellular) delivered NOTHING
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- evidence for the in-flight Android transport work
 Filed: 2026-08-10 16:05 UTC by the Windows soak-node session
 For: the session on `windows-lane/android-parity-dial-dedup` (worktree

@@ -1,5 +1,13 @@
 # TASK: Fix scripts/verify_ios_bindings.sh (broken --stdout flag + wrong ordering)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 A prior pass rewrote `scripts/verify_ios_bindings.sh` to check Swift-bindings
 drift, but it invokes a flag that does not exist and would fail on every run.
 Ground truth below is confirmed by reading `core/src/bin/gen_swift.rs` and

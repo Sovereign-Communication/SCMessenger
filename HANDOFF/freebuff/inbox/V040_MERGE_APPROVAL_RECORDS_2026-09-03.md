@@ -1,5 +1,15 @@
 # V040 MERGE APPROVAL RECORDS -- post-validation terminal phase (2026-09-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Grounding: V040_POST_VALIDATION_MERGE_PLAN_2026-09-03.md (sequence + gates),
 V040_CEO_DIRECTIVE_REVIEWS_ITERATE_TO_APPROVE_MULTI_TRANSPORT_2026-09-03.md
 (review discipline + multi-transport deferral), the verdict files in

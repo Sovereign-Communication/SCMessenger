@@ -1,4 +1,13 @@
 # ORCHESTRATION INDEX — Android/Windows/Ubuntu Production-Ready Push
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-05 13:25 PT
 **Author:** Hermes Overseer session
 **Audience:** Claude Code (next session) + all subagents dispatched from this index

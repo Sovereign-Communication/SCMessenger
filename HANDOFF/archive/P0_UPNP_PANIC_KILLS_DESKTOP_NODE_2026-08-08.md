@@ -1,5 +1,13 @@
 # P0 -- UPnP panic kills the desktop node ~5 minutes after start
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Fixed in PR #139 hardening branch; Windows soak still required
 Severity: P0 (release blocker for v0.4.0)
 Discovered: 2026-08-08 (Windows orchestrator lane, live node run)

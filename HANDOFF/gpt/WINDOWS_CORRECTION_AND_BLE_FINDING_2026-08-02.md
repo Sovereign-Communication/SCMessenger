@@ -1,5 +1,13 @@
 # WINDOWS -> GPT: CORRECTION to my last findings, plus a real Android bug
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: CORRECTION -- supersedes the headline of
 `HANDOFF/gpt/WINDOWS_ANDROID_LOG_FINDINGS_2026-08-02.md` (commit e39b8470)
 Raised: 2026-08-02 by Windows Claude

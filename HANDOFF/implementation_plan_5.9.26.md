@@ -1,5 +1,13 @@
 # Resolve Phase 2 Routing & Core Compilation Errors
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Problem Statement
 
 `cargo check -p scmessenger-core --all-features --all-targets` fails with **5 compilation errors** across 2 files. These errors are gated behind `#[cfg(feature = "phase2_apis")]` and only manifest when compiling with `--all-features`. The standard build (`cargo check -p scmessenger-core`) passes cleanly.

@@ -5,6 +5,16 @@ reason: review-required
 esc_id: ESC-TEST0001
 ---
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Summary
 Round-trip test of the Overseer Bridge (C). This is a synthetic escalation
 to confirm the bridge forwards correctly to the overseer's Telegram DM,

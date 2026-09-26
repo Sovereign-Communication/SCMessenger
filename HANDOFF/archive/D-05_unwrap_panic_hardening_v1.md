@@ -1,5 +1,15 @@
 # Task D-05
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Description
 unwrap()/panic! hardening v1.0.0 scope: FFI boundary (mobile_bridge.rs, exported api fns), startup path, crypto, storage. ~60 sites -> Result/logged-default. Parallel dispatch by file.
 

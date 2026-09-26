@@ -1,5 +1,13 @@
 # Plan From Claude For Hermes — v0.2.1 Completion & Workstation Optimization
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Author:** Claude Code (claude-opus-4-8, minimax-m3 underneath) → Hermes (also minimax-m3)
 **Audience:** Hermes Overseer
 **Date:** 2026-06-02

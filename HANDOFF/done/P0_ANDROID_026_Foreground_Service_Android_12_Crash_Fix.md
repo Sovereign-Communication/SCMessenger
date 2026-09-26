@@ -1,5 +1,13 @@
 # P0_ANDROID_026: Foreground Service Android 12+ Crash Fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Problem
 
 `MeshForegroundService.onStartCommand()` launched a coroutine and immediately returned `START_STICKY`. The actual `startForeground()` call happened asynchronously inside the coroutine (via `startMeshService()`  `tryStartForeground()`). On Android 12+ (API 31+), if `startForeground()` is not called within 5 seconds of `onStartCommand()` returning, the system throws `ForegroundServiceDidNotStartInTimeException` and kills the service.

@@ -1,5 +1,13 @@
 # Multi-dimensional audit — 0.4.0 scope (iteration 1 of N)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Author: CTO seat, Freebuff lane. Method: live evidence from all three nodes plus
 command-verified code reads against one SHA. No local build was run
 (AGENTS.md rule 17; disk was TIGHT at 11.4 GB free during this audit).

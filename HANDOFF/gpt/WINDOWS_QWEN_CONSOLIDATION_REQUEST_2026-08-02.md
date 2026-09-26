@@ -1,5 +1,13 @@
 # Windows handoff -- Qwen free-tier consolidation and CI recovery
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR WINDOWS EXECUTION
 Created: 2026-08-02
 Requester: Mac lane

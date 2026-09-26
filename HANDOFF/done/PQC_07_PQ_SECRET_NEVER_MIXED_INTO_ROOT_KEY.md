@@ -1,5 +1,13 @@
 # TASK [CRITICAL]: PQ ratchet cadence never mixes the shared secret into root_key
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## UPDATE 2026-07-14: THIRD attempt (DH-step-tied mix) reviewed -> BLOCKED
 
 Status: STILL OPEN, THREE attempts blocked. Attempt 3 followed this ticket's own

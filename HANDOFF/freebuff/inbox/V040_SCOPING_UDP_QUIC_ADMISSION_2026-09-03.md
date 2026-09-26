@@ -1,5 +1,15 @@
 # V040 Scoping note -- UDP/QUIC inbound admission vs the #272 TCP-only allowlist
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-03
 Status: READ-ONLY analysis, candidate tree @ 177bd840 (worktree
 scm-v040-candidate, clean). Input to the directive's re-review

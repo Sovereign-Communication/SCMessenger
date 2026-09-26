@@ -1,5 +1,13 @@
 # V040 3-node delivery trace -- open items (2026-09-19)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-19
 Lane: Freebuff / DeepSeek V4 Flash
 Trigger: operator report -- messages sent from the cell (Android) to the Windows

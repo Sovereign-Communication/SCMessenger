@@ -1,5 +1,13 @@
 # 5-Gate Build Validation  Integration Branch
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-10
 **Branch:** merge/integration-to-main-2026-06-10
 **Tip:** 3b78fd16 (v0.3.4)

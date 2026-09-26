@@ -1,5 +1,13 @@
 # Task: Verify and Finalize P1 Android Hardening (Partial) + Route Remaining Work
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P1
 **Model:** gemma4:31b:cloud
 **Budget:** 2000

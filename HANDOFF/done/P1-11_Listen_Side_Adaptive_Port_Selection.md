@@ -1,5 +1,13 @@
 # TASK: P1-11  Listen-side adaptive port selection (default-on `MultiPortConfig`, laddered WS, bound-addr export)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Tier:** [SONNET] [AUDIT-GATE]
 **Phase:** v1.0.0 Phase 1, Stage C (deliverability workstream).
 **Design source:** `HANDOFF/plans/P1-10_adaptive_port_selection_design.md` 1.1, 3.1 (read it first).

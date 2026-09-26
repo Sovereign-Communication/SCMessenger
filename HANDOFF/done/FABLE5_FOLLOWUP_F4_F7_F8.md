@@ -1,5 +1,13 @@
 # TASK: Fable 5 sprint review follow-ups (F4, F7, F8)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P2 (review-sanctioned follow-ups; the blocking findings F1/F2/F3/F5/F6
 are already fixed and committed). Source: tmp/audit_reports/fable5_sprint_adversarial_review.md.
 **Lane:** Qwen-coder generates -> orchestrator applies + gates -> Qwen-thinking

@@ -1,5 +1,13 @@
 # 040-S5 JOSH WAN PROOF RUNBOOK (workflow prep agent draft)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 # 040-S5 RUNBOOK (DRAFT) — Josh WAN proof: Hawaii <-> Pennsylvania E2E messaging through the cloud node
 
 Status: DRAFT for operator review. Read-only task; nothing written to the repo. All source anchors re-verified this session at HEAD `909edf4c` unless noted as carried from the S4 runbook (verified at `645c36ec`; two wave-1b commits since touched `core/src/transport/swarm.rs`, so its swarm.rs line numbers are stale — this draft cites the HEAD numbers).

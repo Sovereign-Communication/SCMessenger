@@ -1,5 +1,13 @@
 # Android drops SOME inbound messages with CryptoError -- 840 occurrences over 31 hours
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- DISPOSITIONED 2026-08-24: measurement-pending, code causes absorbed
 Disposition: both code-level causes named in the revised hypothesis are FIXED
 on main ceabdbd4 -- self-ratchet reset guarded (see

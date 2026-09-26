@@ -1,5 +1,13 @@
 # 3-node log analysis — 2026-09-20 (CTO pass)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Mode: read-only. Not a full D4/D6/D7 tag scoring run (operator: score after
 wave + phone session). Master plan: `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`.
 

@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - NICKNAME-OWNERSHIP-001 / NICKNAME-AUTHORITY-001
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Device evidence (not guessed)
 
 Pixel ledger.json pulled 2026-09-11 (pid 3986, hang-fixed APK):

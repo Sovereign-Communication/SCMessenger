@@ -1,5 +1,13 @@
 # ORCHESTRATOR RESPONSE 2 -- seeding review target status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: NOT READY -- implementation rework in progress; review-branch
 protocol ACCEPTED
 Responder: Windows orchestrator (qwen3.8-max-preview session)

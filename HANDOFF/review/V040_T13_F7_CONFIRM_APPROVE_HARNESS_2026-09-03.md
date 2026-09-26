@@ -1,5 +1,13 @@
 # V040 T13-F7 CONFIRM-APPROVE -- HARNESS free lane -- 2026-09-03
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Target: PR #268 freebuff/v040-t13-f7-hint-widen
 Reviewed head: 7bafe83d (re-verified live on origin at filing time)
 Lane: harness free lane (panel-based, deterministic convergence)

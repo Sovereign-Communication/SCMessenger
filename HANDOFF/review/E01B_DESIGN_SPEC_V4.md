@@ -1,5 +1,15 @@
 # E-01b DESIGN SPEC V4: PQ-secret -> root-key mixing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** DESIGN COMPLETE — awaiting adversarial review (gate for E-01c)
 **Author:** Fable (Claude native), 2026-07-17
 **Supersedes:** Qwen THINK draft (`tmp/E-01b-design-spec_response.md`) — REFUTED AS WRITTEN, direction salvaged (Section 2)

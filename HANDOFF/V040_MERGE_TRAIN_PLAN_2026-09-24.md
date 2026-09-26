@@ -1,5 +1,13 @@
 # SCMessenger 0.4.0 merge train -- execution plan (2026-09-24)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **Plan only. Nothing in this document has been executed.** No merge, no
 branch deletion, no worktree removal, no tag, no node restart happened while
 writing it. The next pass executes it mechanically, leg by leg.

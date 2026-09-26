@@ -1,5 +1,13 @@
 # IDENTITY_BACKUP_UI_INTEGRATION_2026-08-12.md
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: todo
 Priority: P1 (next round after v0.4.0 tag)
 Lane: Android (Windows orchestrator + delegated)

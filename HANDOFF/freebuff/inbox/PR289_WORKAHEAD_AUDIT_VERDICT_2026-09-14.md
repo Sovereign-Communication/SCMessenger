@@ -1,5 +1,15 @@
 # PR #289 work-ahead audit — correctly scoped, NOT yet valid (2 test failures are a real semantic bug in the new validator)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Audited: 2026-09-14, Freebuff lane (passive audit + CI-log RCA; operator
 directed after the safe-work-ahead agent opened PRs from this seat's work).
 Author verified from commit header: "Claude (Cowork sandbox)".

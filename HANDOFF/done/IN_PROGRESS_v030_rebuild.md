@@ -1,4 +1,13 @@
 # v0.3.0 APK Rebuild Report
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Time:** 2026-06-08T09:42-07:00 (PT)
 **Rebuilder:** orchestrator (manual), cloud subagent prep + final verify via `qwen3-coder-next:cloud`
 **Source HEAD:** `665a5199 release: v0.3.0  P0/P1 Android bundle (identity race + mDNS peer-loss + UI)`

@@ -1,5 +1,13 @@
 # TASK: P0-COMPILE-GATE  Get a ground-truth full workspace compile/test result before dispatching any further wiring or feature work
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Why this is P0 and first
 
 A comment surfaced (source: gemini.google.com web UI reading the GitHub repo

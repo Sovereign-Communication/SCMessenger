@@ -1,5 +1,13 @@
 # P1 - Track and remediate rustls RUSTSEC-2026-0285 (waived in deny.toml, untracked)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Closed -- waiver removed, guard re-armed (2026-09-25)
 Priority: P1 (MUST be resolved before the first PUBLIC release; not a v0.4.0
 tag blocker -- see scope note)

@@ -1,5 +1,13 @@
 # P1 — Relocate Android public-key curve validation behind UniFFI (bod-dd336324 remedy)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - **Priority:** P1 — must land before the v0.4.0 tag
 - **Filed:** 2026-09-13, Buffy (Freebuff recovery session)
 - **Doctrine basis:** Board resolution bod-dd336324 — "Kotlin-level BigInteger

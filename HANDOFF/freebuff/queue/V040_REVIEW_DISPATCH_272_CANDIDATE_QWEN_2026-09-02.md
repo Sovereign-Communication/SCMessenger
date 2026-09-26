@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- #272 V040 architecture candidate (adversarial, qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **TRIAGED 2026-09-02 -- verdict filed + fix commit fc0f5ae0 pushed.** Verdict: REQUEST_CHANGES (6 findings; 2 verified REAL and fixed, 1 fixed, 3 not-applicable with evidence). File: HANDOFF/review/V040_CANDIDATE_272_REVIEW_QWEN_2026-09-02.md. Inbox: V040_272_REVIEW_TRIAGED_2026-09-02.md.
 Priority: P0 -- this SHA (a759e0c7) is the three-node candidate; Rule-8 requires a NON-AUTHOR adversarial APPROVE before merge, and nothing may merge until this review is on file.
 Lane: Qwen free -- qwen3.8-2.4t-a95b (ledger-confirmed 100%: 1,000,000 remaining, 1M-context November reserve bucket, docs/QWEN_QUOTA_LEDGER.md 2026-08-31 snapshot; same qwen3.8 generation as qwen3.8-max-0902, which the operator blessed for the #267 hardest-assignment review). Full PR diff + architecture doc supplied as context.

@@ -1,5 +1,13 @@
 # P1 - Android chat renders out of order: the sort key is a REMOTE clock
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open - diagnosed from the device's own store, fix not yet implemented
 Priority: P1 (operator-visible correctness defect: a reply appears BEFORE the
 message that caused it, so the conversation reads as causally impossible)

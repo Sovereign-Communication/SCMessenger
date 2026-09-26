@@ -1,5 +1,15 @@
 # Task C-06
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Description
 P1-18 relay task: 3-node custody chain + WAN relay live proof (content destroyed -- re-derive from docs/ relay specs at dispatch)
 

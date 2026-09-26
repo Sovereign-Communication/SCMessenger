@@ -1,5 +1,13 @@
 # Task: Verify UniFFI Annotations Complete
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Background
 Commit `6d528dc4` added 8 interfaces to `core/src/api.udl` but the corresponding Rust structs lacked `#[derive(uniffi::Object)]` and `#[uniffi::export]` annotations, causing Android crash:
 ```

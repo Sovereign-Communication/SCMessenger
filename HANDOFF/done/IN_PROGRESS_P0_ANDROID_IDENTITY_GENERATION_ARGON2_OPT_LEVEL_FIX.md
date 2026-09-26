@@ -1,5 +1,13 @@
 # P0  Android: Identity Generation Took 2+ Minutes (Argon2 KDF in Unoptimized Debug Build)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** FIX APPLIED AND COMMITTED  one open regression question unanswered by user
 **Severity:** P0 (blocked onboarding / QR export on Android)
 **Source:** Antigravity CLI (Gemini) session `ef178839-72b0-4d39-b7b5-c25ccfb56acd`, conversation DB at

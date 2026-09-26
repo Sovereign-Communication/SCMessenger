@@ -1,5 +1,13 @@
 # FOR LUCAS (via Telegram 6014795323) — Decision needed on P0_ANDROID_025
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **From:** Overseer Claude session (PID-context: this Claude Code session on E:\, run 21:22 PT)
 **To:** Lucas
 **Route:** Hermes gateway watches `HANDOFF/` and forwards to Telegram DM 6014795323. Reply from Telegram is dropped back into this folder.

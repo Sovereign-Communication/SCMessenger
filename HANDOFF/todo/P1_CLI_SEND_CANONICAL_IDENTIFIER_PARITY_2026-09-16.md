@@ -1,5 +1,13 @@
 # P1 - CLI `send` could not address any contact after the canonical-hex migration
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Fixed (pending CI on the push that carries it)
 Priority: P1 (the CLI node's primary function - sending a message - reported
 failure for every send; one of the three node types could not start a

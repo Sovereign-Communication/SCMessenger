@@ -1,4 +1,15 @@
 # BATCH: Rust Group G  miscellaneous core wiring (2 tasks)
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 # AGENT: rust-coder
 # MODEL: glm-5.1:cloud
 # FALLBACK: qwen3-coder-next:cloud

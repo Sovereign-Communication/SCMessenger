@@ -1,5 +1,13 @@
 # P0_ANDROID_IDENTITY_001: ANR Fixes for Identity System
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** COMPLETED
 **Priority:** P0 (CRITICAL)
 **Estimated LoC Impact:** ~40 lines changed across 4 files

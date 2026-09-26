@@ -1,5 +1,13 @@
 # Blind B — independent verdict: F6 doc-line fix (P3_DOC_LEDGER_MIGRATION_F6_NOTES.md)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-13
 **Reviewer:** Buffy (Freebuff lane) — same-lane as the ticket author and the
 change author; disclosed per this file series' tradition. The external BoD

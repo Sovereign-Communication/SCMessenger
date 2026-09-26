@@ -1,5 +1,15 @@
 # DISPATCH: VERIFICATION RE-REVIEW -- Transport Liveness Fixes (Round 2)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Mode: READ-ONLY VERIFICATION REVIEW. No code changes. Round 2 of the
 AGENTS.md rule 8 gate for branch fix/transport-liveness-failover-2026-08-05.
 

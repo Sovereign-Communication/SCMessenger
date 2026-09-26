@@ -1,5 +1,15 @@
 # TASK: D-05 Unwrap/Panic Hardening (v1.0.0 Robustness)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DISPATCH-READY (parallel x2: FFI/startup + crypto/storage)
 Model: Qwen CODER tier
 Scope: Bounded hardening (~60 sites, Result/logged-default pattern)

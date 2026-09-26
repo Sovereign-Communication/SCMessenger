@@ -1,5 +1,15 @@
 # V040-T1 -- The CLI node never dials its known peers on boot
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: CODE ON MAIN -- do not re-dispatch implementation. Evidence 2026-09-20:
 `cli/src/seed_dial.rs` implements boot/recheck `[SEED-DIAL]`; `core/src/transport/swarm.rs`
 has `build_seed_dial_candidates` and `connect_to_seed_peers` (production boot path).

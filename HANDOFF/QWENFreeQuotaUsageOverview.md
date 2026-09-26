@@ -1,4 +1,14 @@
-﻿Current as of 7/27/2026 @ 01:23 HST - aka time of commit
+﻿<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
+Current as of 7/27/2026 @ 01:23 HST - aka time of commit
 
 Free Quota Usage Overview
 94

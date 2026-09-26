@@ -1,5 +1,15 @@
 # TASK: P1-13  Hardcode sweep (retire 9001/9002/9010 literals)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Tier:** [HAIKU]
 **Phase:** v1.0.0 Phase 1, Stage C (deliverability workstream).
 **Design source:** `HANDOFF/plans/P1-10_adaptive_port_selection_design.md` 3.3.

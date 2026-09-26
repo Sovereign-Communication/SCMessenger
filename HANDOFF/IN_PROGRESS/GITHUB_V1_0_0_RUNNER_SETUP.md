@@ -1,5 +1,13 @@
 # TASK: GitHub V1.0.0 Runner Setup — iOS/Mac Testing Enablement
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: DELEGATION-READY (Enterprise Trial acquired)
 Owner: GitHub Actions / Sovereign-Communication org
 Scope: Verify iOS runners accessible, configure CI/CD for iOS + macOS testing

@@ -1,5 +1,15 @@
 # Deadlock Analysis: `receive_message` never returns
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Lock Acquisition Order
 
 1. **Mobile Bridge (Android)**: `MeshRepository.kt:2836` calls `meshService?.onDataReceived(peerId, data)`

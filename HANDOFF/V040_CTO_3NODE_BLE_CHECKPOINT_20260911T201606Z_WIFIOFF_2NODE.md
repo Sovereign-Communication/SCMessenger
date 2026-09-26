@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T20:16Z WiFi-off test (Win+AWS only)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Seat: CTO
 Evidence: `tmp/cto/LOGPULL_WIFIOFF_20260911T201606Z/`
 **Phone ADB offline** during test (WiFi-off / USB not enumerated). Cannot score

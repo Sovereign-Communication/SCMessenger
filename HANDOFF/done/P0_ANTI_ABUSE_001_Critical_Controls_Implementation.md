@@ -1,5 +1,13 @@
 # P0_ANTI_ABUSE_001: Critical Anti-Abuse Controls Implementation
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Status:  COMPLETE
 
 ## Verification Summary (2026-04-20)

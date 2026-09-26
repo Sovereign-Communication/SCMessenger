@@ -1,5 +1,13 @@
 # Rule-8 verdict: zombie-connection fix (follow-up to PR #305)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - Date: 2026-09-18
 - Branch / head: `freebuff/v040-blocking-fixes-20260917` @ `8cc356b8` (fix) + `44ed8071` (exact-IP hardening found during gate prep; reviewed in this same panel)
 - Under review: the WIFI_TRANSPORT_REGRESSION_RCA fix — `ZombieTracker` (liveness stamps: successful pings native + identify::Received both loops), deny-cause classification (`connection_limits::Exceeded` downcast, `source()` unwrap fallback), periodic reap gated on all-silent + fresh deny-classified attempt, wired in native and wasm swarm loops, 9 new regression tests.

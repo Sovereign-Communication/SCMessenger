@@ -1,5 +1,13 @@
 # TASK: Fix PQC-09 onion routing compile errors (5 distinct issues, exact fixes below)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO -- BLOCKING compile gate. All root causes below are verified
 against current source -- apply exactly, do not re-diagnose.
 

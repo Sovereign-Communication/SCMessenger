@@ -1,5 +1,13 @@
 # Windows/Android/AWS Node Parity & 5-Node Gate Readiness
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** Active — orchestrator session, 2026-08-12
 **Authority:** Windows orchestrator (control-plane owner per Mac exit handoff)
 **Session constraint:** No builds/tests/cargo (Antigravity consuming compute). Read-only verification only.

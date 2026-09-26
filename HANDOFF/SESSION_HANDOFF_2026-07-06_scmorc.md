@@ -1,5 +1,15 @@
 # /scmorc Session Handoff -- 2026-07-06
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Halted reason:** Claude API quota hit ~4% remaining (HARDLOCK tier per the
 quota governor in `.claude/commands/scmorc.md`). This session stopped
 dispatching and committed all verified work. Resume next session once the

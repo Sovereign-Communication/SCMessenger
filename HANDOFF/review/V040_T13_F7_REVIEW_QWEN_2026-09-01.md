@@ -1,5 +1,15 @@
 # V040-T13 F7 (hint widen) + V040-T14 pre-existing feeds -- REVIEW (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Reviewer: **qwen-max** (DashScope free, non-author; qwen3-32b non-responsive
 both modes -> same-tier fallback). Targets: PR #268 `freebuff/v040-t13-f7-hint-widen`,
 PR #269 `freebuff/v040-t14-preexisting-fixes`. Dispatched 2026-09-01 via
