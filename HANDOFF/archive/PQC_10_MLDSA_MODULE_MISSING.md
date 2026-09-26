@@ -1,5 +1,13 @@
 # TASK: Create the missing core/src/crypto/pq/mldsa.rs module (PQC-10 completion)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO -- BLOCKING compile gate. The previous PQC-10 dispatch modified
 `core/src/identity/keys.rs` and `core/Cargo.toml` to reference
 `crate::crypto::pq::mldsa::MlDsa65KeyPair` and

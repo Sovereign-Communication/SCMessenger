@@ -1,5 +1,15 @@
 # P1: Outbox Canonical Addressing Drain & IronCore Outbox Unification (CLI-03 & CORE-02)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** RE-SCOPED 2026-09-20 (CO-G-002) — CLI-03 + CORE-02 **FIXED ON MAIN** (canonical drain + persistent IronCore outbox). **Residual OPEN = core/wasm single-form flush** tracked as `HANDOFF/freebuff/queue/V040_T_COB001_WASM_OUTBOX_DUAL_DRAIN.md` (audit CO-B-001). Do not re-implement CLI-03/CORE-02 from this ticket body.
 **Priority:** P1 residual only (was: v0.4.0 Release Blocker for the already-fixed CLI/CORE defects)
 **Target Branch:** residual work on `main` via freebuff PR

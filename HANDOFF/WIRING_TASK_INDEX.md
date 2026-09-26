@@ -1,5 +1,13 @@
 # Wiring Task Index (HANDOFF/todo)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **CLOSED 2026-07-04.** The wiring workstream (350 tasks) completed as of 2026-07-03.
 Verified: `HANDOFF/todo/` contains 0 `task_wire_*` files; `HANDOFF/done/` contains 351.
 Regenerated via `python scripts/generate_wiring_patch_manifest.py`, which now reports

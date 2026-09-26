@@ -1,5 +1,13 @@
 # Qwen Iteration Plan -- Next 2 Iterations
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Created:** 2026-07-08
 **Author:** Qwen session (`/scmqwen` orchestrator)
 **Purpose:** Concrete plan for the next two iterations of Phase 1 work,

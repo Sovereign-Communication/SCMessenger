@@ -1,5 +1,13 @@
 # P1_ANDROID_021: Real Device Release Smoke Test
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Objective
 
 Install the release-minified APK on the Google Pixel 6a and perform end-to-end validation to confirm the app does not crash after ProGuard/R8 obfuscation.

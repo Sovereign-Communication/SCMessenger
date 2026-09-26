@@ -1,5 +1,13 @@
 # P3: Android Retry Suppression - Verification Gate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Task:** Receipt window hardening (60s timeout) + no-downgrade rule  
 **Status:** IMPLEMENTATION COMPLETE - Awaiting Build Verification  
 **Date:** 2026-07-22

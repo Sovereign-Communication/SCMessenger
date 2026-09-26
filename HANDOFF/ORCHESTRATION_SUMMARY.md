@@ -1,5 +1,13 @@
 # Farm-Sim Bootstrap Fix & Phase 2&3 Orchestration Summary
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** Ready for execution on AWS instance  
 **Date:** 2026-07-18  
 **Commits:** 65ac148e, 7c2d28b8  

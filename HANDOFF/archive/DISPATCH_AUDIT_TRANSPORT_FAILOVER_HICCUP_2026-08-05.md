@@ -1,5 +1,15 @@
 # DISPATCH: READ-ONLY AUDIT -- Transport Failover / BLE-LAN Hiccup
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Mode: READ-ONLY AUDIT. Do NOT write code. Do NOT apply diffs. Deliver
 analysis only, in the report format at the bottom.
 

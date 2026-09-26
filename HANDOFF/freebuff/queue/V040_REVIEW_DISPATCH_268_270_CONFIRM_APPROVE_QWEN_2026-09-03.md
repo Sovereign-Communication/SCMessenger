@@ -1,5 +1,13 @@
 # V040 CONFIRM-APPROVE dispatch -- PR #268 and PR #270 (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: close FLAG-1 and FLAG-2 of V040_POST_VALIDATION_MERGE_PLAN_2026-09-03.md
 Type: DISPATCH -- final Rule-8 confirmation pass (CEO-authorized 2026-09-03)
 Reviewer: qwen free lane, non-author (ledger-recorded)

@@ -1,5 +1,13 @@
 # P1_ANDROID_023: Deep Linking for Identity Sharing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Objective
 
 Enable deep links so users can share their SCMessenger identity via URL (e.g., `https://scmessenger.net/add?public_key=...` or `scmessenger://add?public_key=...`). When another user taps the link, the app opens directly to the Add Contact screen with fields pre-filled.

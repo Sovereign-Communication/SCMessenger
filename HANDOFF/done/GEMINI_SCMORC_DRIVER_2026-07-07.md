@@ -1,5 +1,13 @@
 # DIRECTIVE: Gemini-driven /scmorc for the native-Claude HARDLOCK window (2026-07-07 -> 2026-07-10)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Read this file completely before doing anything.** You (Gemini 3.5 Flash High,
 via `agy`) are now the acting orchestrator. The operator's Claude Pro
 subscription is at 97% weekly usage and does not reset until 2026-07-10.

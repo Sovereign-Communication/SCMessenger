@@ -1,5 +1,13 @@
 # GPT: 5-Node Run 2 Kickoff Protocol (iOS + macOS lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-08-04
 **Priority:** CRITICAL — this is the timing gate for 5-node run 2
 **From:** Orchestrator (Windows/Claude)

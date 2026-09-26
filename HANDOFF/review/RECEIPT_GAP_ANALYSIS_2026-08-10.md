@@ -1,5 +1,13 @@
 # Receipt Gap Analysis — why no outbound message ever shows `delivered=true`
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Complete (read-only diagnosis, no source files modified)
 Author: Claude (Cowork sandbox), diagnosis-only per task constraints
 Scope: `tracking/pre-v040-tag-work` (PR 139), root of the five-node merge gate

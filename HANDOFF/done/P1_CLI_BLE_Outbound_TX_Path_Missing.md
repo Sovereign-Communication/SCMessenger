@@ -1,5 +1,13 @@
 # TASK: P1-CLI-BLE-TX  CLI has no BLE outbound (write/TX) path; Android<->Windows BLE is half-duplex (Android->CLI only)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Tier:** [SONNET] implementation (may need an [OPUS+] design pass first if peripheral-advertising is chosen  see below).
 **Gates:** [AUDIT-GATE] (touches `core/src/transport/`), [DEVICE] (BLE radios required to prove).
 

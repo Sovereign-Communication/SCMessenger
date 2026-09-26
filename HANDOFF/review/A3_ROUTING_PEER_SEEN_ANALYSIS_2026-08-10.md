@@ -1,3 +1,13 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 [OK] 1. `routing_peer_seen` has no production caller. Search method: identifier search for `routing_peer_seen` across core, transport, mobile, and bridge trees. The only non-generated hits are the definition at `core/src/iron_core.rs:2571` and a comment at `core/src/routing/optimized_engine.rs:310`. No call exists in `core/src/transport/swarm.rs` or `core/src/mobile_bridge.rs`.
 
 [FAIL] 2. The intended seam is the swarm connection-established path, not the mobile bridge. `routing_peer_seen` requires both a peer and a transport at `core/src/iron_core.rs:2571`. The swarm already observes transport-scoped peer activity and calls `record_message_activity` at `core/src/transport/swarm.rs:3698`, but it does not call `routing_peer_seen`. A mobile-bridge discovery callback is not the correct source because it is not authoritative for transport connectivity.

@@ -1,5 +1,13 @@
 # Agent Task: Android Gradle Build Verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Model:** gemma4:31b:cloud (lightweight)
 **Priority:** P1  Needed for Android deployment
 

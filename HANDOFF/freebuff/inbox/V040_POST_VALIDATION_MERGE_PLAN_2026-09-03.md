@@ -1,5 +1,15 @@
 # V040 Post-validation merge-execution plan (paste-ready, 2026-09-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: READY FOR EXECUTION after (a) the qwen FINAL APPROVE verdicts and (b)
 the three-node validation at 177bd840. Every branch tip below was re-verified
 LIVE on origin in this pass (2026-09-03, commands cited). Grounding:

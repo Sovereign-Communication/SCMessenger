@@ -1,5 +1,13 @@
 # TASK: PQC-13 — PQC verification suite: Kani proofs, proptests, cross-version matrix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: PQC-05, PQC-06, PQC-07, PQC-08, PQC-09. Wave 5. Min tier: Sonnet.
 
 ## Scope

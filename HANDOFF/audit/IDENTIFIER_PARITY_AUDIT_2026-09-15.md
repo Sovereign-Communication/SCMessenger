@@ -1,5 +1,15 @@
 # Canonical Identifier Parity Audit — 2026-09-15 (~00:40Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Operator directive: "ensure we are using unified canonical identifiers to ensure no
 mismatch between versions (parity)." This audit was run while the mesh was LIVE with
 three nodes on three build generations, which makes it a cross-version interop test

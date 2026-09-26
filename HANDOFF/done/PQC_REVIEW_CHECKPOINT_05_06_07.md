@@ -1,5 +1,15 @@
 # TASK: PQC-05/06/07 Adversarial Review Checkpoint [AUDIT-GATE][BLOCKING]
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: TODO -- BLOCKS all PQC-09+ work (master-plan rule: auditor pass after
 PQC-05 before waves 2+ stack up; no verdict exists in HANDOFF/review/).
 Tier: [THINKING] read-only review. Zero-Anthropic route sanctioned by

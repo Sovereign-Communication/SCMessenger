@@ -1,5 +1,13 @@
 # Android Settings ANR Optimization & Debug
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-04-23
 **Agent:** implementer (Android specialist)
 **Model:** qwen3-coder-next:cloud

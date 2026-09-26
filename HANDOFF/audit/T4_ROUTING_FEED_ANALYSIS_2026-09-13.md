@@ -1,5 +1,13 @@
 # T4 ANALYSIS — Routing engine peer-presence feed (D6)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-13
 **Written by:** Buffy (Freebuff recovery session)
 **Resolves:** `HANDOFF/todo/P1_ROUTING_ENGINE_NEVER_LEARNS_PEERS_2026-08-10.md`

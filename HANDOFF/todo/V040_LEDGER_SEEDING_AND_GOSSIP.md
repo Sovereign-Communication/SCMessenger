@@ -1,5 +1,13 @@
 # V0.4.0 -- Ledger seeding via invite, mobile ledger gossip, de-hardcode node addresses
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: PARTIAL -- items 1, 2, 3 (response half), 6 implemented; items 4, 5 open
 Created: 2026-07-25
 Last updated: 2026-07-25

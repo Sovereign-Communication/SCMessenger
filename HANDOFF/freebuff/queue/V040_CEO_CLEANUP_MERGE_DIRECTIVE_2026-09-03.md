@@ -1,5 +1,13 @@
 # V040 CEO directive: candidate commit, safe cleanup, PR closure, merge order
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: AUTHORITATIVE. Replaces the blocked state from
 `HANDOFF/freebuff/inbox/V040_CTO_ARCHITECTURE_AND_3NODE_HANDOFF_2026-09-02_blocked.md`.
 Supersedes nothing else; keep `V040_CTO_ARCHITECTURE_AND_3NODE_HANDOFF_2026-09-02.md`

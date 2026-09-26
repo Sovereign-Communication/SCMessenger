@@ -1,5 +1,13 @@
 # SCMessenger v1.0.0 Unification Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **SUPERSEDED (2026-07-04):** for sequencing and scope, use `HANDOFF/V1_0_0_EXECUTION_PLAN.md`
 (two-phase DAG: Android<->Windows transport parity first, then everything else — all of it
 ship-blocking). This file remains the audit record; its 8 findings were re-verified there

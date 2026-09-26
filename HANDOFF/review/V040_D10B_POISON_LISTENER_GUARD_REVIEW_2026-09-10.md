@@ -1,5 +1,13 @@
 # V040 D10b — Poison-listener event-loop guard (rule-8 review packet)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - Filed: 2026-09-10 ~06:40Z by the CTO seat
 - Perimeter: `core/src/transport/swarm.rs` (rule-8 gated: crypto/transport/
   routing/privacy). Branch work proceeds per T14/D10 precedent; MERGE TO MAIN

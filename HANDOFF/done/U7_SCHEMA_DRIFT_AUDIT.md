@@ -1,5 +1,15 @@
 # TASK: U7 — Schema drift audit (persistence formats)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Tier:** [OPUS+] → [SONNET] — investigation + implementation  
 **Delegation:** `/scmqwen` → THINK (investigation), then CODER (implementation)  
 **Priority:** F2/F3 gate (backlog, non-blocking for F0/F1)  

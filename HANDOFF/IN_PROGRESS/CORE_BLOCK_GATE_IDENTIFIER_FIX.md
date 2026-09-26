@@ -1,5 +1,13 @@
 # CORE_BLOCK_GATE_IDENTIFIER_FIX -- block gate misses because sender_id now carries the public key
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: todo
 Tier: CODER
 Domain: rust-core (security enforcement)

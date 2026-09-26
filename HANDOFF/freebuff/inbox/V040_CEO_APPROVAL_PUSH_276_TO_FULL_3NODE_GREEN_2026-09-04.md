@@ -1,5 +1,15 @@
 # V040 CEO approval -- push #276 through Rule-8 to plain APPROVE, then full 3-node green on the fixed tree (2026-09-04 ~21:00Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04
 From: CEO seat
 To: CTO lane (freebuff)

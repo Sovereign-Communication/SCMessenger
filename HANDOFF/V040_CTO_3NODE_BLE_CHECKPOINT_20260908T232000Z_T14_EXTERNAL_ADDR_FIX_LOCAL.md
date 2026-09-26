@@ -1,5 +1,13 @@
 # V040 CTO three-node checkpoint - T14 configured-external-address fix (local)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `T14_EXTERNAL_ADDR_FIX_LOCAL` (code-level; NOT a three-node completion stage)

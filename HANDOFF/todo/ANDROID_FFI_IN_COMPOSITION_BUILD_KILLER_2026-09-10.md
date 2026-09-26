@@ -1,5 +1,15 @@
 # ANDROID: make FFI-in-Compose-composition a build failure (ANR class killer)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN — filed 2026-09-10T03:22Z by the CTO seat, jointly proposed with
 the CEO seat (recurrence-control thread, seq 1139 direction (c)).
 Priority: HIGH — this is the durable class-killer behind three consecutive

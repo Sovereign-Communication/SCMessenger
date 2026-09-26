@@ -3,6 +3,14 @@ Type: BLOCKED
 
 # BLOCKED -- AWS container swap at e97c3f82 needs node root (operator action required)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Blocker (verified, not inferred)
 The scm-node container on i-0b735c4f26aea42ed (54.235.20.24) cannot be
 replaced from the Freebuff harness because docker on the node requires root

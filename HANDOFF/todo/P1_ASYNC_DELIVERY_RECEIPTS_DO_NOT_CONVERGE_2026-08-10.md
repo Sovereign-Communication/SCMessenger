@@ -1,5 +1,15 @@
 # P1 -- async delivery receipts never converge; sender stays `pending` forever
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: FIXED -- dispositioned 2026-08-24 against main ceabdbd4
 Disposition: the receipt branch in IronCore::receive_message now calls
 `mark_message_sent(receipt.message_id)` (iron_core.rs:3533) gated on

@@ -1,5 +1,15 @@
 # P2 -- Restore UPnP port mapping once libp2p-upnp 0.7.0 is published
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Blocked on upstream release
 Severity: P2 (optimization; NOT a v0.4.0 blocker)
 Filed: 2026-08-09 (Windows/Claude lane, operator-requested)

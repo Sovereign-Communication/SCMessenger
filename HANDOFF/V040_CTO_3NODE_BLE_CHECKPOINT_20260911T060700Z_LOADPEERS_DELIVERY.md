@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T06:07Z loadPeers + delivery matrix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Seat: CTO (Pixel passive-only; Windows/AWS actively driven)
 Evidence:
 - `tmp/cto/LOGPULL_20260911T060118Z/`

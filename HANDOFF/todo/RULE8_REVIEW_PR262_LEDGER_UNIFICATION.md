@@ -1,5 +1,13 @@
 # Rule-8 adversarial review -- PR #262 (ledger unification) and #263 (routing feed)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: CLOSED 2026-09-13 -- verdict WAS delivered pre-merge; this ticket was
    never updated (see closure record at the end)
 Priority: resolved (was: P0 -- neither #262 nor #263 can merge without a recorded APPROVE)

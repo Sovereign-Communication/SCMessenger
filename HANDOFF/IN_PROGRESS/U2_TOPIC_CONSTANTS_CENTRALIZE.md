@@ -1,5 +1,15 @@
 # TASK: U2 — Topic Constants Centralization
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: READY FOR QWE DELEGATION
 Owner: Qwen (mechanical refactoring)
 Scope: Unification U2 (prerequisite for F0 delivery-truth fixes)

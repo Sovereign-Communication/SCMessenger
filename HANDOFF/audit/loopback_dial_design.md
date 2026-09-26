@@ -1,5 +1,15 @@
 # Loopback Dial Design for Wi-Fi Aware
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Problem
 Wi-Fi Aware transport on Android uses loopback address (127.0.0.1) for proxy, but the address filter rejects it for `NetworkMode::Local`, breaking the transport. The security tests require loopback to be rejected in all modes, but this is a special case that should be allowed.
 

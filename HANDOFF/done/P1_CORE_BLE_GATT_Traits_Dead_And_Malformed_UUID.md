@@ -1,5 +1,13 @@
 # TASK: P1-CORE-BLE-GATT  `GattServer`/`GattClient` traits have zero implementations (CORE_SWEEP_03) + malformed `GATT_SERVICE_UUID`
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Tier:** [SONNET] (a delete-with-decision or a wire-up; the design call is small and mechanical once the direction is picked).
 **Gates:** [AUDIT-GATE] (touches `core/src/transport/ble/`).
 

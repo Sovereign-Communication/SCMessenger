@@ -1,5 +1,13 @@
 # Farm-Sim Infrastructure Redesign - Micro-Instance Architecture
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** Planning Phase  
 **Date:** 2026-07-18  
 **Objective:** Replace single large instance with flexible micro-instance topology for dynamic network testing

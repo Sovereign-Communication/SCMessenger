@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - TRANSPORT AVAILABILITY VERIFICATION (all three paths, passive logs)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `TRANSPORT_VERIFY` (pre-test verification; NOT a three-node completion stage)

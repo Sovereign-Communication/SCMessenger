@@ -1,5 +1,13 @@
 # GPT HANDOFF -- iOS parity lane (Mac-only work)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR KICKOFF
 Created: 2026-07-28 (orchestrator takeover audit)
 Executor: GPT-5.6 Sol session on the operator's MacBook

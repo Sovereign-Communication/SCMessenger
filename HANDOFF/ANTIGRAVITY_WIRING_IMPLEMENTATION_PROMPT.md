@@ -1,5 +1,13 @@
 # Antigravity Prompt — Implement All SCMessenger Wiring Tasks (Gemini 3 Flash)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 You are implementing the full wiring backlog for SCMessenger. Be aggressive, systematic, and honest. Do not hand-wave. Ship real wiring, real tests, real verification.
 
 ## Mission

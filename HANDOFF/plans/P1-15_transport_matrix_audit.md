@@ -1,5 +1,15 @@
 # P1-15 — Transport-Matrix Ground-Truth Audit
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Task:** P1-15 [OPUS+] from `HANDOFF/V1_0_0_EXECUTION_PLAN.md` Section 2 (Stage D).
 **Type:** READ-ONLY audit. No code changed. No `crypto-security-auditor` gate (read-only, per plan).
 **Date:** 2026-07-04

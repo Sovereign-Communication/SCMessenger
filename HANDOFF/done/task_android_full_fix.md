@@ -1,5 +1,13 @@
 # Agent Task: Complete Android Build Fix (Full Implementation Only)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Delegated To:** rust-coder (glm-5.1:cloud)
 **Priority:** P0  Blocking APK build
 **Depends On:** Phase 1A compilation baseline (passing)

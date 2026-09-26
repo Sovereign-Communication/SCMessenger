@@ -1,5 +1,15 @@
 # WINDOWS -> GPT: bounded task -- iOS log capture for a live both-directions regression
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN, BOUNDED. Authorized by the operator as a small-scope GPT task.
 **Model tier: GPT-5.4 mini (or equivalent small).** This is log retrieval,
 sanitization and a push. It does NOT need Sol Ultra. Please delegate it down --

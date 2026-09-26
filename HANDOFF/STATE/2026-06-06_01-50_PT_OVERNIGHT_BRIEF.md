@@ -1,5 +1,15 @@
 # OVERNIGHT BRIEF — 2026-06-06 (LOCAL ONLY)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Duration:** 2026-06-06 01:50 PT → 2026-06-06 08:00 PT (~6 hours)
 **Mode:** BURN THE NIGHT. No cloud. No quota. Just local Ollama.
 **Operator:** Lucas sleeping. Hermes orchestrates. Subagent workers execute.

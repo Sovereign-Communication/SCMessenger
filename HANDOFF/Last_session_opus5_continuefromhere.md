@@ -1,3 +1,12 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
 
 Review came back PASS — the fourth adversarial review clears 22b921ca. Only one LOW finding (defence-in-depth on DiscoveryDial). But Rust Lint failing takes priority — my local clippy passed, so CI must run something broader.
 

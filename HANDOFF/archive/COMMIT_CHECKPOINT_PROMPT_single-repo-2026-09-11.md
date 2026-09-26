@@ -1,5 +1,13 @@
 # Fresh-Session Commit Checkpoint Prompt
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: PASTE INTO A NEW SESSION. Self-contained; the session needs no prior
 context.
 Purpose: get everything currently uncommitted committed and tracked, so a board

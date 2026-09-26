@@ -1,5 +1,13 @@
 # Design Plan: Identity State Regression and Recovery
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 [INFO] This plan addresses the latent state machine bug where the Android client's identity state cannot regress from `Ready` to `Uninitialized` (or `None`) when the identity is deleted, wiped, or uninitialized.
 
 ---

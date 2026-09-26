@@ -1,5 +1,15 @@
 # HEAVY_LIFT_LIBP2P_UPGRADE_001
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** VERIFIED REMAINING WORK  BLOCKED by breaking API changes
 **Agent:** rust-coder (glm-5.1:cloud) + architect-planner (deepseek-v4-pro:cloud)
 **Budget:** 5400s+ (HEAVY-LIFT tier, requires Tier 1 window)

@@ -1,5 +1,13 @@
 # Board of Directors (BoD) State — Live Governance Ledger
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-09-11
 Entry point: `/bod` (Codebuff/Freebuff: `/skill:bod`)

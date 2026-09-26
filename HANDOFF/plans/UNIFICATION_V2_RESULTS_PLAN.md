@@ -1,5 +1,13 @@
 # SCMessenger Unification V2 — Results / Intent Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **ACTIVE — mint 2026-08-26 (build mode)**
 Owner: Operator (Treystu) — approved single-list sort + identity fail-closed
 Supersedes for UI taxonomy: two-section `discovered vs Shared` introduced late 2026-08-25 in `DashboardScreen.kt` / `PeerListScreen.kt`. Subsidiary to `SHIP_PLAN.md` D1-D7, `docs/UNIFIED_GLOBAL_APP_PLAN.md`, and `GAP_AUDIT_REMEDIATION_PLAN.md`.

@@ -1,5 +1,13 @@
 # Wave-1 fleet deploy notes (orchestrator)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Authority: `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
 Rule: CI artifacts only; binaries under `tmp/radio-<sha>/`, never `target/`.
 Disk: prefer artifacts; `python scripts/disk_budget.py` before downloads.

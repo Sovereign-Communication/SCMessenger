@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - D1 custody fix live + Android bootstrap deadlock (D3/D4) characterized
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `D1_LIVE_CUTOVER` (code-level milestone; NOT a three-node completion stage)

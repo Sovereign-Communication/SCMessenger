@@ -1,5 +1,13 @@
 # TASK: Fix 2 Swift compile errors breaking the iOS CI build
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR DELEGATION (Qwen CODER, diff mode)
 Scope: EXACTLY two files, surgical fixes only. Do not reformat, do not fix
 lint violations, do not touch anything else.

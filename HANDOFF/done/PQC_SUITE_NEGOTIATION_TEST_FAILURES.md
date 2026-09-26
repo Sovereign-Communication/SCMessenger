@@ -1,5 +1,13 @@
 # TASK: Diagnose why 3 integration_pq_session tests get V1 envelope instead of V2
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: read-only diagnosis first, no fix yet - need root cause before touching
 anything (this is core/src/crypto/ - mandatory adversarial review on any fix).
 

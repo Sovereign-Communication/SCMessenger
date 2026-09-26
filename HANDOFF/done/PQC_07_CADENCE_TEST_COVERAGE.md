@@ -1,5 +1,13 @@
 # TASK: Add test coverage for the PQ ratchet cadence (message-100 trigger)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO. Follow-up to `PQC_07_WIRE_RATCHET_STEP` (landed, committed) --
 the wiring itself is real and existing tests still pass, but nothing
 exercises the new cadence path: `encrypt_message_ratcheted` in

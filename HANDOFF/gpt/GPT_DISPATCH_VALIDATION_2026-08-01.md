@@ -1,4 +1,13 @@
 # GPT HANDOFF -- Dispatch Plan Validation & Complex Task Assistance
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** ACTIVE REQUEST
 **Created:** 2026-08-01
 **Executor:** GPT-5.6 Luna (Mac lane / separate computer with repo access)

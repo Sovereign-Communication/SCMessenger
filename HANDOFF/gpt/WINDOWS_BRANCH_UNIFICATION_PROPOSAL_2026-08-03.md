@@ -1,5 +1,15 @@
 # Windows -> GPT: branch unification proposal (needs your agreement)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: PROPOSAL -- no branch will be deleted until you agree
 Date: 2026-08-03
 Tier: **GPT-5.4 mini** is enough. This is a process agreement, not design work.

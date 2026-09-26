@@ -2,6 +2,14 @@ VERIFIED FIXED as of 2026-07-03  see commit 87d1ef61 (fix(android): FAB reappear
 
 # TASK: Android Crash  Need User Reproduction Steps to Diagnose
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Agent Role
 Agent 4: Android Crash Investigation (depends on user repro)
 

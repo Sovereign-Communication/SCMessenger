@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T20:20Z WiFi-off test (7 min window)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Evidence: `tmp/cto/LOGPULL_WIFIOFF_20260911T201606Z/`
 APK on device lastUpdateTime **10:07:30 local** (20:07:30Z)
 

@@ -1,5 +1,15 @@
 # MASTER AUDIT REPORT  V-Gate Clearance
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Auditor:** Tier 1 Auditor (deepseek-v4-pro:cloud)
 **Date:** 2026-05-13
 **Task File:** `HANDOFF/todo/task_000_MASTER_AUDIT.md`

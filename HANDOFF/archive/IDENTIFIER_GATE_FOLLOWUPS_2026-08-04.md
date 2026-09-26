@@ -1,5 +1,15 @@
 # IDENTIFIER GATE FOLLOW-UPS (from Phase 0b adversarial review)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN -- created 2026-08-04/05 from
 HANDOFF/review/PHASE0B_MSGREQ_GATE_REVIEW_QWENPAID_2026-08-04.md.
 Deadline: before v0.4.0 tag. Tier: THINK/MAX work via qwenpaid unless noted.

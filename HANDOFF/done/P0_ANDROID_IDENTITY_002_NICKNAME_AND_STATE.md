@@ -1,5 +1,13 @@
 # P0_ANDROID_IDENTITY_002: Missing Nickname + State Flicker Fixes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** PENDING
 **Priority:** P0 (CRITICAL)
 **Estimated LoC Impact:** ~60 lines changed across 4 files

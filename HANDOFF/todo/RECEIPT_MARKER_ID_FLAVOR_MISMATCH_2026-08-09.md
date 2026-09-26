@@ -1,5 +1,15 @@
 # Receipt/convergence markers are discarded as marker_not_locally_tracked -- outbox never dequeues
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active
 Severity: P0 (delivery truth -- successful deliveries are re-sent up to 12 times)
 Discovered: 2026-08-09, Windows lane, live node run at anchor `49bc3f56`

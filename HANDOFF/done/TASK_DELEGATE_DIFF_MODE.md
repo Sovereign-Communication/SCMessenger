@@ -1,5 +1,15 @@
 # TASK: Add --mode diff to scripts/delegate_task.py
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Full-file round-trips waste most of the token budget when the change is
 small. Add an opt-in unified-diff mode to `scripts/delegate_task.py`.
 

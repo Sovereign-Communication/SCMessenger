@@ -1,5 +1,15 @@
 # _QUEUE -- Dispatch Order for the Full v1.0.0 Backlog
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## >> ACTIVE DISPATCH (2026-08-31) -- v0.4.0
 
 The v0.4.0 implementation queue lives in **`HANDOFF/freebuff/`** -- see its

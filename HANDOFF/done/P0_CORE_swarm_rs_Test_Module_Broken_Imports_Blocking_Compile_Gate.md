@@ -1,5 +1,13 @@
 # TASK: P0-CORE-SWARM-TEST-IMPORTS  `core/src/transport/swarm.rs` test module fails to compile (5 errors), blocks `cargo test --workspace --no-run`
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Source
 
 Found by ground-truth `cargo test --workspace --no-run` run in

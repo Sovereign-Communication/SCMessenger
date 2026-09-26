@@ -1,5 +1,13 @@
 # TASK: Fix findings from PQC-09/10 adversarial security review
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO. Do NOT start until core message-delivery validation (current
 session priority) is done and the operator says to return to PQC work.
 Onion routing is not yet wired into any live path (`prepare_onion_message`

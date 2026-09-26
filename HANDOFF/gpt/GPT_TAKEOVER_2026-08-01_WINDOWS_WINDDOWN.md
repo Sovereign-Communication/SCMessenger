@@ -1,5 +1,13 @@
 # GPT TAKEOVER -- Windows lane wind-down 2026-08-01
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: ACTIVE HANDOFF -- Windows Claude at API limit, GPT to continue
 Author: Windows Claude (orchestrator)
 Scope: everything discovered and changed this session, and what to do next

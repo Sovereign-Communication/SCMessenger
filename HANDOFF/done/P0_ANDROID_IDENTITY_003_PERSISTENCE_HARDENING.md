@@ -1,5 +1,13 @@
 # P0_ANDROID_IDENTITY_003: Identity Persistence Hardening
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** COMPLETED
 **Priority:** P1 (HIGH)
 **Estimated LoC Impact:** ~30 lines changed across 2 files

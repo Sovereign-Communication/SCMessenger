@@ -1,5 +1,13 @@
 # V040 beach-join continuation -- finish current mission, then execute the beach-join plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN (filed 2026-09-05, operator directive)
 Priority: P0 -- this is the operator's stated path to stranger-ready sharing
 Lane: Freebuff / DeepSeek V4 Flash (or any unmetered model)

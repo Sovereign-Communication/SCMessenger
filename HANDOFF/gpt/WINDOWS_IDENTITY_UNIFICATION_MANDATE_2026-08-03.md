@@ -1,5 +1,13 @@
 # Windows -> GPT: identity unification is now the blocking defect. Live crypto failures.
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: BLOCKING -- the matrix cannot pass until this is decided and implemented
 Date: 2026-08-03
 Tier: **GPT-5.6 Sol Ultra.** This is a cross-platform protocol decision with a

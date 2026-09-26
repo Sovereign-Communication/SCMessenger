@@ -1,5 +1,13 @@
 # TASK: Execute Phase 2 & 3 Testing on AWS Instance
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR OPUS (on instance)
 Owner: Opus (testing orchestration on AWS instance)
 Instance: 32.197.246.78

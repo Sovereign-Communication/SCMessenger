@@ -1,5 +1,15 @@
 # BATCH: AND-DELIVERY-001 — Fix Delivery State Tracking (msg=unknown)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Node:** triage-router
 **Model:** `gemini-3-flash-preview:cloud`
 **Fallback:** `deepseek-v4-flash:cloud`

@@ -1,5 +1,13 @@
 # V040-BJ-P01 — Beach-join Phase 0-1 (operator pull-forward)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN (filed 2026-09-20)
 Priority: P1 Wave 1 -- operator multi-select pulled Phase 0-1 forward
 Lane: Freebuff

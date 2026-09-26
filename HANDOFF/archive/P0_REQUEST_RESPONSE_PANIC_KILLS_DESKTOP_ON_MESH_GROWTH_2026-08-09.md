@@ -1,5 +1,13 @@
 # P0 -- desktop node dies from a libp2p-request-response assertion when the mesh grows
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P0 (blocks the five-node run; the Windows node cannot survive the fleet assembling)
 Discovered: 2026-08-09, live on the candidate during the post-UPnP soak

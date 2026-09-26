@@ -1,5 +1,13 @@
 # CEO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CEO command added)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)

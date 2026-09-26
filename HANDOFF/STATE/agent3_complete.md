@@ -1,5 +1,13 @@
 # Agent 3 — Desktop CI Workflow & Build Scripts
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Summary
 
 Created/updated 4 files for SCMessenger KMP desktop CI and local builds.

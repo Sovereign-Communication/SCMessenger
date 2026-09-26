@@ -1,5 +1,13 @@
 # Master Architectural Specification & Implementation Plan: 7-Topology Mesh Routing Engine
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Executive Overview & Scope
 
 SCMessenger is a sovereign, decentralized mesh messaging platform designed to operate seamlessly across **all 7 real-world network topologies**—from off-grid isolated LANs and multi-homed workstations to mobile roaming, carrier NATs (CGNAT), hybrid cloud relay bridges, physical BLE sneakernets, and strict enterprise firewalls.

@@ -1,5 +1,15 @@
 # Phase 1A: Compilation Baseline
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Priority:** P0
 **Assigned Agent:** rust-coder (glm-5.1:cloud)
 **Fallback:** implementer (qwen3-coder-next:cloud)

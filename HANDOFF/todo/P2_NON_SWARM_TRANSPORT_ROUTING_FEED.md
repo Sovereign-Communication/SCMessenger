@@ -1,5 +1,15 @@
 # P2 — Non-swarm transports (BLE / WiFiAware) establish connections without feeding the routing engine
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 - **Priority:** P2
 - **Filed:** 2026-09-13, Buffy (Freebuff recovery session)
 - **Origin:** Blind B condition C2 of the T4 disposition

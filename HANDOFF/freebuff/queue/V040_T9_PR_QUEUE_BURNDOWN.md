@@ -1,5 +1,15 @@
 # V040-T9 -- Burn the PR queue down from 29 to under 10
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN (filed 2026-08-31, CEO delegation)
 Priority: P2 -- blocks nothing, but 29 open PRs is where real work goes to hide
 Lane: Freebuff / DeepSeek V4 Flash

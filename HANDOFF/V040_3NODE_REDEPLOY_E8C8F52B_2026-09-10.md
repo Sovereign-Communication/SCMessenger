@@ -1,5 +1,13 @@
 # V040 3-node redeploy — candidate e8c8f52b — all lanes available
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 UTC: 2026-09-10 ~19:14–19:33Z
 Candidate: `unified/v040-3node-parity` @ `e8c8f52b`
 PR: https://github.com/Sovereign-Communication/SCMessenger/pull/281

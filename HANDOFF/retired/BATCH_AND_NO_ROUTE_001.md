@@ -1,5 +1,15 @@
 # BATCH: AND-NO-ROUTE-001 — Add Fallback Route Candidates + Diagnostic Logging
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Node:** implementer
 **Model:** `qwen3-coder-next:cloud`
 **Fallback:** `glm-5.1:cloud`

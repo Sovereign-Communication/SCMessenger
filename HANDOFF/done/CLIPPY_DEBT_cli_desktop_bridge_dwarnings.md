@@ -1,5 +1,13 @@
 # TASK: Pre-existing clippy -D warnings debt in scmessenger-cli + desktop-bridge
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P2 (build-gate hygiene; NOT a Phase 1 Windows/Android blocker)
 **Discovered:** 2026-07-07, when NEXT_ITER_01 fixed core's dead-code and the
 `cargo clippy --workspace -- -D warnings` gate advanced past core to surface

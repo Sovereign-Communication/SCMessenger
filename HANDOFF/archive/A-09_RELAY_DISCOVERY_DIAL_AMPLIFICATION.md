@@ -1,5 +1,15 @@
 # A-09: Relay-discovery dial amplification + unauthenticated peer injection
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN -- HIGH (DoS) -- pre-existing, partially mitigated 2026-07-17.
 Additional partial mitigation 2026-07-19 (commit 36635cb0, mislabeled "(A-09) [OK]"
 in its commit message -- it is NOT closed): added `is_dialable_multiaddr` filter to

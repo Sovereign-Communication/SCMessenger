@@ -1,5 +1,15 @@
 # P1-19: Phase 1 Exit Review
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** Awaiting Operator Sign-Off
 **Priority:** P0 (Blocks transition to Phase 2)
 **Date:** 2026-07-10

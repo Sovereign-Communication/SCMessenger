@@ -1,5 +1,15 @@
 # Phase 4: Documentation & Polish
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Priority:** P2
 **Assigned Agent:** worker (gemma4:31b:cloud)
 **Fallback:** triage-router (gemini-3-flash-preview:cloud)

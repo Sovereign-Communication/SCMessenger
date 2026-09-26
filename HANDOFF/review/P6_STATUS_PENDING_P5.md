@@ -1,5 +1,15 @@
 # P6: FFI Snapshot Drift Fix - Status (Conditional on P5)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Task:** Regenerate FFI snapshots if P5 (D-05 unwrap/panic hardening) changes UDL  
 **Status:** BLOCKED - Waiting for P5 Completion  
 **Date:** 2026-07-22

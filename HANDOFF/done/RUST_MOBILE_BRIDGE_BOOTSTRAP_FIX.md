@@ -1,5 +1,15 @@
 # Fix Rust Core: mobile_bridge.rs bootstrap_addrs compilation errors
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Problem
 The `bootstrap_addrs` field was removed from the `MeshService` struct, but 9 references remain in methods and tests, causing `cargo check --workspace` to fail with `error[E0609]: no field 'bootstrap_addrs'`.
 

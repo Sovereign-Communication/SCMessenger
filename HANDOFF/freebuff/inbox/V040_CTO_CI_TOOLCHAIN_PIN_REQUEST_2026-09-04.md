@@ -1,5 +1,15 @@
 # CTO Lane Request — Pin cargo-deny in ci.yml Lint job (repo-wide Lint blocker)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04 ~05:25Z (merge-execution seat)
 
 ## The blocker

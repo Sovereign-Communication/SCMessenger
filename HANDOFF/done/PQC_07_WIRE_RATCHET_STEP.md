@@ -1,5 +1,13 @@
 # TASK: Wire PQ ratchet step + incoming PQ fields into the live encrypt/decrypt path
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO -- HIGH PRIORITY, [AUDIT-GATE]. Confirmed via adversarial
 review (`HANDOFF/review/PQC_05_06_07_ADVERSARIAL_REVIEW.md`, CRITICAL
 finding). `RatchetSession::perform_pq_ratchet_step()` and

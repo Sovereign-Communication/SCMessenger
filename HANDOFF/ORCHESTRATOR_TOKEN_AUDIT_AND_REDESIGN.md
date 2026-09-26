@@ -1,4 +1,13 @@
 # Orchestrator Token Usage Audit & Strict Redesign
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-08-03
 **Scope:** Hermes (minimax orchestrator), recent Claude Code sessions, SCMessenger v0.4.0 Qwen dispatch
 **Goal:** Pure delegator architecture with zero context waste on coordinator

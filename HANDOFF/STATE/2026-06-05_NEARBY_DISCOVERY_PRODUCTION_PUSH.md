@@ -1,5 +1,13 @@
 # STATE: Nearby Discovery → Production-Code Push
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-05
 **Owner:** Lucas Ballek (Overseer)
 **Goal:** Bring Android codebase to "perfect / production-quality" so Lucas can manually upload to Google Play (Play Console already configured, just needs the code).

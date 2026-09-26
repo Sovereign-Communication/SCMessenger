@@ -1,5 +1,13 @@
 # API-Reset Execution Charter -- 2026-08-28
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Author: CEO seat (Claude), shadow audit at operator request
 Authority: Executes `SHIP_PLAN.md` D1-D7. Supersedes nothing. Amends SHIP_PLAN

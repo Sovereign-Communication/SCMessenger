@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T22:19Z 3-node with emulator (full drive)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Evidence: `tmp/cto/LOGPULL_3NODE_EMU_20260911T221938Z/`
 APK: `b96e7103` (CELL-ROUTE-AWS-001d) on **emulator-5554**
 Pixel: standing down (not in adb this pull; was `SXDttuet` on Windows peers earlier)

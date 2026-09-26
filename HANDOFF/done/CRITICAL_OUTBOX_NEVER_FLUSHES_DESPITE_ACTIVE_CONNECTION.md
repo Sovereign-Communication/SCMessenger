@@ -1,5 +1,13 @@
 # TASK [CRITICAL]: Outbox-queued messages never get delivered even with an active direct connection
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO. Found 2026-07-12 during the first-ever successful live
 Windows-CLI<->Android-emulator connection test this session. This is
 arguably the most important finding of the whole session - it's the actual

@@ -1,5 +1,15 @@
 # CI is RED on main -- discovered 2026-07-20, appears to have been red all day unnoticed
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: RESOLVED -- fixes committed, pending push + CI confirmation
 Filed: 2026-07-20 (native session, live GitHub Actions check -- not from any HANDOFF doc)
 Owner: any orchestrator with shell + GitHub access

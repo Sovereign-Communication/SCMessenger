@@ -1,3 +1,11 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md
 Type: DONE
 Milestone: M6 FINAL (DIM-G + whole-pass triage)
