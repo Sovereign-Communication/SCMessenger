@@ -586,6 +586,25 @@ impl ContactManager {
     /// predicate. Roughly half of all 32-byte values pass curve decompression,
     /// so shape never decides whether a value is the right key for a peer --
     /// that is decided where a key is used, in `IronCore::prepare_message`.
+    ///
+    /// NOT a duplicate of `store::ledger_entry::canonical_ledger_peer_id`, and
+    /// the two must not be merged. The derivation both need -- base58 libp2p
+    /// PeerId to canonical key hex -- is already single-owner in
+    /// `public_key_hex_from_libp2p_peer_id`, which this function calls. What
+    /// differs is step 1, a supplied key that does NOT re-derive the peer id.
+    ///
+    /// Here it IS the identity: a contact may be added under an arbitrary
+    /// add-time label, and a valid 64-hex key is then the contact's canonical
+    /// identity. That is the "V2 canonicalization" contract, pinned by
+    /// `lookup_by_public_key_resolves_peer_keyed_contact`.
+    ///
+    /// The ledger and outbox refuse the same input on purpose: they map
+    /// spellings of THE SAME key material, and a key that does not re-derive
+    /// the peer id is not a spelling of it (`store::outbox::canonical_peer_key`
+    /// says so in its own doc). Folding one into the other breaks a pinned
+    /// contract in one direction or the other;
+    /// `contact_and_ledger_canonicalization_agree_except_where_the_contract_differs`
+    /// holds the line.
     fn canonical_contact_key(&self, peer_id: &str, public_key: &str) -> Option<String> {
         let peer_id = peer_id.trim();
         if peer_id.is_empty() {
@@ -1281,6 +1300,66 @@ mod tests {
             &peer_id,
             &stored.public_key
         ));
+    }
+
+    /// WP1: the contacts store's canonicalization is not the ledger's, and the
+    /// difference is a pinned contract rather than drift. This test holds that
+    /// boundary: it asserts the two owners agree everywhere they answer the
+    /// same question, and asserts the one input class where they must NOT.
+    ///
+    /// The shared derivation is already single-owner -- both delegate to
+    /// `ledger_entry::public_key_hex_from_libp2p_peer_id`. The deliberate
+    /// difference is a supplied key that does not re-derive the peer id: the
+    /// contacts store treats a valid 64-hex key as the identity even under an
+    /// arbitrary add-time label ("V2 canonicalization",
+    /// `lookup_by_public_key_resolves_peer_keyed_contact`), while the ledger
+    /// and outbox refuse it because it is not a spelling of the same key
+    /// material. Merging the two would break one contract or the other, so this
+    /// test exists to stop the difference being closed by accident.
+    #[test]
+    fn contact_and_ledger_canonicalization_agree_except_where_the_contract_differs() {
+        let mgr = make_manager();
+        let ledger = crate::store::ledger_entry::canonical_ledger_peer_id;
+
+        // (1) WHERE THEY AGREE: a real self-certifying peer id, with a key hint
+        // and without one (the read path holds no key). This is the case both
+        // stores meet in production, and the one that must never drift.
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-owner-agree");
+        assert_eq!(
+            mgr.canonical_contact_key(&peer_id, &key_hex),
+            ledger(&peer_id, Some(key_hex.as_str())),
+            "a self-certifying peer id must canonicalize identically in both owners"
+        );
+        assert_eq!(
+            mgr.canonical_contact_key(&peer_id, ""),
+            ledger(&peer_id, None),
+            "the read path asks with no key hint and must get the same answer"
+        );
+
+        // (2) WHERE THEY MUST DIFFER: an arbitrary add-time label carrying a
+        // valid 64-hex key that does not re-derive that label.
+        let label = "arbitrary-add-time-label";
+        let some_key = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        assert_eq!(
+            mgr.canonical_contact_key(label, some_key),
+            Some(some_key.to_string()),
+            "V2 canonicalization: a valid 64-hex key IS the contact identity"
+        );
+        assert_eq!(
+            ledger(label, Some(some_key)),
+            None,
+            "the ledger owner maps spellings of the same key only, so it refuses"
+        );
+
+        // The behaviour that difference produces, asserted rather than assumed:
+        // the contact really is filed under the key and reachable by it.
+        mgr.add(Contact::new(label.to_string(), some_key.to_string()))
+            .unwrap();
+        let stored = mgr
+            .get(some_key.to_string())
+            .unwrap()
+            .expect("the row is filed under the supplied key");
+        assert_eq!(stored.peer_id, some_key);
     }
 
     /// WP1.1: recovery of a history peer with no derivable key stores a
