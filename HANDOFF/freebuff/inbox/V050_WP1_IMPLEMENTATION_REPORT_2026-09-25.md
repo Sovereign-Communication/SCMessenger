@@ -10,6 +10,14 @@ lane contract, `UNVERIFIED-JEV` is not DONE. This is a stop condition, not a
 ranking. **The green CI run does not soften it** — see Blocker 1.
 **Delivery state:** branch `freebuff/wp1-identity-unification`, commit
 `c0a12149`, pushed, PR #383 OPEN and green. Not merged.
+**WP1.4 ghost-topic guard (2026-09-26):** the own-topic acceptance is now
+asserted behaviourally -- `own_topic_subscribe_is_registered_on_the_running_node`
+starts a real node and reads `SwarmHandle::get_topics`, with a control proving
+the observable discriminates -- so deleting the startup own-topic subscribe in
+`core/src/transport/swarm.rs` fails it. Compiled and executed by CI on PR #383,
+NOT locally: `scripts/disk_budget.py` returned BLOCKED (exit 2) at 1.4 GB free,
+so the local suite never ran against this test. The Rule-8 gated file was not
+edited.
 
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger

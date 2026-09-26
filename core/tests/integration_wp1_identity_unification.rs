@@ -4,22 +4,36 @@
 //! write helper. These tests pin the write-side invariants that WP1 closed, so a
 //! future change that reopens them fails here rather than in a live send.
 //!
-//! Scope note: `is_ghost_peer_topic` and the own-topic subscribe are private to
-//! `core/src/transport/swarm.rs`, which is a Rule-8 gated directory. These tests
-//! therefore assert the observable seam those paths depend on --
-//! `extract_ed25519_public_key_from_peer_id` and the topic string shape -- and
-//! not the private control flow. A private-function unit test inside
-//! `swarm.rs` would require the Rule-8 adversarial review this change is not
-//! claiming.
+//! Scope note: `is_ghost_peer_topic` is private to `core/src/transport/swarm.rs`,
+//! a Rule-8 gated directory, and is not exercised directly here -- a
+//! private-function unit test inside `swarm.rs` would require the Rule-8
+//! adversarial review this change is not claiming.
+//!
+//! The own-topic SUBSCRIBE, by contrast, IS observable without touching that
+//! file: `SwarmHandle::get_topics` returns the event loop's live subscription
+//! set, and the startup own-topic subscribe inserts into exactly that set.
+//! WP1.4's acceptance is that the test fails if the subscribe is removed, and
+//! only a test that starts a node and asks it what it is subscribed to can
+//! meet that bar. Asserting the topic string shape cannot: it passes with the
+//! `gossipsub.subscribe` call deleted, which is the omission this file used to
+//! document rather than close.
 //!
 //! Run with:
 //!   cargo test -p scmessenger-core --test integration_wp1_identity_unification
 
+use libp2p::identity::Keypair;
 use scmessenger_core::store::ledger_entry::{
     is_self_certifying_binding, peer_id_from_public_key_hex, public_key_hex_from_libp2p_peer_id,
 };
-use scmessenger_core::transport::swarm::extract_ed25519_public_key_from_peer_id;
+use scmessenger_core::transport::swarm::{
+    default_routing_engine_handle, extract_ed25519_public_key_from_peer_id, start_swarm,
+    SwarmHandle,
+};
 use scmessenger_core::{IronCore, MessageType};
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+use tokio::sync::mpsc;
 
 /// Build a real self-certifying (peer id, key hex) pair.
 fn self_certifying_peer(seed_tag: &[u8]) -> (libp2p::PeerId, String) {
@@ -207,6 +221,11 @@ fn key_hex_uses_only_one_case_on_disk() {
 // WP1.4 -- own-topic addressing is derived from the local identity
 // ============================================================================
 
+// This is the PRECONDITION, not the WP1.4 acceptance. It pins where the own
+// topic's hex comes from. It cannot observe whether a subscribe happened, so
+// it still passes if the subscribe is deleted -- see
+// `own_topic_subscribe_is_registered_on_the_running_node` for the test that
+// does.
 #[test]
 fn own_peer_topic_hex_is_the_local_ed25519_key() {
     // Both event loops (native and wasm) build the own topic from exactly this
@@ -230,6 +249,94 @@ fn own_peer_topic_hex_is_the_local_ed25519_key() {
         .trim_end_matches("/v1");
     assert_eq!(hex_part, key_hex);
     assert!(is_self_certifying_binding(&peer_id.to_string(), hex_part));
+}
+
+/// WP1.4 ACCEPTANCE. The test must fail if the own-topic subscribe is removed.
+///
+/// The subscribe under test is the startup one in `core/src/transport/swarm.rs`
+/// (the block that derives `own_peer_key_hex` from the local peer id, calls
+/// `gossipsub.subscribe`, and inserts the topic into the loop's
+/// `subscribed_topics` on success). Its `insert` is in the `Ok` arm, so
+/// deleting the subscribe deletes the entry, and the assertion below fails.
+///
+/// It is reached here entirely through the public API: `start_swarm` and
+/// `SwarmHandle::get_topics`. Nothing in the Rule-8 gated file is modified to
+/// observe it, which is why this can exist at all where a unit test on the
+/// private `is_ghost_peer_topic` could not.
+///
+/// Why the behaviour matters: senders publish to
+/// `/scmessenger/peer/<recipient-identity-hex>/v1`. A node that is not
+/// subscribed to its own topic receives nothing, and gossipsub `publish`
+/// succeeds with zero subscribers -- so the sender records a transport ACK and
+/// then waits forever for a receipt. That is the ghost-own-topic regression
+/// this pins shut.
+#[tokio::test]
+async fn own_topic_subscribe_is_registered_on_the_running_node() {
+    let dir = TempDir::new().expect("tempdir");
+    let core = Arc::new(IronCore::with_storage(
+        dir.path().to_string_lossy().to_string(),
+    ));
+
+    // Derive the expected own topic the same way the loop does: from the
+    // local peer id's inline Ed25519 key.
+    let keypair = Keypair::generate_ed25519();
+    let local_peer_id = libp2p::PeerId::from(keypair.public());
+    let key_hex = hex::encode(
+        extract_ed25519_public_key_from_peer_id(&local_peer_id)
+            .expect("a generated ed25519 keypair carries an inline public key"),
+    );
+    let own_topic = format!("/scmessenger/peer/{}/v1", key_hex);
+
+    let (event_tx, mut event_rx) = mpsc::channel(256);
+    let handle: SwarmHandle = start_swarm(
+        keypair,
+        None,
+        event_tx,
+        Some(Arc::downgrade(&core)),
+        false,
+        None,
+        default_routing_engine_handle(),
+    )
+    .await
+    .expect("failed to start swarm");
+
+    // Keep the event channel drained so the loop never blocks on a full queue.
+    let drain = tokio::spawn(async move {
+        while event_rx.recv().await.is_some() {}
+    });
+
+    let topics = tokio::time::timeout(Duration::from_secs(30), handle.get_topics())
+        .await
+        .expect("get_topics timed out: the event loop is not servicing commands")
+        .expect("get_topics returned an error");
+
+    // CONTROL. `get_topics` has to discriminate, or the assertion below proves
+    // nothing. A peer topic this node never subscribed to must be absent --
+    // the loop only seeds sc-lobby, sc-mesh, the delivery-convergence topic,
+    // and its own. If this control ever fails, the observable has gone
+    // vacuous and the real assertion below is no longer evidence.
+    let never_subscribed = format!("/scmessenger/peer/{}/v1", "ab".repeat(32));
+    assert_ne!(
+        never_subscribed, own_topic,
+        "the control topic must differ from the own topic"
+    );
+    assert!(
+        !topics.contains(&never_subscribed),
+        "CONTROL FAILED: get_topics() reports a topic nobody subscribed to, so \
+         presence proves nothing. topics={topics:?}"
+    );
+
+    assert!(
+        topics.contains(&own_topic),
+        "a node must be subscribed to its own peer topic or it receives nothing. \
+         Senders publish to /scmessenger/peer/<recipient-key>/v1 and gossipsub \
+         publish succeeds with zero subscribers, so the sender records a \
+         transport ACK and waits forever for a receipt. This node is not \
+         subscribed to {own_topic}. topics={topics:?}"
+    );
+
+    let _ = handle.shutdown().await;
+    drain.abort();
 }
 
 #[test]
