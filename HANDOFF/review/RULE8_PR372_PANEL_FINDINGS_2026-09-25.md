@@ -87,10 +87,13 @@ false.
 3. **Coverage shape:** the three named tests exercise the desync path, but not
    demonstrably all eight converted arms.
 
-## Evidence locations (this checkout, `tmp/`, not committed)
+## Evidence locations (committed, `HANDOFF/review/rule8-pr372/evidence/`)
 
-- `tmp/rule8-pr372/pack/prompt_d9_vendor.txt` (round 2 prompt, with corrections)
-- `tmp/rule8-pr372/pack/d9-vendor-delta.patch` (upstream -> vendored, 456 lines)
-- `tmp/rule8-pr372/pack/d9_panel_result.json`, `d9_panel_result_v2.json`
-- `tmp/rule8-pr372/source/vendor_handler_either_v2.rs` (the window reviewed)
-- `tmp/rule8-pr372/upstream/` (the verified pristine crate)
+Corrected 2026-09-26. These paths previously read `tmp/rule8-pr372/...` and did
+not resolve; the evidence was committed under the paths below. See
+`RULE8_PR372_STATUS_2026-09-26.md` section 4.
+
+- `HANDOFF/review/rule8-pr372/evidence/prompt_d9_vendor.txt` (round 2 prompt, with corrections)
+- `HANDOFF/review/rule8-pr372/evidence/d9-vendor-delta.patch` (upstream -> vendored, 456 lines)
+- `HANDOFF/review/rule8-pr372/evidence/d9_panel_result.json`, `d9_panel_result_v2.json`
+- `HANDOFF/review/rule8-pr372/evidence/vendor_handler_either_v2.rs` (the window reviewed)
