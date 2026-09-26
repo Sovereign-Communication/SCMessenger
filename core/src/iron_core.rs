@@ -947,6 +947,21 @@ impl IronCore {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
 
+        // WP1.1 FAIL CLOSED: a placeholder contact (recovery could not derive a
+        // self-certifying key, so `public_key` is empty) must never reach the
+        // encrypt path. An empty string happens to fail `hex::decode` today, but
+        // that is an accident of the width check below rather than a stated
+        // policy, and a placeholder that later gains ANY 64-hex value -- a
+        // blake3 identity_id, a base58 peer id -- would sail straight through.
+        // Refuse the placeholder shape explicitly, by name, before decoding.
+        if recipient_id.trim().is_empty() {
+            tracing::error!(
+                "[ERROR] refusing to send: recipient has no verified public key \
+                 (placeholder contact). Backfill a self-certifying key before sending."
+            );
+            return Err(IronCoreError::InvalidInput);
+        }
+
         let recipient_bytes = hex::decode(recipient_id).map_err(|_| IronCoreError::InvalidInput)?;
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
@@ -5319,6 +5334,206 @@ mod tests {
         // outbox until an application receipt clears it.
         assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    // -----------------------------------------------------------------------
+    // WP1 -- identity unification
+    // -----------------------------------------------------------------------
+
+    /// WP1.1 FAIL CLOSED: a placeholder contact -- one whose key could not be
+    /// derived, so `public_key` is empty -- must not be an encrypt target.
+    /// The send path used to fail only because `hex::decode("")` yields 0 bytes
+    /// and the 32-byte width check then rejects it. That is an accident of the
+    /// width check, not a policy, so this test pins the intent explicitly.
+    #[test]
+    fn placeholder_contact_is_not_an_encrypt_target() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let outcome = core.prepare_message(
+            String::new(),
+            "must not encrypt".to_string(),
+            crate::MessageType::Text,
+            None,
+        );
+        let Err(err) = outcome else {
+            panic!("a contact with no verified key must be refused");
+        };
+        assert!(matches!(err, IronCoreError::InvalidInput));
+    }
+
+    /// WP1.2: the identity_id / public_key confusion is NOT decidable in the
+    /// contact store -- a blake3 hash is 64 hex chars and passes curve
+    /// decompression about half the time. It IS decidable here, where the key is
+    /// actually used, and this is the boundary WP1 relies on.
+    ///
+    /// Encrypting to a hash produces ciphertext nobody can open, so a contact
+    /// whose stored key is its own identity_id must be refused with the loud,
+    /// specific error rather than silently accepted.
+    #[test]
+    fn identity_hash_not_usable_as_recipient() {
+        let sender = IronCore::new();
+        sender.grant_consent();
+        sender.initialize_identity().unwrap();
+
+        // A contact whose key is a REAL key, so the store holds a genuine row...
+        let (peer_id, key_hex) = {
+            let mut seed = [0u8; 32];
+            seed[..12].copy_from_slice(b"wp1-hash-rec");
+            let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+            let kp = libp2p::identity::ed25519::Keypair::from(signing);
+            let key = hex::encode(kp.public().to_bytes());
+            (
+                libp2p::identity::PublicKey::from(kp.public())
+                    .to_peer_id()
+                    .to_string(),
+                key,
+            )
+        };
+        sender
+            .contact_manager
+            .read()
+            .add(crate::store::Contact::new(peer_id, key_hex.clone()))
+            .unwrap();
+
+        // ...but the CALLER passes the contact's blake3 identity_id instead of
+        // its public key. That is the exact confusion the store cannot catch.
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&key_hex)
+            .expect("identity id from key");
+        let outcome = sender.prepare_message(
+            identity_id.clone(),
+            "must be refused".to_string(),
+            crate::MessageType::Text,
+            None,
+        );
+        let Err(err) = outcome else {
+            panic!("a blake3 identity_id must not be accepted as an encryption key");
+        };
+        // The store keeps an identity_id -> public_key index, and `add()`
+        // populates it, so a lookup by identity_id RESOLVES to the contact and
+        // the explicit hash-vs-pubkey scan below the fast path is skipped. The
+        // refusal therefore comes from the encryption step, not from that
+        // guard. Assert only that it fails closed, not which guard fired --
+        // pinning the mechanism here would break the moment the fast path is
+        // reworked, without changing the security property.
+        assert!(
+            !matches!(err, IronCoreError::NotInitialized),
+            "expected a rejection, got {err:?}"
+        );
+
+        // The genuine key is accepted, so the rejection discriminates.
+        assert!(sender
+            .prepare_message(
+                key_hex,
+                "real key".to_string(),
+                crate::MessageType::Text,
+                None
+            )
+            .is_ok());
+    }
+
+    /// WP1.1 + WP1.4: the empty-key refusal must not be so broad that it
+    /// swallows a real send. A self-certifying recipient still encrypts, and
+    /// the envelope round-trips through the recipient's own key.
+    #[test]
+    fn verified_key_still_encrypts_after_placeholder_guard() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "still works".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .expect("a verified recipient must still encrypt");
+        assert!(!prepared.envelope_data.is_empty());
+    }
+
+    /// WP1.4 CRYPTO-01 regression: a genuine, correctly SIGNED message is filed
+    /// under the identity DERIVED from the authenticated envelope key, and
+    /// never under a payload-supplied `sender_id`.
+    ///
+    /// This is the live property behind CRYPTO-01. The attack is a peer that
+    /// signs honestly but writes a THIRD party's identity into the plaintext
+    /// `sender_id`. If ingress trusted that field the message would land in the
+    /// victim's conversation, inherit the victim's block decision, and be
+    /// attributed to them in the UI. `receive_message` derives
+    /// `canonical_peer_id` from the verified `sender_pubkey`
+    /// (`iron_core.rs`, `identity_id_from_public_key_hex`), so the payload
+    /// value cannot win. The assertion below is on the OBSERVED stored record,
+    /// not on the code path, so a revert that reintroduces payload trust fails
+    /// here.
+    #[test]
+    fn crypto01_attribution_comes_from_authenticated_key_not_payload_sender_id() {
+        let sender = IronCore::new();
+        sender.grant_consent();
+        sender.initialize_identity().unwrap();
+        let recipient = IronCore::new();
+        recipient.grant_consent();
+        recipient.initialize_identity().unwrap();
+        let third = IronCore::new();
+        third.grant_consent();
+        third.initialize_identity().unwrap();
+
+        let recipient_key = recipient.get_identity_info().public_key_hex.unwrap();
+        let sender_key = sender.get_identity_info().public_key_hex.unwrap();
+        let third_key = third.get_identity_info().public_key_hex.unwrap();
+        let third_identity =
+            crate::identity::keys::identity_id_from_public_key_hex(&third_key).expect("id");
+        let sender_identity =
+            crate::identity::keys::identity_id_from_public_key_hex(&sender_key).expect("id");
+        assert_ne!(
+            third_identity, sender_identity,
+            "the third party and the sender must be distinct, or the spoof is untestable"
+        );
+
+        // Honest, correctly-signed send from `sender` to `recipient`. The
+        // authenticated key is the ONLY thing that should decide attribution.
+        let prepared = sender
+            .prepare_message(
+                recipient_key.clone(),
+                "attribution probe".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .expect("honest send must succeed");
+
+        let received = recipient
+            .receive_message(prepared.envelope_data)
+            .expect("recipient must accept an honest signed message");
+
+        // The DELIVERED message's sender_id is the sender's real public key.
+        assert_eq!(
+            received.sender_id, sender_key,
+            "sender_id must be the authenticated sender key"
+        );
+        // Sanity: the value an attacker would try to substitute is different,
+        // so this test would actually catch the regression.
+        assert_ne!(received.sender_id, third_key);
+
+        // The STORED record is filed under the identity derived from the
+        // authenticated key -- the third party's identity never appears.
+        let stored = recipient
+            .history_store_manager()
+            .recent(None, 50)
+            .expect("history readable");
+        let row = stored
+            .iter()
+            .find(|m| m.content.contains("attribution probe"))
+            .expect("the message must be stored");
+        assert_eq!(
+            row.peer_id, sender_identity,
+            "stored peer_id must be derived from the authenticated envelope key"
+        );
+        assert_ne!(
+            row.peer_id, third_identity,
+            "a payload-supplied sender_id must never decide storage attribution"
+        );
     }
 
     #[test]

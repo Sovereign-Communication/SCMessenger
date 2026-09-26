@@ -902,6 +902,16 @@ mod dial_scheduler_tests {
             "[auto-reply] already marked"
         );
     }
+}
+
+/// Contact identity + send-addressing regressions.
+///
+/// Split out of `dial_scheduler_tests`, which is about dial scheduling and
+/// auto-reply, not identity. Same `use super::*` surface as the original
+/// module, so no test body changed in this move.
+#[cfg(test)]
+mod contact_identity_tests {
+    use super::*;
 
     /// SELF-CERTIFYING KEY BINDING: an identity envelope without a usable
     /// public key must create a placeholder contact with an EMPTY key (plus a
@@ -970,6 +980,189 @@ mod dial_scheduler_tests {
         let stored = contacts.get(peer_id.clone()).unwrap().expect("contact");
         assert_eq!(stored.public_key.to_lowercase(), key_hex);
         assert_ne!(stored.public_key.to_lowercase(), peer_id);
+    }
+
+    // -----------------------------------------------------------------------
+    // WP1.3 -- send addressing resolves both spellings through ONE helper
+    // -----------------------------------------------------------------------
+
+    /// Build a real self-certifying (peer id, key hex) pair.
+    fn self_certifying_peer(seed_tag: &[u8]) -> (PeerId, String) {
+        let mut seed = [0u8; 32];
+        let n = seed_tag.len().min(32);
+        seed[..n].copy_from_slice(&seed_tag[..n]);
+        let signing =
+            libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).expect("valid seed");
+        let kp = libp2p::identity::ed25519::Keypair::from(signing);
+        let key_hex = hex::encode(kp.public().to_bytes());
+        (
+            libp2p::identity::PublicKey::from(kp.public()).to_peer_id(),
+            key_hex,
+        )
+    }
+
+    /// WP1.3: a contact row is canonically keyed by public-key hex, which the
+    /// CLI prints as the contact's "Peer ID". Parsing that hex as base58
+    /// failed, so every `send` reported "Invalid peer ID in contact" for a
+    /// message it had already enqueued. Both spellings must resolve.
+    #[test]
+    fn peer_id_resolver_accepts_both_canonical_hex_and_legacy_base58() {
+        let (peer_id, key_hex) = self_certifying_peer(b"wp1-cli-resolve");
+
+        let from_base58 = peer_id_from_contact_identifier(&peer_id.to_string())
+            .expect("legacy base58 peer id resolves");
+        let from_hex =
+            peer_id_from_contact_identifier(&key_hex).expect("canonical public-key hex resolves");
+
+        assert_eq!(from_base58, peer_id);
+        assert_eq!(from_hex, peer_id, "hex must resolve to the same peer id");
+    }
+
+    /// WP1.3: surrounding whitespace and case must not break resolution --
+    /// a user pasting a key with a trailing space should still send.
+    #[test]
+    fn peer_id_resolver_tolerates_whitespace_and_hex_case() {
+        let (peer_id, key_hex) = self_certifying_peer(b"wp1-cli-whitespace");
+
+        let padded = format!("  {}\n", key_hex);
+        assert_eq!(
+            peer_id_from_contact_identifier(&padded),
+            Some(peer_id),
+            "padded key hex must resolve"
+        );
+
+        // Uppercase hex is the same key. `is_valid_public_key` accepts it and
+        // the resolver path must too, or a user who uppercased the key is stuck.
+        let upper = key_hex.to_uppercase();
+        if upper != key_hex {
+            assert_eq!(
+                peer_id_from_contact_identifier(&upper),
+                Some(peer_id),
+                "uppercase key hex must resolve to the same peer id"
+            );
+        }
+    }
+
+    /// WP1.3: the resolver refuses values that are not a peer id at all. A
+    /// contact whose key could not be derived (a placeholder) must fail here
+    /// rather than resolve to something unopenable.
+    #[test]
+    fn peer_id_resolver_rejects_unresolvable_identifiers() {
+        for bad in ["", "   ", "not-a-peer-id", "Alice", "zzzz"] {
+            assert_eq!(
+                peer_id_from_contact_identifier(bad),
+                None,
+                "{bad:?} must not resolve to a peer id"
+            );
+        }
+    }
+
+    /// WP1.3: name lookup and canonical-hex lookup resolve to the SAME contact,
+    /// and that contact then resolves to the same peer id as its key -- so a
+    /// send addressed by NAME cannot pick a different peer than one addressed by
+    /// hex.
+    ///
+    /// Deliberate scope: a base58 peer id does NOT resolve as a contact query.
+    /// The canonical model makes public-key hex the one contact address and
+    /// treats the peer id as derived, never "a second contact-address flavor".
+    /// `peer_id_resolver_accepts_both_canonical_hex_and_legacy_base58` covers the
+    /// send path, which must still accept legacy base58.
+    #[test]
+    fn name_lookup_and_hex_lookup_address_the_same_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = IronCore::with_storage(path_to_string(&dir.path().join("storage")).unwrap());
+        let contacts = core.contacts_store_manager();
+
+        let (peer_id, key_hex) = self_certifying_peer(b"wp1-cli-name");
+        let mut contact = Contact::new(key_hex.clone(), key_hex.clone());
+        contact.nickname = Some("Alice".to_string());
+        contacts.add(contact).unwrap();
+
+        // By canonical key hex.
+        let by_hex = find_contact(&contacts, &key_hex).expect("hex lookup");
+        // By name (case-insensitive).
+        let by_name = find_contact(&contacts, "alice").expect("name lookup");
+
+        assert_eq!(by_hex.peer_id, key_hex, "stored keyed by canonical hex");
+        assert_eq!(by_hex.peer_id, by_name.peer_id, "name and hex agree");
+        assert_eq!(by_name.nickname.as_deref(), Some("Alice"));
+
+        // Both spellings resolve to one peer at the send path.
+        for c in [&by_hex, &by_name] {
+            assert_eq!(
+                peer_id_from_contact_identifier(&c.peer_id),
+                Some(peer_id),
+                "every accepted lookup spelling must address the same peer"
+            );
+        }
+    }
+
+    /// WP1.3 + WP1.1: a recovered placeholder contact resolves to NO peer id
+    /// and carries no key, so the send path fails closed instead of encrypting
+    /// to a fabricated value. The record survives restart for the operator.
+    #[test]
+    fn placeholder_contact_cannot_address_a_send_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = dir.path().join("storage");
+        // A SHA-256 multihash peer id (`0x12 0x20` + 32 bytes): a real libp2p
+        // peer id that is NOT an identity multihash, so it embeds no key. This
+        // is the input the removed fabrication fallback used to mine 32 "key"
+        // bytes from. `bs58` is not a CLI dependency, so the value is a literal
+        // -- asserted below rather than trusted.
+        let sha_peer = "QmNLfbof5rLekrACjeuLk9JmGZD2HDBHCU4z16iYKmx5SE".to_string();
+        assert!(
+            sha_peer.parse::<PeerId>().is_ok(),
+            "fixture must be a genuine peer id, or this test is vacuous"
+        );
+        assert!(
+            scmessenger_core::store::ledger_entry::public_key_hex_from_libp2p_peer_id(&sha_peer)
+                .is_none(),
+            "fixture must embed no public key"
+        );
+
+        let peer_id_of = |path: &std::path::Path| {
+            let core = IronCore::with_storage(path_to_string(path).unwrap());
+            core.contacts_store_manager()
+        };
+
+        // Record a placeholder for a history peer with no derivable key.
+        {
+            let contacts = peer_id_of(&storage);
+            let history = scmessenger_core::store::history::HistoryManager::new(Arc::new(
+                scmessenger_core::store::backend::MemoryStorage::new(),
+            ));
+            history
+                .add(scmessenger_core::store::history::MessageRecord {
+                    id: "wp1-cli-restart".to_string(),
+                    direction: scmessenger_core::store::history::MessageDirection::Received,
+                    peer_id: sha_peer.clone(),
+                    content: "hello".to_string(),
+                    timestamp: 1,
+                    sender_timestamp: 1,
+                    delivered: false,
+                    hidden: false,
+                })
+                .unwrap();
+            contacts.reconcile_from_history(&history).unwrap();
+        }
+
+        // After a restart the record is still there, still keyless.
+        let contacts = peer_id_of(&storage);
+        let stored = contacts
+            .get(sha_peer.clone())
+            .unwrap()
+            .expect("placeholder survives restart");
+        assert!(
+            stored.public_key.is_empty(),
+            "a placeholder must carry no key, got {}",
+            stored.public_key
+        );
+        assert_ne!(stored.public_key, sha_peer, "never peer-id-as-public-key");
+        assert!(stored
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("awaiting verified key"));
     }
 }
 
@@ -1631,7 +1824,7 @@ async fn cmd_contact(action: ContactAction) -> Result<()> {
                     return Ok(());
                 }
                 canonical
-            } else if looks_like_ed25519_pk(&peer_id) {
+            } else if scmessenger_core::identity::keys::is_valid_public_key(&peer_id) {
                 // Direct Ed25519 public key — verify it matches the --public-key arg
                 if peer_id.to_lowercase() != public_key.to_lowercase() {
                     eprintln!(
@@ -5229,27 +5422,9 @@ async fn cmd_test() -> Result<()> {
 /// Blake3 identity_id (32-byte hash → 64 hex chars).  A user who copies their
 /// `scm identity` "ID" field will get this format.
 /// NOTE: This also matches valid Ed25519 public keys (also 64 hex chars).
-/// Use looks_like_ed25519_pk() to distinguish.
+/// Use `is_valid_public_key` (the single owner of that predicate) to distinguish.
 fn looks_like_blake3_id(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c: char| c.is_ascii_hexdigit())
-}
-
-/// Returns true if `s` is a valid Ed25519 public key (64 hex chars that decode
-/// to a valid curve point).  Distinguishes public keys from Blake3 identity IDs,
-/// which are also 64 hex chars but are NOT valid Ed25519 points.
-fn looks_like_ed25519_pk(s: &str) -> bool {
-    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
-        return false;
-    }
-    if let Ok(bytes) = hex::decode(s) {
-        if bytes.len() == 32 {
-            if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                // Use libp2p's ed25519 crate instead of ed25519_dalek
-                return libp2p::identity::ed25519::PublicKey::try_from_bytes(&arr).is_ok();
-            }
-        }
-    }
-    false
 }
 
 /// Returns true if `s` can be parsed as a valid libp2p PeerId

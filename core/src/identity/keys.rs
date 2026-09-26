@@ -85,6 +85,26 @@ pub fn is_valid_public_key(hex_str: &str) -> bool {
     false
 }
 
+/// Build a real self-certifying `(libp2p peer id, public key hex)` pair for
+/// tests, deterministically from `seed_tag`.
+///
+/// Lives here because this module already owns the ed25519 key predicates, so
+/// a test needing a genuine key does not grow a private copy of the encoding.
+#[cfg(test)]
+pub(crate) fn self_certifying_keypair(seed_tag: &[u8]) -> (String, String) {
+    let mut seed = [0u8; 32];
+    let n = seed_tag.len().min(32);
+    seed[..n].copy_from_slice(&seed_tag[..n]);
+    let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed)
+        .expect("test seed is a valid ed25519 secret key");
+    let kp = libp2p::identity::ed25519::Keypair::from(signing);
+    let peer_id = libp2p::identity::PublicKey::from(kp.public())
+        .to_peer_id()
+        .to_string();
+    let key_hex = hex::encode(kp.public().to_bytes());
+    (peer_id, key_hex)
+}
+
 /// Check if a 64-hex string is a valid identity_id format (always valid if 64 hex chars)
 pub fn is_valid_identity_id(hex_str: &str) -> bool {
     hex_str.len() == 64 && hex_str.chars().all(|c| c.is_ascii_hexdigit())
