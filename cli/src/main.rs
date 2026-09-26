@@ -1824,8 +1824,26 @@ async fn cmd_contact(action: ContactAction) -> Result<()> {
                     return Ok(());
                 }
                 canonical
-            } else if scmessenger_core::identity::keys::is_valid_public_key(&peer_id) {
+            } else if scmessenger_core::crypto::validate_ed25519_public_key(&peer_id).is_ok() {
                 // Direct Ed25519 public key — verify it matches the --public-key arg
+                //
+                // Deliberately the same lax, decompress-only validator that
+                // validated --public-key three lines above, NOT the stricter
+                // `is_valid_public_key`. WP1 briefly routed this through the
+                // strict owner, which additionally requires a canonical RFC 8032
+                // encoding, and that narrowed what a user could add: a 32-byte
+                // value that decompresses but is non-canonical (y >= p, or the
+                // sign bit set on x = 0) passed --public-key validation and was
+                // accepted here as a direct ed25519 key. With the strict
+                // predicate it fell through to the blake3 branch below, failed
+                // to resolve, and the contact was silently not added -- behind a
+                // message about identity IDs, and exit status 0. Nothing in WP1
+                // asked the CLI to get stricter and this call site is
+                // user-facing, so the acceptance set is unchanged from main.
+                // `is_valid_public_key` stays the strict owner the contact STORE
+                // relies on; these are two different questions, and
+                // `cli_contact_add_gate_stays_lax_and_matches_the_public_key_validator`
+                // holds this one lax.
                 if peer_id.to_lowercase() != public_key.to_lowercase() {
                     eprintln!(
                         "{} The peer-id argument and public-key differ.",

@@ -946,22 +946,6 @@ impl IronCore {
     ) -> Result<crate::PreparedMessage, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
-
-        // WP1.1 FAIL CLOSED: a placeholder contact (recovery could not derive a
-        // self-certifying key, so `public_key` is empty) must never reach the
-        // encrypt path. An empty string happens to fail `hex::decode` today, but
-        // that is an accident of the width check below rather than a stated
-        // policy, and a placeholder that later gains ANY 64-hex value -- a
-        // blake3 identity_id, a base58 peer id -- would sail straight through.
-        // Refuse the placeholder shape explicitly, by name, before decoding.
-        if recipient_id.trim().is_empty() {
-            tracing::error!(
-                "[ERROR] refusing to send: recipient has no verified public key \
-                 (placeholder contact). Backfill a self-certifying key before sending."
-            );
-            return Err(IronCoreError::InvalidInput);
-        }
-
         let recipient_bytes = hex::decode(recipient_id).map_err(|_| IronCoreError::InvalidInput)?;
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
@@ -5340,11 +5324,17 @@ mod tests {
     // WP1 -- identity unification
     // -----------------------------------------------------------------------
 
-    /// WP1.1 FAIL CLOSED: a placeholder contact -- one whose key could not be
-    /// derived, so `public_key` is empty -- must not be an encrypt target.
-    /// The send path used to fail only because `hex::decode("")` yields 0 bytes
-    /// and the 32-byte width check then rejects it. That is an accident of the
-    /// width check, not a policy, so this test pins the intent explicitly.
+    /// WP1.1: a placeholder contact -- one whose key could not be derived, so
+    /// `public_key` is empty -- must not be an encrypt target.
+    ///
+    /// This branch once added an explicit empty-recipient guard here to make
+    /// that a stated policy rather than a side effect. The guard was removed as
+    /// dead weight: every input it caught already returned the same error.
+    /// `""` decodes to 0 bytes and the 32-byte width check rejects it; a
+    /// whitespace-only value decodes as invalid hex. Both are
+    /// `InvalidInput`, so no caller could tell the two apart. The behaviour is
+    /// real, so it stays pinned -- by the width check, which is where it
+    /// actually comes from.
     #[test]
     fn placeholder_contact_is_not_an_encrypt_target() {
         let core = IronCore::new();
@@ -5377,20 +5367,10 @@ mod tests {
         sender.grant_consent();
         sender.initialize_identity().unwrap();
 
-        // A contact whose key is a REAL key, so the store holds a genuine row...
-        let (peer_id, key_hex) = {
-            let mut seed = [0u8; 32];
-            seed[..12].copy_from_slice(b"wp1-hash-rec");
-            let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
-            let kp = libp2p::identity::ed25519::Keypair::from(signing);
-            let key = hex::encode(kp.public().to_bytes());
-            (
-                libp2p::identity::PublicKey::from(kp.public())
-                    .to_peer_id()
-                    .to_string(),
-                key,
-            )
-        };
+        // A contact whose key is a REAL key, so the store holds a genuine row.
+        // Same seed this used to build inline, so the derived digest -- and so
+        // what the assertions below observe -- is byte-for-byte unchanged.
+        let (peer_id, key_hex) = crate::test_support::self_certifying_keypair(b"wp1-hash-rec");
         sender
             .contact_manager
             .read()
@@ -5433,11 +5413,11 @@ mod tests {
             .is_ok());
     }
 
-    /// WP1.1 + WP1.4: the empty-key refusal must not be so broad that it
-    /// swallows a real send. A self-certifying recipient still encrypts, and
-    /// the envelope round-trips through the recipient's own key.
+    /// WP1.1 + WP1.4: refusing an unverifiable recipient must not be so broad
+    /// that it swallows a real send. A self-certifying recipient still
+    /// encrypts, and the envelope round-trips through its own key.
     #[test]
-    fn verified_key_still_encrypts_after_placeholder_guard() {
+    fn verified_recipient_still_encrypts() {
         let core = IronCore::new();
         core.grant_consent();
         core.initialize_identity().unwrap();

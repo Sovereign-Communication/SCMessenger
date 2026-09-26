@@ -1038,8 +1038,8 @@ fn current_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::keys::self_certifying_keypair;
     use crate::store::backend::MemoryStorage;
+    use crate::test_support::self_certifying_keypair;
     use std::sync::Arc;
 
     fn make_manager() -> ContactManager {

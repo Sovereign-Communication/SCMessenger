@@ -479,7 +479,7 @@ fn placeholder_or_derived_contact(peer_id: &str) -> Contact {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::keys::self_certifying_keypair;
+    use crate::test_support::self_certifying_keypair;
 
     #[test]
     fn test_contact_creation() {

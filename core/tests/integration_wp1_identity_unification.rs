@@ -419,3 +419,51 @@ fn consolidated_key_shape_check_is_strictly_stricter_than_the_old_cli_check() {
         }
     }
 }
+
+/// The CLI's `contact add` gate must stay LAX, and must stay the SAME lax check
+/// it has always used.
+///
+/// WP1 consolidated that call site onto `is_valid_public_key`, which is
+/// stricter: it also requires a canonical RFC 8032 encoding. That silently
+/// narrowed what a user could add. A 32-byte value that decompresses as a
+/// curve point but is non-canonical (y >= p, or the sign bit set on x = 0)
+/// passed the `--public-key` validation three lines earlier in `cmd_contact`
+/// and was accepted as a direct ed25519 key. Under the strict predicate it
+/// fell through to the blake3-identity branch instead, failed to resolve, and
+/// the contact was not added -- reported as an identity-ID problem, exit 0.
+///
+/// Nothing in WP1 asked the CLI to get stricter, and the call site is
+/// user-facing, so the gate went back to
+/// `crypto::validate_ed25519_public_key`, the decompress-only validator
+/// already used for `--public-key`. This test pins the acceptance set so the
+/// two validators cannot silently swap roles again.
+#[test]
+fn cli_contact_add_gate_stays_lax_and_matches_the_public_key_validator() {
+    // The two encodings `is_valid_public_key` rejects as non-canonical. Both
+    // are accepted by the lax validator, which is the pre-WP1 CLI behaviour.
+    let non_canonical = vec![0xffu8; 32];
+    let mut neg_zero = vec![0u8; 32];
+    neg_zero[0] = 0x01;
+    neg_zero[31] = 0x80;
+
+    for (label, bytes) in [("y >= p", &non_canonical), ("sign bit on x=0", &neg_zero)] {
+        let as_hex = hex::encode(bytes);
+        assert!(
+            !scmessenger_core::identity::keys::is_valid_public_key(&as_hex),
+            "{label}: precondition -- the strict owner rejects this encoding"
+        );
+        assert!(
+            scmessenger_core::crypto::validate_ed25519_public_key(&as_hex).is_ok(),
+            "{label}: the CLI gate must still ACCEPT this, or `scm contact add` \
+             stopped accepting a key it accepted before WP1"
+        );
+    }
+
+    // A real key is accepted by both, so the lax gate is not simply broken --
+    // and the strict owner the contact store depends on is still strict.
+    let (_peer_id, real_key_hex) = self_certifying_peer(b"wp1-cli-gate-lax");
+    assert!(scmessenger_core::identity::keys::is_valid_public_key(
+        &real_key_hex
+    ));
+    assert!(scmessenger_core::crypto::validate_ed25519_public_key(&real_key_hex).is_ok());
+}
