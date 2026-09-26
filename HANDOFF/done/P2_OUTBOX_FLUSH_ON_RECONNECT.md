@@ -1,5 +1,13 @@
 # P2: Outbox Flush on Reconnect
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Ticket Status:** Open (dispatch to Qwen CODER)
 **Tier:** [SONNET]
 **Scope:** v0.4.0 blocker

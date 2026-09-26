@@ -1,5 +1,15 @@
 # 3-node verification — Pixel reinstall + off-site vs home log compare
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 UTC window: 2026-09-10 ~20:09Z (off-site) through 2026-09-11 ~00:30Z (home)
 Candidate: Windows `441a0214`, AWS `e8c8f52b`, Pixel APK reinstall 14:25 local
 (`git=f9a1f60b` family, SHA256 `10C43A79…`)

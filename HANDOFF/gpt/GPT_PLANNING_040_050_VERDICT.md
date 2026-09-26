@@ -1,5 +1,13 @@
 # GPT VERDICT -- v0.4.0 completion and v0.5.0 execution plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR ORCHESTRATOR INTAKE
 Release verdict at review baseline: v0.4.0-alpha.1 NO-SHIP
 Baseline: `origin/main` `74a6808d`; staging ref

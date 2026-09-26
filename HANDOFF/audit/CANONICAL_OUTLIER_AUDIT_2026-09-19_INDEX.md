@@ -1,5 +1,13 @@
 # Canonical Outlier Audit -- MASTER INDEX (2026-09-19)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: HANDOFF/freebuff/queue/AUDIT_CANONICAL_OUTLIERS_V040_V050_V100_2026-09-19.md
 Branch: glm/canonical-outlier-audit
 Mode: REPORT-ONLY. Findings feed 0.4.0 gate / 0.5.0 parity / 1.0.0 unification ledger.

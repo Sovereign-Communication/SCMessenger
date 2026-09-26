@@ -1,5 +1,13 @@
 # V0.4.0 tag path — unified (2026-09-20)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **SUPERSEDED FOR EXECUTION PRIORITY** by
 `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` (operator interview same day:
 "no tag, no secrets, just get it working first"). This file remains useful as

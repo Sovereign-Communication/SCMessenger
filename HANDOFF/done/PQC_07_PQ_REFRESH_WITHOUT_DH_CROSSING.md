@@ -1,5 +1,15 @@
 # TASK [HIGH, design question]: PQ ratchet refresh when no DH crossing occurs
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: TODO. Split out 2026-07-12 from
 `PQC_07_PQ_SECRET_NEVER_MIXED_INTO_ROOT_KEY.md` after that ticket's literal
 wiring bug was fixed and re-verified, but a narrower, deeper issue survived.

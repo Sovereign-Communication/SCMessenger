@@ -1,5 +1,13 @@
 # 2026-06-08 Sweep Results
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** YELLOW (not RED, not GREEN)
 - GREEN: cargo check, cargo test (3 pre-existing failures), assembleDebug (60.2 MB APK)
 - YELLOW: testDebugUnitTest (21 pre-existing MockK failures, 28.5h old cached), CLI smoke (HTTP not externally reachable on Windows — server binds but port blocked at OS level)

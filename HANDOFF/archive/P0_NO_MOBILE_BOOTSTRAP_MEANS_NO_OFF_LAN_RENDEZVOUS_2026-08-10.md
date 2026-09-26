@@ -1,5 +1,13 @@
 # P0 -- mobile nodes have no configurable bootstrap, so they cannot rendezvous off-LAN
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open
 Filed: 2026-08-10 ~03:00Z (Windows lane)
 Severity: P0 for real-world use. Two phones left the LAN today and at least one

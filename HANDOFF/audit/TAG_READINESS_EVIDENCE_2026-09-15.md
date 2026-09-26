@@ -1,5 +1,13 @@
 # v0.4.0 Tag-Readiness Evidence Package
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Prepared: 2026-09-15 (Freebuff lane, CTO seat). Purpose: the complete evidence
 set the operator asked to review BEFORE any tag action. No tag has been
 created; no push of tags; merge of PR #288 remains with the orchestrator per

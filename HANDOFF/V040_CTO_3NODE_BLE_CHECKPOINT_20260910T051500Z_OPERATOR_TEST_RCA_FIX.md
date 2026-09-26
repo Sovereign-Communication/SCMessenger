@@ -1,5 +1,15 @@
 # V040 CTO checkpoint — operator drop-test evidence + AWS-online RCA + fixes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Stage: OPERATOR_TEST_SCORED + TWO_DEFECTS_FIXED_CODE_LEVEL (not a 3-node completion stage)
 UTC: 2026-09-10T05:15Z. Branch cto/t2-disk-ruling-2026-08-31. Immutable append-only.
 

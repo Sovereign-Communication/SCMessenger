@@ -1,5 +1,13 @@
 # TASK: Fix 1 Swift compile error in mDNSServiceDiscovery.swift
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR DELEGATION (Qwen CODER, diff mode)
 Scope: ONE file, ONE 1-line-class fix. Nothing else.
 

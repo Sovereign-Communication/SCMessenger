@@ -1,4 +1,15 @@
 # MODEL: kimi-k2-thinking:cloud
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 # BUDGET: 3600
 
 # Phase 5: Pre-Release Verification (Gatekeeper Review)

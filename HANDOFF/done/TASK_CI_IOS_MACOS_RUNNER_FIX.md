@@ -1,5 +1,13 @@
 # TASK: Fix iOS CI workflow so free public-repo macOS runners produce real signal
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO
 Tier: [SONNET] (mechanical once decisions below are read)
 Blocks: iOS parity lane (bindings regen + simulator tests without local Mac)

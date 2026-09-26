@@ -1,5 +1,13 @@
 # Unified v0.4.0 3-node parity plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Created: 2026-09-10
 Owner: Operator session (MiMoSCMessengerFresh)

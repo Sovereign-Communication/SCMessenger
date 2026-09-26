@@ -1,5 +1,15 @@
 # V040 Rule-8 adversarial review — PR #276 outbox drop-hop fix (rounds R9-R14, gate CLOSES)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **ROUND 14 — APPROVE (plain). Rule-8 gate for PR #276 CLOSED on the
 review side** (filed 2026-09-06 00:40Z; reviewer runs R9-R14 on 2026-09-05).
 PR: #276 (freebuff/v040-outbox-transport-fix @ **6359f661**, base

@@ -1,5 +1,15 @@
 # CTO lane A — closeout, 2026-08-15
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: CLOSED. Written for the unified CTO to reconcile against lane B.
 Scope: this file describes ONLY what this session did. It does not speak for
 lane B (the concurrent CTO that opened #152-#166).

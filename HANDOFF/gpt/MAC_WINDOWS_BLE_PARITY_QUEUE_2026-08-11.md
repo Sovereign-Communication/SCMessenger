@@ -1,5 +1,15 @@
 # macOS/Windows BLE parity queue
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** in progress now; Windows-lane wake is reserved for independent validation and consensus, with no timer or scheduled task.
 **Scope:** PR #139 integration branch `tracking/pre-v040-tag-work`.
 

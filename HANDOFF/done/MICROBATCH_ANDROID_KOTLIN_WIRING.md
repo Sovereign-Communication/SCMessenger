@@ -1,5 +1,13 @@
 # MICROBATCH: Android Kotlin Wiring Tasks
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 You are a worker implementing wiring tasks for Android/Kotlin code. Each task requires you to:
 1. Find the target function in the specified file
 2. Identify where it should be called in the application loop

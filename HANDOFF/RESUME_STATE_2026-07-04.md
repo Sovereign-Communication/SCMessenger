@@ -1,5 +1,13 @@
 # Resume State — 2026-07-04 (native Cowork session)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read this first if you're picking this up next. It tells you exactly what's real,
 what's draft, what's blocked, and the precise next commands to run.
 

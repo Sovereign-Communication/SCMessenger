@@ -1,5 +1,15 @@
 # TASK: Fix ratchet.rs compile errors
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Fix these 3 remaining compile errors in `core/src/crypto/ratchet.rs`. Do NOT change any other logic.
 
 ## Error 1 — E0382: `pq_ss` moved value used twice (line ~564 and ~579)

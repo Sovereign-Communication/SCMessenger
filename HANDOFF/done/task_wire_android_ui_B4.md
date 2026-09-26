@@ -1,5 +1,15 @@
 # BATCH: Android UI Component + ViewModel + Service Wiring (B4 + B5 remaining)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 You are a worker implementing wiring tasks. Each task requires you to:
 1. Find the target function in the specified file
 2. Identify where it should be called in the production code path

@@ -1,5 +1,13 @@
 # P1_ANDROID_Unit_Tests_Force_Disabled_Since_2026-06-06
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P1 (escalation-flagged -- contradicts a documented mandatory rule)
 **Platform:** Android
 **Status:** RESOLVED 2026-07-06 (re-enabled with operator sign-off)

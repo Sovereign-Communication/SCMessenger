@@ -1,5 +1,13 @@
 # Rule-8 harness verdict — PR #281 GHOST-IDENTITY-001 (b258f1db..fe6f895f)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-11T06:22Z
 Reviewer: sovereign-harness free-tier panel (3 models) + judge
 Cost: **$0.00** (paid escalation permitted to $0.10; not needed)

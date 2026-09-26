@@ -1,5 +1,15 @@
 # Prove message delivery between two INDEPENDENT endpoints, not just Lucas's own two clients
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DONE -- proven 2026-07-20, both directions confirmed.
 Filed: 2026-07-20
 Closed: 2026-07-19 (Bob planning session) -- moved to done/ per PROOF_TWO_ENDPOINT_DELIVERY_2026-07-20.md.

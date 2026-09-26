@@ -1,5 +1,13 @@
 # TASK: PQC-09 — Hybrid per-hop onion routing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: PQC-05, PQC-03. Wave 3. Min tier: Sonnet. ADVERSARIAL REVIEW MANDATORY (privacy/ module).
 
 ## Why

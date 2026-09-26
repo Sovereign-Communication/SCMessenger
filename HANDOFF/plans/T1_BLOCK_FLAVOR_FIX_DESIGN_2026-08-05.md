@@ -1,5 +1,13 @@
 # T1 Design: close the mixed-fleet block bypass (dual-flavor blocks)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: DESIGN ACCEPTED (pending implementation + adversarial review)
 Source: qwenpaid / qwen3.8-max-preview design dispatch 2026-08-05 (task file
 tmp/t1_block_flavor_design.prompt.md; full raw response in

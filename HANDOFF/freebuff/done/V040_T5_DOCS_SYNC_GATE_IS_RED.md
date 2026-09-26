@@ -1,5 +1,13 @@
 # V040-T5 -- Every agent's finalize gate currently fails
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: DONE -- merged as PR #260 (squash `90372779`), 2026-08-31 19:44Z.
         Follow-up T8 filed to restore the test whose deletion caused this.
 Priority: P2 -- small, but it is corrupting the process

@@ -1,5 +1,13 @@
 # CRITICAL: Ratchet + PQ subsystem is unreachable from IronCore's production message path
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 > **UPDATE 2026-08-24 (PR #221):** the `SCM_RATCHET_DISABLE` kill switch described
 > below has been REMOVED. It bypassed the ingress signature verification added by
 > PR #221 entirely, so setting it reopened the original P0 message-forgery hole

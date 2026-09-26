@@ -1,5 +1,15 @@
 # Design: RFC1918-on-RFC1918 LAN Disclosure + Contact-Chained Ledger Sharing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** Proposed
 **Date:** 2026-08-06
 **Component:** `core/src/store/ledger_entry.rs`, `core/src/transport/addr_filter.rs`, `core/src/transport/swarm.rs`

@@ -1,5 +1,13 @@
 # D2 — Release keystore verification at main ccce98cf (evidence, not inference)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-13
 **Author:** Buffy (Freebuff recovery session), Phase 4 of the approved plan
 **Question:** does the release build actually sign, with which alias and

@@ -1,5 +1,13 @@
 # Farm-Sim V1.0.0 Readiness Execution Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** IN PROGRESS
 **Start Time:** 2026-07-18 21:43 UTC
 **Expected Completion:** 2026-07-18 23:30 UTC

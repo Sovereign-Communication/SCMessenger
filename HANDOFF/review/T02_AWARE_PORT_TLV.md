@@ -1,5 +1,13 @@
 # T-02 Adversarial Review: AWARE_PORT TLV negotiation
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-07-17
 **Reviewer:** Qwen THINK (qwen3-235b-a22b-thinking-2507)
 **Initial Verdict:** FAIL (4 findings)

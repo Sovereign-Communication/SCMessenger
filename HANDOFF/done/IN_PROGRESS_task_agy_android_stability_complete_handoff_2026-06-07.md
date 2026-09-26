@@ -1,5 +1,13 @@
 # Agy (Gemini Pro)  Complete Handoff & Remediation Ticket
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **From:** Hermes (passive audit) on behalf of Lucas
 **To:** Claude Code (orchestrator)  pick up, delegate, verify
 **Date:** 2026-06-07 20:25 PT

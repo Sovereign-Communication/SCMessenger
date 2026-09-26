@@ -1,5 +1,13 @@
 # Implementation Plan: CLI Discovery Parity
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Achieve feature parity between the SCMessenger CLI and the Android application by exposing discovery controls (BLE, mDNS, WiFi-Aware) and manual scan triggers.
 
 ## User Review Required

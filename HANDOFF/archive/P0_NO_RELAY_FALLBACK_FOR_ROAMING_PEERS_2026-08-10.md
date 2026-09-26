@@ -1,5 +1,15 @@
 # P0 -- a roaming peer is unreachable: the node never falls back to the relay
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Open -- observed LIVE during the iteration-2 roaming condition
 Filed: 2026-08-10 ~04:25Z, anchor `68fcc3f1`
 Severity: P0. This is the core product promise. A device that leaves WiFi

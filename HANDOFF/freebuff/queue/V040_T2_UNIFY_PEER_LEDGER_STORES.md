@@ -1,5 +1,13 @@
 # V040-T2 -- Unify the two peer ledgers into one store
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: CODE ON MAIN -- do not re-dispatch the 2026-08-31 unification diff.
 Evidence 2026-09-20: `cli/src/ledger.rs` documents the process-lifetime core
 ledger store, one-time legacy `peers.json` import + archive, and

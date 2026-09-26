@@ -1,5 +1,13 @@
 ﻿# Runbook: Pixel / Android passive verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Owner: operator + CTO/controller seats
 Rule date: 2026-09-11

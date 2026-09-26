@@ -1,5 +1,15 @@
 # V040 -- qwen free lane reviews DISPATCHED directly (2026-09-01)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 All four open PRs now carry a non-author adversarial review from the qwen free
 lane, dispatched directly via `tmp/qwen_review_dispatch.py` (no operator paste
 cycle). Full verdicts + lane verification addenda:

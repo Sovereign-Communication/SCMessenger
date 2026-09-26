@@ -1,5 +1,15 @@
 # Phase WIRE: Full Repo-Wide Wiring Verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Priority:** P0 (Blocking  must pass before ANY release)
 **Assigned Agent:** wiring-verifier (deepseek-v4-pro:cloud)
 **Fallback:** architect-planner (deepseek-v4-pro:cloud)

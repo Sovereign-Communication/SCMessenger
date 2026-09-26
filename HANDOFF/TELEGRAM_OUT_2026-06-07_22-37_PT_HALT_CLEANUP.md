@@ -1,5 +1,15 @@
 # HALT + Cleanup Log — 2026-06-07 22:37 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **From:** Claude Code (orchestrator)
 **To:** Lucas (Telegram) + Hermes
 **Re:** Hermes audit picked up; 2 orphan processes I created killed; dispatch still halted

@@ -1,5 +1,15 @@
 # P1_ANDROID_024: Manual Dark/Light Theme Toggle
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Objective
 
 Add a manual theme toggle in Settings so users can override the system default dark/light mode.

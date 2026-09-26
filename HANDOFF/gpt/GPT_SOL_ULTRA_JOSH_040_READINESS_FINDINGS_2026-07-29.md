@@ -1,5 +1,13 @@
 # GPT HANDOFF -- Josh 0.4.0 support-gap findings
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-07-29
 Audience: GPT 5.6 SOL Ultra
 Scope: verified observations only, no remediation requests

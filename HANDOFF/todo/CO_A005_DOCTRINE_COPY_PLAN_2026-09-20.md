@@ -1,5 +1,15 @@
 # CO-A-005 / doctrine copy -- operator planning record (2026-09-20)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: PLANNED (operator interview 2026-09-20)
 Source findings: `HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_iter1.md` (CO-A-002..005), `iter6` triage
 Authority: AGENTS.md "nodes, not relays" doctrine

@@ -1,5 +1,13 @@
 # P1 -- the AWS relay cannot be updated: no working SSH key on this machine
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open -- BLOCKED on operator
 Filed: 2026-08-09 ~17:00Z (Windows lane, during the five-node prep)
 

@@ -1,5 +1,15 @@
 # TASK: PQC-08 Compile Fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Fix 2 compile errors in `core/src/crypto/encrypt.rs` introduced by the PQC-08 gating change.
 
 ## Error 1 — E0609: wrong field name `suite_negotiable`

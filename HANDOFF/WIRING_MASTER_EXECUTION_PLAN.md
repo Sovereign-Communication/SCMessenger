@@ -2,6 +2,14 @@ NOTE (2026-07-04): The wiring workstream (350 tasks) completed as of 2026-07-03,
 
 # SCMessenger Wiring Master Execution Plan (All HANDOFF/todo Tasks)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## 1) Scope + Success Definition
 
 This plan covers **every** wiring task currently in `HANDOFF/todo` and is designed to drive end-to-end runtime functionality across all app variants (Core, Android, WASM, CLI), while preserving feature parity and regression safety.

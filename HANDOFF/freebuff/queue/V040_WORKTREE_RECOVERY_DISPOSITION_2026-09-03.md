@@ -1,5 +1,13 @@
 # V040 worktree recovery disposition -- 2026-09-03
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: RECOVERY-COMPLETE / DELETION-PARTIALLY-EXECUTED-BY-CTO / VERIFIED
 (pass 2, 2026-09-03). The auditing session deleted nothing, but the CTO
 subsequently removed 10 worktrees (see G.1) and committed the architecture

@@ -1,5 +1,13 @@
 # Hermes Decision Log — 2026-06-06 ~01:20 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Event
 Lucas authorized Path A (live retest on Pixel 6a) for P0_025 verification.
 Overseer is currently idle in folder-monitor on `E:\SCMessenger-Github-Repo\SCMessenger\HANDOFF\`.

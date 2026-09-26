@@ -1,5 +1,13 @@
 # Orchestrator Takeover — 2026-08-28 (Buffy as orchestrator, deepseek model)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: ACTIVE
 Author: Buffy (Freebuff orchestrator), taking over from the OxAlpha-folder
 OpenCode/Claude session that stalled on provider rate limits.

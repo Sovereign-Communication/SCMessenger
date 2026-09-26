@@ -1,5 +1,13 @@
 # P0_ANDROID_016: Settings Screen 42s Startup Hang
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 (Performance Blocker)
 **Platform:** Android
 **Source:** User report + logcat `android/android_logcat_4-22-26.md`

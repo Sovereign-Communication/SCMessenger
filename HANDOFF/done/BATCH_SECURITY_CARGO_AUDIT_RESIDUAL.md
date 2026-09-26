@@ -1,5 +1,15 @@
 # BATCH_SECURITY_CARGO_AUDIT_RESIDUAL
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** RESEARCH COMPLETE  BLOCKED (requires libp2p major version upgrade)
 **Agent:** rust-coder_1779261571 (glm-5.1:cloud)
 **Budget:** 1800s (MIXED tier)

@@ -1,5 +1,13 @@
 # BLE OFFLINE PROXIMITY DEMO PLAYBOOK (SHIP_PLAN D7)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY-FOR-OPERATOR (radio-readiness pre-verified 2026-08-25, see Adjacency Findings below)
 Scope: Prove Windows <-> Pixel 6a message delivery over BLE GATT with NO WiFi/LAN/Internet path available.
 

@@ -1,5 +1,15 @@
 # Gap-Audit Remediation Plan — Failsafe Execution
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active (subsidiary to SHIP_PLAN.md until v0.4.0 tags)
 Created: 2026-08-25
 Owner: Operator (Treystu)

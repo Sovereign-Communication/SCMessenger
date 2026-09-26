@@ -1,5 +1,15 @@
 # v0.4.0-alpha.1 BASELINE FREEZE (040-G0)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: FROZEN
 Date: 2026-07-28
 Authority: GPT planning verdict PR #115 (GPT_PLANNING_040_050_VERDICT.md),

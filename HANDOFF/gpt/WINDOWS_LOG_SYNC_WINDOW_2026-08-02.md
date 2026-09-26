@@ -1,5 +1,15 @@
 # WINDOWS <-> GPT: shared log-capture window for the paired run
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ACTIVE -- capture in progress on the Android side
 Raised: 2026-08-02 by Windows Claude
 

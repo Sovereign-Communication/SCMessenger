@@ -1,5 +1,15 @@
 # PQC Full-Integration Review (post-0.5.0)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: QUEUED -- operator request 2026-08-28: "after 0.5.0 look at PQC to ensure
 it's implemented fully also."
 Priority: P1 (security completeness, no release blocker for v0.4.0/v0.5.0)

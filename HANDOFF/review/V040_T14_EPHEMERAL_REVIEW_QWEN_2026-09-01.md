@@ -1,5 +1,15 @@
 # V040-T14 P0 (ephemeral port) -- ADVERSARIAL REVIEW (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Reviewer: **qwen3-30b-a3b-thinking-2507** (DashScope free, non-author; qwq-plus
 non-responsive -> same-tier fallback). Target: PR #270 `freebuff/v040-t14-ephemeral-port`.
 Dispatched 2026-09-01 via tmp/qwen_review_dispatch.py. Status: **REQUEST_CHANGES

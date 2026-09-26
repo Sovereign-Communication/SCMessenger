@@ -1,5 +1,13 @@
 # Agent Task: Fix Remaining Core Compilation Errors
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Delegated To:** rust-coder (glm-5.1:cloud)
 **Errors to fix:** 42 E0433 + 27 E0425 + 3 E0405 = ~50 errors in mobile_bridge.rs
 

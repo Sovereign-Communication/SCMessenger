@@ -1,5 +1,15 @@
 # TASK: A-05 iOS Receipt Unification (U6)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DISPATCH-READY
 Model: Qwen CODER tier
 Scope: Tight (platform unification, receipt pipeline)

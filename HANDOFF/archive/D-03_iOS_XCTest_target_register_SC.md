@@ -1,5 +1,13 @@
 # Task D-03
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Description
 iOS XCTest target: register SCMessengerTests/ in .xcodeproj (PBXNativeTarget), add to scheme, wire xcodebuild test
 

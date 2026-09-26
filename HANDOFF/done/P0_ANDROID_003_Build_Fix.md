@@ -1,5 +1,13 @@
 # P0_ANDROID_003: Android Rust Build Fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 (Critical Release Blocker)
 **Platform:** Android
 **Status:** Completed (Rust layer)

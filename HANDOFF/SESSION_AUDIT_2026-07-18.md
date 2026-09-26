@@ -1,5 +1,13 @@
 # Session Audit & Context Preservation - 2026-07-18
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** In Progress (workflow executing)  
 **Session Focus:** Farm-Sim Phase 2&3 Testing - Bootstrap Fix & Lite Deployment  
 **Instance:** AWS EC2 i-00e068c0837ac0858 at 32.197.246.78  

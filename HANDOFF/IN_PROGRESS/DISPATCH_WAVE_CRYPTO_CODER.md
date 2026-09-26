@@ -1,5 +1,13 @@
 # DISPATCH WAVE: Crypto + CODER Implementation (Qwen CODER Tier)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR DISPATCH
 Tier: CODER (Qwen CODER + Groq FLASH for validation)
 Wave: A (4 parallel CODER tasks)

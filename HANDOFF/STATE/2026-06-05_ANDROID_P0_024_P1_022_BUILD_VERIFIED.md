@@ -1,5 +1,13 @@
 # Android P0_024 + P1_022 Build Verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-05 21:10 PT
 **Author:** Overseer session
 **Worktree:** `E:\SCMessenger-build-p0-024\`

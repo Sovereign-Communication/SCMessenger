@@ -143,6 +143,14 @@ def _block_fields(block: str) -> dict:
 
 def validate_text(text: str, policy: Policy = POLICY) -> List[str]:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # A UTF-8 BOM is an encoding artifact, not content. Left in place it
+    # sits between the start of line 1 and the BEGIN marker, so the
+    # line-anchored marker patterns cannot see the opening marker while
+    # still seeing the closing one -- a compliant document reported as
+    # having "0 begin markers, 1 end markers". Strip a LEADING BOM only;
+    # one in the body is content.
+    if text.startswith("﻿"):
+        text = text[1:]
     begin_lines = _marker_lines(text, BEGIN)
     end_lines = _marker_lines(text, END)
     matches = _block_matches(text)

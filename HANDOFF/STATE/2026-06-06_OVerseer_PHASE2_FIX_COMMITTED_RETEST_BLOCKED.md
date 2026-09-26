@@ -1,5 +1,13 @@
 # 2026-06-06 — Overseer: PHASE 2 fixed and committed; live retest BLOCKED
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** P0_ANDROID_025 fix committed on `fix/p0-android-025-mdns-listener-collision`; build green; live mDNS retest on Pixel 6a blocked by phone being offline
 **Date:** 2026-06-06 01:00 PT
 **Commit:** `e84f4fc3` on `fix/p0-android-025-mdns-listener-collision` (off `origin/main` dd109707)

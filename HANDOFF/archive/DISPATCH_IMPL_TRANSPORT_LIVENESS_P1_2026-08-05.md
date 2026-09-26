@@ -1,5 +1,15 @@
 # DISPATCH: IMPLEMENT -- Transport Liveness Phase 1 (No Wire Changes)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Branch: fix/transport-liveness-failover-2026-08-05
 Audit basis: HANDOFF/review/TRANSPORT_FAILOVER_AUDIT_QWENPAID_2026-08-05.md
 Ticket: HANDOFF/todo/TRANSPORT_BLE_LAN_HICCUP_VERIFICATION_2026-08-05.md

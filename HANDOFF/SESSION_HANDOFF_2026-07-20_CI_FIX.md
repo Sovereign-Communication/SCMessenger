@@ -1,5 +1,13 @@
 # Session Handoff: CI Fix + Priority 0 Complete
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-07-20 (second session)
 Previous session: HANDOFF/SESSION_HANDOFF_2026-07-20_LUCAS_JOSH_ALPHA.md
 Operator: Lucas

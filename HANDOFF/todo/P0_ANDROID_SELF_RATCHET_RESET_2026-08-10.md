@@ -1,5 +1,13 @@
 # P0 -- Android resets its OWN ratchet session on mDNS service loss
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: FIXED -- dispositioned 2026-08-24 against main ceabdbd4
 Disposition: MdnsServiceDiscovery.kt:211-215 now guards `onServiceLost` with
 the same self-peer check as `onServiceResolved` (early return before

@@ -1,3 +1,11 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_CTO_ARCHITECTURE_AND_3NODE_HANDOFF_2026-09-02.md
 Type: QUESTION
 

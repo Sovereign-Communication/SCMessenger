@@ -1,5 +1,15 @@
 # REJECTION NOTE: task_epic_wiring_draft.md
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Rejected by:** Tier 1 Auditor (deepseek-v4-pro:cloud)
 **Date:** 2026-05-13
 **Reason:** NON-EXECUTABLE

@@ -1,5 +1,13 @@
 # TASK [CRITICAL]: Android reports message delivery failure despite successful delivery (missing receipt/ack)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: PARTIAL - steps 1-2 (core receipt classification + CLI serde_json fix)
 LANDED 2026-07-13. Receipt round-trip now works core-side: incoming Receipt
 messages are classified (after the blocked-peer check, with a fall-through to

@@ -1,5 +1,13 @@
 # Adversarial Security Review — RFC1918-on-RFC1918 LAN Disclosure + Contact Chaining
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** READY FOR SIGN-OFF (AGENTS.md Rule 8 gate)
 **Date:** 2026-08-06
 **Commits under review:**

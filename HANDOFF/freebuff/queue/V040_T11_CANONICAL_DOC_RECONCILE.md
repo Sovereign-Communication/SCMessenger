@@ -1,5 +1,15 @@
 # V040-T11 -- Make the canonical docs self-consistent
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: MERGED -- PR #314 merged 2026-09-19 (verified `gh pr view 314` 2026-09-20).
 Pre-merge note: partial increment; acceptance 1-2 were not fully satisfied on
 the PR branch -- residual canonical-doc drift is post-tag / G5 hygiene, not a

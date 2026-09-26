@@ -1,5 +1,13 @@
 # Task D-04
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Description
 Emulator instrumented-test job: boot scm_pixel_34 AVD headless, run WiFi-Aware/LAN pairing smoke against CLI daemon
 

@@ -1,5 +1,13 @@
 # App Sharing -- iOS Parity, Then Cross-Platform Install Hosting
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN -- awaiting operator decision on iOS distribution channel
 Last updated: 2026-08-05
 Priority: MEDIUM (product feature; behind the transport/ledger/v0.4.0 gates)

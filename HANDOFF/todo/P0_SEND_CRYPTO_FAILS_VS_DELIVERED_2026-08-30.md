@@ -1,5 +1,13 @@
 # P0 -- operator sends "fail crypto" to a (new) node identity while old ids read delivered
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN (filed 2026-08-30)
 Operator report: "I'm failing to send message to the new node ID (something about
 crypto failing), but the old Id still says delivered, but I'm getting no response."

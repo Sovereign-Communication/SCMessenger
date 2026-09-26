@@ -1,5 +1,15 @@
 # V040 candidate merge conflict brief -- #272 into final tree
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04 (~07:30Z)
 Status: DECISION REQUESTED (not resolved, not merged)
 Author: CEO-seat execution (freebuff lane)

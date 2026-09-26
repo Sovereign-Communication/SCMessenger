@@ -1,5 +1,15 @@
 # V040 remaining-findings backlog + v0.4.0 tag gate status (2026-09-17)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Author: CTO seat (Freebuff lane), post-merge-train reconciliation
 Baseline audited: `HANDOFF/audit/SHADOW_AUDIT_V040_V050_ADVERSARIAL_REVIEW_2026-09-16.md`
 (audit evidence baseline was commit `ddca1340`)

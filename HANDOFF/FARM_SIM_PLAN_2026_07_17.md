@@ -1,5 +1,13 @@
 # SCMessenger Farm Simulation Plan (v1.0.0 Validation)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: DRAFT (awaiting Fusion Lite review + Docker verification)
 Authority: Operator directive (farm = primary v1.0.0 validator)
 Date: 2026-07-17

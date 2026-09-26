@@ -7,6 +7,16 @@ time_limit_ms: 30000
 phase: "MICRO_OVERRIDE"
 ---
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 # ORCHESTRATOR DIRECTIVE: Extreme Efficiency Micro-Batch
 
 **Created:** 2026-05-14

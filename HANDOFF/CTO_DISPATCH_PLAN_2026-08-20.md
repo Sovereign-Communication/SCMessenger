@@ -1,5 +1,15 @@
 # CTO dispatch plan -- 2026-08-20 (post-unification seat)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active
 Supersedes: HANDOFF/CTO_DISPATCH_PLAN_2026-08-16.md (merge train completed)
 Entry point: `/CTO`. State file: `HANDOFF/CTO_STATE.md` section 0 + 2026-08-20 addendum.

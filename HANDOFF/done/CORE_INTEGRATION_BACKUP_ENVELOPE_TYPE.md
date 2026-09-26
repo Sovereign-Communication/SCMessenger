@@ -1,5 +1,13 @@
 # TASK: Fix WireEnvelope/Envelope type mismatch in integration_backup.rs (last workspace compile error)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 `core/tests/integration_backup.rs` lines 326 and 389 call:
 ```rust
 let plaintext = decrypt_message_ratcheted(session, &first_envelope)

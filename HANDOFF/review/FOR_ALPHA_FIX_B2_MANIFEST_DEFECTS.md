@@ -1,5 +1,15 @@
 # [FOR ALPHA - FIX] B2 Manifest Re-Anchor Defects (Beta Rejection)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Priority:** P1
 **Parent:** FOR_ALPHA_WIRE_B2_MANIFEST_REANCHOR.md (Beta Audit: REJECTED)
 **Status:** Open

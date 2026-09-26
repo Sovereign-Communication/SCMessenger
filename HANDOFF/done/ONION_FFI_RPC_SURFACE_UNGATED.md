@@ -1,5 +1,13 @@
 # TASK: Onion routing FFI/RPC surface bypasses the onion_routing_enabled gate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO, LOWERED PRIORITY - verify-first step done 2026-07-13. Grepped
 android/app/src/main, iOS/SCMessenger/SCMessenger (excluding Generated/), and
 log-visualizer/browser for any UI callers of prepare_onion_message/

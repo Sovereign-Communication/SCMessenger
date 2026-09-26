@@ -1,5 +1,13 @@
 # Three-node live baseline + update plan (2026-09-19, read-only pass)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Type: EVIDENCE + PLAN. Nothing was updated, restarted, or reconfigured for this
 note -- every line below is a read of a running node, and every command is named.
 Filenames on the nodes carry the build they are running; identities were read

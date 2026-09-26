@@ -1,5 +1,13 @@
 # Gemini 3.5 Flash Orchestrator — Quick Start
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-07-10
 Purpose: Drive Phase 1 backlog forward during native Claude subscription HARDLOCK window (2026-07-08 to 2026-07-10 reset)

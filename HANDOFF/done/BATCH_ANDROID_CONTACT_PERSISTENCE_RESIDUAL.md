@@ -1,5 +1,13 @@
 # BATCH_ANDROID_CONTACT_PERSISTENCE_RESIDUAL
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** VERIFIED REMAINING WORK  Partially fixed, one gap remains
 **Agent:** Android/Kotlin implementer
 **Budget:** 1800s (MIXED tier)

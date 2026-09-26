@@ -1,5 +1,13 @@
 # V0.4.0 Completion Plan — Final Push
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Created: 2026-08-25
 Authority: Executes SHIP_PLAN.md D1-D7; supersedes nothing. Subsidiary to GAP_AUDIT_REMEDIATION_PLAN.md for post-tag sprints.

@@ -1,5 +1,13 @@
 # V040 /cto continuation package: three-node BLE certification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: FINAL, tracked canonical procedure
 Last evidence refresh: 2026-09-08T09:09:56Z
 Owner: the next `/cto` session

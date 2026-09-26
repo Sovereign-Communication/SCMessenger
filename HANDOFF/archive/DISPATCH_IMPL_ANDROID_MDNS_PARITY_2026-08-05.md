@@ -1,5 +1,13 @@
 # DISPATCH: IMPLEMENT -- Android mDNS Discovery Parity (Ledger Gap Phase 1)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Branch: fix/android-mdns-parity-2026-08-05 (operator-approved, PR-first)
 Ticket: HANDOFF/todo/LEDGER_SHARING_ANDROID_NODE_VISIBILITY_2026-08-05.md
 Audit: HANDOFF/review/LEDGER_VISIBILITY_AUDIT_QWENPAID_2026-08-05.md

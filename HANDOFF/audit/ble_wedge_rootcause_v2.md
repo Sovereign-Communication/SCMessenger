@@ -1,5 +1,15 @@
 # BLE Inbound Wedge -- Root Cause Audit v2
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Stats mutex: ELIMINATED
 
 All six sites (483,490,856,1369,1386,1417) are brief: lock, increment, drop.

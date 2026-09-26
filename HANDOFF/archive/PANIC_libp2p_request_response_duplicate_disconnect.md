@@ -1,5 +1,13 @@
 # PANIC: libp2p-request-response assertion on duplicate disconnect
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN -- node-fatal, reproduced on the Windows CLI node
 Found: 2026-08-03 during 5-node prep, by the Haiku node-driver lane
 Severity: HIGH -- kills the process, loses all listeners, blocks unattended running

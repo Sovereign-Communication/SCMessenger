@@ -1,5 +1,13 @@
 # TASK: PQC-04 — Suite advertisement and cryptographically authenticated downgrade
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: PQC-02, PQC-03. Wave 1. Min tier: Sonnet.
 
 ## Why

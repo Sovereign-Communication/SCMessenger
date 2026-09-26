@@ -1,5 +1,13 @@
 # Pixel "Message Store Unavailable" — RCA + field recovery on the merged binaries
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-18 (UTC), device work 14:02Z-14:30Z. Device: Pixel 6a
 (`adb-26261JEGR01896-6pHTac`), app 0.4.0 versionCode 15 installed 2026-09-16
 01:17 (predates the #288 train, #295 coldstart work, #305, and the zombie fix).

@@ -1,5 +1,13 @@
 # SCMessenger Schema Versioning Map
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Audit date:** 2026-07-17
 **Audited by:** Qwen THINK (qwen3-235b-a22b-thinking-2507) + orchestrator gap-fill
 **Ticket:** U7_SCHEMA_DRIFT_AUDIT.md (A-06, Phase 1 Investigation)

@@ -1,5 +1,13 @@
 # TASK: P1-DOCS-T12c  Correct stale T12c finding: WiFi Aware `send()` `false` is a deliberate documented no-op, not a missing write path
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Tier:** [HAIKU] (docs-only, verbatim-scoped).
 **Gates:** none (documentation only; does not touch `core/src/crypto|transport|routing|privacy`).
 

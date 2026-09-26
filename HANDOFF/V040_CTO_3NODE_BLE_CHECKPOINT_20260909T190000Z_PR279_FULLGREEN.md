@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - PR #279 opened, full-green at 2b84879f, nodes re-rolled
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `PR_OPEN_FULLGREEN_REROLLED` (pre-merge; reconcile + rule-8 pending)

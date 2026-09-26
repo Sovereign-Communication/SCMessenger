@@ -1,5 +1,13 @@
 # TASK: Android  Hardcoded User-Facing Strings in ContactsScreen and SettingsScreen
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Context
 
 `.claude/rules/android.md` Pre-Merge Checklist mandates: "No hardcoded strings

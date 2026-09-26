@@ -1,5 +1,13 @@
 # 5-Node Run 2: Fresh Wipe/Install Test Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date**: 2026-08-04
 **Status**: READY FOR EXECUTION
 **Baseline**: `origin/main` at `ba362cc5` (post PR #133)

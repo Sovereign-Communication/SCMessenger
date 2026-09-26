@@ -1,5 +1,15 @@
 # Blind B — independent adversarial verdict: T1/T2 already-landed disposition
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Date:** 2026-09-13
 **Reviewer:** Buffy (Freebuff lane) — NOT independent of the census; independence
 profile disclosed below per the rule-8 tradition of this file series.

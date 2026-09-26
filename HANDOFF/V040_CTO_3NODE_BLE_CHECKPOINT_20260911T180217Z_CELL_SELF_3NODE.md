@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T18:02Z 3-node cell + self-id compare
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Seat: CTO (Pixel passive; Win/AWS API+ssh)
 Evidence: `tmp/cto/LOGPULL_3NODE_CELL_20260911T180217Z/`
 Builds: Pixel `f92f47ba` (SELF-AS-PEER-001 + CELL-ROUTE-AWS-001), Windows/AWS live triangle

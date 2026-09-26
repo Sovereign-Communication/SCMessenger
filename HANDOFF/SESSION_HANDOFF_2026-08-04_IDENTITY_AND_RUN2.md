@@ -1,5 +1,13 @@
 # Session Handoff: Identity Canonicalization + 5-Node Run 2 Readiness
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-08-04
 Branch: `fix/identity-canonicalization-steps2-5` (PR #136, OPEN, CI red)

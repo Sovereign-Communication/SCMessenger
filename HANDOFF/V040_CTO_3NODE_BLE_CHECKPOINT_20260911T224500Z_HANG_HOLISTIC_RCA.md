@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - HANG-LOCK-001: holistic UI-hang RCA + fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `HANG_HOLISTIC_RCA` (recurring Android UI hang class)

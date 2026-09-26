@@ -1,5 +1,13 @@
 # V040 REVIEW DISPATCH -- #267 F-DHT gate rework (adversarial, qwen free coder)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **DISPATCHED 2026-09-01 -- REVIEW FILED + TRIAGED.** Model: qwen3.8-max-0902 (fresh 1M). Verdict: `HANDOFF/review/V040_T13_FDHT_REVIEW_QWEN_2026-09-01.md` (APPROVE with 5 findings). **Triage 2026-09-01 (commit `79b4958c`, pushed):** F1 fixed (case-insensitive pair arm + test), F3 fixed (wire-merge observed_peer_ids + test), F2/F4 documented as intentional (doctrine / dial-scheduler), F5 accepted. PR #267 body carries the full triage table. Gates green (core 1402/0, cli 82/0, clippy 0, wasm32 proof, fmt).
 Priority: P0 -- rework already REJECTED once by the CEO for an exploitable gate; this is the second review
 Lane: **Qwen free -- qwen3.8-max-0902** (fresh 1M quota, 1M context -- operator-enabled 2026-09-01; the hardest assignment gets the strongest model). Full changed files are supplied in context, not just excerpts.

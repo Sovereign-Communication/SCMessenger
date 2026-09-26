@@ -1,5 +1,13 @@
 # V040 PR #278 RULE-8 REVIEW CHAIN CLOSED -- PLAIN APPROVE (R18)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-07 (~09:05Z session clock)
 PR: #278 (Android inbound-display + FFI/ANR fix chain, branch freebuff/v040-android-mesh-resilience)
 Approved head: bfe6bc0b ("R17: owner-tagged lifecycle stashes block cross-thread echo clobber")

@@ -1,5 +1,13 @@
 # 5-node test, run 1: what happened and what to change
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: COMPLETE for the Windows/Android half. iOS/macOS half pending from GPT.
 Date: 2026-08-03
 Evidence: `tmp/bundle/` -- 34k lines across 6 sources from 2 nodes.

@@ -1,5 +1,13 @@
 # TASK: Fix 41 pre-existing compile errors in core lib unit tests (stale struct shapes)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO -- HIGH PRIORITY. This blocks the mandatory compile gate
 (`cargo test --workspace --no-run`) for the ENTIRE workspace, not just these
 two files. Confirmed pre-existing (predates today's PQC-08 work) via a full

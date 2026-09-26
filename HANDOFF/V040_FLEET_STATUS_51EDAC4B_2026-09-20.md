@@ -1,5 +1,13 @@
 # Fleet status — 3 nodes on `51edac4b` (2026-09-20)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Operator: Android **not blocked** — fresh install authorized and executed.
 
 ## Same-SHA cutover

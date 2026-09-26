@@ -1,5 +1,13 @@
 # Four-Node Gate Execution Plan -- Claude CTO/CAO prep
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Created: 2026-08-23
 Owner: Interim CTO/CAO (Claude seat)

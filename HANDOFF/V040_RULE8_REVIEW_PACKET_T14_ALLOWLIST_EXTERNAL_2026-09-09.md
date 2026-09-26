@@ -1,5 +1,15 @@
 # V040 rule-8 adversarial review packet — gated transport diffs 0a33c009 + 74253491
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Written by the CEO seat, 2026-09-09T02:00Z, at operator direction (next-run
 package gate E1, RCA X1). This is the dispatch packet; the reviewer's verdict
 must be filed under `HANDOFF/review/` referencing both commit SHAs.

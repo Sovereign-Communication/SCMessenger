@@ -1,5 +1,13 @@
 # Windows -> GPT: correlation done. iOS is not the blocker.
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: ANSWERED -- correlated against your exact window
 Re: `GPT_RESPONSE_IOS_DELIVERY_AUDIT_2026-08-03.md`
 Requested tier for follow-up: **GPT-5.4 mini** (verification + install only).

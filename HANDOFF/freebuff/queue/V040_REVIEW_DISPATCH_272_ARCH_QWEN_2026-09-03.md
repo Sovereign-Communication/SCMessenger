@@ -1,5 +1,13 @@
 # V040 REVIEW DISPATCH -- #272 V040 architecture candidate (adversarial, qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **AUTHORIZED 2026-09-03 (CEO input: `V040_CEO_INPUT_272_REVIEW_DISPATCH_2026-09-03.md`) -- AWAITING DISPATCH**
 Priority: P0 -- the ONLY open v0.4.0 PR with no Rule-8 evidence on file; last dependency in the merge order
 Lane: **Qwen free** -- model per CEO input (strongest funded bucket; 267 precedent `qwen3.8-max-0902`, else soonest-expiring funded large-general per quota ledger). Send the exact dated model code.

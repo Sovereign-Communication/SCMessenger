@@ -1,5 +1,13 @@
 # TASK: PQC-12 — Post-quantum TLS key exchange on project-controlled transport hops
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: none (independent). Wave 4. Min tier: Sonnet (build-system heavy).
 
 ## Why

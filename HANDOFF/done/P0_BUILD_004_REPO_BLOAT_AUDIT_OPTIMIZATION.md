@@ -1,5 +1,13 @@
 # P0_BUILD_004_REPO_BLOAT_AUDIT_OPTIMIZATION
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0
 **Type:** BUILD
 **Status:**  SAFE PHASE COMPLETE  risky items deferred to backlog

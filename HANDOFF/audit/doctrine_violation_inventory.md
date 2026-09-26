@@ -1,5 +1,13 @@
 # Doctrine Violation Inventory: "relay" used as NOUN for network participants
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 > **Doctrine**: This project has NO "relays". Every node is a full relay, so
 > the word "relay" as a NOUN referring to a network participant is wrong --
 > say "node". Legitimate exceptions exist (see §EXCEPTIONS).

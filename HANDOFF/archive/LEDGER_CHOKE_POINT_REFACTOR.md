@@ -1,5 +1,13 @@
 # Ledger choke-point refactor -- stop patching call sites
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO (operator-approved 2026-07-26)
 Created: 2026-07-26
 Scope: prerequisite for closing the ledger findings; blocks 0.4.0 sign-off

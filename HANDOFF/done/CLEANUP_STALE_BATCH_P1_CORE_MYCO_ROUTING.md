@@ -1,5 +1,15 @@
 # CLEANUP: Stale BATCH_P1_CORE_MYCO_ROUTING from todo/
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** VERIFIED COMPLETE  No implementation work required
 **Agent:** Any (micro cleanup)
 **Budget:** 0s (instant)

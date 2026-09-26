@@ -1,5 +1,13 @@
 # V040 REVIEW DISPATCH -- #270 ephemeral-port P0 (adversarial, qwen free max)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **DISPATCHED 2026-09-01 -- REVIEW FILED, RESOLVED.** Model: qwen3-30b-a3b-thinking-2507 (qwq-plus non-responsive -> same-tier fallback). Verdict: `HANDOFF/review/V040_T14_EPHEMERAL_REVIEW_QWEN_2026-09-01.md`. **Resolution 2026-09-01: finding REJECTED after full investigation** -- the promotion sites sit inside the `#[cfg(not(target_arch="wasm32"))]` event loop; the wasm loop records observations for diagnostics parity only (zero add_external_address in the wasm build). Guard kept; commit `6fd0230b` (comments only) documents the empty-set semantics. Effective disposition: APPROVE. PR #270 body updated with the resolution.
 Priority: P0 -- the whole mesh was advertising a non-dialable address at the source; this PR fixes it
 Lane: **Qwen free -- qwq-plus** (reasoning tier, 906,398 remaining per docs/QWEN_QUOTA_LEDGER.md -- adversarial review is reasoning-tier work; spend-first bucket, expires 10-06)

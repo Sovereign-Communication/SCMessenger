@@ -1,5 +1,15 @@
 # OVERNIGHT BRIEF — 2026-06-06 01:35 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Lucas directive:** "Iterate on all unfinished work product. Make sure that wakes Claude when you drop it. And ensure Claude keeps working all night."
 
 **Quota state:** 5h=25% (TIER 1 HEAVY-LIFT, unlimited budget), 7d=96.4% (TIER 4 territory, no HARDLOCK trigger).

@@ -1,5 +1,13 @@
 # V040-T7 -- Stage the Android work so device time is verification, never authoring
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: MERGED -- PR #312 merged 2026-09-19T23:05:21Z (verified `gh pr view 312`
 2026-09-20). Pre-merge note: branch `freebuff/t7-android-parity-staging`, commit
 `4878eab5`; staging scripts remain the device-verification path. Do not

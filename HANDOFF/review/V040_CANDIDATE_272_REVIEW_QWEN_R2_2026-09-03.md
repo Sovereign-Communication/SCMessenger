@@ -1,5 +1,13 @@
 # PR #272 re-review (round 2) — qwen verdict + triage record
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - Model: qwen3.8-2.4t-a95b (ledger-confirmed 100% status, 1M context)
 - Reviewed head: fc0f5ae0; fixed head: 3891d11c (pushed, PR body carries the table)
 - Verdict: REQUEST_CHANGES — 6 findings; 4 VERIFIED REAL + 1 SPLIT + 1 NOT-APPLICABLE

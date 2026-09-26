@@ -1,5 +1,15 @@
 # PQC-05/06/07 Adversarial Review — Consolidated Verdict
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## UPDATE 2026-07-12: gap did NOT close, changed shape — VERDICT STILL FAIL
 
 The 2026-07-11 pass below found the PQ ratchet functions were completely

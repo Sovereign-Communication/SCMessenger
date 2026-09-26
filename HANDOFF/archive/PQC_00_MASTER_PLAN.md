@@ -1,5 +1,13 @@
 # TASK: PQC-00 — Post-Quantum Migration Master Plan (READ FIRST, DO NOT IMPLEMENT FROM THIS FILE)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Purpose
 
 Index and shared rules for the post-quantum cryptography (PQC) workstream. Source analysis: `docs/QUANTUM_READINESS_AUDIT.md` (2026-07-03). Every PQC task file references this one. This file itself contains no implementation work — do not move it to done/ until PQC-01 through PQC-14 are all done.

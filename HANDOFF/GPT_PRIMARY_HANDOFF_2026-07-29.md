@@ -1,5 +1,13 @@
 # GPT PRIMARY-DRIVER HANDOFF (operator directive 2026-07-29)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: ACTIVE
 Roles per operator: GPT (Mac, GPT-5.6 Sol) = PRIMARY orchestrator brain,
 judgement, and iOS implementation. Windows Claude (qwen3.8-max-preview,

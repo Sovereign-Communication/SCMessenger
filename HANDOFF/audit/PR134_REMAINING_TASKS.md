@@ -1,5 +1,13 @@
 # PR #134: Remaining Tasks to Resolve All 5-Node Run 1 Findings
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status**: OPEN
 **Date**: 2026-08-04
 **Baseline**: `origin/main` at `ba362cc5` (post PR #133 merge)

@@ -1,5 +1,15 @@
 # PR #267 re-review (round 2) — qwen verdict + disposition record
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 - Model: qwen3.8-2.4t-a95b (ledger-confirmed 100%, 1M context)
 - Reviewed head: 80197ef5 (triage 79b4958c + hostile-re-review fix 80197ef5)
 - Verdict: REQUEST_CHANGES — 4 findings; 1 Medium, 2 Low, 1 Informational

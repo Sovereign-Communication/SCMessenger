@@ -1,5 +1,13 @@
 # desktop_bridge: precise wiring spec (research complete, implementation NOT started)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Written by:** Claude (native Cowork session), 2026-07-03. This is a research handoff, not a
 claim of completion. I have no local Rust toolchain in this sandbox (no cargo, no rustc, no
 package-install rights) and could not compile-verify any of this. Everything below is derived

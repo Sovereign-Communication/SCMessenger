@@ -1,5 +1,13 @@
 # SCMessenger Unification V3 — Delivery / Ack Convergence Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **RESULT — verified 2026-08-28 (D1–D3 + R1+R2 deployed, soak-verified)**
 Owner: Operator (Treystu) delegation request. Branches from `fix/android-receipt-envelope`.
 Supersedes nothing; extends `UNIFICATION_V2_RESULTS_PLAN.md` (Verdict 4) with the **delivery layer**.

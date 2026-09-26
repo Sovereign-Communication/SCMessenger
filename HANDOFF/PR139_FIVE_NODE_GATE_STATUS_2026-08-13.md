@@ -1,5 +1,13 @@
 # PR #139 Five-Node Gate Status — 2026-08-13
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Authority:** Windows Orchestrator (from Mac lane exit handoff)
 **Session constraint:** No builds/tests (Antigravity heavy compute)
 **Status:** Ready for operator to proceed with node rebuild and 5-node gate

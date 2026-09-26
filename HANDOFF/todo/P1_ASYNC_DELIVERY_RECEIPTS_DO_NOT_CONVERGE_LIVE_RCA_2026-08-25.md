@@ -1,5 +1,13 @@
 # P1_ASYNC_DELIVERY_RECEIPTS_DO_NOT_CONVERGE — LIVE REPRODUCTION + RCA (2026-08-25)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open (supersedes prior framing; now has live two-device evidence)
 Discovered-live: 2026-08-25, Windows(Pixel 6a pair) @ main `0064d49a`
 Severity: HIGH — blocks SHIP_PLAN D4 ("both see a delivery receipt")

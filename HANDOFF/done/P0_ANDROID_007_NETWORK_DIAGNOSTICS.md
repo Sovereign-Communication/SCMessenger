@@ -1,5 +1,13 @@
 # P0_ANDROID_007: Network Diagnostics Implementation
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 CRITICAL
 **Platform:** Android
 **Status:** Open

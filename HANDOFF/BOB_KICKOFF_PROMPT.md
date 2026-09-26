@@ -1,3 +1,13 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Read `docs/orchestration/BOB_MISSION_BRIEF_V1_0_0.md` at the repo root first. It's your mission for this run, in priority order, with an explicit authority grant and a list of what's already changed since the HANDOFF docs were last written. It points to three new tickets in `HANDOFF/todo/` (`CI_RED_ON_MAIN_ALL_FEATURES.md`, `PROVE_SECOND_REAL_ENDPOINT_DELIVERY.md`, `V1_INSTALL_ARTIFACT_FOR_ALPHA_TESTERS.md`) plus the existing backlog in `HANDOFF/todo/_QUEUE.md`. Fold this into that, don't run a parallel system.
 
 Operating attitude for this run:
