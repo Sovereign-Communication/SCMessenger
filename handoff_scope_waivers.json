@@ -1,5 +1,34 @@
 {
   "_note": "Owner-signed, per-document exemptions from the handoff ownership gate. A waiver SUPPRESSES enforcement for exactly one document; it never writes a scope block into that document, so an exempted document is never made to look compliant. Use a waiver only when a document cannot honestly carry `foreign_material: NONE` -- for example one that legitimately records another product's tooling. Stamping such a document is a false attestation, which is precisely what this gate exists to prevent. Every entry requires all five fields (path, owner, reason, ticket, date) and is audited on every run: an entry naming a path that is not a tracked handoff document, or whose document no longer trips the foreign-alias detector, FAILS the gate. An exemption therefore cannot silently outlive its reason. Validate with: python scripts/validate_handoff_scope.py --repo-root . --self-test",
   "schema": 1,
-  "waivers": []
+  "waivers": [
+    {
+      "path": "HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md",
+      "owner": "Sovereign-Communication/SCMessenger operator (authorized 2026-09-26)",
+      "reason": "dogfood run record naming the Harness-MCP tooling that drove the run; it cannot honestly declare foreign_material: NONE, and rewriting an active run record to pass a lint would falsify it",
+      "ticket": "#372",
+      "date": "2026-09-26"
+    },
+    {
+      "path": "HANDOFF/plans/OC_DOGFOOD_INCORPORATION_PLAN.md",
+      "owner": "Sovereign-Communication/SCMessenger operator (authorized 2026-09-26)",
+      "reason": "incorporation plan citing both Harness CLI and Harness-MCP as the source tooling; the citation is the plan's subject matter, not stray foreign content",
+      "ticket": "#372",
+      "date": "2026-09-26"
+    },
+    {
+      "path": "HANDOFF/review/D1_D9_HARNESS_ADVERSARIAL_FINDINGS_2026-09-22.md",
+      "owner": "Sovereign-Communication/SCMessenger operator (authorized 2026-09-26)",
+      "reason": "adversarial findings whose subject is the Harness-MCP review tooling; Rule-8 evidence under active review, so it is neither rewritten nor stamped",
+      "ticket": "#372",
+      "date": "2026-09-26"
+    },
+    {
+      "path": "HANDOFF/review/OC_LANE_AUDIT_2026-09-22.md",
+      "owner": "Sovereign-Communication/SCMessenger operator (authorized 2026-09-26)",
+      "reason": "lane audit that records the Harness CLI as the audited surface; the reference is the finding, not contamination",
+      "ticket": "#372",
+      "date": "2026-09-26"
+    }
+  ]
 }

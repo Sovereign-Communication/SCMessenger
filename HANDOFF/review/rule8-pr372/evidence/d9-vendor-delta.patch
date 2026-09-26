@@ -1,0 +1,456 @@
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/either.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/either.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/either.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/either.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -149,7 +149,14 @@
+             (Either::Right(right), Either::Right(event)) => {
+                 right.on_connection_handler_event(peer_id, connection_id, event);
+             }
+-            _ => unreachable!(),
++            // VENDORED PATCH (SCMessenger D9): was `unreachable!()` — the behaviour-level
++            // mirror of the handler-side desync that panicked live on stock 0.48.0. The
++            // event is dropped with a warning instead of panicking the behaviour task.
++            _ => {
++                tracing::warn!(
++                    "D9-DEGRADE: Either on_connection_handler_event event/handler side mismatch; dropping event"
++                );
++            }
+         }
+     }
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/external_addresses.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -84,7 +84,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use std::sync::LazyLock;
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/listen_addresses.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -32,7 +32,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use libp2p_core::{multiaddr::Protocol, transport::ListenerId};
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/behaviour/peer_addresses.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -93,7 +93,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use std::{io, sync::LazyLock};
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool/dial_ranker.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -390,7 +390,7 @@
+             || is_unicast_link_local(addr))
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use futures::FutureExt;
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/pool.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/pool.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -858,7 +858,9 @@
+     }
+
+     fn extract(mut self) -> StreamMuxerBox {
+-        self.connection.take().unwrap()
++        self.connection
++            .take()
++            .expect("connection must be present while being dropped")
+     }
+ }
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection/supported_protocols.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -36,7 +36,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use super::*;
+     use crate::handler::{ProtocolsAdded, ProtocolsRemoved};
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/connection.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/connection.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -471,7 +471,7 @@
+         }
+     }
+
+-    #[cfg(test)]
++    #[cfg(all(test, feature = "upstream-tests"))]
+     fn poll_noop_waker(&mut self) -> Poll<Result<Event<THandler::ToBehaviour>, ConnectionError>> {
+         Pin::new(self).poll(&mut Context::from_waker(futures::task::noop_waker_ref()))
+     }
+@@ -779,7 +779,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use std::{
+         convert::Infallible,
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/either.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler/either.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/either.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler/either.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -37,19 +37,27 @@
+     RIP: InboundUpgradeSend,
+     LIP: InboundUpgradeSend,
+ {
++    // VENDORED PATCH (SCMessenger D9): returns Option so a protocol/info side desync
++    // is reported to the caller instead of panicking (`_ => unreachable!()` upstream).
++    // Panics were observed live on stock 0.48.0 right after identify.
+     pub(crate) fn transpose(
+         self,
+-    ) -> Either<FullyNegotiatedInbound<LIP, LIOI>, FullyNegotiatedInbound<RIP, RIOI>> {
++    ) -> Option<Either<FullyNegotiatedInbound<LIP, LIOI>, FullyNegotiatedInbound<RIP, RIOI>>> {
+         match self {
+             FullyNegotiatedInbound {
+                 protocol: future::Either::Left(protocol),
+                 info: Either::Left(info),
+-            } => Either::Left(FullyNegotiatedInbound { protocol, info }),
++            } => Some(Either::Left(FullyNegotiatedInbound { protocol, info })),
+             FullyNegotiatedInbound {
+                 protocol: future::Either::Right(protocol),
+                 info: Either::Right(info),
+-            } => Either::Right(FullyNegotiatedInbound { protocol, info }),
+-            _ => unreachable!(),
++            } => Some(Either::Right(FullyNegotiatedInbound { protocol, info })),
++            _ => {
++                tracing::debug!(
++                    "D9-DEGRADE: Either FullyNegotiatedInbound protocol/info side mismatch; dropping"
++                );
++                None
++            }
+         }
+     }
+ }
+@@ -60,17 +68,25 @@
+     RIP: InboundUpgradeSend,
+     LIP: InboundUpgradeSend,
+ {
+-    fn transpose(self) -> Either<ListenUpgradeError<LIOI, LIP>, ListenUpgradeError<RIOI, RIP>> {
++    // VENDORED PATCH (SCMessenger D9): Option instead of `unreachable!()` on side desync.
++    fn transpose(
++        self,
++    ) -> Option<Either<ListenUpgradeError<LIOI, LIP>, ListenUpgradeError<RIOI, RIP>>> {
+         match self {
+             ListenUpgradeError {
+                 error: Either::Left(error),
+                 info: Either::Left(info),
+-            } => Either::Left(ListenUpgradeError { error, info }),
++            } => Some(Either::Left(ListenUpgradeError { error, info })),
+             ListenUpgradeError {
+                 error: Either::Right(error),
+                 info: Either::Right(info),
+-            } => Either::Right(ListenUpgradeError { error, info }),
+-            _ => unreachable!(),
++            } => Some(Either::Right(ListenUpgradeError { error, info })),
++            _ => {
++                tracing::debug!(
++                    "D9-DEGRADE: Either ListenUpgradeError error/info side mismatch; dropping"
++                );
++                None
++            }
+         }
+     }
+ }
+@@ -107,7 +123,14 @@
+         match (self, event) {
+             (Either::Left(handler), Either::Left(event)) => handler.on_behaviour_event(event),
+             (Either::Right(handler), Either::Right(event)) => handler.on_behaviour_event(event),
+-            _ => unreachable!(),
++            // VENDORED PATCH (SCMessenger D9): was `unreachable!()`; panics observed live
++            // on stock 0.48.0 (tokio worker task died on this line after identify). A
++            // desynced FromBehaviour event is dropped with a warning instead.
++            _ => {
++                tracing::warn!(
++                    "D9-DEGRADE: Either on_behaviour_event event/handler side mismatch; dropping event"
++                );
++            }
+         }
+     }
+
+@@ -159,15 +182,16 @@
+         match event {
+             ConnectionEvent::FullyNegotiatedInbound(fully_negotiated_inbound) => {
+                 match (fully_negotiated_inbound.transpose(), self) {
+-                    (Either::Left(fully_negotiated_inbound), Either::Left(handler)) => handler
+-                        .on_connection_event(ConnectionEvent::FullyNegotiatedInbound(
+-                            fully_negotiated_inbound,
+-                        )),
+-                    (Either::Right(fully_negotiated_inbound), Either::Right(handler)) => handler
+-                        .on_connection_event(ConnectionEvent::FullyNegotiatedInbound(
+-                            fully_negotiated_inbound,
+-                        )),
+-                    _ => unreachable!(),
++                    (Some(Either::Left(fni)), Either::Left(handler)) => {
++                        handler.on_connection_event(ConnectionEvent::FullyNegotiatedInbound(fni))
++                    }
++                    (Some(Either::Right(fni)), Either::Right(handler)) => {
++                        handler.on_connection_event(ConnectionEvent::FullyNegotiatedInbound(fni))
++                    }
++                    // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
++                    (None, _) | (Some(_), _) => tracing::debug!(
++                        "D9-DEGRADE: Either FullyNegotiatedInbound handler side mismatch; dropping"
++                    ),
+                 }
+             }
+             ConnectionEvent::FullyNegotiatedOutbound(fully_negotiated_outbound) => {
+@@ -180,7 +204,10 @@
+                         .on_connection_event(ConnectionEvent::FullyNegotiatedOutbound(
+                             fully_negotiated_outbound,
+                         )),
+-                    _ => unreachable!(),
++                    // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
++                    _ => tracing::debug!(
++                        "D9-DEGRADE: Either FullyNegotiatedOutbound handler side mismatch; dropping"
++                    ),
+                 }
+             }
+             ConnectionEvent::DialUpgradeError(dial_upgrade_error) => {
+@@ -189,20 +216,24 @@
+                         .on_connection_event(ConnectionEvent::DialUpgradeError(dial_upgrade_error)),
+                     (Either::Right(dial_upgrade_error), Either::Right(handler)) => handler
+                         .on_connection_event(ConnectionEvent::DialUpgradeError(dial_upgrade_error)),
+-                    _ => unreachable!(),
++                    // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
++                    _ => tracing::debug!(
++                        "D9-DEGRADE: Either DialUpgradeError handler side mismatch; dropping"
++                    ),
+                 }
+             }
+             ConnectionEvent::ListenUpgradeError(listen_upgrade_error) => {
+                 match (listen_upgrade_error.transpose(), self) {
+-                    (Either::Left(listen_upgrade_error), Either::Left(handler)) => handler
+-                        .on_connection_event(ConnectionEvent::ListenUpgradeError(
+-                            listen_upgrade_error,
+-                        )),
+-                    (Either::Right(listen_upgrade_error), Either::Right(handler)) => handler
+-                        .on_connection_event(ConnectionEvent::ListenUpgradeError(
+-                            listen_upgrade_error,
+-                        )),
+-                    _ => unreachable!(),
++                    (Some(Either::Left(lue)), Either::Left(handler)) => {
++                        handler.on_connection_event(ConnectionEvent::ListenUpgradeError(lue))
++                    }
++                    (Some(Either::Right(lue)), Either::Right(handler)) => {
++                        handler.on_connection_event(ConnectionEvent::ListenUpgradeError(lue))
++                    }
++                    // VENDORED PATCH (SCMessenger D9): was `_ => unreachable!()`.
++                    (None, _) | (Some(_), _) => tracing::debug!(
++                        "D9-DEGRADE: Either ListenUpgradeError handler side mismatch; dropping"
++                    ),
+                 }
+             }
+             ConnectionEvent::AddressChange(address_change) => match self {
+@@ -232,3 +263,121 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::dummy;
++    use libp2p_core::upgrade::{DeniedUpgrade, InboundUpgrade, UpgradeInfo};
++    use std::{convert::Infallible, iter};
++
++    /// Minimal inbound upgrade whose `Output` is constructible, so the test can
++    /// build `FullyNegotiatedInbound` values directly.
++    struct UnitUpgrade;
++
++    // UpgradeInfoSend is blanket-implemented for all `UpgradeInfo + Send + 'static`.
++    impl UpgradeInfo for UnitUpgrade {
++        type Info = &'static str;
++        type InfoIter = iter::Once<&'static str>;
++
++        fn protocol_info(&self) -> Self::InfoIter {
++            iter::once("/scm-test/1.0.0")
++        }
++    }
++
++    impl InboundUpgrade<crate::Stream> for UnitUpgrade {
++        type Output = ();
++        type Error = Infallible;
++        type Future = futures::future::Ready<Result<(), Infallible>>;
++
++        fn upgrade_inbound(self, _socket: crate::Stream, _info: Self::Info) -> Self::Future {
++            futures::future::ready(Ok(()))
++        }
++    }
++
++    /// Handler with a constructible `FromBehaviour` (`()`) — the dummy handler's
++    /// `FromBehaviour` is `Infallible`, which cannot force a side desync.
++    struct UnitHandler;
++
++    impl ConnectionHandler for UnitHandler {
++        type FromBehaviour = ();
++        type ToBehaviour = ();
++        type InboundProtocol = DeniedUpgrade;
++        type OutboundProtocol = DeniedUpgrade;
++        type InboundOpenInfo = ();
++        type OutboundOpenInfo = ();
++
++        fn listen_protocol(
++            &self,
++        ) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
++            SubstreamProtocol::new(DeniedUpgrade, ())
++        }
++
++        fn on_behaviour_event(&mut self, _event: Self::FromBehaviour) {}
++
++        fn poll(
++            &mut self,
++            _cx: &mut Context<'_>,
++        ) -> Poll<
++            ConnectionHandlerEvent<
++                Self::OutboundProtocol,
++                Self::OutboundOpenInfo,
++                Self::ToBehaviour,
++            >,
++        > {
++            Poll::Pending
++        }
++
++        fn poll_close(&mut self, _cx: &mut Context<'_>) -> Poll<Option<Self::ToBehaviour>> {
++            Poll::Ready(None)
++        }
++
++        fn on_connection_event(
++            &mut self,
++            _event: ConnectionEvent<Self::InboundProtocol, Self::OutboundProtocol>,
++        ) {
++        }
++    }
++
++    /// REGRESSION (SCMessenger D9): upstream 0.48.0 panics with `unreachable!()`
++    /// when a `FullyNegotiatedInbound`'s protocol and info sides disagree. The
++    /// patched code must degrade to `None` instead of panicking.
++    #[test]
++    fn transpose_desync_returns_none_instead_of_panicking() {
++        let event: FullyNegotiatedInbound<
++            Either<SendWrapper<UnitUpgrade>, SendWrapper<UnitUpgrade>>,
++            Either<(), ()>,
++        > = FullyNegotiatedInbound {
++            // `protocol` is the upgraded Output (`()` for UnitUpgrade), not the upgrade.
++            protocol: future::Either::Left(()),
++            info: Either::Right(()), // side desync
++        };
++        assert!(
++            event.transpose().is_none(),
++            "side-desynced FullyNegotiatedInbound must degrade to None, not panic (SCMessenger D9)"
++        );
++    }
++
++    /// Matched sides must still route exactly as upstream does.
++    #[test]
++    fn transpose_matched_sides_still_route() {
++        let event: FullyNegotiatedInbound<
++            Either<SendWrapper<UnitUpgrade>, SendWrapper<UnitUpgrade>>,
++            Either<(), ()>,
++        > = FullyNegotiatedInbound {
++            protocol: future::Either::Left(()),
++            info: Either::Left(()),
++        };
++        assert!(event.transpose().is_some());
++    }
++
++    /// REGRESSION (SCMessenger D9): the live panic fired on this exact arm — a
++    /// `FromBehaviour` event routed to the wrong side of an `Either` handler
++    /// tree right after identify. Must drop with a warning, not panic.
++    #[test]
++    fn on_behaviour_event_side_desync_must_not_panic() {
++        let mut handler: Either<dummy::ConnectionHandler, UnitHandler> =
++            Either::Left(dummy::ConnectionHandler);
++        handler.on_behaviour_event(Either::Right(())); // desync: Left handler, Right event
++    }
++}
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/one_shot.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler/one_shot.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler/one_shot.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler/one_shot.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -212,7 +212,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use std::convert::Infallible;
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/handler.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/handler.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -750,7 +750,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod test {
+     use super::*;
+
+diff -ru tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/lib.rs
+--- tmp/rule8-pr372/upstream/libp2p-swarm-0.48.0/src/lib.rs	2006-07-23 15:21:28.000000000 -1000
++++ tmp/rule8-pr372/vendor-head/vendor/libp2p-swarm-0.48.0/src/lib.rs	2026-09-25 07:10:43.000000000 -1000
+@@ -57,7 +57,7 @@
+ mod executor;
+ mod stream;
+ mod stream_protocol;
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod test;
+ mod upgrade;
+
+@@ -776,7 +776,8 @@
+                     .iter_established_connections_of_peer(&peer_id)
+                     .collect::<Vec<_>>();
+                 let num_established = NonZeroU32::new(
+-                    u32::try_from(other_established_connection_ids.len() + 1).unwrap(),
++                    u32::try_from(other_established_connection_ids.len() + 1)
++                        .expect("established connection count fits u32"),
+                 )
+                 .expect("n + 1 is always non-zero; qed");
+
+@@ -895,8 +896,8 @@
+                 }
+                 let peer_id = connected.peer_id;
+                 let endpoint = connected.endpoint;
+-                let num_established =
+-                    u32::try_from(remaining_established_connection_ids.len()).unwrap();
++                let num_established = u32::try_from(remaining_established_connection_ids.len())
++                    .expect("established connection count fits u32");
+
+                 self.behaviour
+                     .on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
+@@ -1782,7 +1783,7 @@
+     }
+ }
+
+-#[cfg(test)]
++#[cfg(all(test, feature = "upstream-tests"))]
+ mod tests {
+     use libp2p_core::{
+         multiaddr,

@@ -124,9 +124,26 @@ class MeshServiceViewModel @Inject constructor(
      * Toggle the mesh service on/off.
      */
     fun toggleService() {
-        when (serviceState.value) {
+        // Read the repository source directly so a lifecycle transition is not
+        // hidden by this ViewModel's WhileSubscribed stateIn cache when the
+        // user taps during STARTING or STOPPING.
+        when (meshRepository.serviceState.value) {
             uniffi.api.ServiceState.STOPPED -> startService()
             uniffi.api.ServiceState.RUNNING -> stopService()
+            uniffi.api.ServiceState.STARTING -> {
+                // A second tap while startup is still in flight must remain
+                // actionable. Treat it as a request to cancel startup instead
+                // of silently ignoring the user's input.
+                Timber.i("Mesh toggle requested during STARTING; stopping pending service")
+                stopService()
+            }
+            uniffi.api.ServiceState.STOPPING -> {
+                // Stop teardown is asynchronous. An explicit second tap means
+                // resume once the service receives the start command; the
+                // foreground service serializes the lifecycle transition.
+                Timber.i("Mesh toggle requested during STOPPING; starting service")
+                startService()
+            }
             else -> {
                 Timber.w("Cannot toggle service in state: ${serviceState.value}")
             }

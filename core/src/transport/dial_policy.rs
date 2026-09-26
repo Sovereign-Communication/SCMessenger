@@ -371,10 +371,33 @@ type RelayEntry = (PeerId, Vec<Multiaddr>);
 ///
 /// Once a peer is connected, we construct circuit-relay multiaddrs to that peer
 /// through known relay peers. This improves connectivity for future dials.
+///
+/// The ladder is bounded on both axes (`RELAY_TRACKING_CAP` tracked relays,
+/// [`MAX_RELAY_LADDER_ADDRS`] emitted circuits per target) so the synthesised
+/// candidate ladder a single peer can produce has a fixed width, and the
+/// per-peer admission ceiling in `per_peer_cap` is sized against that width.
+/// See that module for the derivation.
 pub struct CircuitRelayLadder {
-    /// List of known relay peers (peer ID + their external addresses).
+    /// List of known relay peers (peer ID + their external addresses), most
+    /// recently registered first (see `add_relay`).
     relays: Arc<RwLock<Vec<RelayEntry>>>,
 }
+
+/// How many relay peers one node tracks, newest-registration-wins. The
+/// circuit ladder is tried after the direct ports, so a bounded set of recent
+/// relays is the useful set; unbounded growth only widens every peer's dial
+/// ladder past what the admission ceiling can admit.
+pub const RELAY_TRACKING_CAP: usize = 8;
+
+/// Cap on relay CIRCUIT ADDRESSES EMITTED for ONE target peer (see
+/// `build_relay_addresses`), so the synthesised ladder stays inside the
+/// per-peer admission ceiling with room for the direct-port ladder (3 direct
+/// ports + 1 last-good). The most recently registered relays are offered the
+/// slots first, in registration order. A relay with no usable address emits
+/// nothing and does NOT consume a slot, so one nested/DNS-only/portless relay
+/// cannot hide usable relays behind it; the emitted list itself is the bound,
+/// so one relay advertising many addresses still cannot widen the ladder.
+pub const MAX_RELAY_LADDER_ADDRS: usize = 4;
 
 impl CircuitRelayLadder {
     /// Create a new circuit-relay ladder.
@@ -394,9 +417,15 @@ impl CircuitRelayLadder {
         debug!(
             relay_peer_id=%relay_peer_id,
             addr_count=external_addrs.len(),
+            tracked_relays=relays.len().saturating_add(1),
+            relay_tracking_cap=RELAY_TRACKING_CAP,
             "[CIRCUIT-RELAY] Registered relay peer"
         );
-        relays.push((relay_peer_id, external_addrs));
+        // Newest first, so the bounded set and the build-time cap both prefer
+        // the relays this node has seen most recently.
+        relays.insert(0, (relay_peer_id, external_addrs));
+        // Bounded: keep the most recently registered relays.
+        relays.truncate(RELAY_TRACKING_CAP);
     }
 
     /// Remove a relay after its authenticated connection is gone.
@@ -406,17 +435,33 @@ impl CircuitRelayLadder {
             .retain(|(peer_id, _)| peer_id != relay_peer_id);
     }
 
-    /// Build a list of circuit-relay multiaddrs to a target peer through known relays.
+    /// Build circuit-relay multiaddrs to a target peer through known relays.
     ///
-    /// Returns a list of circuit-relay addresses in the format:
-    /// `/ip4/<relay-ip>/tcp/<relay-port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>`
+    /// Returns at most [`MAX_RELAY_LADDER_ADDRS`] addresses, newest-registered
+    /// relay first, in the format
+    /// `/ip4/<relay-ip>/tcp/<relay-port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>`.
+    ///
+    /// A slot is consumed only by a VALID circuit that is actually emitted, so
+    /// a relay whose addresses are all nested, DNS-only, or portless cannot
+    /// consume the budget and hide a usable relay behind it. Duplicate circuits
+    /// are collapsed. Once the emitted budget is full, older relays are not
+    /// consulted: the ladder prefers recency and the bound protects admission.
     pub fn build_relay_addresses(&self, target_peer_id: PeerId) -> Vec<Multiaddr> {
         use libp2p::multiaddr::Protocol;
 
         let relays = self.relays.read();
-        let mut relay_addrs = HashSet::new();
+        let mut relay_addrs: Vec<Multiaddr> = Vec::with_capacity(MAX_RELAY_LADDER_ADDRS);
+        let mut seen: HashSet<Multiaddr> = HashSet::with_capacity(MAX_RELAY_LADDER_ADDRS);
+        let mut skipped_invalid = 0usize;
 
+        // `relays` is newest-first (see `add_relay`), so walking it in order
+        // gives the newest relays the first slots. The loop bound is only a
+        // work bound: RELAY_TRACKING_CAP already caps the tracked set, so no
+        // path can make this scan unbounded even with a huge input.
         for (relay_pid, external_addrs) in relays.iter() {
+            if relay_addrs.len() >= MAX_RELAY_LADDER_ADDRS {
+                break;
+            }
             // A relay cannot provide a useful circuit to itself. More
             // importantly, accepting a self-target here creates a circuit
             // path that returns to the originating node and multiplies during
@@ -425,6 +470,9 @@ impl CircuitRelayLadder {
                 continue;
             }
             for relay_addr in external_addrs {
+                if relay_addrs.len() >= MAX_RELAY_LADDER_ADDRS {
+                    break;
+                }
                 // Only use direct addresses with a proper IP and port. Identify
                 // can repeat /p2p and /p2p-circuit components when a peer has
                 // already used a relay; appending another circuit suffix would
@@ -433,6 +481,7 @@ impl CircuitRelayLadder {
                     .iter()
                     .any(|proto| matches!(proto, Protocol::P2pCircuit))
                 {
+                    skipped_invalid += 1;
                     continue;
                 }
                 // Preserve each transport component (IP, port, transport wrappers)
@@ -457,13 +506,25 @@ impl CircuitRelayLadder {
                     }
                 }
 
-                if has_ip && has_port {
-                    // Construct circuit-relay address: base -> /p2p/<relay> -> /p2p-circuit -> /p2p/<target>
-                    let mut circuit_addr = direct_addr;
-                    circuit_addr.push(Protocol::P2p(*relay_pid));
-                    circuit_addr.push(Protocol::P2pCircuit);
-                    circuit_addr.push(Protocol::P2p(target_peer_id));
-                    relay_addrs.insert(circuit_addr);
+                if !has_ip || !has_port {
+                    // DNS-only, portless, or otherwise undialable prefix. This is
+                    // recorded so the next relay, not this one, gets the slot.
+                    skipped_invalid += 1;
+                    continue;
+                }
+
+                // Construct circuit-relay address: base -> /p2p/<relay> -> /p2p-circuit -> /p2p/<target>
+                let mut circuit_addr = direct_addr;
+                circuit_addr.push(Protocol::P2p(*relay_pid));
+                circuit_addr.push(Protocol::P2pCircuit);
+                circuit_addr.push(Protocol::P2p(target_peer_id));
+                // Duplicate advertisements are common after a relay's address
+                // list is re-advertised; collapse them so they cannot eat the
+                // emitted budget.
+                if seen.insert(circuit_addr.clone()) {
+                    relay_addrs.push(circuit_addr);
+                } else {
+                    skipped_invalid += 1;
                 }
             }
         }
@@ -472,11 +533,13 @@ impl CircuitRelayLadder {
             debug!(
                 target_peer_id=%target_peer_id,
                 relay_count=relay_addrs.len(),
-                "[CIRCUIT-RELAY] Built relay addresses for target"
+                cap=MAX_RELAY_LADDER_ADDRS,
+                skipped_invalid,
+                "[CIRCUIT-RELAY] Built relay addresses for target, newest relays first"
             );
         }
 
-        relay_addrs.into_iter().collect()
+        relay_addrs
     }
 }
 
@@ -783,6 +846,232 @@ mod tests {
                 .to_string()
                 .contains(&format!("/p2p/{relay_pid}/p2p-circuit/p2p/{relay_pid}"))
         }));
+    }
+
+    /// BOUNDARY (B5): a node that has seen many relay peers must not produce an
+    /// unbounded candidate ladder for one target -- that is what made the
+    /// admission ceiling look like it needed to be 16. Both the tracked set and
+    /// the emitted circuits are capped, newest relay wins the first slots, and a
+    /// relay already selected is not displaced by a later one.
+    #[test]
+    fn circuit_relay_ladder_is_bounded_newest_first() {
+        let ladder = CircuitRelayLadder::new();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        // Register more relays than either cap.
+        let registered: Vec<PeerId> = (0..RELAY_TRACKING_CAP + 3)
+            .map(|i| {
+                let pid = libp2p::identity::Keypair::generate_ed25519()
+                    .public()
+                    .to_peer_id();
+                let addr: Multiaddr = format!("/ip4/192.168.1.{}/tcp/4001", 100 + i)
+                    .parse()
+                    .expect("direct relay fixture is valid");
+                ladder.add_relay(pid, vec![addr]);
+                pid
+            })
+            .collect();
+
+        let routes = ladder.build_relay_addresses(target_pid);
+        assert_eq!(routes.len(), MAX_RELAY_LADDER_ADDRS);
+        // The most recently registered relays take the slots, and the emitted
+        // list is itself newest-first: the dial path walks it in order, so
+        // membership alone is not enough to prove recency preference.
+        for pid in registered.iter().rev().take(MAX_RELAY_LADDER_ADDRS) {
+            assert!(
+                routes
+                    .iter()
+                    .any(|addr| addr.to_string().contains(&format!("/p2p/{pid}/"))),
+                "newest relay {pid} should be on the ladder"
+            );
+        }
+        for pid in registered
+            .iter()
+            .take(registered.len() - MAX_RELAY_LADDER_ADDRS)
+        {
+            assert!(
+                !routes
+                    .iter()
+                    .any(|addr| addr.to_string().contains(&format!("/p2p/{pid}/"))),
+                "relay {pid} fell out of the bounded ladder"
+            );
+        }
+        let expected_order: Vec<PeerId> = registered
+            .iter()
+            .rev()
+            .take(MAX_RELAY_LADDER_ADDRS)
+            .copied()
+            .collect();
+        let emitted_order: Vec<PeerId> = routes
+            .iter()
+            .map(|addr| {
+                addr.iter()
+                    .find_map(|p| match p {
+                        libp2p::multiaddr::Protocol::P2p(pid) => Some(pid),
+                        _ => None,
+                    })
+                    .expect("every emitted circuit carries its relay peer id")
+            })
+            .collect();
+        assert_eq!(
+            emitted_order, expected_order,
+            "emitted relay circuits must be newest-registration first"
+        );
+    }
+
+    /// BOUNDARY: the emitted list is the cap, not the number of relays
+    /// considered. One relay advertising many addresses must not push the
+    /// synthesised ladder past `MAX_RELAY_LADDER_ADDRS` (that is what made the
+    /// per-peer admission ceiling look like it needed to be 16).
+    #[test]
+    fn circuit_relay_ladder_caps_emitted_addresses_per_relay() {
+        let ladder = CircuitRelayLadder::new();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let relay_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        // One relay advertising far more addresses than the cap, plus a newer
+        // relay that also has several. The newest relay must still get slots.
+        ladder.add_relay(
+            relay_pid,
+            (0..(MAX_RELAY_LADDER_ADDRS * 3))
+                .map(|i| {
+                    format!("/ip4/192.168.1.{}/tcp/4001", 100 + i)
+                        .parse()
+                        .expect("direct relay fixture is valid")
+                })
+                .collect(),
+        );
+        let newest_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        ladder.add_relay(
+            newest_pid,
+            (0..(MAX_RELAY_LADDER_ADDRS * 3))
+                .map(|i| {
+                    format!("/ip4/192.168.2.{}/tcp/4001", 100 + i)
+                        .parse()
+                        .expect("direct relay fixture is valid")
+                })
+                .collect(),
+        );
+
+        let routes = ladder.build_relay_addresses(target_pid);
+        assert_eq!(
+            routes.len(),
+            MAX_RELAY_LADDER_ADDRS,
+            "a multi-address relay must not widen the emitted ladder"
+        );
+        assert!(
+            routes[0]
+                .to_string()
+                .contains(&format!("/p2p/{newest_pid}/")),
+            "the newest relay fills the first slot even when it has many addresses"
+        );
+    }
+
+    /// BOUNDARY: an invalid relay entry must not consume an emitted slot or
+    /// hide usable relays behind it. A relay whose addresses are all nested,
+    /// DNS-only, portless, duplicated, or self-targeted contributes nothing,
+    /// and the next relay still gets the budget.
+    #[test]
+    fn circuit_relay_ladder_invalid_entries_do_not_consume_slots() {
+        let ladder = CircuitRelayLadder::new();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        // Oldest: entirely unusable. DNS-only has no IP, portless has no port,
+        // nested has a P2pCircuit.
+        let dead_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        ladder.add_relay(
+            dead_pid,
+            vec![
+                "/dns4/relay.invalid/tcp/4001"
+                    .parse()
+                    .expect("dns-only fixture is valid"),
+                "/ip4/192.168.9.1"
+                    .parse()
+                    .expect("portless fixture is valid"),
+                format!("/ip4/192.168.9.2/tcp/4001/p2p/{dead_pid}/p2p-circuit")
+                    .parse()
+                    .expect("nested fixture is valid"),
+            ],
+        );
+
+        // Middle: the target itself. A self-targeted relay must not eat a slot.
+        ladder.add_relay(
+            target_pid,
+            vec!["/ip4/192.168.9.3/tcp/4001"
+                .parse()
+                .expect("direct fixture is valid")],
+        );
+
+        // Newest: two usable relays, one of which re-advertises a duplicate.
+        let older_usable = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        ladder.add_relay(
+            older_usable,
+            vec!["/ip4/192.168.3.1/tcp/4001"
+                .parse()
+                .expect("direct fixture is valid")],
+        );
+        let newest_usable = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        ladder.add_relay(
+            newest_usable,
+            vec![
+                "/ip4/192.168.4.1/tcp/4001"
+                    .parse()
+                    .expect("direct fixture is valid"),
+                "/ip4/192.168.4.1/tcp/4001"
+                    .parse()
+                    .expect("direct fixture is valid"),
+            ],
+        );
+
+        let routes = ladder.build_relay_addresses(target_pid);
+        // Both usable relays are reachable, newest first. The dead relay, the
+        // self-targeted relay, and the duplicate contribute nothing.
+        assert_eq!(routes.len(), 2, "invalid entries must not consume slots");
+        assert!(routes[0]
+            .to_string()
+            .contains(&format!("/p2p/{newest_usable}/")));
+        assert!(routes[1]
+            .to_string()
+            .contains(&format!("/p2p/{older_usable}/")));
+        for addr in &routes {
+            assert_eq!(addr.to_string().matches("/p2p-circuit/").count(), 1);
+        }
+    }
+
+    /// EMPTY INPUT: an empty tracked set, or a target that is the only tracked
+    /// relay, yields no circuits and must not panic.
+    #[test]
+    fn circuit_relay_ladder_handles_empty_input() {
+        let ladder = CircuitRelayLadder::new();
+        let target_pid = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        assert!(ladder.build_relay_addresses(target_pid).is_empty());
+
+        ladder.add_relay(target_pid, vec![]);
+        assert!(ladder.build_relay_addresses(target_pid).is_empty());
+
+        let other = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        ladder.add_relay(other, vec![]);
+        assert!(ladder.build_relay_addresses(target_pid).is_empty());
     }
 
     #[test]
