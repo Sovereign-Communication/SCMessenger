@@ -147,12 +147,12 @@ Both nodes returned to `outbox_count=0` afterwards.
 
 | Warning | Ticket | Disposition |
 |---|---|---|
-| `[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts` (recurring; peer `12D3KooWKrnxkGW…`) | `HANDOFF/todo/D2_SEED_DIAL_REDIAL_MISSING_SEED_PEER.md` — quotes this exact line as its defect evidence | pre-existing, unchanged by this rollout |
+| `[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts` (recurring; peer `12D3KooWKrnxkGW…`) | `HANDOFF/todo/D2_SEED_DIAL_REDIAL_MISSING_SEED_PEER.md` (**not on `main`** -- filed on `fix/361-review-blockers` (PR #372, unmerged)) — quotes this exact line as its defect evidence | pre-existing, unchanged by this rollout |
 | `ble_mesh: Windows GATT server / advertising error HRESULT(0x00000000)` | no dedicated ticket | **pre-existing, not a regression**: the outgoing `1bc78c8` binary emitted the byte-identical line at its own startup, with `terminal_result="no_adapter"` |
 | `SEED-DIAL sweep 1: 104 candidate(s), peers=0` | D2 family | benign; custody registered regardless |
-| `AutoNAT: behind NAT` | referenced in `HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md` | expected on a desktop; covered by the accepted circuit |
-| `[CONN-CAP] closing redundant per-peer path` | **unticketed** — only the Wave-1 note in this file's 2026-09-20 pass | working as designed |
-| stale `13.217.204.112:8080` for the Pixel, `failure_count: 6` | **unticketed** | new observation this pass: an unreachable address retained alongside the Pixel's live ones |
+| `AutoNAT: behind NAT` | `HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md` (**not on `main`** -- filed on `fix/361-review-blockers` (PR #372, unmerged)); named there only in a libp2p behaviour list, not as a treatment of this warning | expected on a desktop; covered by the accepted circuit |
+| `[CONN-CAP] closing redundant per-peer path` | `HANDOFF/todo/D7_CONN_CAP_REDUNDANT_PATH_CLOSE.md` (filed 2026-09-26); the Wave-1 note at lines 61 and 72 of this file covers the `max sub-streams` family but never named this line | working as designed |
+| stale `13.217.204.112:8080` for the Pixel, `failure_count: 6` | `HANDOFF/todo/D11_STALE_LEDGER_PEER_ADDRESS.md` (filed 2026-09-26) | new observation this pass: an unreachable address retained alongside the Pixel's live ones |
 
 ### Why "no regression" here is operational, not diff-based
 
