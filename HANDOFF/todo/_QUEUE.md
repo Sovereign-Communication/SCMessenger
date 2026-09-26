@@ -18,6 +18,12 @@ lane is run. Do not duplicate the queue here; one doc per fact.
 
 Plan the queue executes: `SHIP_PLAN.md` section 6.
 
+Canon pointer (2026-09-21): the Reticulum audit and its post-tag borrow queue
+live in `HANDOFF/plans/RETICULUM_AUDIT_2026-09-21.md` and
+`HANDOFF/plans/V050_PHILOSOPHY_AND_BORROW_PLAN.md`. Do not create todo/
+tickets from them before the v0.4.0 tag; graduation into tickets happens per
+that plan's sequencing rule.
+
 Everything below this block predates the v0.4.0 ship plan.
 
 

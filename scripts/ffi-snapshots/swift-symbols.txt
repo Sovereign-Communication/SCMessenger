@@ -179,6 +179,7 @@ open func recommendedBehavior() -> BehaviorAdjustment?  {
 open func reconcileFromHistory(history: HistoryManager)throws  -> UInt32  {
 open func recordAbuseSignal(peerId: String, signal: String)  {try! rustCall() {
 open func recordConnection(multiaddr: String, peerId: String)  {try! rustCall() {
+open func recordDataLinkForRouting(peerId: String, transport: String)  {try! rustCall() {
 open func recordFailure(multiaddr: String)  {try! rustCall() {
 open func recordLog(line: String)  {try! rustCall() {
 open func registerBlockedDevice(peerId: String, deviceId: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {

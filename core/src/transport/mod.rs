@@ -20,6 +20,7 @@ pub mod multiport;
 pub mod nat;
 pub mod observation;
 pub mod peer_broadcast;
+pub mod per_peer_cap;
 pub mod reflection;
 pub mod relay_health;
 pub mod reputation;
