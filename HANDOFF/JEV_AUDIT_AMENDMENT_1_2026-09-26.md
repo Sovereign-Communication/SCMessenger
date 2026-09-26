@@ -1,4 +1,4 @@
-# SCMessenger owner handoff — amendment 1: the Android fix scope is three PRs, and a silent Dependabot cargo outage
+# SCMessenger owner handoff — amendment 1: the Android fix scope is three PRs, the Android gate is not a merge blocker, and a silent Dependabot cargo outage
 
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger
@@ -10,18 +10,70 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 
 This is an assist-only handoff. The owning repository retains all decisions, edits, merges, and publication authority.
 
-It **amends**, and does not replace, `HANDOFF/JEV_AUDIT_ANDROID_GATE_2026-09-25.md`. Two things in that document are now known to be wrong or incomplete:
+It **amends**, and does not replace, `HANDOFF/JEV_AUDIT_ANDROID_GATE_2026-09-25.md`. Three things in that document are now known to be wrong, incomplete, or materially understated:
 
 1. Its Finding 1 names a single carrier (#361) for the two broken `it.action ==` assertions. There are **three**, and all three are based on `main`.
-2. It carries no finding at all for a cargo dependency-update outage that has been silently failing.
+2. It treats a failing `Android JVM Unit Tests` as an obstacle to merging. **That check is not required on `main`, so a red Android gate does not block anything.** The real risk is larger than a red gate, and it is stated in Amendment C.
+3. It carries no finding at all for a cargo dependency-update outage that has been silently failing.
 
-Everything else in the 2026-09-25 document still holds at the current head.
+Everything else in the 2026-09-25 document still holds at the current head, and its root-cause analysis of the failing assertions is now confirmed by a green run rather than by inference — see Amendment A.
 
 ## Pinned state
 
 - Measured `main` at `bceacb94` ("feat(handoff): add an auditable, per-document waiver register (#387)"), 2026-09-26. The two commits since `cd511fa0` are handoff/governance only and touch **no product code**, so every line number cited below is current.
 - 49 pull requests were open at measurement time. All were enumerated; none were modified.
 - All evidence below is read-only. No product worktree was touched, no branch of this repository was used for measurement, nothing was deployed.
+
+---
+
+## Amendment C — nothing stops a red Android gate from reaching `main`
+
+This is the most important section in this document, and it changes how Amendment A should be read.
+
+### The required-check list on `main`
+
+`GET /repos/Sovereign-Communication/SCMessenger/branches/main/protection` returns exactly these required status checks:
+
+```
+["Repository Hygiene Checks", "Lint", "Rust Linting",
+ "Test (ubuntu-latest)", "Handoff ownership scope"]
+```
+
+**`Android JVM Unit Tests` is not on that list.** There are no repository rulesets that might govern this instead.
+
+### What that means for each carrier
+
+- **#361** — 32 of 33 checks pass. The single failure is `Android JVM Unit Tests`. Four of the five required checks pass; the fifth, `Handoff ownership scope`, has never reported on this branch. State is `MERGEABLE/BEHIND`, i.e. one rebase from current. **On the checks this repository actually enforces, #361 is green.** The red Android result is real, visible, and not a blocker.
+- **#364** — the same shape: every required check either passes or has never reported, the only failure is the non-required Android job, and the state is `CONFLICTING/DIRTY`.
+- **#359** — none of the five required checks has ever reported. Its only workflow run in its entire history is the CodeQL run `35836517373`. The Android job has never run on it.
+
+### The honest ordering, which is the opposite of the intuitive one
+
+A red Android gate is the **best** of the three outcomes, because at least a human or a reviewer can see it. It is not a safety net — nothing enforces it — but it is a visible signal.
+
+#359 is the **worst** outcome, and this is the point: its Android result does not exist. Nobody has ever looked at it, so the defect on that branch is invisible to CI, invisible to a reviewer scanning checks, and invisible to anyone reading this document without also reading the identity argument in Amendment A. A branch in that state, based on `main`, is the one most likely to reach `main` with the defect and with no red anywhere to explain what happened.
+
+One honest qualification, so this is not overclaimed: a new push that touches `android/**` would most likely cause the job to run and go red, because the branch carries an `android/**` change. But that red would still not block the merge, and the run is a side effect of pushing rather than something the configuration demands. "Nobody has looked" is the accurate description; "it can never go red" would not be.
+
+### This is a protection gap, not a fix
+
+"Not required" describes a missing guard, not a remedy. The two ways this ends:
+
+1. **The lane makes `Android JVM Unit Tests` a required status check**, and the defect can no longer reach `main` through any of the three carriers.
+2. **The defect lands on `main`**, and from then on every branch cut from `main` carries it, including branches with nothing to do with #359, #361 or #364.
+
+### Recommendation: require the check
+
+**Recommendation: add `Android JVM Unit Tests` to `required_status_checks.contexts` on `main`.** Reasons, in order of weight:
+
+- **It costs no build time the project does not already spend.** The job already exists in `.github/workflows/mobile.yml` as `android-unit-tests`, already runs on every pull request touching the paths it cares about, and already took `22m 55s` on #372. Requiring it spends minutes the project is already spending.
+- **The repository's own rules already require it.** `docs/rules/ANDROID.md:59-64` lists under "Pre-Merge Checklist": `./gradlew :app:testDebugUnitTest --tests "com.scmessenger.android.test.RoleNavigationPolicyTest"` passes. The rule exists in the repository's own documentation; only the enforcement is missing.
+- **The workflow was explicitly designed as a pre-merge gate.** The comment above the job at `.github/workflows/mobile.yml:60-68` says the standalone JVM job exists precisely to give test feedback on every pull request and to serve as the pre-merge gate that `docker-test-suite.yml` cannot. It was built to be a gate. It was never wired up as one.
+- **It converts this handoff from advisory to enforced.** Required, it would have blocked #361 and #364 automatically and forced #359 to be gated.
+
+**One prerequisite, and it matters.** `.github/workflows/mobile.yml` gates the job behind `paths:` filters (`android/**`, `iOS/**`, `core/**`, `Cargo.toml`, `Cargo.lock`, `scripts/build_xcframework.sh`, `scripts/check_wiring.py`, `scripts/test_check_wiring.py`, `core/src/api/udl`, `mobile/**`). GitHub treats a required check that never reports as *pending*, which blocks the merge. Adding the job to the required list **without** also making it always report — by giving the job an unconditional trigger, or adding a lightweight always-running companion job that reports the same result — would wedge every pull request that does not touch those paths, including the 46 open ones that are not Android work.
+
+Sequence it deliberately: fix the three carriers first, or accept that #361 and #364 become correctly blocked the moment the check is required. That blockage is the intended outcome, not a regression.
 
 ---
 
@@ -53,10 +105,12 @@ The test file on all three heads is **byte-identical** — `sha256:0c4aff3345675
 
 For contrast, the same file on `main` is `sha256:7943c4f2e115de32…`, 7 `@Test`, no `it.action` — so `main` is clean and the defect lives only on these branches.
 
-### An honest distinction between the two measured failures and the one inferred
+### Measured on two, unmeasured on one
 
 - **#361** and **#364** have each had the Android gate run, and each failed with the identical signature: `353`/`357` tests completed, `2 failed, 3 skipped`, the same two test names (`toggle during STARTING|STOPPING`), and the same `Only one matching call to Context(#926)/Context(#965)` null-argument signature mismatch. That is measured, from CI logs.
-- **#359 has never had the Android gate run.** Its head commit has exactly one workflow run — the CodeQL "PR #359" run `35836517373`, success, 6 check-runs, no Android job. So #359 is a carrier **by file identity, not by a measured failure**. Because its test file is byte-identical to the two that do fail, it is expected to fail the same way; that expectation is inference and is labelled as such.
+- **#359 has never had the Android gate run.** Its head commit has exactly one workflow run in its history — the CodeQL "PR #359" run `35836517373`, success, 6 check-runs, no Android job. So #359 is a carrier **by file identity, not by a measured failure**. Because its test file is byte-identical to the two that do fail, it is expected to fail the same way; that expectation is inference and is labelled as such.
+
+Read this together with Amendment C: because `Android JVM Unit Tests` is not a required check, the two measured reds do not block those merges, and the one unmeasured carrier is the one nobody is looking at.
 
 ### The two assertions, verbatim
 
@@ -67,11 +121,41 @@ From the shared carrier file (identical on all three heads):
 
 The assertions sit in the two tests named `toggle during STARTING …` and `toggle during STOPPING …`.
 
+### The corrected assertions are verified green, and what they now assert
+
+The earlier caveat on #372 is discharged. `Android JVM Unit Tests`, job `108481836751`, run `36269937310`, head `2cb046cf`: **conclusion `success`**, 22m 55s, `BUILD SUCCESSFUL in 22m 33s`, 40 actionable tasks executed. Tallied from the job log:
+
+| | #361 (red) | #372 (green) |
+|---|---|---|
+| STARTED | 353 | **356** |
+| PASSED | 348 | **353** |
+| FAILED | 2 | **0** |
+| SKIPPED | 3 | **3** |
+
+Both formerly-failing tests are present and explicitly `PASSED`. Two things in that log are noise, not failures: the only `FAILED` substrings are `TIMBER … Receipt encode FAILED … simulated transient encode error` from a passing retry-guard test, and the `NetworkRequest$Builder` `NullPointerException` lines are `STANDARD_OUT` from tests exercising android.jar stubs. The 356-vs-353 difference is #372's other work — both copies of this test file have 9 `@Test`, so the file swap does not change the count.
+
+**What the replacement asserts, and the one thing it stops asserting.** The full diff is four hunks: one import added, one dropped, and the two assertion bodies. No test was deleted (`@Test` 9 → 9) and no assertion was removed; `verify` calls go from 2 to 4.
+
+```kotlin
+// #361, unpassable
+verify(exactly = 1) { mockContext.startService(match { it.action == MeshForegroundService.ACTION_STOP }) }
+
+// #372
+verify(exactly = 1) { mockContext.startService(any<Intent>()) }
+verify(exactly = 0) { mockContext.startForegroundService(any<Intent>()) }   // new
+```
+
+It keeps the discriminating assertion — `Context.startService` versus `Context.startForegroundService` is the observable contract that separates the stop path from the start path in production (`MeshServiceViewModel.kt:87-91` and `:106-109`) — and it **adds** an `exactly = 0` negative assertion the original did not have. On that axis the corrected version is more constraining than the one it replaces.
+
+What it genuinely gives up is the `Intent.action` **constant**. A regression that called `startService` with the wrong action string would now pass. That reduction is unavoidable in this environment rather than a convenience: `returnDefaultValues = true` (`android/app/build.gradle:232-234`) makes android.jar's `Intent.action` a stub returning `null`, and Robolectric was removed (`:315-319`), so the original could not pass by construction — which is exactly why it was red on three carriers. The in-code comment documents this and cites `android/app/build.gradle:315`. Restoring action-level coverage needs an instrumented test or Robolectric reinstated for this class, which is separate work and is not part of this fix.
+
+So: the lane inherits a genuine, stated narrowing alongside a verified-green gate. Both facts belong in the same breath.
+
 ### The corrected assertions already exist in this repository
 
 PR **#372** (`fix/361-review-blockers`, head `2cb046cf8cab34c15327a4fbfbb90fb91ab212f4`) carries `e7466639` as an ancestor. Its test file is `sha256:e7769b6b2b39dd4a…` — 9 `@Test` methods and **zero** `it.action`. So the fix is already written and already reviewed in this repository; it is simply not on the two branches that need it, and not on `main`.
 
-Two caveats stated plainly: #372 is `MERGEABLE/BLOCKED` and is not a route to `main` on its own, and at the time of writing its `Android JVM Unit Tests` job (run `36269937310`) was still **pending** — so the corrected file is verified here by content hash, not by a green gate.
+Two caveats stated plainly: #372 is `MERGEABLE/BLOCKED` and is not a route to `main` on its own, and the file it carries is the one whose green run is recorded above — the content hash and the passing job now agree.
 
 ### Root cause, restated against the current code (line numbers verified at `bceacb94`)
 
@@ -89,7 +173,7 @@ Unchanged from the 2026-09-25 handoff, and re-verified at this head:
 1. Treat the fix scope as **#359, #361 and #364** — not #361 alone. All three are `base=main`.
 2. Apply the corrected test file (available on #372, or as commit `e7466639b59f6c07f19090ecd9867b39ac36b58e`, which applies cleanly onto the #361 head) to **each** of the three branches.
 3. Re-run `Android JVM Unit Tests` on each of the three after the change. For #359 this is the first run that branch will ever have had.
-4. Do not merge any of the three with the file unchanged. As it stands, resolving #359 or #364 and merging it puts the defect onto `main`.
+4. Do not merge any of the three with the file unchanged. Per Amendment C this is a human decision, not an enforced one: on #361 and #364 every check this repository actually requires is green or has never reported, so nothing will stop the merge for you. Merging any of the three with the file unchanged puts the defect onto `main`, and from `main` it propagates to every future branch.
 
 ---
 
@@ -174,7 +258,8 @@ That matters because CI builds this package: `cargo build --target wasm32-unknow
 
 ## Severity and limits of this handoff
 
-- **Severity of Amendment A**: high. Two `base=main` pull requests can currently land a red test suite, and a third has never been gated at all.
+- **Severity of Amendment A**: high, and higher than a red gate alone would suggest. `Android JVM Unit Tests` is not a required check, so a failing Android suite does not block a merge. Two `base=main` carriers are red while fully green on every enforced check; a third has never been gated at all and is the least visible of the three.
+- **Severity of Amendment C**: the highest of the three, because it is the one that recurs. Fixing the three carriers by hand closes three branches; requiring the check closes the class.
 - **Severity of Amendment B**: medium-high. It does not block CI or releases; it means Rust dependency updates — including security updates — have not run for five days, and the failure is silent by construction.
 - **Limit**: the Android gate cannot be executed locally; all Android findings rest on CI logs and on file content read at the exact head commits named above.
 - **Limit**: no statement here should be read as a merge, an approval, or a sign-off. The owning repository decides what lands.
