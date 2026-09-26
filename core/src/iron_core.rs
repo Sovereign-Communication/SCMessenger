@@ -5454,22 +5454,30 @@ mod tests {
         assert!(!prepared.envelope_data.is_empty());
     }
 
-    /// WP1.4 CRYPTO-01 regression: a genuine, correctly SIGNED message is filed
-    /// under the identity DERIVED from the authenticated envelope key, and
-    /// never under a payload-supplied `sender_id`.
+    /// WP1.4 CRYPTO-01 regression: a message whose PAYLOAD claims a third
+    /// party's `sender_id`, delivered inside an envelope the REAL sender
+    /// signed, must be filed under the AUTHENTICATED key -- not the claimed one.
     ///
-    /// This is the live property behind CRYPTO-01. The attack is a peer that
-    /// signs honestly but writes a THIRD party's identity into the plaintext
-    /// `sender_id`. If ingress trusted that field the message would land in the
-    /// victim's conversation, inherit the victim's block decision, and be
-    /// attributed to them in the UI. `receive_message` derives
-    /// `canonical_peer_id` from the verified `sender_pubkey`
-    /// (`iron_core.rs`, `identity_id_from_public_key_hex`), so the payload
-    /// value cannot win. The assertion below is on the OBSERVED stored record,
-    /// not on the code path, so a revert that reintroduces payload trust fails
-    /// here.
+    /// The attack. Ingress reads two different fields. `sender_pubkey` comes
+    /// from the signed envelope and is proof of key possession. The plaintext
+    /// `Message.sender_id` is chosen by whoever built the payload and is
+    /// covered by no signature -- `encrypt_message` binds the sender key as
+    /// AAD, and AAD authenticates the envelope, not the meaning of a field
+    /// inside the ciphertext. A peer that signs honestly but writes a third
+    /// party's identity into that field would, if ingress trusted it, land the
+    /// message in the victim's conversation under someone else's name, inherit
+    /// the victim's block decision for that name, and file it in that party's
+    /// history.
+    ///
+    /// What makes this test non-vacuous is the CONTROL assertion below.
+    /// `received.sender_id` IS the third party's key, which proves the lie
+    /// survived decryption and really is present in the message the victim
+    /// processed. Only then does the stored-row assertion mean anything: a
+    /// test that sent an HONEST message cannot distinguish a correct
+    /// implementation from one that reads the payload field, because in that
+    /// case the two fields agree and both implementations file the same row.
     #[test]
-    fn crypto01_attribution_comes_from_authenticated_key_not_payload_sender_id() {
+    fn crypto01_spoofed_payload_sender_id_cannot_decide_attribution() {
         let sender = IronCore::new();
         sender.grant_consent();
         sender.initialize_identity().unwrap();
@@ -5480,55 +5488,113 @@ mod tests {
         third.grant_consent();
         third.initialize_identity().unwrap();
 
-        let recipient_key = recipient.get_identity_info().public_key_hex.unwrap();
-        let sender_key = sender.get_identity_info().public_key_hex.unwrap();
-        let third_key = third.get_identity_info().public_key_hex.unwrap();
-        let third_identity =
-            crate::identity::keys::identity_id_from_public_key_hex(&third_key).expect("id");
-        let sender_identity =
-            crate::identity::keys::identity_id_from_public_key_hex(&sender_key).expect("id");
+        let recipient_key = recipient
+            .get_identity_info()
+            .public_key_hex
+            .expect("recipient key");
+        let sender_key = sender
+            .get_identity_info()
+            .public_key_hex
+            .expect("sender key");
+        let third_key = third.get_identity_info().public_key_hex.expect("third key");
+        let sender_identity = crate::identity::keys::identity_id_from_public_key_hex(&sender_key)
+            .expect("sender identity");
+        let third_identity = crate::identity::keys::identity_id_from_public_key_hex(&third_key)
+            .expect("third identity");
         assert_ne!(
-            third_identity, sender_identity,
-            "the third party and the sender must be distinct, or the spoof is untestable"
+            sender_identity, third_identity,
+            "the claimed party and the real sender must be distinct, or the spoof is untestable"
         );
 
-        // Honest, correctly-signed send from `sender` to `recipient`. The
-        // authenticated key is the ONLY thing that should decide attribution.
-        let prepared = sender
-            .prepare_message(
-                recipient_key.clone(),
-                "attribution probe".to_string(),
-                crate::MessageType::Text,
-                None,
+        // ---- The forgery: a payload that claims `third` is the sender. ----
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let forged = crate::Message {
+            id: message_id.clone(),
+            sender_id: third_key.clone(), // THE LIE
+            recipient_id: recipient_key.clone(),
+            message_type: crate::MessageType::Text,
+            payload: b"spoof probe".to_vec(),
+            timestamp: crate::util::unix_time_secs(),
+        };
+        let plaintext = crate::message::encode_message(&forged).expect("encode forged payload");
+
+        // ---- Encrypted and signed by the REAL sender, so envelope
+        // verification at ingress must SUCCEED. The question this test asks
+        // is not "is it rejected" but "which identity files it". ----
+        let recipient_pk: [u8; 32] = hex::decode(&recipient_key)
+            .expect("recipient key hex")
+            .try_into()
+            .expect("32 bytes");
+        let envelope_data = {
+            let identity = sender.identity.read();
+            let keys = identity.keys().expect("sender identity keys");
+            // identity-first lock order, as production does.
+            let mut sessions = sender.ratchet_sessions.write();
+            let wire = crate::crypto::encrypt::encrypt_with_ratchet_fallback(
+                &keys.signing_key,
+                None, // no recipient bundle -> legacy static ECDH, as for a V1 peer
+                &recipient_pk,
+                &plaintext,
+                Some(&mut *sessions),
+                &recipient_key, // session lookup key; no session exists yet
+                None,           // our_bundle
+                Some(&keys.x25519_encryption_secret),
+                false, // require_pq
+                None,  // audit_log
             )
-            .expect("honest send must succeed");
+            .expect("the real sender must be able to encrypt to the recipient");
 
+            let drift_env = match wire {
+                crate::message::WireEnvelope::V1(env) => {
+                    crate::drift::DriftEnvelope::from_legacy_envelope(
+                        env,
+                        message_id.clone(),
+                        recipient_pk,
+                        &keys.signing_key,
+                    )
+                }
+                crate::message::WireEnvelope::V2(env2) => {
+                    crate::drift::DriftEnvelope::from_v2_envelope(
+                        env2,
+                        message_id.clone(),
+                        recipient_pk,
+                        &keys.signing_key,
+                    )
+                }
+            }
+            .expect("wrap in a signed drift envelope");
+            drift_env.to_bytes().expect("serialize envelope")
+        };
+
+        // ---- The victim processes it. Verification must pass: the sender
+        // really did sign it. ----
         let received = recipient
-            .receive_message(prepared.envelope_data)
-            .expect("recipient must accept an honest signed message");
+            .receive_message(envelope_data)
+            .expect("an honestly-signed message must be accepted, spoofed payload or not");
 
-        // The DELIVERED message's sender_id is the sender's real public key.
+        // CONTROL: the lie really is in the message the victim decrypted. If
+        // this fails, the payload field is being normalized somewhere upstream
+        // and the assertion below has stopped testing payload trust at all.
         assert_eq!(
-            received.sender_id, sender_key,
-            "sender_id must be the authenticated sender key"
+            received.sender_id, third_key,
+            "CONTROL FAILED: the payload's claimed sender must survive into the \
+             delivered message, otherwise this test no longer exercises payload trust"
         );
-        // Sanity: the value an attacker would try to substitute is different,
-        // so this test would actually catch the regression.
-        assert_ne!(received.sender_id, third_key);
+        assert_ne!(received.sender_id, sender_key);
 
-        // The STORED record is filed under the identity derived from the
-        // authenticated key -- the third party's identity never appears.
+        // THE PROPERTY: storage attribution comes from the authenticated key.
         let stored = recipient
             .history_store_manager()
             .recent(None, 50)
             .expect("history readable");
         let row = stored
             .iter()
-            .find(|m| m.content.contains("attribution probe"))
+            .find(|m| m.content.contains("spoof probe"))
             .expect("the message must be stored");
         assert_eq!(
             row.peer_id, sender_identity,
-            "stored peer_id must be derived from the authenticated envelope key"
+            "the stored record must be filed under the AUTHENTICATED sender, not \
+             under the identity the payload claimed"
         );
         assert_ne!(
             row.peer_id, third_identity,
