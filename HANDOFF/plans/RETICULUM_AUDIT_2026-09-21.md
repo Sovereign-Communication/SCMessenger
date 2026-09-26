@@ -1,5 +1,13 @@
 # Reticulum Audit for SCMessenger
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active (canonical record of the 2026-09-21 audit)
 Companion plan: `HANDOFF/plans/V050_PHILOSOPHY_AND_BORROW_PLAN.md` (the execution queue for everything this audit defers)
 Auditor: Freebuff lane session, 2026-09-21

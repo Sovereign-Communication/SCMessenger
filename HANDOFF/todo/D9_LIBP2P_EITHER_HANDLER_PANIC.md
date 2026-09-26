@@ -1,5 +1,15 @@
 # D9 — libp2p 0.48 either-handler task panic on connect/identify
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Fixed-in-source + DEPLOYED to both cloud nodes (2026-09-22 10:42-10:43Z) - see SCM_NODES_AUDIT.md section 10 and NODE.md; vendored-patch source uncommitted on glm/canonical-outlier-audit; harness adversarial findings dossier on file at HANDOFF/review/D1_D9_HARNESS_ADVERSARIAL_FINDINGS_2026-09-22.md (no REJECT-level finding; rule-8 gate still requires uninvolved reviewer sign-off)
 Priority: HIGH — task-level crash on the connect path of a live mesh; the
 process survives, but it fires exactly when a peer attaches.

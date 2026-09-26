@@ -1,5 +1,15 @@
 # D8 — Sender-side delivery status stays `delivered: false` after custody delivery
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Todo (investigation first — defect not yet confirmed)
 Priority: MEDIUM — if custody-only delivery never converges the sender's
 status, every offline-recipient send reads as failed forever, which breaks

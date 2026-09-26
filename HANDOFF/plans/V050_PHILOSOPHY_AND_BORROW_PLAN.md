@@ -1,5 +1,13 @@
 # V0.5.0+ Philosophy and Borrow Plan (Reticulum-derived)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active (canonical post-v0.4.0 queue for Reticulum-derived work)
 Created: 2026-09-21
 Basis: `HANDOFF/plans/RETICULUM_AUDIT_2026-09-21.md` (read it first; every item

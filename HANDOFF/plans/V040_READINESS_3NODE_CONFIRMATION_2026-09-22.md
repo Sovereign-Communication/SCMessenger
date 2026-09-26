@@ -1,5 +1,15 @@
 # 0.4.0 Readiness -- 3-Node Confirmation Status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active (living readiness record; update on every state change)
 Created: 2026-09-22
 Owner: CTO seat; operator decisions marked [HUMAN]

@@ -8,6 +8,8 @@ foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
 
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-25
 Reviewed head (round 2): `fix/361-review-blockers` @ `ec5f0135`
 Reviewed head (round 1): `fix/361-review-blockers` @ `08c3482f`

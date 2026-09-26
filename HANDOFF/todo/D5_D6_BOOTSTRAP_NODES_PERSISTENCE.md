@@ -1,5 +1,13 @@
 # D5/D6 — Bootstrap peers env-only: persist `bootstrap_nodes` in config, fix relay DHT bootstrap
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Todo
 Priority: LOW-MEDIUM — not currently harmful (seed candidates arrive via the
 ledger), but any code path reading the persisted config sees zero bootstrap

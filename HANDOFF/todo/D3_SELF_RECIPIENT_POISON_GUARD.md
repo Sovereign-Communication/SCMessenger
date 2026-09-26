@@ -1,5 +1,15 @@
 # D3 — Self-addressed message loops: reject at enqueue, drain at outbox, add queue-cancel
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Todo
 Priority: MEDIUM — ~20 WARN/hour of noise, wasted dial attempts, and the node
 marking ITSELF dead in the backoff table.

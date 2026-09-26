@@ -1,5 +1,15 @@
 # D2 — No durable reconnect: seed sweep never re-dials a missing seed-tier peer
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Todo
 Priority: HIGH — the always-on node's entire purpose is a constant custody
 target; today a bridge between nodes dies until a human restarts a service.
