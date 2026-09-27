@@ -247,6 +247,36 @@ Local reproduction, byte-for-byte the same failure:
 | `main` as-is, all five member directories present | exit 0 |
 | `main` with `wasm/` removed (mimics the Dependabot directory) | **exit 101** — `failed to load manifest for workspace member …/wasm` / `failed to read …/wasm/Cargo.toml` |
 
+**Re-verified independently on 2026-09-27 against `main` at `05df2960`, with cargo
+1.98.1** (the `stable` channel that `rust-toolchain.toml` pins and that CI and
+Dependabot both use). Every row above reproduces, and the two-fix conclusion
+holds:
+
+| Tree | `cargo metadata --no-deps` | `cargo pkgid -p scmessenger-wasm` |
+|---|---|---|
+| `main` as-is, `wasm/` present | exit 0 | resolves |
+| `main` with `wasm/` **absent** | **exit 101**, `failed to load manifest for workspace member` | not reached |
+| absent + `"wasm"` removed from `members` | exit 0 | **does not match** — the wasm32 jobs would break |
+| absent + `exclude` deleted instead (#391) | **exit 101**, identical error | not reached |
+
+**Read the second column before concluding anything from the first.** With
+`wasm/` present, the as-committed manifest resolves and so does #391's — exit 0
+either way. A reader who tests only the checked-out tree will "verify" that
+there is no defect here, and be wrong. The failure is a property of a *consumer
+that does not materialise `wasm/`*, not of the working tree. That is precisely
+the trap this re-check fell into before the table above was consulted, which is
+why it is recorded here rather than left implicit.
+
+The premise — that Dependabot's working directory omits `wasm/Cargo.toml` —
+remains internal to Dependabot and is still not verifiable from this repository.
+What is verifiable, and was re-verified, is the conditional: *any* consumer that
+lacks `wasm/Cargo.toml` fails on the as-committed manifest, and only removing
+`"wasm"` from `members` makes the root workspace resolve without it. Note also
+that `main` currently has **no Dependabot check-run at all**, and its full CI
+matrix is green, so there is no live failing signal on `main` to corroborate the
+premise — the case for acting rests on the conditional, not on an observed
+outage.
+
 ### The fix is two changes, and the first one alone breaks CI
 
 **This section was previously headed "The fix: one line", and that heading was ours and it was wrong.** Both changes were stated in the body of this document from the first version, but a heading saying "one line" is what a reader acts on — and #391 acted on it correctly. It took the one line, applied the wrong half of it, and shipped. The misleading heading is the defect here, not the reader of it.
@@ -265,7 +295,7 @@ They are not a change and a follow-on. Landed alone, change 1 trades a silent De
 
 ### Required follow-on: one removal is necessary but not sufficient
 
-Removing `wasm` from `members` makes it a non-member, and `wasm/Cargo.toml` is written to inherit from the workspace: `version.workspace`, `edition.workspace`, `license.workspace`, and 13 dependencies declared as `{ workspace = true }`. It then fails to parse on its own:
+Removing `wasm` from `members` makes it a non-member, and `wasm/Cargo.toml` is written to inherit from the workspace: `version.workspace`, `edition.workspace`, `license.workspace`, and **12** dependencies declared as `{ workspace = true }` (corrected 2026-09-27: an earlier revision of this line said 13; the count in `wasm/Cargo.toml` is 12, and the three `*.workspace = true` package keys are separate from the dependency entries). It then fails to parse on its own:
 
 ```
 error: failed to parse manifest at …/wasm/Cargo.toml
@@ -301,7 +331,7 @@ This has been raised on #391 with the measurement, rather than left for a reader
 ### Requested owner actions
 
 1. Remove `"wasm"` from `members` in root `Cargo.toml` line 2. Confirm locally with `cargo metadata --no-deps` (expect exit 0).
-2. Make `wasm/Cargo.toml` standalone in the same change: an empty `[workspace]` table, literal `version`/`edition`/`license`, and the 13 `{ workspace = true }` dependencies spelled out.
+2. Make `wasm/Cargo.toml` standalone in the same change: an empty `[workspace]` table, literal `version`/`edition`/`license`, and the 12 `{ workspace = true }` dependencies spelled out.
 3. Confirm `Cross` and `release` still build `scmessenger-wasm` for `wasm32-unknown-unknown`.
 4. Re-run the Dependabot job and confirm the cargo entry succeeds.
 5. Separately and cheaply: `Cargo.toml:3-4` comments that `wasm` is "excluded from default members". `exclude` has no effect on default members at all — that is `default-members` — so the comment is wrong on its own terms and is part of what made this misconfiguration look intentional.
