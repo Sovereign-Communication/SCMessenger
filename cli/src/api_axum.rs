@@ -253,7 +253,7 @@ async fn handle_fetch_artifact(
 async fn handle_send_message(
     State(ctx): State<Arc<ApiContext>>,
     AxumJson(request): AxumJson<SendMessageRequest>,
-) -> Result<AxumJson<SendMessageResponse>, (StatusCode, String)> {
+) -> Result<(StatusCode, AxumJson<SendMessageResponse>), (StatusCode, String)> {
     let core = &ctx.core;
     let contacts = core.contacts_store_manager();
 
@@ -304,18 +304,31 @@ async fn handle_send_message(
     let sent = ble_ok || swarm_ok;
 
     if !sent {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to send message via BLE and Swarm".to_string(),
+        // Option B: rejected/unaccepted requests return success:false in the
+        // JSON envelope (never a bare string, never success:false on 2xx).
+        // 503 matches the API_CONTRACT.md table: nothing accepted this message.
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            AxumJson(SendMessageResponse {
+                success: false,
+                error: Some("Failed to send message via BLE and Swarm".to_string()),
+                warning: None,
+                message_id: None,
+                status: Some("rejected".to_string()),
+            }),
         ));
     }
 
-    Ok(AxumJson(SendMessageResponse {
-        success: true,
-        error: None,
-        message_id: None,
-        status: Some("accepted".to_string()),
-    }))
+    Ok((
+        StatusCode::OK,
+        AxumJson(SendMessageResponse {
+            success: true,
+            error: None,
+            warning: None,
+            message_id: None,
+            status: Some("accepted".to_string()),
+        }),
+    ))
 }
 
 async fn handle_add_contact(
