@@ -105,6 +105,33 @@ The test file on all three heads is **byte-identical** — `sha256:0c4aff3345675
 
 For contrast, the same file on `main` is `sha256:7943c4f2e115de32…`, 7 `@Test`, no `it.action` — so `main` is clean and the defect lives only on these branches.
 
+### #372 is not a fourth carrier, and merging it does not fix the other three
+
+This needs saying plainly, because #372 is the one branch in this document that already carries the corrected file, and the two facts are easy to run together in a reader's head.
+
+- **#372 is not a carrier of the defect.** Its test file is `sha256:e7769b6b2b39…`, 7,469 bytes, 9 `@Test`, and **zero** occurrences of `it.action`. It is the corrected file, not a fourth instance of the broken one, and it does not widen the fix scope.
+- **Merging #372 does not fix the three carriers.** #372 is a *different branch* from all of them. Its corrected file reaches `main` on #372's own terms or not at all; it does not travel to #359, #361 or #364 by #372 being merged. Each of the three needs the file corrected **on its own branch**, which is what action 3 below says.
+- **#372 is not a clean route to `main` for this fix either.** It is `base=main` and it merges cleanly, but it is a four-part transport pull request — leak, WASM parity, admission cap, and the JVM tests. Obtaining the test fix by merging it means accepting the other three changes in the same merge, each of which needs its own decision here. The *file* can be lifted from it, as action 3 says; the pull request cannot be merged for that purpose alone.
+- **And it is not blocked.** It merges cleanly against current `main`, as the table below shows. `BEHIND` means "needs an update", not "conflicting", and the two GitHub labels are not interchangeable.
+
+### All three carriers are no longer mergeable into `main`, and that blocks the fix
+
+`main` has moved since these branches were cut. Measured by a three-way merge against current `main` (`05df2960`), computed in memory — **no branch, ref or working tree of this repository was modified to produce it**:
+
+| PR | Head | Merge-base with `main` | `main` commits behind | GitHub label | Actual conflicting files |
+|---|---|---|---|---|---|
+| #359 | `3f41005d` | `629a3eef` | **150** | `CONFLICTING` | **48 — of which 8 are product code** |
+| #361 | `63f4a7d7` | `56d66f71` | 15 | `BEHIND` | **0 — merges cleanly** |
+| #364 | `45b0f8b8` | `56d66f71` | 15 | `CONFLICTING` | **2 — both documentation** |
+
+The GitHub labels overstate the obstacle for #361 and understate it for #359:
+
+- **#361 is not conflicting at all.** It is behind and merges cleanly with no conflicting hunks. It needs an update to clear the `BEHIND` state, and nothing has to be resolved.
+- **#364's two conflicts are `add/add` on documentation** — `HANDOFF/todo/AND_STOP_START_FLOOD_AND_CANCEL_2026-09-23.md` and `HANDOFF/todo/OUTBOX_NO_PERIODIC_RETRY_SWEEP_2026-09-23.md`. Two Markdown files, each created independently on both sides. Resolvable by keeping one side; no product judgement is involved.
+- **#359 is the real one, and it is the branch nobody is looking at.** 48 conflicting files, 150 commits behind, and **8 of them product code with genuine content conflicts**: `ChatScreen.kt`, `ChatViewModel.kt`, `ContactsViewModel.kt`, `ConversationsViewModel.kt`, `DashboardViewModel.kt`, `PeerIdValidator.kt`, `OrderingAndNotificationRoutingTest.kt` (add/add) and `core/src/transport/swarm.rs`. The other 40 are Markdown. This is the same branch Amendment A already identifies as the least visible of the three, and it is now also by a wide margin the most expensive to land.
+
+**One thing is *not* blocked, and it is the file this finding is about.** The defective test file `android/app/src/test/java/com/scmessenger/android/ui/viewmodels/MeshServiceViewModelTest.kt` is **not in any of the three conflict sets**. All three branches can take the corrected file without resolving a single conflict. The fix to Finding 1 and the merge debt on these branches are two separate problems; running them together would stall the cheap one behind the expensive one.
+
 ### Measured on two, unmeasured on one
 
 - **#361** and **#364** have each had the Android gate run, and each failed with the identical signature: `353`/`357` tests completed, `2 failed, 3 skipped`, the same two test names (`toggle during STARTING|STOPPING`), and the same `Only one matching call to Context(#926)/Context(#965)` null-argument signature mismatch. That is measured, from CI logs.
@@ -170,10 +197,11 @@ Unchanged from the 2026-09-25 handoff, and re-verified at this head:
 
 ### Requested owner actions
 
-1. Treat the fix scope as **#359, #361 and #364** — not #361 alone. All three are `base=main`.
-2. Apply the corrected test file (available on #372, or as commit `e7466639b59f6c07f19090ecd9867b39ac36b58e`, which applies cleanly onto the #361 head) to **each** of the three branches.
-3. Re-run `Android JVM Unit Tests` on each of the three after the change. For #359 this is the first run that branch will ever have had.
-4. Do not merge any of the three with the file unchanged. Per Amendment C this is a human decision, not an enforced one: on #361 and #364 every check this repository actually requires is green or has never reported, so nothing will stop the merge for you. Merging any of the three with the file unchanged puts the defect onto `main`, and from `main` it propagates to every future branch.
+1. **Clear the merge state before landing the fix, and before re-running the gate.** Two carriers conflict with `main` and the third is behind; the evidence is in *All three carriers are no longer mergeable into `main`*. It is cheap on #361 (an update, nothing to resolve) and on #364 (two `add/add` documentation files), and it is the substantial one on #359 (48 files, 8 of them product code). This is a decision for this repository and is **deliberately left unresolved here** — these are your branches, and how to reconcile them is your call, not an operations finding.
+2. Treat the fix scope as **#359, #361 and #364** — not #361 alone. All three are `base=main`.
+3. Apply the corrected test file (available on #372, or as commit `e7466639b59f6c07f19090ecd9867b39ac36b58e`, which applies cleanly onto the #361 head) to **each** of the three branches. This is **independent of action 1**: the test file is in none of the three conflict sets, so the fix can be applied and reviewed while the merge debt is being worked through.
+4. Re-run `Android JVM Unit Tests` on each of the three after the change. For #359 this is the first run that branch will ever have had. A rebase is the point at which a previously-passing or previously-failing result should be re-read rather than carried over.
+5. Do not merge any of the three with the file unchanged. Per Amendment C this is a human decision, not an enforced one: on #361 and #364 every check this repository actually requires is green or has never reported, so nothing will stop the merge for you. Merging any of the three with the file unchanged puts the defect onto `main`, and from `main` it propagates to every future branch.
 
 ---
 
@@ -282,13 +310,18 @@ This has been raised on #391 with the measurement, rather than left for a reader
 
 ## Addendum — re-verified 2026-09-27, no finding changed
 
-Everything above was re-checked against live state after this document was first published. **No finding, measurement or recommendation changed.** What changed is the context around them:
+**Why this addendum exists, stated rather than assumed.** A handoff that was accurate when written and has since become quietly incomplete is worse than one that is merely wider, because a reader has no way to know which parts to discount. A wrong number announces itself; a stale one reads exactly like a correct one. So the facts that change what a reader should *do* are recorded here rather than left to rot in the body. Every item below alters the action this repository takes, not merely the description of it.
+
+**This is a dated snapshot, not a standing claim, and it is labelled as one.** Every finding in this document is a **property of a revision** — `main` at a named commit, the carriers at their named heads — and it holds only for that revision. A later reader should re-check rather than trust, and should treat the date above as the moment the check was last true, not as a claim that it still is. The cheapest re-check is to re-run the commands named in *Pinned state* against current `main`; nothing in this document should be read as a standing property of the code.
+
+Everything above was re-checked against live state. **No finding, measurement or recommendation changed.** What changed is the context around them:
 
 - `main` has advanced from `bceacb94` to `05df2960` (merges #389, #390 on top of the two already noted). All five commits since `cd511fa0` touch handoff and governance files only — `ci.yml`, `scripts/validate_handoff_scope.py`, `handoff_scope_waivers.json` and four `HANDOFF/*.md` — and **none touches `android/`, `Cargo.toml` or any product code**, so every line number cited above is still current.
 - The required-check list on `main` is still exactly `Repository Hygiene Checks`, `Lint`, `Rust Linting`, `Test (ubuntu-latest)`, `Handoff ownership scope`, `strict: true`, and the repository still has **no rulesets**. `Android JVM Unit Tests` is still not required.
 - The three carriers are still the three carriers. The defective test file is byte-identical at all three heads (`sha256:0c4aff33…`, 6,655 bytes, 9 `@Test`, `it.action` at lines 102 and 118), and a re-enumeration of all **51** open pull requests found no fourth copy.
 - **Two of the three carriers now conflict with `main`.** #359 and #364 are `CONFLICTING`; #361 is `BEHIND`. Each needs a rebase before the corrected assertions can land, and a rebase is the point at which the Android result should be re-read rather than carried over.
-- **The corrected assertions already exist in a mergeable pull request.** #372 (`fix/361-review-blockers`, head `2cb046cf`, `base=main`, `MERGEABLE`) carries the fixed test file — `sha256:e7769b6b…`, 7,469 bytes — and is fully green, including `Android JVM Unit Tests` passing in 22m 55s on run `36269937310`. This is the run already cited above as proof the corrected assertions pass. The fix is therefore available to lift from #372 rather than to be rewritten; #372 is not itself a carrier of the defect.
+- **The corrected assertions already exist in a mergeable pull request.** #372 (`fix/361-review-blockers`, head `2cb046cf`, `base=main`) carries the fixed test file — `sha256:e7769b6b…`, 7,469 bytes — and is fully green, including `Android JVM Unit Tests` passing in 22m 55s on run `36269937310`. This is the run already cited above as proof the corrected assertions pass. The fix is therefore available to lift from #372 rather than to be rewritten. **It is not a fourth carrier, and merging it does not fix the other three** — see the note beside the carrier table, which also corrects an earlier draft of this addendum that described #372 as blocked. It is merge-clean; it is `BEHIND`, which is a different thing.
+- **All three carriers are now unmergeable into `main` without work**, which sits between this repository and closing Finding 1. Two conflict and one is behind, with the real cost on #359. The evidence, the per-branch breakdown, and the fact that the defective test file is in none of the conflict sets are in *All three carriers are no longer mergeable into `main`*; it is now requested action 1.
 
 ## Severity and limits of this handoff
 
