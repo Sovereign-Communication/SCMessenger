@@ -45,6 +45,9 @@ COPY cli/Cargo.toml cli/
 COPY mobile/Cargo.toml mobile/
 COPY wasm/Cargo.toml wasm/
 COPY desktop_bridge/Cargo.toml desktop_bridge/
+# The D9 path patch is resolved from the build context as well.
+COPY vendor/libp2p-swarm-0.48.0/Cargo.toml vendor/libp2p-swarm-0.48.0/
+COPY vendor/libp2p-swarm-0.48.0/src vendor/libp2p-swarm-0.48.0/src
 
 # Copy source code
 COPY core/src core/src
