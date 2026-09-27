@@ -38,24 +38,6 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# Ensure harness is importable
-try:
-    import harness
-    from harness.config import (
-        HARD_MAX_COST,
-        load_settings,
-        FREE_PANEL_POOL,
-        FREE_JUDGE,
-    )
-    from harness.errors import HarnessError
-    from harness.panel import panel_judge
-    from harness.session import governor_for, ledger_for, router_for
-    from harness._http import HttpTransport
-except ImportError as err:
-    print(f"[ERROR] Failed to import sovereign-harness: {err}", file=sys.stderr)
-    print("[ERROR] Ensure sovereign-harness is installed or in PYTHONPATH.", file=sys.stderr)
-    sys.exit(1)
-
 MAX_BOD_COST_CEILING = 0.10
 REQUIRED_PANELISTS = 5
 
@@ -329,6 +311,12 @@ def evaluate_board_proposal(
             "notes": "Dry-run mode requested. No external API calls made.",
         }
 
+    try:
+        from harness_source import HarnessSourceError, import_harness_modules
+
+        api = import_harness_modules()
+    except HarnessSourceError as exc:
+        raise RuntimeError(f"Harness source unavailable: {exc}") from exc
     os.environ["HARNESS_MAX_PANELISTS"] = str(REQUIRED_PANELISTS)
     overrides = {
         "max_panelists": REQUIRED_PANELISTS,
@@ -341,21 +329,19 @@ def evaluate_board_proposal(
     elif use_paid:
         overrides["panel_pool"] = ",".join(PAID_PANEL_POOL)
         overrides["judge"] = PAID_JUDGE
-    settings = load_settings(overrides=overrides)
+    settings = api["load_settings"](overrides=overrides)
 
-    api_key, gov = governor_for(settings, cost_ceiling)
-    ledger = ledger_for(settings, caller="bod-governance")
-    router = router_for(settings)
-
+    api_key, gov = api["governor_for"](settings, cost_ceiling)
+    ledger = api["ledger_for"](settings, caller="bod-governance")
     prompt = BOD_PANEL_PROMPT_TEMPLATE.format(
         rubric=REPO_PHILOSOPHY_RUBRIC.strip(), proposal=proposal.strip()
     )
 
     panel_pool = settings.panel_pool
-    judge_model = settings.judge or (FREE_JUDGE if not use_paid else PAID_JUDGE)
+    judge_model = settings.judge or (api["FREE_JUDGE"] if not use_paid else PAID_JUDGE)
 
-    result = panel_judge(
-        transport=HttpTransport(),
+    result = api["panel_judge"](
+        transport=api["HttpTransport"](),
         api_key=api_key,
         governor=gov,
         prompt=prompt,
@@ -405,7 +391,6 @@ def evaluate_board_proposal(
 
     # Check judge consensus
     judge_content = judge_synthesis.get("content", "") if isinstance(judge_synthesis, dict) else ""
-    judge_verdict_raw = consensus.get("verdict", "")
     judge_agreed = False
 
     if all_models_agreed:
@@ -705,9 +690,6 @@ def main():
             use_paid=args.paid or not args.free,
             use_heavy=args.heavy,
         )
-    except HarnessError as e:
-        print(f"[FAIL] Sovereign-harness error: {e}", file=sys.stderr)
-        sys.exit(1)
     except Exception as e:
         print(f"[FAIL] Unexpected governance error: {e}", file=sys.stderr)
         sys.exit(1)
