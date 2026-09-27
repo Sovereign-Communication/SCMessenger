@@ -1,5 +1,15 @@
 # Blind B — independent verdict: D2 build-number bump + keystore verification path
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Date:** 2026-09-13
 **Reviewer:** Buffy (Freebuff lane) — same-lane disclosure per this file
 series' tradition; the external BoD panel is the gate of record.

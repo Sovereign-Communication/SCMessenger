@@ -1,5 +1,13 @@
 # TASK: P0-DESKTOP-BRIDGE-CFG-GATE  `desktop_bridge/src/lib.rs:47` missing `#[cfg(target_os = "linux")]` on `pub mod ble;`
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Source
 
 Found by ground-truth `cargo build --workspace` run in

@@ -1,5 +1,13 @@
 # Agent 1 — desktop_bridge Crate Creation: Complete
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Summary
 
 Created/updated the `desktop_bridge` crate for SCMessenger Linux desktop as a lightweight desktop integration bridge with XDG path resolution.

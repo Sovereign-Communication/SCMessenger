@@ -1,5 +1,13 @@
 # P0_ANDROID_008: Kotlin Compile Fixes - COMPLETED
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 (Build Blocking)  
 **Platform:** Android  
 **Estimated LoC Impact:** 150250 LoC  

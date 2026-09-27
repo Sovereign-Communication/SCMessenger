@@ -1,5 +1,13 @@
 # SCMessenger Freebuff transition — canonical handoff (2026-09-21)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **ACTIVE — sole execution handoff for Freebuff after orchestrator session close**
 Owner: CTO/orchestrator session close
 Canonical: this file wins for post-session Freebuff execution until the

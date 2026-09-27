@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - D2/D7/A4 code-level fixes (full-unification program)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `UNIFICATION_CODE_COMPLETE` (pre-gate; this file is immutable - later stages append new files, never edit this one)

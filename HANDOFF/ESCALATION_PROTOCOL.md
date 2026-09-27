@@ -1,5 +1,15 @@
 # Escalation Protocol — Overseer Bridge (C)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 This is the contract between Claude Code (the orchestrator/worker) and the
 Overseer Bridge — the launchd service that bridges
 `HANDOFF/ESCALATIONS/` ↔ `HANDOFF/DIRECTIVES/` ↔ Lucas's Telegram DM.

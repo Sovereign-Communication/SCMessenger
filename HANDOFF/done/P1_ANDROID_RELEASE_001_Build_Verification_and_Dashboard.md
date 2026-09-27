@@ -1,5 +1,13 @@
 # P1_ANDROID_RELEASE_001: Release Build Verification + Dashboard Transport Icons
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** TODO
 **Priority:** P1  Release readiness + UX polish
 **Estimated LoC Impact:** ~100

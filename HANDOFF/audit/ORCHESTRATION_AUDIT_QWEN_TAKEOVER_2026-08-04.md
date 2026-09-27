@@ -1,5 +1,15 @@
 # ORCHESTRATION AUDIT -- QWEN CODE TAKEOVER (2026-08-04)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Final. Author: Qwen Code (qwen3.8-max) session, Windows host,
 operator-approved audit + setup package. Scope: the unified orchestration
 setup (command surface, docs, dispatch tooling, state files, lane

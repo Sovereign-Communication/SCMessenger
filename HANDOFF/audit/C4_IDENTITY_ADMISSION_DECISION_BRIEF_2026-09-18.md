@@ -1,5 +1,15 @@
 # Decision brief: c4 — identity multiplication vs the per-peer relay share
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Rule-9 escalation (security trade-off) arising from the PR #305 rule-8 review
 (c4: real, 2R/1NR, judge medium). For operator decision. Written 2026-09-18.
 

@@ -1,5 +1,13 @@
 # E-00 IMPLEMENTATION PACKET -- wire ratchet/PQ subsystem into IronCore production path
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 > **REMOVED 2026-08-24 (PR #221):** every `SCM_RATCHET_DISABLE` / `ratchet_disabled()`
 > reference below (the kill switch this packet specified) has been deleted from
 > `core/src/iron_core.rs`. It bypassed the ingress signature verification added by

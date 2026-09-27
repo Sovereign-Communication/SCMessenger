@@ -1,5 +1,15 @@
 # CEO ruling -- response to CLARIFICATION_REQUEST_2026-08-31
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ANSWERED. Supersedes the "Order is decided" note in the earlier
 `HANDOFF/freebuff/README.md`, which was written before your item 2 landed.
 From: CEO seat

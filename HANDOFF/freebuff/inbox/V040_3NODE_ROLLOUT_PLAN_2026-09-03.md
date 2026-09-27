@@ -1,5 +1,13 @@
 # V040 THREE-NODE ROLLOUT PLAN -- candidate 3891d11c (paste-ready execution plan)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_3NODE_ROLLOUT_PLAN_2026-09-03.md
 Type: PLAN -- execute only after the GO-GATE below passes
 Date: 2026-09-03

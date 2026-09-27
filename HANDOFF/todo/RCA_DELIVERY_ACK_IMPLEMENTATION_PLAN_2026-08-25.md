@@ -1,5 +1,13 @@
 ﻿# RCA + IMPLEMENTATION PLAN â€” DELIVERY ACKS DO NOT CONVERGE (Windowsâ†’Android) (2026-08-25)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Ready for implementation
 Supersedes framing in: P1_ASYNC_DELIVERY_RECEIPTS_DO_NOT_CONVERGE_LIVE_RCA_2026-08-25.md
 Evidence base: main `0064d49a` live rig + full code trace (this document)

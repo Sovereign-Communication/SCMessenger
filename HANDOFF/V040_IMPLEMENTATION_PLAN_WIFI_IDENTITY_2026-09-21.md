@@ -1,5 +1,13 @@
 ﻿# V0.4.0 comprehensive implementation plan â€” identity / transport / WiFi delivery
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active â€” **authoritative for implementing models** (no guesswork)
 Date: 2026-09-21
 Last updated: 2026-09-24 (Harness immutable-tag admission and staged rollout)

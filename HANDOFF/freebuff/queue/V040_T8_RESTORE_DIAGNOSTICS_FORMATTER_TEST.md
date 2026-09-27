@@ -1,5 +1,13 @@
 # V040-T8 -- Restore the WS11 test deleted under a false premise
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: MERGED -- this work landed as PR #271 (merged 2026-09-03, merge commit
 36fc1faa). Both acceptance-4 artifacts are on main: the restored test and the
 risk-register link. Status corrected 2026-09-19 by the queue-reconcile pass;

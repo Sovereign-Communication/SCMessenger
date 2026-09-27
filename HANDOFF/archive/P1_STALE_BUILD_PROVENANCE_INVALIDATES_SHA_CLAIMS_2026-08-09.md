@@ -1,5 +1,13 @@
 # P1 -- `--version` reports a stale git hash, invalidating every cross-lane SHA claim
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open
 Filed: 2026-08-09 (Windows lane, during PR #139 CLI coordination)
 Severity: P1 -- does not crash anything, but silently corrupts the evidence that

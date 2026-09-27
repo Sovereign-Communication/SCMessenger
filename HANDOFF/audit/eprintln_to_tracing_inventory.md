@@ -1,5 +1,13 @@
 # eprintln! → tracing:: Conversion Inventory
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Source:** `core/src/mobile_bridge.rs`
 **File lines:** 1–2609+ (non-wasm mobile path)
 **Total calls found:** 15

@@ -1,5 +1,15 @@
 # TASK: PQC-07 Compile Fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 The recent changes to `core/src/crypto/ratchet.rs` and `core/src/crypto/session_manager.rs` introduced some compilation errors. Please fix them.
 
 Here is the cargo check output:

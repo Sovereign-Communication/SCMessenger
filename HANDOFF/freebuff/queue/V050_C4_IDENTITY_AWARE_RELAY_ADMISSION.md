@@ -1,5 +1,15 @@
 # Task: c4 fix -- identity-aware relay admission (known/unknown classification + aggregate unknown pool)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Lane: Freebuff (0.5.0). Priority: next implementation task after the current
 mission. Review gate: **Rule-8 mandatory** (touches `core/src/transport`).
 

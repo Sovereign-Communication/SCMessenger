@@ -1,5 +1,13 @@
 # Security Tooling Integration Report
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Task:** Integrate Security Tooling
 **Completed By:** CLIBetaTester_1777680299
 **Date:** 2026-05-01

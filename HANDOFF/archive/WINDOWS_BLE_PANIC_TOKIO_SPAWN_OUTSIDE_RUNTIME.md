@@ -1,5 +1,13 @@
 # Windows BLE crashes the node: tokio::spawn from a WinRT event handler
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P1 -- enabling BLE on Windows kills the process; BLE transport is
 unusable on this platform until fixed

@@ -1,5 +1,15 @@
 # P0_BUILD_004: Windows Integration Test Stabilization
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Status:  P0 BLOCKER - Windows Build System Unstable
 **Source:** Subagent feedback on rlib metadata / "can't find crate" errors
 

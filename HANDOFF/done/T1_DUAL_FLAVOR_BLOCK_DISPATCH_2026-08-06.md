@@ -1,5 +1,13 @@
 # T1 Scoped Task: Dual-Flavor Block Storage (identifier-gate follow-up)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## RESOLUTION 2026-08-09 -- ALREADY_WIRED, closed without dispatch
 
 Pre-dispatch validation (ORCHESTRATION.md Section 2.2 step 2) found this

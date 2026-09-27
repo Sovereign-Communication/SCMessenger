@@ -1,5 +1,15 @@
 # CEO -- F-DHT inventory is incomplete; ruling pending on A/B/C
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: CORRECTION (ruling itself is with the operator)
 From: CEO seat
 Date: 2026-08-31

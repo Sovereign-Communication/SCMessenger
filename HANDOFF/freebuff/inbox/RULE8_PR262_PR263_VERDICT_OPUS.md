@@ -1,5 +1,15 @@
 # Rule-8 Adversarial Review -- PR #262 + PR #263
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Reviewer: independent seat (did not author either PR, did not write the T2 spec).
 Date: 2026-08-31
 Method: source reading only. No cargo/gradle invoked (build host owned by another lane).

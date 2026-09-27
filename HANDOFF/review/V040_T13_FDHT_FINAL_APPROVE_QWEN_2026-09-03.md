@@ -1,5 +1,15 @@
 # V040 T13-FDHT FINAL APPROVE -- qwen free lane (Rule-8 non-author)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Task: V040_REVIEW_DISPATCH_267_272_FINAL_APPROVE_QWEN_2026-09-03.md
 Reviewer: qwen3.8-2.4t-a95b (ledger-confirmed 100% / 1M context; same model as R1 and R2 -- one continuous non-author identity)
 Target: PR #267 freebuff/v040-t13-fdht-gate @ 80197ef5

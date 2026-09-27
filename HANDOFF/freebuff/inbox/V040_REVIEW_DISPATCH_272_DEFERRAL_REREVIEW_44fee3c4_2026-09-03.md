@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- #272 multi-transport deferral re-review @ 44fee3c4 (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-03
 Status: **STAGED -- NOT DISPATCHED** (lane dispatch is CTO-driven; the harness-lane
 option additionally awaits the CEO's explicit go. This file is the paste-ready

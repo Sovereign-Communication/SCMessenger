@@ -1,5 +1,15 @@
 # Ruling request: which JEV instrument is the WP DONE gate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN -- needs orchestrator confirmation (not an implementation task)
 Filed: 2026-09-21 by the Freebuff lane
 Evidence: `HANDOFF/freebuff/jev/` (state files + verdicts), PR #349, PR #352

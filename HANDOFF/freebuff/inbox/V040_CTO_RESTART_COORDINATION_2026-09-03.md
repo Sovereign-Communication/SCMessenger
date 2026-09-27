@@ -1,5 +1,13 @@
 # V040 CTO RESTART COORDINATION -- 2026-09-03 (paste-ready)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Supersedes nothing; complements the standing sync note
 (V040_CEO_CTO_SYNC_2026-09-03.md) and the merge execution log
 (V040_MERGE_EXECUTION_LOG_2026-09-03.md), which remain the evidence record.

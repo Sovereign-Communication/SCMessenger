@@ -1,5 +1,13 @@
 # P4: Android Receipt Unification Re-dispatch - Verification Gate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Task:** Use core UniFFI bindings for receipt encode/decode (re-dispatch after silent failure)  
 **Status:** IMPLEMENTATION COMPLETE - Awaiting Build Verification  
 **Date:** 2026-07-22

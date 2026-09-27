@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- Rule-8 adversarial review: PR #273 @ f50ac0f9 (freebuff/v040-nimble-peer, qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **COMPLETE 2026-09-03 -- PLAIN APPROVE** (R1 returned REQUEST_CHANGES A1-A4; dispositions verified against the tree -- A1 partially refuted/documented, A2 refuted (two guarded sinks, grep evidence), A3/A4 accepted as doc+marker hardening, round-2 commit d82978ab; R2 at fixed head d82978ab returned `Verdict: APPROVE`.)
 Verdict: HANDOFF/review/V040_NIMBLE_PEER_REVIEW_QWEN_2026-09-03.md (R2 final @ d82978ab)
 R1 raw response: tmp/rev273_brief_response.md; R2 raw response: tmp/rev273r2_brief_response.md

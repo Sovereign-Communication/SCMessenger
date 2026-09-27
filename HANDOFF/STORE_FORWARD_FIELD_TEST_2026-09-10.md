@@ -1,5 +1,13 @@
 # AWS store/forward field-test runbook (operator, out of house)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Candidate: `b5048dd4` (Android APK SHA256 `10C43A79…`)
 Fleet: Windows CLI + AWS relay + Pixel 6a
 

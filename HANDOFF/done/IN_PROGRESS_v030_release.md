@@ -1,5 +1,13 @@
 # IN_PROGRESS  v0.3.0 Release Push
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Task:** Merge `fix/p1-cli-025-identify-dedup`  `integration/v0.2.2-pre-android-push-2026-06-05` and bump to v0.3.0
 **Worker:** qwen3-coder-next:cloud (subagent, leaf worker)
 **Started:** 2026-06-08 ~08:55 PT

@@ -1,0 +1,5 @@
+{
+  "_note": "Owner-signed, per-document exemptions from the handoff ownership gate. A waiver SUPPRESSES enforcement for exactly one document; it never writes a scope block into that document, so an exempted document is never made to look compliant. Use a waiver only when a document cannot honestly carry `foreign_material: NONE` -- for example one that legitimately records another product's tooling. Stamping such a document is a false attestation, which is precisely what this gate exists to prevent. Every entry requires all five fields (path, owner, reason, ticket, date) and is audited on every run: an entry naming a path that is not a tracked handoff document, or whose document no longer trips the foreign-alias detector, FAILS the gate. An exemption therefore cannot silently outlive its reason. Validate with: python scripts/validate_handoff_scope.py --repo-root . --self-test",
+  "schema": 1,
+  "waivers": []
+}

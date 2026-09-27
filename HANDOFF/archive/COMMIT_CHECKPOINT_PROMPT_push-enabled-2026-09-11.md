@@ -1,5 +1,15 @@
 # Commit Checkpoint - all unsaved work, every repo
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Paste into a fresh session launched in the parent folder that holds the clones.
 Retirement: delete once the board's audit lands.
 Supersedes: `HANDOFF/archive/COMMIT_CHECKPOINT_PROMPT_multi-repo-2026-09-11.md`.

@@ -1,5 +1,13 @@
 # TASK: Add --verify auto-fix loop to scripts/delegate_task.py
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Add an automatic verify-and-fix loop to `scripts/delegate_task.py` so that a
 single dispatch can apply code, run a local verification command, and if it
 fails, automatically re-prompt the model with the errors -- up to N rounds --

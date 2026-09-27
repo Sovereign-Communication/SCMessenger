@@ -1,5 +1,13 @@
 # Farm-Sim Phase 2&3 Execution Summary
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-07-18  
 **Duration:** 90 minutes  
 **Instance:** 32.197.246.78 (AWS m7i-flex.large, i-00e068c0837ac0857)  

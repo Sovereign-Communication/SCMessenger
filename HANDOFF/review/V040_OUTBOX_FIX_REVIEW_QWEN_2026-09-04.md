@@ -1,5 +1,15 @@
 # V040 Rule-8 adversarial review — PR #276 outbox drop-hop fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **ROUND 1 — REQUEST_CHANGES** (qwen free lane, 2026-09-04 ~21:00Z)
 PR: #276 (freebuff/v040-outbox-transport-fix @ 22e23c60, base cto/v040-candidate-2026-09-02 e97c3f82)
 Reviewer: qwen3.8-2.4t-a95b (ledger: reserve bucket 11-11, full 1M; same non-author as #273 R1-R4)

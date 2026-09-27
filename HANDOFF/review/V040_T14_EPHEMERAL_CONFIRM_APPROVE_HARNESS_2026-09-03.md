@@ -1,5 +1,13 @@
 # V040 T14-EPHEMERAL CONFIRM-APPROVE -- HARNESS free lane -- 2026-09-03
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Target: PR #270 freebuff/v040-t14-ephemeral-port
 Reviewed head: 6fd0230b (re-verified live on origin at filing time)
 Lane: harness free lane (panel-based, deterministic convergence)

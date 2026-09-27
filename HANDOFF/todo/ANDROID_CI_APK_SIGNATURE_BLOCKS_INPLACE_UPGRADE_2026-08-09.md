@@ -1,5 +1,13 @@
 # BLOCKER: the CI Android APK cannot upgrade an installed app in place -- signature mismatch
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: UNBLOCKED 2026-08-09 without data loss -- see RESOLUTION below.
         The RELEASE-PROCESS concern in this ticket is still open.
 

@@ -1,5 +1,13 @@
 # SESSION HANDOFF — 2026-07-13 — V1.0.0 Farm Backlog Orchestration
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active. Read this first if picking up from this session. Governing
 plan: `HANDOFF/plans/FARM_FINAL_PLAN.md` (Fable-authored 2026-07-13,
 supersedes nothing, refines the Farm Use Case directive). Live pick list:

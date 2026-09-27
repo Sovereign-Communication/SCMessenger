@@ -1,5 +1,13 @@
 # TASK: Farm-Sim Phase 2 & 3 Comprehensive Testing (V1.0.0 Scope)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR DELEGATION
 Owner: Orchestration Agent (remote SSH to 32.197.246.78)
 Scope: Complete Phase 2 (stress) + Phase 3 (failure injection) test matrix

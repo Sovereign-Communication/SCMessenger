@@ -1,5 +1,13 @@
 # Windows lane -- PR 139 resume state (authoritative)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Written 2026-08-11 by the Windows `/orchestrate` session, wrapping at operator
 request (API budget). Read this FIRST on resume, then the latest PR 139 comments.
 

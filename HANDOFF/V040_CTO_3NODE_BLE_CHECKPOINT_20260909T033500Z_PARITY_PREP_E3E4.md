@@ -1,5 +1,13 @@
 # V040 CTO three-node checkpoint — PARITY PREP (E3/E4 closed, run tree frozen)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `PARITY_PREP` (entry-gate closure; NOT a three-node completion stage)

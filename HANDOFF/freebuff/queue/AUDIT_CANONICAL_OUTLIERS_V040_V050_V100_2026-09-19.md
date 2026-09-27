@@ -1,5 +1,13 @@
 # Canonical Outlier Audit -- GLM 5.3 Flash iterative inventory
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: FINAL for this pass (iterations 0-6 complete 2026-09-19). Docs land on branch `docs/canonical-outlier-audit-2026-09-19` from `origin/main`. Original mixed PR #335 is superseded for the audit package. Reports: HANDOFF/audit/CANONICAL_OUTLIER_AUDIT_2026-09-19_INDEX.md. Remediation is follow-on work.
 Priority: P1 -- feeds the 0.4.0 gate, 0.5.0 parity, and the 1.0.0 unification ledger
 Lane: Freebuff / GLM 5.3 Flash
