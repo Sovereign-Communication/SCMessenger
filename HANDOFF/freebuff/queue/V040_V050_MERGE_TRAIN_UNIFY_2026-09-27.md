@@ -884,6 +884,17 @@ Tag through `[OPERATOR GATE] TAG-050`.
 
 ---
 
+## 13. Live status and cross-session updates
+
+- **Car status, source of truth:** `STATE_DIR/TRAIN_STATE.md`, the executor's own ledger.
+- **Shared tracker:** PR #403. On every resume, run `gh pr view 403 --comments` before continuing.
+  - The executor posts one comment per completed car (the REPORT block from 0.6).
+  - The operator and other sessions post cross-session updates there: pushes, rulings, gate answers.
+  - A comment from the operator that answers a GATE counts as that GO.
+- **Retired:** the v1 draft `HANDOFF/freebuff/TRAIN_V040_V050_UNIFY_2026-09-27.md` (never committed; deleted). Any state carried over from it must be re-verified with commands.
+
+---
+
 ## Appendix A -- merge-tree triage (Git Bash, git >= 2.38, read-only apart from loose objects)
 
 ```bash
@@ -1026,9 +1037,10 @@ Begin with P0-1.
 Resume the SCMessenger merge train (Freebuff lane). Read
 C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md, then sections 0-3 of
 HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md and the section for the next car.
-Re-verify the last recorded state with commands (gh pr view <n> --json state,mergeCommit;
-git log -1 origin/main; the last JEV output) before continuing. Same rules: no merges, no Rule-8
-sign-off, no Pixel UI, an inbox report for every gate.
+Read the cross-session updates: gh pr view 403 --comments. Re-verify the last recorded state
+with commands (gh pr view <n> --json state,mergeCommit; git log -1 origin/main; the last JEV
+output) before continuing. Same rules: no merges, no Rule-8 sign-off, no Pixel UI, an inbox
+report for every gate.
 ```
 
 **TRI-040** (each run or re-run):
