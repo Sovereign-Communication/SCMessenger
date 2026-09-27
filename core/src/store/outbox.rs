@@ -452,37 +452,45 @@ impl Outbox {
         result
     }
 
-    /// Drain all messages for a peer (for batch delivery)
+    /// Drain all messages for a peer (for batch delivery).
+    ///
+    /// Drains every spelling of this peer's queue in one pass (#395):
+    /// a queue split across the canonical key and a pre-canonicalization
+    /// spelling is fully emptied by a single call.
     pub fn drain_for_peer(&mut self, recipient_id: &str) -> Vec<QueuedMessage> {
-        let resolved_key = self.resolve_queue_key(recipient_id);
-        let recipient_id: &str = &resolved_key;
+        // Resolve before borrowing the backend.
+        let keys = self.queue_keys_with_messages(recipient_id);
         match &mut self.backend {
             OutboxBackend::Memory { queues, total } => {
                 let mut drained = Vec::new();
-                if let Some(queue) = queues.remove(recipient_id) {
-                    let count = queue.len();
-                    *total -= count;
-                    // Filter out messages that are in custody and should not be delivered locally
-                    for msg in queue.into_iter() {
-                        if !msg.in_custody {
-                            drained.push(msg);
+                for key in &keys {
+                    if let Some(queue) = queues.remove(key.as_str()) {
+                        let count = queue.len();
+                        *total -= count;
+                        // Filter out messages that are in custody and should not be delivered locally
+                        for msg in queue.into_iter() {
+                            if !msg.in_custody {
+                                drained.push(msg);
+                            }
                         }
                     }
                 }
                 drained
             }
             OutboxBackend::Persistent(db) => {
-                let prefix_str =
-                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), recipient_id);
                 let mut messages = Vec::new();
                 let mut keys_to_remove = Vec::new();
 
-                if let Ok(results) = db.scan_prefix(prefix_str.as_bytes()) {
-                    for (key, value) in results {
-                        if let Ok(msg) = deserialize_queued_message(&value) {
-                            if !msg.in_custody {
-                                messages.push(msg);
-                                keys_to_remove.push(key);
+                for key in &keys {
+                    let prefix_str =
+                        format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), key);
+                    if let Ok(results) = db.scan_prefix(prefix_str.as_bytes()) {
+                        for (key, value) in results {
+                            if let Ok(msg) = deserialize_queued_message(&value) {
+                                if !msg.in_custody {
+                                    messages.push(msg);
+                                    keys_to_remove.push(key);
+                                }
                             }
                         }
                     }
@@ -609,11 +617,35 @@ impl Outbox {
         }
     }
 
-    /// Flush peer messages that are due for delivery
+    /// Every spelling of this peer's queue that currently holds messages,
+    /// canonical first. The drain paths use this so one pass empties all
+    /// spellings (#395); `resolve_queue_key` stays the single-key resolver
+    /// for read-only peeks.
+    fn queue_keys_with_messages(&self, requested: &str) -> Vec<String> {
+        queue_key_candidates(requested)
+            .into_iter()
+            .filter(|candidate| self.key_holds_messages(candidate))
+            .collect()
+    }
+
+    /// Flush peer messages that are due for delivery.
+    ///
+    /// Drains every spelling of this peer's queue in one pass (#395):
+    /// a queue split across the canonical key and a pre-canonicalization
+    /// spelling is fully emptied by a single call.
     pub fn flush_peer_messages(&mut self, recipient_id: &str) -> Vec<QueuedMessage> {
-        // Resolve before borrowing the backend, so both arms drain one key.
-        let resolved_key = self.resolve_queue_key(recipient_id);
-        let recipient_id: &str = &resolved_key;
+        // Resolve before borrowing the backend, so the per-key drain below
+        // can take &mut self.
+        let keys = self.queue_keys_with_messages(recipient_id);
+        let mut drained = Vec::new();
+        for key in &keys {
+            drained.extend(self.flush_queue_key(key));
+        }
+        drained
+    }
+
+    /// Drain due messages from a single resolved queue key.
+    fn flush_queue_key(&mut self, queue_key: &str) -> Vec<QueuedMessage> {
         match &mut self.backend {
             OutboxBackend::Memory { queues, total } => {
                 let now_ms = web_time::SystemTime::now()
@@ -634,7 +666,7 @@ impl Outbox {
                     }
                 };
 
-                if let Some(queue) = queues.get_mut(recipient_id) {
+                if let Some(queue) = queues.get_mut(queue_key) {
                     let mut drained = Vec::new();
                     let mut remaining = VecDeque::new();
                     for msg in queue.drain(..) {
@@ -652,7 +684,7 @@ impl Outbox {
                     *total -= drained.len();
                     *queue = remaining;
                     if queue.is_empty() {
-                        queues.remove(recipient_id);
+                        queues.remove(queue_key);
                     }
                     drained
                 } else {
@@ -679,7 +711,7 @@ impl Outbox {
                 };
 
                 let prefix_str =
-                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), recipient_id);
+                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), queue_key);
                 let mut messages = Vec::new();
                 let mut keys_to_remove = Vec::new();
 
@@ -1174,6 +1206,60 @@ mod tests {
             1,
             "the pre-canonicalization entry must still go out"
         );
+    }
+
+    /// #395: a queue split across the canonical key and a pre-canonicalization
+    /// spelling is fully emptied by a SINGLE flush -- no second pass needed.
+    #[test]
+    fn flush_drains_all_spellings_in_one_pass() {
+        let mut outbox = Outbox::new();
+        // One message under the canonical spelling (where `enqueue` writes).
+        outbox.enqueue(make_msg("msg-canonical", HEX_PEER)).unwrap();
+        // One message stranded under the legacy base58 spelling.
+        if let OutboxBackend::Memory { queues, total } = &mut outbox.backend {
+            queues.insert(
+                BASE58_PEER.to_string(),
+                VecDeque::from(vec![make_msg("msg-legacy", BASE58_PEER)]),
+            );
+            *total += 1;
+        } else {
+            panic!("unit tests run on the memory backend");
+        }
+        assert_eq!(outbox.total_count(), 2);
+
+        let flushed = outbox.flush_peer_messages(HEX_PEER);
+        assert_eq!(
+            flushed.len(),
+            2,
+            "one flush must drain both spellings, got: {:?}",
+            flushed.iter().map(|m| &m.message_id).collect::<Vec<_>>()
+        );
+        assert_eq!(outbox.total_count(), 0, "no spelling may retain messages");
+    }
+
+    /// #395: same one-pass guarantee for the batch `drain_for_peer` path.
+    #[test]
+    fn drain_for_peer_drains_all_spellings_in_one_pass() {
+        let mut outbox = Outbox::new();
+        outbox.enqueue(make_msg("msg-canonical", HEX_PEER)).unwrap();
+        if let OutboxBackend::Memory { queues, total } = &mut outbox.backend {
+            queues.insert(
+                BASE58_PEER.to_string(),
+                VecDeque::from(vec![make_msg("msg-legacy", BASE58_PEER)]),
+            );
+            *total += 1;
+        } else {
+            panic!("unit tests run on the memory backend");
+        }
+
+        let drained = outbox.drain_for_peer(HEX_PEER);
+        assert_eq!(
+            drained.len(),
+            2,
+            "one drain must empty both spellings, got: {:?}",
+            drained.iter().map(|m| &m.message_id).collect::<Vec<_>>()
+        );
+        assert_eq!(outbox.total_count(), 0, "no spelling may retain messages");
     }
 
     #[test]
