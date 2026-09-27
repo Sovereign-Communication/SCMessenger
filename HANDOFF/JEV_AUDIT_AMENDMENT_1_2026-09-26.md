@@ -219,14 +219,21 @@ Local reproduction, byte-for-byte the same failure:
 | `main` as-is, all five member directories present | exit 0 |
 | `main` with `wasm/` removed (mimics the Dependabot directory) | **exit 101** — `failed to load manifest for workspace member …/wasm` / `failed to read …/wasm/Cargo.toml` |
 
-### The fix: one line, from `members` — and *which* list was determined by test, not by reading
+### The fix is two changes, and the first one alone breaks CI
+
+**This section was previously headed "The fix: one line", and that heading was ours and it was wrong.** Both changes were stated in the body of this document from the first version, but a heading saying "one line" is what a reader acts on — and #391 acted on it correctly. It took the one line, applied the wrong half of it, and shipped. The misleading heading is the defect here, not the reader of it.
 
 Both lists were edited in a scratch copy and the result measured:
 
-- **Removing `"wasm"` from `members` (line 2)** → `cargo metadata --no-deps` at the workspace root **resolves, exit 0**.
-- **Deleting the `exclude` line (line 5)** instead → **still exit 101**, with the identical `failed to read …/wasm/Cargo.toml` error.
+- **Removing `"wasm"` from `members` (line 2)** → `cargo metadata --no-deps` at the workspace root **resolves, exit 0** — and then the `wasm32` CI jobs fail, because `wasm/Cargo.toml` is written to inherit from the workspace. This is change 1 of 2, not a fix.
+- **Deleting the `exclude` line (line 5)** instead → **still exit 101**, with the identical `failed to read …/wasm/Cargo.toml` error. Change 1 and nothing else.
 
-So the line to remove is from **`members`**, not from `exclude`. `exclude` is inert for this failure, and removing it fixes nothing.
+`exclude` is inert for this failure and removing it fixes nothing. The fix is two changes, landed together:
+
+1. remove `"wasm"` from `members` (line 2), **and**
+2. make `wasm/Cargo.toml` standalone in the same change.
+
+They are not a change and a follow-on. Landed alone, change 1 trades a silent Dependabot outage for three red `wasm32` jobs: louder, and worse.
 
 ### Required follow-on: one removal is necessary but not sufficient
 
@@ -242,6 +249,23 @@ Adding an empty `[workspace]` table to `wasm/Cargo.toml` and spelling out the th
 
 That matters because CI builds this package: `cargo build --target wasm32-unknown-unknown -p scmessenger-wasm --release` at `.github/workflows/cross.yml:143`, plus the `wasm32-unknown-unknown` steps at `.github/workflows/cross-platform-test.yml:179` and `.github/workflows/release.yml:357`. A change to `members` that is not accompanied by making `wasm/Cargo.toml` standalone will fix Dependabot and break those.
 
+### #391 is right about the comment, and its own text rules out its fix direction
+
+PR #391, *"fix(cargo): wasm in members AND exclude is what silences the cargo Dependabot updater"* (opened 2026-09-27), keeps `wasm` in `members` and deletes `exclude`. **That is the edit measured above as still exit 101.**
+
+Two things are credited before anything else, because both are correct and both improve the manifest:
+
+- **The stale comment was wrong.** `Cargo.toml:3-4` described `wasm` as "excluded from default members". `exclude` has no effect on default members — that is `default-members` — so it described a mechanism that was never active, and it is part of what made the misconfiguration look deliberate. #391's replacement comment is accurate and the line should go however this is resolved.
+- **`members` is not `default-members`,** and #391 is right to say so.
+
+The fix direction is nevertheless the one that does not work, and #391 establishes that itself. Its diff comment reads:
+
+> a members-only entry whose directory is absent makes every cargo command fail to load the workspace, which is what stopped Dependabot's cargo updater
+
+That sentence is correct, and it is the entire problem. Dependabot materialises the workspace **without** `wasm/`, so a `members`-only entry naming `wasm` has an absent directory there and fails by precisely the quoted mechanism. #391's own failing measurement is that same case — manifest untouched, `wasm/` renamed away, RC 101 — and in that measurement **`exclude` was still present**. `exclude` was therefore not the variable in the failing run, so its absence cannot be what changes the outcome.
+
+This has been raised on #391 with the measurement, rather than left for a reader to infer from this document.
+
 ### What is not claimed
 
 *Why* Dependabot omits `wasm/Cargo.toml` from its working directory is internal to Dependabot and cannot be verified from this repository. The double-listing is the strongest candidate trigger — a fetcher honouring `exclude` when choosing which member manifests to materialise — but that mechanism is inference and is not asserted here. The reproduction above does not depend on it: it establishes that any consumer which materialises the workspace without `wasm/Cargo.toml` fails, and that removing `wasm` from `members` is the change that makes the root workspace resolve without it.
@@ -255,6 +279,16 @@ That matters because CI builds this package: `cargo build --target wasm32-unknow
 5. Separately and cheaply: `Cargo.toml:3-4` comments that `wasm` is "excluded from default members". `exclude` has no effect on default members at all — that is `default-members` — so the comment is wrong on its own terms and is part of what made this misconfiguration look intentional.
 
 ---
+
+## Addendum — re-verified 2026-09-27, no finding changed
+
+Everything above was re-checked against live state after this document was first published. **No finding, measurement or recommendation changed.** What changed is the context around them:
+
+- `main` has advanced from `bceacb94` to `05df2960` (merges #389, #390 on top of the two already noted). All five commits since `cd511fa0` touch handoff and governance files only — `ci.yml`, `scripts/validate_handoff_scope.py`, `handoff_scope_waivers.json` and four `HANDOFF/*.md` — and **none touches `android/`, `Cargo.toml` or any product code**, so every line number cited above is still current.
+- The required-check list on `main` is still exactly `Repository Hygiene Checks`, `Lint`, `Rust Linting`, `Test (ubuntu-latest)`, `Handoff ownership scope`, `strict: true`, and the repository still has **no rulesets**. `Android JVM Unit Tests` is still not required.
+- The three carriers are still the three carriers. The defective test file is byte-identical at all three heads (`sha256:0c4aff33…`, 6,655 bytes, 9 `@Test`, `it.action` at lines 102 and 118), and a re-enumeration of all **51** open pull requests found no fourth copy.
+- **Two of the three carriers now conflict with `main`.** #359 and #364 are `CONFLICTING`; #361 is `BEHIND`. Each needs a rebase before the corrected assertions can land, and a rebase is the point at which the Android result should be re-read rather than carried over.
+- **The corrected assertions already exist in a mergeable pull request.** #372 (`fix/361-review-blockers`, head `2cb046cf`, `base=main`, `MERGEABLE`) carries the fixed test file — `sha256:e7769b6b…`, 7,469 bytes — and is fully green, including `Android JVM Unit Tests` passing in 22m 55s on run `36269937310`. This is the run already cited above as proof the corrected assertions pass. The fix is therefore available to lift from #372 rather than to be rewritten; #372 is not itself a carrier of the defect.
 
 ## Severity and limits of this handoff
 
