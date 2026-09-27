@@ -707,22 +707,34 @@ pub fn decrypt_with_ratchet_fallback(
                     // deterministically derivable from both parties' static keys,
                     // so a sender whose session store was wiped (daemon restart)
                     // can be re-synced by rebuilding ours.
+                    //
+                    // #394: if the recovery itself fails, the stale session is
+                    // dropped instead of being kept (and re-persisted) for
+                    // indefinite retry. The next inbound message renegotiates
+                    // via the fresh-init path above.
                     tracing::warn!(
                         "V1 ratchet decrypt failed for peer {}.. ({}); rebuilding receiver session from static keys",
                         &peer_id[..16.min(peer_id.len())],
                         first_error
                     );
-                    let mut sender_ed = [0u8; 32];
-                    sender_ed.copy_from_slice(&envelope.sender_public_key);
-                    let sender_x25519 =
-                        crate::crypto::encrypt::ed25519_public_to_x25519(&sender_ed)?;
-                    manager.create_receiver_session(
-                        &peer_id,
-                        recipient_signing_key,
-                        &sender_x25519,
-                    )?;
-                    return match manager.get_session_mut(&peer_id) {
-                        Some(session) => match decrypt_message_ratcheted(session, envelope) {
+                    let recovered: Result<Vec<u8>> = (|| {
+                        let mut sender_ed = [0u8; 32];
+                        sender_ed.copy_from_slice(&envelope.sender_public_key);
+                        let sender_x25519 =
+                            crate::crypto::encrypt::ed25519_public_to_x25519(&sender_ed)?;
+                        manager.create_receiver_session(
+                            &peer_id,
+                            recipient_signing_key,
+                            &sender_x25519,
+                        )?;
+                        let session =
+                            manager.get_session_mut(&peer_id).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Session exists but cannot be retrieved for peer {}",
+                                    peer_id
+                                )
+                            })?;
+                        match decrypt_message_ratcheted(session, envelope) {
                             Ok(plaintext) => {
                                 tracing::warn!(
                                     "V1 session re-established for peer {}..; message recovered",
@@ -738,9 +750,16 @@ pub fn decrypt_with_ratchet_fallback(
                                 );
                                 Err(first_error)
                             }
-                        },
-                        None => Err(first_error),
-                    };
+                        }
+                    })();
+                    if recovered.is_err() {
+                        manager.remove_session(&peer_id);
+                        tracing::warn!(
+                            "V1 stale session dropped for peer {}.. after failed recovery; next message will renegotiate",
+                            &peer_id[..16.min(peer_id.len())]
+                        );
+                    }
+                    return recovered;
                 }
                 bail!("Ratcheted V1 envelope received but no active ratchet session");
             }
@@ -819,6 +838,15 @@ pub fn decrypt_with_ratchet_fallback(
                                     peer_short,
                                     retry_err
                                 );
+                                // #394: the rebuilt session cannot decrypt
+                                // either; drop it so a stale session is never
+                                // persisted, and the next message renegotiates
+                                // via the fresh-init path.
+                                manager.remove_session(&peer_id);
+                                tracing::warn!(
+                                    "V2 stale session dropped for peer {}..; next message will renegotiate",
+                                    peer_short
+                                );
                                 return Err(first_error);
                             }
                         },
@@ -829,6 +857,15 @@ pub fn decrypt_with_ratchet_fallback(
                             "V2 session re-establishment unavailable for peer {}..: {}",
                             peer_short,
                             init_err
+                        );
+                        // #394: re-establishment is unavailable, so the stale
+                        // session can never recover; drop it instead of
+                        // retrying it indefinitely. The next message
+                        // renegotiates via the fresh-init path.
+                        manager.remove_session(&peer_id);
+                        tracing::warn!(
+                            "V2 stale session dropped for peer {}..; next message will renegotiate",
+                            peer_short
                         );
                     }
                 }
@@ -1083,6 +1120,100 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pt2, b"after restart");
+    }
+
+    #[test]
+    fn test_decrypt_fallback_drops_stale_session_on_unrecoverable_failure() {
+        // #394: when session re-establishment is unavailable, a decrypt
+        // failure must DROP the stale session from the manager instead of
+        // keeping it (and re-persisting it) for indefinite retry. The next
+        // inbound message then renegotiates via the fresh-init path.
+        let alice_key = generate_keypair();
+        let bob_key = generate_keypair();
+        let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
+        let bob_x25519_secret = ed25519_to_x25519_secret(&bob_key);
+        let bob_mlkem = crate::crypto::pq::generate();
+
+        let alice_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: alice_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&alice_x25519_secret).to_bytes(),
+            mlkem_encaps_key: crate::crypto::pq::generate().public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+        let bob_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: bob_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&bob_x25519_secret).to_bytes(),
+            mlkem_encaps_key: bob_mlkem.public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+
+        let mut bob_sessions = RatchetSessionManager::new();
+
+        // Establish Bob's receiver session with a valid message.
+        let mut alice_sessions = RatchetSessionManager::new();
+        let wire1 = {
+            let session = alice_sessions
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"hello").unwrap()
+        };
+        let pt1 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire1,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt1, b"hello");
+
+        let peer_id =
+            hex::encode(blake3::hash(alice_key.verifying_key().to_bytes()).as_bytes());
+        assert!(bob_sessions.has_session(&peer_id));
+
+        // Corrupt the ciphertext so decrypt fails, and withhold the
+        // keys/bundles so session re-establishment is unavailable.
+        let mut bad_wire = wire1;
+        match &mut bad_wire {
+            crate::message::WireEnvelope::V2(e) => {
+                let last = e.ciphertext.len() - 1;
+                e.ciphertext[last] ^= 0x01;
+            }
+            crate::message::WireEnvelope::V1(_) => panic!("expected V2 envelope"),
+        }
+        decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &bad_wire,
+            Some(&mut bob_sessions),
+            None,
+            None,
+            None,
+        )
+        .expect_err("corrupt message with no re-establishment material must fail");
+
+        // The stale session was dropped, not kept for indefinite retry.
+        assert!(
+            !bob_sessions.has_session(&peer_id),
+            "stale session must be dropped after unrecoverable decrypt failure"
+        );
+        assert_eq!(bob_sessions.session_count(), 0);
     }
 
     #[test]
