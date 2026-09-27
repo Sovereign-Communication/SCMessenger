@@ -313,6 +313,16 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
   problem that does not exist.
 - Every status line carries a command and its output, a run URL, or `UNVERIFIED`.
 
+## Dogfood override — product handoffs
+
+For an active Harness/SCMessenger dogfood run, these rules override capability-specific commit and push permissions:
+
+- **Never interrupt WIP.** Before any action that could change or terminate shared work, verify the current branch, `git status --short --branch`, and the relevant diff. Never reset, overwrite, clean, stash, kill/terminate, or delete unowned work. If status or ownership is unclear, stop and report the evidence.
+- **Docs-only commits and pushes.** Commit and push documentation only, including handoff findings and recommended remediations. Do not commit or push source, tests, generated files, or other code WIP; leave those changes in place and report them.
+- **Route handoffs to the owning product repository.** Commit SCMessenger handoff files and SCMessenger recommended remediations in this SCMessenger repository. Commit Harness handoff files and Harness recommended remediations in the Harness repository. Never place or commit one product's handoff in the other product's repository.
+- **Single-owner handoff gate (executable).** Every SCMessenger handoff must declare `scope: SCMessenger`, `owner: Sovereign-Communication/SCMessenger`, `purpose: SCMessenger-only findings and remediation handoff`, `foreign_material: NONE`, and the exact boundary line used by the repository-local gate. Before handoff delivery, run `python scripts/validate_handoff_scope.py --repo-root . --document <handoff>`. The active `.githooks/pre-commit` runs the same gate against staged Git-index bytes via `scripts/rules_check.py --staged`, and CI runs the changed-file gate before merge. A foreign-product reference outside the metadata block is a hard failure, not a warning. Legacy handoffs are not grandfathered: touching one requires owner cleanup and metadata first. Split mixed material into separate owner handoffs before delivery; do not bypass the hook.
+- **Verify before publishing.** Immediately before each commit or push, re-check the target repository status and staged diff, and confirm that it contains only the intended documentation.
+
 ### MAC LANE (GPT / Codex on the operator's MacBook — iOS platform work + adversarial review)
 Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
 - You MAY and SHOULD commit, push, and open and manage your own pull

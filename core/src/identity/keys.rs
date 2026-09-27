@@ -11,6 +11,12 @@ pub const PUBLIC_KEY_PREFIX: &str = "pk:";
 pub const IDENTITY_ID_PREFIX: &str = "id:";
 
 /// Check if a 64-hex string looks like a public key (valid Ed25519 curve point)
+///
+/// This is the SINGLE owner of the "is this an ed25519-shaped key" predicate.
+/// The contact store, the identity-envelope path, and the CLI all route through
+/// it; none of them reimplements the check. It answers a question about SHAPE
+/// only -- see [`identity_id_from_public_key_hex`] for why a passing result is
+/// not proof that a value is the right key for a given peer.
 pub fn is_valid_public_key(hex_str: &str) -> bool {
     if hex_str.len() != 64 || !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
         return false;
@@ -21,6 +27,26 @@ pub fn is_valid_public_key(hex_str: &str) -> bool {
         }
     }
     false
+}
+
+/// Build a real self-certifying `(libp2p peer id, public key hex)` pair for
+/// tests, deterministically from `seed_tag`.
+///
+/// Lives here because this module already owns the ed25519 key predicates, so
+/// a test needing a genuine key does not grow a private copy of the encoding.
+#[cfg(test)]
+pub(crate) fn self_certifying_keypair(seed_tag: &[u8]) -> (String, String) {
+    let mut seed = [0u8; 32];
+    let n = seed_tag.len().min(32);
+    seed[..n].copy_from_slice(&seed_tag[..n]);
+    let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed)
+        .expect("test seed is a valid ed25519 secret key");
+    let kp = libp2p::identity::ed25519::Keypair::from(signing);
+    let peer_id = libp2p::identity::PublicKey::from(kp.public())
+        .to_peer_id()
+        .to_string();
+    let key_hex = hex::encode(kp.public().to_bytes());
+    (peer_id, key_hex)
 }
 
 /// Check if a 64-hex string is a valid identity_id format (always valid if 64 hex chars)
