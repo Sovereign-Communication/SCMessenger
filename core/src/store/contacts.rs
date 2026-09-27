@@ -666,11 +666,19 @@ impl ContactManager {
     }
 
     /// Save a contact's public key bundle.
+    ///
+    /// The bundle's cross-signature is verified BEFORE anything is persisted:
+    /// a forged or tampered bundle is rejected and never reaches the store.
+    /// This is the single ingestion boundary for contact bundles, so every
+    /// current and future import path is covered (#393).
     pub fn save_contact_bundle(
         &self,
         public_key_hex: &str,
         bundle: &PublicKeyBundle,
     ) -> Result<(), IronCoreError> {
+        // #393: verify pre-persistence. A bundle that fails verification is
+        // never stored.
+        crate::identity::verify_bundle(bundle).map_err(|_| IronCoreError::CryptoError)?;
         let key = contact_bundle_key(public_key_hex);
         let value = serde_json::to_vec(bundle).map_err(|_| IronCoreError::Internal)?;
         self.backend
@@ -1122,6 +1130,33 @@ mod tests {
             loaded.is_none(),
             "bundle must be deleted when contact is removed"
         );
+    }
+
+    /// #393 regression: a forged/tampered bundle is rejected at ingest and
+    /// never persisted.
+    #[test]
+    fn test_save_contact_bundle_rejects_tampered_bundle() {
+        use crate::identity::{sign_bundle, IdentityKeys};
+
+        let mgr = make_manager();
+        let keys = IdentityKeys::generate();
+        let mut tampered = sign_bundle(&keys).unwrap();
+        // Tamper with the signed payload: flip a byte of the Ed25519 key so
+        // the cross-signature no longer matches.
+        tampered.ed25519_public[0] ^= 0x01;
+
+        let err = mgr
+            .save_contact_bundle("tampered-pubkey", &tampered)
+            .expect_err("tampered bundle must be rejected at ingest");
+        assert!(
+            matches!(err, crate::IronCoreError::CryptoError),
+            "expected CryptoError, got {:?}",
+            err
+        );
+
+        // Nothing was persisted.
+        let loaded = mgr.get_contact_bundle("tampered-pubkey").unwrap();
+        assert!(loaded.is_none(), "rejected bundle must not be stored");
     }
 
     #[test]
