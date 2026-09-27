@@ -17,6 +17,7 @@ Usage:
   python scripts/disk_budget.py            # survey (default)
   python scripts/disk_budget.py --tight 25 --floor 10
   python scripts/disk_budget.py --json
+  python scripts/disk_budget.py --fast     # free space + verdict only, no walk
 
 Exit codes:
   0  OK       -- at or above the tight threshold
@@ -246,6 +247,11 @@ def main():
     ap.add_argument("--floor", type=float, default=DEFAULT_FLOOR_GB,
                     help="hard-stop below this many GB free (default %g)" % DEFAULT_FLOOR_GB)
     ap.add_argument("--json", action="store_true", dest="as_json")
+    ap.add_argument("--fast", action="store_true",
+                    help="filesystem free space and verdict only; skip the "
+                         "directory walk entirely. Cheap enough to call on "
+                         "every commit, which is the only way a full disk gets "
+                         "noticed before it becomes an incident.")
     args = ap.parse_args()
 
     root = repo_root()
@@ -259,26 +265,49 @@ def main():
     else:
         verdict = "OK"
 
-    # Every candidate path in the repo, plus every registered worktree's
-    # target/. Duplicates are collapsed so the total is not double-counted.
+    if args.fast:
+        # No directory walk. This is the mode a commit hook can afford; the
+        # full survey walks every worktree and takes minutes on a full disk.
+        print("disk: %s free of %s (%.1f%% used)  verdict=%s  "
+              "(TIGHT<%gGB BLOCKED<%gGB)"
+              % (human(usage.free), human(usage.total),
+                 100.0 * usage.used / usage.total, verdict, args.tight,
+             args.floor))
+        return {"OK": 0, "TIGHT": 1, "BLOCKED": 2}[verdict]
+
+    # Every candidate path in the repo, plus every registered worktree's build
+    # output. Duplicates are collapsed so the total is not double-counted.
+    #
+    # The dedupe key MUST be canonicalised. `git rev-parse --show-toplevel`
+    # returns the root with backslashes; `git worktree list` returns that very
+    # same directory with forward slashes. A raw string compare therefore
+    # missed the match and the checkout's own target/ was counted TWICE: the
+    # survey reported 27.07 GB reclaimable when the truth was 14.7 GB.
+    def _key(p):
+        return os.path.normcase(os.path.realpath(p))
+
     candidates = []
     seen = set()
     for rel in CANDIDATE_DIRS:
         p = os.path.join(root, rel)
-        if os.path.isdir(p) and p not in seen:
-            seen.add(p)
+        if os.path.isdir(p) and _key(p) not in seen:
+            seen.add(_key(p))
             b, complete = dir_size(p)
             if b > 0:
                 candidates.append({"path": p, "bytes": b, "complete": complete,
                                    "scope": "checkout"})
+    # Every worktree is scanned for EVERY candidate dir, not just target/. A
+    # worktree that ran an Android or core build leaves android/app/build or
+    # core/target behind, and the old one-dir loop walked straight past them.
     for wt in worktrees(root):
-        p = os.path.join(wt, "target")
-        if os.path.isdir(p) and p not in seen:
-            seen.add(p)
-            b, complete = dir_size(p)
-            if b > 0:
-                candidates.append({"path": p, "bytes": b, "complete": complete,
-                                   "scope": "worktree"})
+        for rel in CANDIDATE_DIRS:
+            p = os.path.join(wt, rel)
+            if os.path.isdir(p) and _key(p) not in seen:
+                seen.add(_key(p))
+                b, complete = dir_size(p)
+                if b > 0:
+                    candidates.append({"path": p, "bytes": b, "complete": complete,
+                                       "scope": "worktree"})
 
     candidates.sort(key=lambda c: c["bytes"], reverse=True)
 

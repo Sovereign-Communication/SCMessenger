@@ -11,4 +11,32 @@ if [ $status -ne 0 ]; then
   echo "pre-commit: blocked by scripts/rules_check.py (see [FAIL] lines above)." >&2
   echo "Fix the violations and re-commit. Rules: AGENTS.md / .claude/rules/." >&2
 fi
+
+# --- disk budget visibility (AGENTS.md rule 17) -----------------------------
+# The disk guard used to be documentation only: nothing in .githooks/ or in any
+# CI workflow referenced it, so "run disk_budget before a build" and "reclaim
+# immediately" depended on every agent remembering. On 2026-09-27 that
+# oversight was 12 GB of build output sitting un-reclaimed for four days on a
+# disk at 100%. This makes the verdict visible at the moment a lane is about to
+# leave build output behind.
+#
+# Report-only by default. This checkout is shared, so a commit is frequently
+# somebody else's work; a full disk must never strand a lane mid-flight. Set
+# SCM_ENFORCE_DISK=1 to make a BLOCKED verdict (below the hard floor) hard-fail.
+python scripts/disk_budget.py --fast
+disk=$?
+if [ $disk -ne 0 ]; then
+  echo "" >&2
+  if [ "${SCM_ENFORCE_DISK:-0}" = "1" ] && [ $disk -eq 2 ]; then
+    echo "pre-commit: BLOCKED -- disk is below the hard floor (see above)." >&2
+    echo "  python scripts/reclaim_safe.py --reclaim" >&2
+    echo "  gh run download <run-id> -n <artifact> -D tmp/<dir>   # CI is the verifier" >&2
+    echo "  escape: SCM_ENFORCE_DISK=0, or operator-only --no-verify" >&2
+    status=$disk
+  else
+    echo "[WARNING] disk below the tight threshold -- reclaim before a full build." >&2
+    echo "          python scripts/reclaim_safe.py --reclaim" >&2
+  fi
+fi
+
 exit $status
