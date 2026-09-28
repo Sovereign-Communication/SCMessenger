@@ -1,5 +1,17 @@
 # WP1 findings: two gaps this ticket's rows surfaced, deliberately not fixed here
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+It is an SCMessenger-side record written by this lane; any external tooling it
+names appears in prose only, and no foreign-repository finding, status or
+remediation is carried here.
 Status: OPEN -- filed 2026-09-21 alongside the WP1 PR
 Lane: Freebuff
 Related: `HANDOFF/freebuff/queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md`
