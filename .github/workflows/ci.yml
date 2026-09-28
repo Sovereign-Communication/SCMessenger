@@ -97,11 +97,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # WHY THE CHECKOUT USES github.sha AND NOT inputs.candidate_sha
+      # ---------------------------------------------------------------
+      # `inputs.candidate_sha` is caller-controlled. Feeding it to
+      # actions/checkout's `ref` makes the checked-out tree -- and therefore
+      # every `python scripts/...` step below -- an input an attacker who can
+      # dispatch this workflow chooses, in the privileged default-branch
+      # context. CodeQL flags that as actions/cache-poisoning/poisonable-step
+      # (2 high alerts at ci.yml:142/144 on head 2b68b7d6).
+      #
+      # The guard already requires candidate_sha == github.sha, so the two are
+      # equal on every run that reaches the code steps. Checking out
+      # `${{ github.sha }}` is therefore behaviour-identical for the passing
+      # case and removes the untrusted-input -> checkout edge entirely, rather
+      # than relying on the guard to neutralise it after the fact.
+      #
+      # candidate_sha is NOT dropped: the guard below still asserts it is a
+      # full SHA, still resolves it against the branch tip, and still requires
+      # it to equal the checked-out SHA. Do not "restore" inputs.candidate_sha
+      # here -- add an assertion instead.
       - name: Checkout dispatched candidate
         if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.candidate_sha }}
+          ref: ${{ github.sha }}
       - name: Checkout repository
         if: github.event_name != 'workflow_dispatch'
         uses: actions/checkout@v7
