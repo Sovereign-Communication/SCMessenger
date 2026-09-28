@@ -65,14 +65,17 @@ Precedence: those documents win on HOW (format, reporting, tooling, safety). Thi
   - call the JEV tools (jev_phase, log_judgment, issue_sort) over MCP.
 - CI is the primary build verifier for this lane (operator directive 2026-09-22).
 - Freebuff may NOT:
-  - merge any PR;
-  - give a Rule-8 sign-off;
+  - give a Rule-8 sign-off on its own work (a fresh Claude reviewer signs, section 14 A2);
   - drive the Pixel (no input, tap, `am start`, force-stop, or UI reading);
-  - revert, stash, delete or commit a file it did not create.
-- Not covered by any rule: ssh to AWS. It needs the explicit operator grant H-6 before any AWS step.
-- Superseding PRs carry the original authors' commits unchanged: merge, never rewrite. Each links the PR it supersedes. The operator closes the old PR after the new one merges.
+  - revert, stash, delete or commit a file it did not create, except through BK-01's tool.
+- **Operator grants 2026-09-28** (section 14):
+  - merging PRs under A1
+  - AWS ssh under A6
+  - tagging and publishing under A10
+  - closing superseded PRs under A4
+- Superseding PRs carry the original authors' commits unchanged: merge, never rewrite. Each links the PR it supersedes. After the new one merges, the lane closes the old PR with evidence (A4).
 
-**0.3 Gates.** `[OPERATOR GATE]`:
+**0.3 Gates.** Section 14 lists what is pre-approved. `[OPERATOR GATE]` now applies only to anything outside those approvals, to the hard stops in 14.5, and to physical Pixel actions. For those:
 1. Write an inbox report (0.6).
 2. Print the GATE block.
 3. Wait for the operator to type `GO <id>`, `MERGED <pr>`, `SKIP <id>` or `STOP`.
@@ -244,6 +247,8 @@ This is the 2026-09-24 ROLLOUT_RCA method. Transport ACKs alone never count.
 
 ## 3. Operator prerequisites and rulings (human-only)
 
+**Superseded where they differ by section 14:** the operator interview of 2026-09-28 answered H-1..H-11, D-01, R-1 and R-2, and granted standing approvals. Read section 14 first.
+
 The executor checks these, records their state in TRAIN_STATE, and raises a QUESTION when a car depends on one that is not done.
 
 | Id | What | Unblocks |
@@ -377,15 +382,12 @@ LoC landed: 0. Rescue branches are archives.
 - **Last commit before 2026-09-01, not in a car:** archive-proposed.
 - **Refs on remotes other than origin:** list only. Never delete.
 
-**T-3 Archive** (`[OPERATOR GATE] GO T-3`):
-- Tag each approved ref: `git tag archive/<branch> <sha>`.
+**T-3 Archive** (approved, section 14 A3: tags only):
+- Re-verify each approved ref's SHA.
+- Tag it: `git tag archive/<branch> <sha>`.
 - Push each tag by name.
-- Then `git push origin --delete <branch>`, one command per branch.
-- The tags keep every commit reachable.
-- **Constraint:** the repo's pre-push hook blocks remote-branch deletions from agent sessions (AGENTS.md rule 5).
-  - The executor pushes the archive tags and prepares the exact delete commands in `STATE_DIR/T3_DELETE_COMMANDS.sh`.
-  - The operator runs the deletions.
-- **Never archive or delete:** `backup/20260927/*` and `rescue/*`.
+- Delete NO remote branches; the operator ruled keep-branches.
+- Never tag or touch `backup/20260927/*` or `rescue/*`.
 
 **T-4 Carry-forward.**
 - Read `HANDOFF/freebuff/V040_0_LANE_UNIFY_MERGE_TRAIN_2026-09-23.md`, the queue files it supersedes, `recovery/harness-plan-snapshot-20260924` (#369) and `freebuff/v040-v050-harness-plan`.
@@ -396,14 +398,14 @@ LoC landed: 0. Rescue branches are archives.
 
 ## 6. Phase 2 -- v0.4.0 train
 
-**Order:** BK-01 (P0-8, runs while MT-00a waits on CI) -> MT-01 (if the scan gates PRs) -> MT-00a -> MT-00b and MT-02 in parallel -> MT-03 -> MT-06 -> MT-04 -> MT-05 -> MT-07 -> MT-08 -> MT-09 -> MT-10 -> MT-11 -> MT-12 -> TRI-040 (section 7) -> TAG-040 (section 8).
+**Order:** BK-01 (P0-8, runs while MT-00a waits on CI) -> MT-01 (if the scan gates PRs) -> MT-00a -> MT-00b and MT-02 in parallel -> MT-03 -> MT-06 -> MT-04 -> MT-05 -> MT-07 -> MT-08 -> MT-09 -> MT-10 -> MT-11 -> MT-12 -> AUD-040 (section 14, H-7) -> TRI-040 (section 7) -> TAG-040 (section 8).
 
 **Car pattern** (every car unless it says otherwise):
 1. Run the car's "verify" step. If its acceptance already holds on origin/main, write a DONE inbox report with the command output, mark the car DONE-VERIFIED, and move on.
 2. A clean existing PR needs no push. Check its gates, then raise a merge GATE.
 3. A conflicting PR, or one that must be combined: `git switch -c freebuff/train-<car> origin/main`, then `git merge --no-ff --no-edit origin/<source>`. Resolve only as the car's notes direct; anything else is BLOCKED. Push the branch and open a PR titled "<car>: ... (supersedes #n)".
 4. Rule-8 cars: QUESTION for the review (H-5), pinned to the PR head SHA.
-5. CI green -> merge GATE -> the operator merges.
+5. CI green on required checks -> the lane merges under section 14 A1.
 6. JEV gate (2.3) -> REPORT.
 
 | Car | Content | Source | LoC (measured unless est) | Deps | Rule-8 |
@@ -433,7 +435,7 @@ LoC landed: 0. Rescue branches are archives.
   - The operator merged #402 (merge commit faf22a57db).
   - #396 and #397 were updated onto main with update-branch; CI is re-running.
   - Before the update, #396's only failure was CodeQL, which is not a required check. Required checks: Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest), Handoff ownership scope.
-  - When both are green, raise the merge GATE.
+  - When both are green, merge them under section 14 A1.
 - **Scope correction:**
   - After these land, every later PR must pass the new jobs.
   - #402 enforces single-owner handoff documents. When a docs PR mixes owners, split it per owner; do not weaken the gate.
@@ -459,7 +461,7 @@ LoC landed: 0. Rescue branches are archives.
      - HANDOFF/harness/packs/scm-ops-issues-v1.json
   2. Where main has a newer commit on a path (`git log -1 --format=%cs origin/main -- <path>`), merge by hand and keep main-only content.
   3. Also land #386 (+95), #388 (+362), #357 (+277/-8) and #376 (+268).
-  4. Add this file, and the H-6 grant line in FREEBUFF.md once the operator gives it.
+  4. Add this file. Record the section 14 grants (A1 merges, A6 AWS ssh, A10 tag and publish) in `docs/rules/FREEBUFF.md` and in AGENTS.md's FREEBUFF LANE, as dated operator rulings of 2026-09-28.
 - **Why before MT-05:** the transport PRs then carry only code. Rules stop depending on which worktree an agent sits in.
 - **Acceptance:**
   - `scripts/docs_sync_check.sh` passes.
@@ -625,7 +627,7 @@ Order: D3 before D2. D3's self-dial loop poisons the backoff table that D2 reads
 - Mark the superseded queue files.
 - Correct the dead AWS IP (54.226.67.101) wherever docs still cite it.
 
-### MT-12 -- Rules-drift guard (a config change; `[OPERATOR GATE]`)
+### MT-12 -- Rules-drift guard (a hook change; lands as a normal PR under section 14 A1)
 
 Extend the SessionStart orientation hook to print `[WARNING]` in either case:
 - `git diff --quiet origin/main -- AGENTS.md CLAUDE.md docs/rules SHIP_PLAN.md` fails
@@ -643,9 +645,13 @@ This covers SHIP_PLAN G3 (gates D4, D6, D7) and P0 umbrella WP5.
 - Every MT car is DONE, DONE-VERIFIED or operator-SKIPped. main is green.
 - One commit C (the origin/main tip) is used everywhere.
 - H-2 and H-3 are done. H-6 is granted.
-- The JEV-LOG pack is frozen (Appendix C, `[OPERATOR GATE] FREEZE-PACK`).
+- The JEV-LOG pack is frozen. Freezing is delegated by the 2026-09-28 interview ("triangulate fully with jev"):
+  - the lane builds `scm-ops-log-v1` per Appendix C
+  - verifies every keyword occurs in real logs
+  - commits it under `HANDOFF/harness/packs/`
+  - posts it on #403 (the operator may veto)
 
-**7.2 Deploy C as a candidate** (`[OPERATOR GATE] GO TRI-040-DEPLOY`). KEEP doctrine: no image or binary change without verified functional improvement, and this run is that verification. On FAIL, roll back.
+**7.2 Deploy C as a candidate** (approved: section 14 A5, A6 and A7; enable logging per A8 first). KEEP doctrine: no image or binary change without verified functional improvement, and this run is that verification. On FAIL, roll back.
 
 - **AWS:**
   - Deploy: `IMAGE_TAG=testbotz/scmessenger:sha-<C7> scripts/aws_deploy.sh`. This is the only supported path: container `scm-node`, `--network host`, `-v /opt/scm-relay-data:/data`, `scm --http-bind 0.0.0.0:9876 start`, then a health poll.
@@ -704,7 +710,7 @@ This covers SHIP_PLAN G3 (gates D4, D6, D7) and P0 umbrella WP5.
 | C9 | soak | 60 min: Windows <-> AWS alternating every 2 min (30), plus Windows -> Pixel every 10 min (6) | executor | 36 |
 | C10 | AND-SS-001 | 6 STOP taps in 2 s, START, then Windows -> Pixel | operator + executor | 2 |
 | C14 | D7 | offline proximity: WAN blocked at the router (or an outbound firewall rule on Windows), Pixel mobile data off; Windows <-> Pixel over LAN/BLE only, 2 each way | operator + executor | 4 |
-| C15 (R-2) | G3-0 | churn: AWS comes back on a new public IP; the nodes re-mesh unaided (D2/T1 evidence) | operator EC2 action | 0 (connectivity only) |
+| C15 (R-2) | G3-0 | churn: AWS comes back on a new public IP; the nodes re-mesh unaided (D2/T1 evidence) | executor: `aws ec2 stop-instances` / `start-instances` (section 14, A6) | 0 (connectivity only) |
 
 **7.5 Triangulation rules** (`scripts/tri3.py`, Appendix D). PASS requires every rule for 100% of the 75 messages.
 
@@ -752,28 +758,28 @@ SHIP_PLAN G4 adds:
 - Delete API_RESET_EXECUTION_CHARTER.
 - Retire V040_COMPLETION_PLAN.
 
-`[OPERATOR GATE] TAG-040`: `git tag -a v0.4.0 <C> -m "v0.4.0"`, `git push origin v0.4.0`, then publish per G4.
+**TAG-040** (approved, section 14 A10):
+1. Check which workflows fire on `v*` tags.
+2. `git tag -a v0.4.0 <C> -m "v0.4.0"`
+3. `git push origin v0.4.0`
+4. Publish the release with notes: D2 skipped, the H-7 ruling, known issues, the TRI-040 evidence.
+
+Checklist items 6, 8 and 9 are closed by the rulings in 14.2: H-2 done; D1 green; H-7 replaced by AUD-040.
 
 ---
 
 ## 9. Unify the workspace (after TAG-040)
 
-**U-1 Retire worktrees** (`[OPERATOR GATE] GO U-1`).
-- Retire one only when `git -C <path> status --short` prints nothing (after the P0-2 rescue) and its branch is merged, CONTAINED or archived.
-- Use `git worktree remove <path>`, never `--force`.
-- Retire:
-  - all 10 `repro-*`
-  - tmp/android-artifact-wt, tmp/android-artifact-main-wt
-  - tmp/fix-361, tmp/jev-completion-gate-20260924, tmp/harness-plan-snapshot-20260924, tmp/swa-20260925
-  - wt-cargo-wasm, wt-d9-degrade, wt-ss-outbox-040, wt-wp1
-  - SCMessenger-v040-harness-plan, wt-train-plan
-- Keep the primary checkout and wt-train.
+**U-1 Retire worktrees** (approved, section 14 A12).
+- Use BK-01's tool only: run `bash backup_purge.sh backup`, then `verify`, then `purge`.
+- It removes only clean, fully pushed worktrees and byte-identical scratch copies.
+- A worktree holding WIP is never removed: it stays, backed up.
 
-**U-2 Branches.** Finish the T-3 deletions.
+**U-2 Branches.** None deleted: the operator ruled tags only (section 14, A3).
 
 **U-3 Exit criteria:**
 - every remaining worktree's rules files are identical to origin/main
-- 3 worktrees or fewer
+- every remaining worktree is a kept checkout, or holds WIP backed up on GitHub
 - 0 unclassified remote branches
 - 0 duplicate PRs for one fix
 
@@ -792,7 +798,7 @@ The philosophy doc's explicitly rejected items stay rejected.
 **V5-00 Scope lock.**
 - Diff this section against `git grep -n -i -E "0\.5\.0|v0\.5|V050" origin/main -- HANDOFF docs "*.md"`. Pay particular attention to HANDOFF/plans/MILESTONE_RELEASE_PLAN.md.
 - Send one QUESTION with the delta table.
-- `[OPERATOR GATE] GO V5-00` fixes the scope.
+- Post the scope table on #403, then continue (section 14 A12). Operator objections apply from the moment they are seen.
 
 | Car | Content | Anchors / sources | LoC est | Rule-8 |
 |---|---|---|---|---|
@@ -917,7 +923,7 @@ Same procedure as section 7, on commit C5, with three more cases:
 
 If the MAC lane has an iOS build of C5, iOS joins as a 4th node, driven by the MAC lane. Its log becomes a 4th triangulation source.
 
-Tag through `[OPERATOR GATE] TAG-050`.
+Tag and publish v0.5.0 under section 14 A10, the same way as TAG-040.
 
 ---
 
@@ -949,6 +955,159 @@ Tag through `[OPERATOR GATE] TAG-050`.
   - #402 merged; #396 and #397 updated onto main.
   - The Windows node is running `bceacb94` under the supervisor.
   - BK-01 is inserted as P0-8.
+
+---
+
+## 14. Operator standing approvals and rulings (interview, 2026-09-28)
+
+These supersede section 3 and any conflicting line in FREEBUFF.md or AGENTS.md for this train. MT-00b records A1, A6 and A10 in FREEBUFF.md and AGENTS.md (FREEBUFF LANE).
+
+### 14.1 Standing approvals: the lane acts without asking, inside these conditions
+
+**A1 Merge PRs** with `gh pr merge <n> --merge` (merge commit), only when ALL of these hold:
+- The branch is up to date with main. Use `gh pr update-branch <n>` and wait for the re-run.
+- Every REQUIRED check is green on the head SHA. Re-read the list before each merge:
+  `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`
+- The car's JEV gate (2.3) is >= 85 with hard gates clear.
+- Gated code (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) has an A2 APPROVE on that exact head SHA.
+- There are no unresolved review threads or requested changes.
+- Any failing non-required check has been investigated and shown not to be a real defect.
+
+Never `--admin`. Never force-push.
+
+**A2 Rule-8 review** of gated diffs. Both steps run, and both are recorded on the PR.
+1. **Harness first pass,** hard cap $0.10 per gated PR:
+   `<HARNESS> verify --prompt-file <packet.md> --source-file <diff.patch> --converge --max-cost 0.10`, where `<HARNESS>` is the admitted-harness invocation recorded in TRAIN_STATE.md at P0-6
+   The packet holds: the PR, the head SHA, the diff, the SECURITY_PROTOCOL.md checklist (race conditions, null checks, timing side channels, edge cases), the ticket acceptance and any prior dossier. For D9 that dossier is `HANDOFF/review/D1_D9_HARNESS_ADVERSARIAL_FINDINGS_2026-09-22.md`.
+2. **Claude final sign-off,** always. Pass every artifact (packet, diff, Harness verdict) to a fresh session:
+   `/isolated-request --model sonnet --budget 1.0 <prompt>`
+   - Fallback 1: `python C:/Users/SCM/Documents/GitHub/Harness/.claude/skills/isolated-request/run.py --model sonnet --budget 1.0 --prompt-file <file>`, run from the worktree root.
+   - Fallback 2, clean context: from an empty scratch dir, `claude -p --model sonnet --permission-mode plan --add-dir <worktree> < <file>`.
+
+Rules for the review:
+- The reviewer authored nothing, and its verdict names the head SHA.
+- A later commit that touches gated code voids the verdict.
+- REJECT: fix, then run both steps again.
+- The lane never signs its own work.
+
+**A3 T-3 archive** means pushing `archive/<branch>` tags only.
+- Never delete a remote branch.
+- Never touch `backup/*` or `rescue/*`.
+
+**A4 Close superseded or obsolete PRs** only after the superseding PR has merged, or the content is proven on main (merge-tree CONTAINED).
+- Comment with the evidence when closing.
+- Branches stay.
+
+**A5 Windows node: full drive.**
+- Allowed: redeploy and restart per 7.2, API sends and reads, logs, debug logging.
+- The node runs at all times except during a deliberate redeploy. If it is found down, relaunch the live build and report.
+- No Task Scheduler entry (operator: no).
+
+**A6 AWS node: full drive.** ssh as `ec2-user` with `~/.ssh/scm-node-key.pem`, for these uses only:
+- `scripts/aws_deploy.sh` deploys and rollbacks
+- `sudo docker logs`
+- API calls to `127.0.0.1:9876` on the host
+- the churn test's `aws ec2 stop-instances` / `start-instances`, using the local AWS CLI. First confirm `aws sts get-caller-identity`, then discover the instance exactly as `aws_deploy.sh` does.
+
+No other system changes, installs or firewall edits.
+
+**A7 Pixel: install and passive logs only.**
+- Allowed: `adb install -r` of CI APKs; `adb logcat`; `run-as` log reads.
+- Never drive the UI. Every tap, toggle or onboarding step is the operator's, requested through a GATE.
+
+**A8 Comprehensive logging, before TRI runs:**
+- **Windows:** add `set "RUST_LOG=info,scmessenger=debug"` to the 7.2 launch chain.
+- **AWS:** confirm `RUST_LOG=info,scmessenger=debug` in the running container (`docker inspect`).
+- **Pixel:** debug APK, logcat plus `mesh.log`.
+- MT-10's per-message markers are live.
+
+**A9 Paid spend caps:**
+
+| Use | Cap |
+|---|---|
+| Harness first pass (A2) | $0.10 per gated PR |
+| AUD-040 | $0.10 total |
+| TRI log_judgment | $0.10 per TRI run |
+| Claude review | $1.00 each |
+
+Stop and ask before exceeding any cap.
+
+**A10 Tag and publish v0.4.0 and v0.5.0** when every tag gate passes:
+1. Read which workflows fire on `v*` tags, and whether they succeed without D2 signing.
+2. Push the annotated tag on the proven commit C.
+3. Publish the release, with notes covering: D2 skipped, the H-7 ruling, known issues, and the TRI evidence summary.
+
+**A11 BK-01** backup and safe reclaim, per P0-8. It never removes WIP.
+
+**A12 Continue into v0.5.0** after TAG-040:
+1. U-1..U-3, using BK-01's rules.
+2. V5-00: post the scope table on #403, then continue.
+3. The V5 cars, TRI-050, TAG-050.
+
+Operator objections on #403 apply from the moment the lane sees them.
+
+### 14.2 Rulings
+
+| Id | Ruling |
+|---|---|
+| D-01 | WP1-WP4 (#383, #352, #349, #355, #356) land in v0.4.0 (MT-03). |
+| R-1 | #352 lands on its own evidence. Confirm with `python scripts/jev_canonical_check.py --wp WP1` (is_passing >= 0.70). |
+| R-2 | The churn test C15 is in TRI-040; the lane runs the EC2 step (A6). |
+| H-1 / D2 | Skipped for v0.4.0: no signed release APK. The release notes say so. |
+| H-2 | Done: the debug keystore pin works (P0-7: Mobile 5/5 green). |
+| H-3 | Onboard fresh (see below). |
+| H-4 / D10 | Stay internet-reachable. MT-09e shrinks to rate-limiting or downgrading the `Parse(Method)` scanner-noise lines; Rule-8 if the change lands in `core/src/transport`. |
+| H-5 | Per A2. |
+| H-6 | Granted, per A6. |
+| H-7 | External crypto audit replaced by AUD-040 for v0.4.0 (see below). |
+| H-8 / SEC-03 | Open the sled-migration branch with an owner and a plan. Nothing merges before the tag. |
+| H-9 / AND-06 | Implement A1+A2 before the tag (MT-09j). |
+| H-10 | Keep strict branch protection; update branches before merging. |
+| H-11 | Merges, the tag and publishing are delegated per A1 and A10. |
+
+**H-3 detail:**
+- The operator opens the app and onboards a new identity.
+- The lane re-seeds it as a contact on Windows and AWS.
+- The old triad (779e9ea3...) stays in place but is excluded from TRI matrices.
+- `tmp/pixel-data-backup-20260921` is never touched.
+
+**H-7 detail:** the external crypto audit is NOT commissioned for v0.4.0. AUD-040 replaces it:
+- Scope: a Harness audit (<= $0.10 total) of `core/src/{crypto,transport,routing,privacy}`, the D9 vendor patch and the PQC status, with JEV completion gates.
+- High-severity findings get an A2 step 2 Claude confirmation and a ticket.
+- REJECT-level findings block the tag.
+- Record it as a dated operator ruling in SHIP_PLAN G4-2 and in the release notes.
+
+### 14.3 T-4 default dispositions (applied unless the operator overrides on #403)
+
+- **Already merged** (#339, #353, #354, #358, #362, #402): mark DONE after verifying each state.
+- **Open PRs:**
+  - #357: MT-00b.
+  - #360: MT-00b if still relevant after rebase; otherwise close with evidence (A4).
+  - #316: MT-08.
+  - #329: MT-11; close it if its three status lines are superseded.
+  - #363 (draft OpenClaw bridge ops): REVIEW queue, not v0.4.0.
+  - #366 and #368: verify state.
+  - #369: read in T-4, never merged.
+- **`MeshServiceViewModelTest`** (the CI blocker on #361/#364): fix its real cause inside MT-05/MT-06. Never weaken or skip it.
+- **#364 split:** FGS behaviour -> MT-06c; Dockerfile hunk -> MT-05; outbox sweep -> MT-07.
+- **`train/A3-deny-waiver`** (removes the rustls RUSTSEC-2026-0285 waiver): land it only when `cargo deny check` passes without the waiver. Otherwise keep the waiver and the P1 tracking ticket.
+- **T-COB001:** verify against main (CO-B-001 merged as #339); if still open, add it to MT-09.
+
+### 14.4 Still operator-only
+
+- Physical Pixel actions: open and onboard; the toggles for C2, C6, C7, C8, C10 and C14; waking, unlocking and pairing for adb.
+- Pausing other agent sessions before BK-01's purge.
+- Anything outside 14.1.
+
+### 14.5 Hard stops: write BLOCKED or QUESTION, then wait
+
+- main goes red after a merge. Stop merging; the fix or revert goes through the same gates.
+- A Rule-8 REJECT.
+- A secret found in a diff.
+- Any identity change on the Windows or AWS node.
+- A spend cap would be exceeded.
+- A destructive action not covered by 14.1.
+- Any TRI rule failure. Roll back per 7.7.
 
 ---
 
@@ -1062,42 +1221,90 @@ Follow the override surface as documented in the JEV dogfood run record (`git ls
 
 ## Appendix E -- prompts
 
-**MASTER** (paste once into Freebuff):
+**LAUNCH** (paste once into Freebuff; operator-approved 2026-09-28):
 ```
-You are the SCMessenger merge-train executor (Freebuff lane). Your task file is
-HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md
-(until it merges, read it with:
- MSYS_NO_PATHCONV=1 git show origin/docs/merge-train-v040-v050-20260927:HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md )
-Before any command read in full: CLAUDE.md, AGENTS.md (FREEBUFF LANE), docs/rules/FREEBUFF.md,
-HANDOFF/freebuff/inbox/README.md, then sections 0-3 of the task file. Read later sections one at a
-time, when you reach them.
-1. State: C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md. Re-read before every step;
-   update after every step.
-2. Order: P0-1..P0-8 (P0-8 = BK-01), T-1..T-4, then the section 6 car table. One car in local work at a time; while
-   a car waits on CI or review you may prepare the next car whose deps are met. Never two builds
-   at once; CI is the primary verifier; no local build while disk_budget.py exits 2.
-3. Each car: verify step first, then its steps, its acceptance commands, the JEV gate (2.3), then
-   print the REPORT block.
-4. You never merge, never sign Rule-8, never drive the Pixel UI, never touch a file or worktree you
-   did not create. For a merge, a review, a phone action or a ruling: write the inbox report
-   (inbox/README.md format), print the GATE block, and wait for GO / MERGED / SKIP / STOP.
-5. DONE = PR merged by the operator + main CI green on the merge SHA + JEV bar >= 85 with hard
-   gates clear + evidence recorded. Delivered = receiver decrypt + durable history + receipt back;
-   never transport ACKs.
-6. If the repo contradicts the task file: write Type PREMISE-WRONG with the command output and stop
-   that car.
-Begin with P0-1.
+SCMessenger merge train -- FULL LAUNCH (Freebuff lane), operator-approved 2026-09-28.
+You are the executor. Goal: land all v0.4.0 work, prove the mesh on three nodes, tag and publish
+v0.4.0, then do the same for v0.5.0 -- using only the approvals in section 14 of the task file.
+
+Task file: C:/Users/SCM/Documents/GitHub/wt-train-plan/HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md
+(branch docs/merge-train-v040-v050-20260927 = PR #403, the shared tracker. If the worktree copy is
+missing: MSYS_NO_PATHCONV=1 git show origin/docs/merge-train-v040-v050-20260927:HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md)
+State: C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md -- re-read before every step,
+update after every step.
+
+READ FIRST, in full: CLAUDE.md, AGENTS.md (FREEBUFF LANE), docs/rules/FREEBUFF.md,
+HANDOFF/freebuff/inbox/README.md, then task-file sections 0-3 and 14. Section 14 holds the operator's
+standing approvals and rulings and overrides anything older. Then run `gh pr view 403 --comments` and
+reconcile TRAIN_STATE.md, verifying each claim with the command it names. Read the other sections one
+at a time, as you reach them.
+
+ORDER
+ 1. Commit your two untracked inbox reports in wt-train-plan (HANDOFF-SCOPE block,
+    python scripts/validate_handoff_scope.py --repo-root . --staged, push to the #403 branch).
+ 2. P0-8 BK-01: scm-train-state/backup_purge.sh inventory -> backup -> verify (0 missing) ->
+    purge --dry-run -> purge -> report. Uncommitted work is never removed.
+ 3. MT-00a: merge #396 and #397 when green (A1).
+ 4. T-3: push archive tags only (A3).
+ 5. T-4: apply 14.3.
+ 6. Section 6 cars in order: MT-01, MT-00b, MT-02, MT-03, MT-06, MT-04, MT-05, MT-07, MT-08,
+    MT-09, MT-10, MT-11, MT-12.
+ 7. AUD-040 (14.2 H-7).
+ 8. TRI-040 (section 7).
+ 9. TAG-040 (A10).
+ 10. U-1..U-3, then v0.5.0: V5-00 (post the scope table, then continue), the V5 cars, TRI-050,
+     TAG-050 (A12).
+ While a car waits on CI or review, prepare the next car whose deps are met.
+
+YOU MAY (14.1)
+ - merge PRs when every A1 condition holds
+ - run Rule-8 reviews per A2: Harness first pass <= $0.10, then a Claude final sign-off via
+   /isolated-request or its fallbacks. You never sign your own work.
+ - push archive tags; close superseded PRs with evidence
+ - fully drive the Windows node and the AWS node: ssh, aws_deploy.sh, docker logs, the API, and
+   EC2 stop/start for the churn test
+ - install APKs on the Pixel and pull its logs passively
+ - enable debug logging on all three nodes (A8)
+ - tag and publish releases (A10)
+ Spend caps are in A9.
+
+YOU MAY NOT
+ - drive the Pixel UI: ask the operator for every tap, toggle and onboarding step
+ - delete remote branches, force-push, use --admin, or bypass hooks (--no-verify)
+ - weaken or skip a test or gate
+ - touch a file or worktree you did not create, except through BK-01's tool
+ - change a node identity
+ - exceed a spend cap
+
+EVERY CAR
+ verify step first (DONE-VERIFIED if it already holds on main) -> steps -> acceptance commands ->
+ JEV gate (2.3: >= 85, hard gates clear) -> merge under A1 -> main CI green on the merge SHA ->
+ REPORT block on #403 and in TRAIN_STATE.md.
+ - Delivered means receiver decrypt + durable history + receipt back; never transport ACKs.
+ - CI is the primary build verifier. No local build while `python scripts/disk_budget.py` exits 2;
+   never two builds at once.
+ - Harness: invoke it exactly as recorded in TRAIN_STATE.md at P0-6 (the admitted SCM-local harness).
+
+STOP AND ASK (14.5)
+ Triggers: main red after a merge; a Rule-8 REJECT; a secret in a diff; any Windows/AWS identity
+ change; a spend cap would be exceeded; a destructive action not in 14.1; any TRI rule failure
+ (roll back per 7.7).
+ Then: write the inbox report (Type BLOCKED or QUESTION), post it on #403, and continue with any
+ other car whose deps are met.
+If the repo contradicts the task file: write Type PREMISE-WRONG with the command output and stop
+that car.
+Begin with READ FIRST.
 ```
 
 **RESUME** (each new Freebuff session):
 ```
-Resume the SCMessenger merge train (Freebuff lane). Read
-C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md, then sections 0-3 of
-HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md and the section for the next car.
-Read the cross-session updates: gh pr view 403 --comments. Re-verify the last recorded state
-with commands (gh pr view <n> --json state,mergeCommit; git log -1 origin/main; the last JEV
-output) before continuing. Same rules: no merges, no Rule-8 sign-off, no Pixel UI, an inbox
-report for every gate.
+Resume the SCMessenger merge train (Freebuff lane).
+Read C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md, then sections 0-3 and 14 of
+HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md, and the section for the next car.
+Read the cross-session updates: gh pr view 403 --comments.
+Re-verify the last recorded state with commands before continuing:
+gh pr view <n> --json state,mergeCommit; git log -1 origin/main; the last JEV output.
+Same approvals (section 14) and the same hard stops (14.5).
 ```
 
 **TRI-040** (each run or re-run):
