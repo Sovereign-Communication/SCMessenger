@@ -98,6 +98,37 @@ description = "Android Keystore Password"
 regex = '''(?i)(keystore|storePassword|keyPassword)['":\s]*[=:]\s*['"][^'"\s]{6,}['"]'''
 tags = ["android", "keystore", "password"]
 
+# Scoped allowlist, this rule only, two paths only.
+#
+# Proven false positives (P0-4, run 36292343654, all rule
+# android-keystore-password, 3 findings on 2 paths):
+#
+#   .github/actions/sign-debug-apk/action.yml
+#     KEYSTORE="$WORK/debug-pinned.keystore"
+#     A FILE PATH. The keystore itself arrives at runtime as KEYSTORE_B64 via
+#     the secrets context (action.yml KEYSTORE_B64: ${{ inputs['keystore-base64'] }}),
+#     is base64-decoded to that path, and its password is never in the repo.
+#
+#   scripts/verify_release_keystore.sh
+#     KEYSTORE="${1:-}"
+#     A CLI POSITIONAL PARAMETER -- the script's own usage line reads
+#     `<keystore-file> <alias>`. The password is prompted for at runtime.
+#
+# This is deliberately a [rules.allowlist] on one rule, not a global path
+# allowlist and not a rule disable:
+#   - a `private-key`, `generic-api-key` or `aws-access-key` finding in either
+#     file would still fire, so a real secret added to these paths later is
+#     still caught;
+#   - the real leak this rule set must keep catching (the sk-ws- pattern in
+#     scripts/qwen_*_worker.py, operator-owed rotation) is in neither path and
+#     is untouched.
+[rules.allowlist]
+description = "KEYSTORE= here names a file path or a CLI argument, not a password (P0-4)"
+paths = [
+    '''^\.github/actions/sign-debug-apk/action\.yml$''',
+    '''^scripts/verify_release_keystore\.sh$''',
+]
+
 # iOS Provisioning Profile
 [[rules]]
 id = "ios-provisioning"
