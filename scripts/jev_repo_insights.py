@@ -2,7 +2,7 @@
 """Batched JEV repo insight runner for SCMessenger (orchestrator tool).
 
 Harvests compact signals from HANDOFF / queue / PRs / git, then runs
-**batched** TypeSafe JEV evaluations (harness origin/main `JevEvaluator`).
+**batched** TypeSafe JEV evaluations (admitted Harness `JevEvaluator`).
 Batched calls keep input tokens and cost low; code owns mechanical facts,
 JEV owns bounded semantic judgments.
 
@@ -15,7 +15,9 @@ Usage:
 Design notes:
 - Aligns with Harness WIP JEV-P3/P5: operator-declared packs only; unkeyed =
   is_fallback and must not be treated as live canonical judgment.
-- Does not edit Harness P2/P3 worktrees. Uses HARNESS_REPO for harness.jev.
+- Does not edit external Harness worktrees. Uses the shared source resolver;
+  canary admission is a separate lifecycle mode and is never production
+  evidence.
 - Completion gate for WPs remains scripts/jev_canonical_check.py.
 
 Evidence contract: every report section lists commands used to harvest.
@@ -24,10 +26,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
-import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,13 +39,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_harness():
     """SCMessenger-local harness only (vendor/sovereign-harness)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from local_harness import import_harness  # type: ignore
 
     mod = import_harness()
-    from harness.jev import jev_cost  # type: ignore
-
-    return mod["JevEvaluator"], jev_cost, (lambda: mod["key"]), mod["root"]
+    return mod["JevEvaluator"], mod["jev_cost"], lambda: mod["key"], mod["root"]
 
 
 def _run(cmd: List[str], cwd: Optional[Path] = None) -> str:
@@ -293,20 +290,15 @@ def run_batches(
     batches: List[Dict[str, Any]],
     min_confidence: float,
 ) -> Dict[str, Any]:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from jev_packs import pack_for  # type: ignore
+    from local_harness import evaluate_jev_with_openrouter_fallback
 
     questions = pack_for(pack_name)
     results = []
     total_tokens = 0
     total_cost = 0.0
     for i, state in enumerate(batches):
-        try:
-            from local_harness import evaluate_jev_with_openrouter_fallback
-            res, jmeta = evaluate_jev_with_openrouter_fallback(evaluator, state, questions)
-        except Exception:
-            res = evaluator.evaluate(state, questions)
-            jmeta = {'endpoint': 'typesafe', 'fallback_used': False}
+        res, jmeta = evaluate_jev_with_openrouter_fallback(evaluator, state, questions)
         total_tokens += int(res.input_tokens or 0)
         total_cost += float(res.cost or 0.0)
         results.append(
@@ -345,7 +337,6 @@ def run_issue_sort(signals: Dict[str, Any]) -> Dict[str, Any]:
     Operator pack is frozen in scripts/scmessenger_issue_sort_pack.json
     (JEV-P5 contract: no invented buckets).
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from local_harness import make_policy  # type: ignore
 
     if not ISSUE_SORT_PACK.is_file():
@@ -514,9 +505,6 @@ def main() -> int:
     api_key = resolve_jev_key() or None
     evaluator = JevEvaluator(api_key=api_key)
     print(f"[INFO] harness={harness_path} keyed={bool(api_key)}")
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from jev_packs import pack_for  # type: ignore
 
     runs = []
     for mode in modes:
