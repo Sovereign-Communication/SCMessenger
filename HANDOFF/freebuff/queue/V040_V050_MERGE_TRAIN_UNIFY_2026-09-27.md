@@ -327,19 +327,20 @@ LoC landed: 0. Rescue branches are archives.
 
 **P0-8 BK-01 -- back up everything to GitHub, then reclaim only what is safe** (operator directive 2026-09-27/28; runs now, while MT-00a waits on CI).
 - **Rule:** uncommitted work (WIP) is never removed, reset, cleaned, stashed or switched. It is backed up to GitHub and left in place.
-- **Tool:** `C:/Users/SCM/Documents/GitHub/scm-train-state/backup_purge.sh` (v2, SAFE; read its header first).
+- **Tool:** `scripts/backup_purge.sh` on this branch (v2, SAFE; read its header first). Set `BP=C:/Users/SCM/Documents/GitHub/wt-train-plan/scripts/backup_purge.sh`.
+  - `STATE_DIR/backup_purge.sh` is only a stub that forwards to it.
   - Never perform any of its steps by hand.
-  - Edit it only to fix a crash, and put the diff in the REPORT.
-- **Steps,** in `STATE_DIR`:
-  1. `bash backup_purge.sh inventory`
-  2. `bash backup_purge.sh backup`
+  - Edit it only to fix a crash. Commit the fix on this branch, and put the diff in the REPORT.
+- **Steps** (any cwd; outputs go to `STATE_DIR/backup_purge/`):
+  1. `bash "$BP" inventory`
+  2. `bash "$BP" backup`
      - It pushes every working state to `refs/heads/backup/20260927/...`.
      - It uploads ignored non-build files to the DRAFT release `backup-local-20260927` (maintainers only).
      - Any `[FAIL]`: stop and report.
-  3. `bash backup_purge.sh verify` -- must end with `0 missing`.
-  4. `bash backup_purge.sh purge --dry-run` -- read `backup_purge/decisions.tsv`.
-  5. `bash backup_purge.sh purge`
-  6. `bash backup_purge.sh report`
+  3. `bash "$BP" verify` -- must end with `0 missing`.
+  4. `bash "$BP" purge --dry-run` -- read `STATE_DIR/backup_purge/decisions.tsv`.
+  5. `bash "$BP" purge`
+  6. `bash "$BP" report`
 - **Purge may remove only:**
   - clean worktrees that are fully on GitHub and hold no local-only data
   - the lane's scratch copies whose full working state is byte-identical to a `rescue/*` commit on GitHub
@@ -436,6 +437,8 @@ LoC landed: 0. Rescue branches are archives.
   - #396 and #397 were updated onto main with update-branch; CI is re-running.
   - Before the update, #396's only failure was CodeQL, which is not a required check. Required checks: Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest), Handoff ownership scope.
   - When both are green, merge them under section 14 A1.
+  - After the update: #397 is CLEAN (28/28).
+  - #396 fails CodeQL with two high `actions/cache-poisoning/poisonable-step` alerts at `.github/workflows/ci.yml:142/144` (head `2b68b7d6`). A1 blocks the merge until they are fixed or proven false positive, with evidence on the PR. The fix may supersede #396 via a `freebuff/train-mt00a-*` branch.
 - **Scope correction:**
   - After these land, every later PR must pass the new jobs.
   - #402 enforces single-owner handoff documents. When a docs PR mixes owners, split it per owner; do not weaken the gate.
@@ -771,7 +774,7 @@ Checklist items 6, 8 and 9 are closed by the rulings in 14.2: H-2 done; D1 green
 ## 9. Unify the workspace (after TAG-040)
 
 **U-1 Retire worktrees** (approved, section 14 A12).
-- Use BK-01's tool only: run `bash backup_purge.sh backup`, then `verify`, then `purge`.
+- Use BK-01's tool only: run `bash "$BP" backup`, then `verify`, then `purge` (`$BP` as in P0-8).
 - It removes only clean, fully pushed worktrees and byte-identical scratch copies.
 - A worktree holding WIP is never removed: it stays, backed up.
 
@@ -1242,9 +1245,11 @@ at a time, as you reach them.
 ORDER
  1. Commit your two untracked inbox reports in wt-train-plan (HANDOFF-SCOPE block,
     python scripts/validate_handoff_scope.py --repo-root . --staged, push to the #403 branch).
- 2. P0-8 BK-01: scm-train-state/backup_purge.sh inventory -> backup -> verify (0 missing) ->
-    purge --dry-run -> purge -> report. Uncommitted work is never removed.
- 3. MT-00a: merge #396 and #397 when green (A1).
+ 2. P0-8 BK-01, with BP=C:/Users/SCM/Documents/GitHub/wt-train-plan/scripts/backup_purge.sh:
+    bash "$BP" inventory -> backup -> verify (0 missing) -> purge --dry-run -> purge -> report.
+    Uncommitted work is never removed.
+ 3. MT-00a: merge #397 now (A1). #396 has two high CodeQL cache-poisoning alerts (ci.yml:142/144):
+    fix or prove false positive before merging it.
  4. T-3: push archive tags only (A3).
  5. T-4: apply 14.3.
  6. Section 6 cars in order: MT-01, MT-00b, MT-02, MT-03, MT-06, MT-04, MT-05, MT-07, MT-08,
