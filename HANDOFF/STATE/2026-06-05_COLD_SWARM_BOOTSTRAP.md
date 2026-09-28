@@ -1,5 +1,15 @@
 # Worker Pool Warm-up — Framework Already Live (Post-Mortem 2026-06-05)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Author:** Hermes subagent (META-bootstrap role)
 **Session:** 2026-06-05 21:00 PT, on `integration/v0.2.2-pre-android-push-2026-06-05`
 **Scope:** Protocol repair + worker-pool-warmup dispatch ticket authoring

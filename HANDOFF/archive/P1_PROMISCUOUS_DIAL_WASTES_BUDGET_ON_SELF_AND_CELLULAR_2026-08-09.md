@@ -1,5 +1,13 @@
 # P1 -- promiscuous dial sweep spends ~60% of its budget on this node itself and on unreachable carrier addresses
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P1 (blocks LAN convergence; the desktop nodes are not finding each other)
 Discovered: 2026-08-09, visible only after raising `RUST_LOG` to debug

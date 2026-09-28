@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T20:00Z cell test (27s window)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Seat: CTO (Pixel passive; Win/AWS API+ssh)
 Evidence: `tmp/cto/LOGPULL_CELL_20260911T200027Z/`
 Build: `18f5dc2a` (C1–C8 + RECEIPT-UI-001 + notif/nickname)

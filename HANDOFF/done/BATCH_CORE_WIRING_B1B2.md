@@ -1,5 +1,13 @@
 # BATCH: Core Entrypoints + Transport/Routing Wiring (B1 + B2 combined)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 You are a worker implementing wiring tasks. Each task requires you to:
 1. Find the target function
 2. Identify where it should be called

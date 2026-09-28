@@ -1,5 +1,13 @@
 # TASK: KMP Scaffolding & Rust Integration — Rust & UniFFI Linux Specialist
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status update 2026-07-12 (reality-check pass): steps 1-4 are DONE --
 `desktop_bridge/` exists in the workspace with real, substantial modules
 (`ble.rs`, `notification.rs`, `power.rs`, `socket_activation.rs`, `tray.rs`,

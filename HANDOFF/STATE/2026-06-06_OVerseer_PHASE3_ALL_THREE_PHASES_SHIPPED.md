@@ -1,5 +1,13 @@
 # 2026-06-06 — Overseer: PHASE 3 complete; PHASES 1+2+3 all shipped locally, awaiting push
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** All three phases of the Telegram reply executed. No push (Lucas's gate). Idling in HANDOFF/ monitor.
 **Date:** 2026-06-06 01:05 PT
 **Commits added this session (not pushed):**

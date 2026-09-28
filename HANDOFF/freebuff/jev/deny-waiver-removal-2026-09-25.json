@@ -1,0 +1,34 @@
+{
+  "wp": "WP0-deny-waiver",
+  "ticket": "HANDOFF/done/P1_SECURITY_RUSTLS_RUSTSEC_2026_0285_TRACKING.md",
+  "instruction": "Remove the deny.toml waiver for RUSTSEC-2026-0285 (rustls TLS 1.3 handshake across encryption levels, CVSS 5.3 MEDIUM) because Cargo.lock already resolves the patched rustls 0.23.45, so the guard can re-arm with no code or lockfile change; close the tracking ticket with recorded evidence. The CI Lint job (cargo deny check) and the security workflow (cargo deny check advisories) are the verifiers; no local cargo build is permitted on this host (disk guard).",
+  "files_touched": [
+    "deny.toml (removed the RUSTSEC-2026-0285 ignore entry and its comment; -2 lines)",
+    "HANDOFF/todo/P1_SECURITY_RUSTLS_RUSTSEC_2026_0285_TRACKING.md -> HANDOFF/done/P1_SECURITY_RUSTLS_RUSTSEC_2026_0285_TRACKING.md (Status: Closed, resolution section with evidence, acceptance criteria checked)"
+  ],
+  "acceptance": [
+    "deny.toml no longer ignores RUSTSEC-2026-0285",
+    "grep 'RUSTSEC-2026-0285' deny.toml is empty",
+    "Cargo.lock resolves rustls >= 0.23.45 (the patched release) and there is exactly one rustls entry",
+    "No unpatched rustls is reachable via a [patch.crates-io] pin (main's Cargo.toml has no [patch] section)",
+    "cargo deny check passes (verified by the CI Lint job on this branch's head, not locally)",
+    "The tracking ticket is closed and moved to HANDOFF/done/ with evidence headers"
+  ],
+  "evidence": {
+    "lock": "$ grep -A 1 '^name = \"rustls\"' Cargo.lock\nname = \"rustls\"\nversion = \"0.23.45\"\n$ grep -c 'name = \"rustls\"' Cargo.lock\n1",
+    "waiver_removed": "$ grep -c 'RUSTSEC-2026-0285' deny.toml\n0",
+    "diff": "$ git diff -- deny.toml\n@@ -28,8 +28,6 @@ ignore = [\n     \"RUSTSEC-2026-0104\",\n     # Transitive via proc-macro-error2 - unmaintained, transitive, no fix available\n     \"RUSTSEC-2026-0173\",\n-    # Transitive via libp2p -> quinn -> rustls 0.23.x - upstream fix in progress\n-    \"RUSTSEC-2026-0285\",\n ]",
+    "mechanical": "$ python scripts/rules_check.py -> exit 0; $ python scripts/check_queue_status.py -> [OK] every cited PR matches the claim its ticket's status statement makes (exit 0); $ git diff --cached --check -> exit 0; both files LF-only (0 CR bytes)",
+    "ci_verifier": ".github/workflows/ci.yml Lint job: cargo install cargo-deny --version 0.20.2 --locked; cargo deny check. .github/workflows/security.yml: cargo deny check advisories. Both run on this branch's head; results recorded in the PR.",
+    "not_run_locally": "cargo deny check was not run on this host: python scripts/disk_budget.py verdict BLOCKED/TIGHT forbids local cargo builds; CI is the only builder (AGENTS.md rule 17, docs/rules/BUILD_AND_CI.md CI-Primary Build Doctrine)."
+  },
+  "canon_rows": {
+    "canon_identity": "Upheld, and the axis is not load-bearing for this change. The change removes two lines from deny.toml (a supply-chain advisory waiver) and closes its tracking ticket. It introduces no second contact-address flavor: no contact, ledger, store, UI, or identity file is touched (git diff --stat on this branch lists exactly deny.toml, the moved ticket, and this state file). The ticket's remediation text mentions a 'rustls pin' only as a hypothetical fallback in step 3, and no Cargo.toml or Cargo.lock change is part of this branch. Hex remains the contact/store addressing key; peer id is still derived only for libp2p. Answer to the axis: true.",
+    "canon_routing_feed": "unrelated: no routing or transport feed is touched; Cargo.lock, Cargo.toml, and core/ are unchanged (git diff --stat shows only deny.toml and the ticket).",
+    "instruction_matches": "Every acceptance row is met with the command output cited above: the waiver is gone, the lockfile evidence is recorded, no patch pin can reintroduce an unpatched rustls, the verifier (CI Lint) is named, and the ticket is closed and moved to done/. The one row about a local full gate suite is explicitly recorded as not claimed."
+  },
+  "not_claimed": [
+    "A local cargo deny check run on this host (disk guard forbids it).",
+    "Any rustls version bump: none was needed; the lockfile already had the patched 0.23.45."
+  ]
+}

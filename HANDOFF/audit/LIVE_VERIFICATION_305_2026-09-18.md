@@ -1,5 +1,13 @@
 # Live verification of #305's two riskiest changes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-18 (UTC). Scope: exercise PR #305's TRN-07 relay-admission ladder and
 its AND-06 strict public-key decoding under real traffic on the live mesh, using
 candidate binaries on the Windows node and the AWS container. The Pixel was not

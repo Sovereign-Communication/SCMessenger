@@ -1,5 +1,15 @@
 # GPT ADVERSARIAL REVIEW -- Wave 1b stage 1a
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: BLOCK -- REMEDIATION REQUIRED
 Reviewed range: `ed13500abaf372836be37bef93f3eaf5a24765a6..d258fd7fecf84363a286093e6f236c0d4b7fa677`
 Remote ref: `refs/heads/wip/v040-seeding-fixes`

@@ -1,5 +1,13 @@
 # JEV repo insight report — SCMessenger
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Generated: 2026-09-21T02:28:03.354335+00:00
 Main tip (origin): `6719f130f023f209c4616f089a1a165fcec6a9da`
 Harness: `C:\Users\SCM\Documents\GitHub\Harness-jev-use`

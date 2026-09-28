@@ -1,5 +1,13 @@
 # TASK: Fix the last 2 real test failures (1121 passed, 2 failed)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 The previous compile-fix round got `cargo test -p scmessenger-core --lib`
 from 41 compile errors down to 2 runtime failures. Both root causes are
 already diagnosed below -- apply the exact fixes, do not re-diagnose.

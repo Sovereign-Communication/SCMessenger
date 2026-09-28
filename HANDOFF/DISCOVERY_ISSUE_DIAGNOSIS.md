@@ -1,5 +1,13 @@
 # Discovery Issue Diagnosis & Fix Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date**: 2026-05-06  
 **Issue**: Windows CLI cannot discover Android device despite all discovery options "enabled"  
 **Root Cause**: mDNS is compile-time disabled on Windows

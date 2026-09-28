@@ -1,5 +1,13 @@
 # TASK: P2-ANDROID-BLE  Windows CLI treats every BLE MAC rotation as a new peripheral, resetting connection state
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Context
 
 Found during a live BLE discovery test (2026-07-04) between a Windows CLI

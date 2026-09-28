@@ -1,5 +1,13 @@
 # Cell/AWS relay RCA + custody fix + emulator 3-node status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 UTC: 2026-09-10 ~20:09–20:40Z
 Fix commit: `441a0214` on `unified/v040-3node-parity`
 PR: https://github.com/Sovereign-Communication/SCMessenger/pull/281

@@ -1,5 +1,13 @@
 # Agent 2 - KMP Shared Module Skeleton: COMPLETE
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Summary
 
 Created the Kotlin Multiplatform (KMP) shared module skeleton for SCMessenger at `/mnt/e/SCMessenger-Github-Repo/SCMessenger/shared/`.

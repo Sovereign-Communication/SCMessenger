@@ -1,5 +1,13 @@
 # Design Plan: SmartTransportRouter & ConversationItem Parameters Cleanup/Wiring
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 This design plan addresses two overlapping tickets regarding unused and suppressed parameters in the Android transport and UI modules:
 1. `ANDROID_SWEEP_02_NEEDS_PLANNING_smart_transport_router_unused_params.md`
 2. `P3_ANDROID_NEEDS_PLANNING_SMARTTRANSPORTROUTER_DEAD_PARAMS.md`

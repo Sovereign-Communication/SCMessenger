@@ -1,5 +1,15 @@
 # V040 Rule-8 adversarial review -- ROUND 2 FINAL: PR #273 @ d82978ab
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Reviewer: non-author adversarial reviewer (qwen free lane, qwen3.8-2.4t-a95b -- ledger-confirmed 100% / 1M context, reserve bucket 11-11; same reviewer identity as the #267/#272 final-approve pass)
 Date: 2026-09-03
 Base: 177bd840 (candidate head)

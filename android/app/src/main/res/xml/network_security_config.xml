@@ -21,7 +21,10 @@
       Android emulator host alias (10.0.2.2) and the local loopback
       (127.0.0.1) used by adb reverse / on-device proxies during
       development. Production traffic is unaffected because it goes
-      over the public mesh-relay servers via TLS / libp2p noise.
+      over other nodes via TLS / libp2p noise. (Wording corrected 2026-09-21:
+      there is no dedicated relay-server tier; every node relays. Canonical
+      outlier audit CO-A-003. XML comments cannot contain a double hyphen,
+      which is why this sentence avoids one.)
     -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>

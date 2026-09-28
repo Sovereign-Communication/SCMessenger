@@ -1,5 +1,13 @@
 # V040-T-CONN-04 — connection_limits cap refuses multi-port dials
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN (filed 2026-09-20 orchestrator; live defect)
 Priority: P0 for field scoring (D4/D6 LAN paths)
 Lane: Freebuff / DeepSeek V4 Flash (unmetered)

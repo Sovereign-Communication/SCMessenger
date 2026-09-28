@@ -1,5 +1,15 @@
 # Orchestrator Log
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Per-session audit trail for the Hermes-Claude swarm. One entry per significant
 orchestrator event: activate, pool launch, pool stop, patrol finding, hardlock
 abort, quota tier transition. Format: ISO-8601 timestamp, event tag, payload.

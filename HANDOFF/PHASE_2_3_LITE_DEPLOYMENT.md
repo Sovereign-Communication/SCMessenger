@@ -1,5 +1,13 @@
 # Farm-Sim Phase 2&3 Lite Testing - Deployment & Execution
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Ready for instance deployment  
 Date: 2026-07-18  
 Commit: 0bd08e5b  

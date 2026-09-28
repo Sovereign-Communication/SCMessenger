@@ -1,5 +1,13 @@
 # P0  Android: Identity Generation Regression in Onboarding Flow
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** OPEN
 **Severity:** P0 (blocker for new users)
 **Reported by:** User, 2026-06-05 ~14:20 PT, via Telegram

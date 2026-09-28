@@ -1,5 +1,15 @@
 # TASK: Version bump 0.3.4 -> 0.3.5 across all version references
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 The workspace has accumulated substantial work since the version was last
 set (PQC-01 through PQC-08, orchestration unification, docs cleanup,
 compile-gate fix restoring `cargo test --workspace --no-run`) without a

@@ -1,5 +1,13 @@
 # P2_CORE_Bootstrap_Test_Depends_On_Unset_Env_Var
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P2
 **Platform:** Core (Rust, test hygiene)
 **Status:** TODO

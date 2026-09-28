@@ -1,5 +1,13 @@
 # P0 -- BLE L2CAP accept loop spins on terminal socket failure, destroying log observability
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P0 (blocks the v0.4.0 five-node evidence gate)
 Discovered: 2026-08-08 19:39 HST (Windows lane, live `adb logcat` pull)

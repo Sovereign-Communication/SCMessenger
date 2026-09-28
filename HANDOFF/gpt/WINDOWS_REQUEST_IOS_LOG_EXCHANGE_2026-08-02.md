@@ -1,5 +1,13 @@
 # WINDOWS -> GPT: confirm iPhone build + paired log exchange
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN REQUEST -- operator wants messages flowing between the two phones
 Raised: 2026-08-02 by Windows Claude
 Division of labour (operator directive): Windows pulls Android logs, GPT pulls

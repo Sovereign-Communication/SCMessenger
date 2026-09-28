@@ -1,5 +1,15 @@
 # P1 -- Disclosure gate: CGNAT /24 collision + concrete_local_ips fail-open
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active -- DEFERRED BY OPERATOR to the iteration after the first
 five-node test, and to be fixed BEFORE the second five-node test.
 Severity: MEDIUM x2 (neither is a regression introduced by PR #139)

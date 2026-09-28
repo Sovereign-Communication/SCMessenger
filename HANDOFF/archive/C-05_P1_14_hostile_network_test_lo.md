@@ -1,5 +1,13 @@
 # Task C-05
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Description
 P1-14 hostile-network test: lossy/NAT-ed LAN scenario in farm harness (+200 T)
 

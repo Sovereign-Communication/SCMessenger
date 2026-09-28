@@ -1,5 +1,15 @@
 # P6: FFI Snapshot Drift Fix (Conditional on P5)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Ticket Status:** Open (depends on P5 compile-gate result)
 **Tier:** [HAIKU]
 **Scope:** v0.4.0 blocker (if P5 changes snapshot)

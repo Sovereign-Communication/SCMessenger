@@ -1,4 +1,15 @@
 # Plan Verification — 4-Section Architecture Status vs. Codebase HEAD
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Verifier:** Hermes Agent (overseer), session 2026-06-11
 **Source plan:** the 4-section "platform status" claim pasted by Lucas
 **Codebase state:** HEAD = `core/src/`, `mobile/`, `cli/`, `wasm/`, `android/`, `iOS/` on disk + `HANDOFF/ACTIVE_LEDGER.md` (2026-05-13 sweep) + `HANDOFF/STATE/2026-06-08_UNIFIED_BACKLOG.md` + `docs/CURRENT_STATE.md` (last verified 2026-05-18)

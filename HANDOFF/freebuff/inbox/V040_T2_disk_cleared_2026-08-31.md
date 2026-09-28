@@ -1,3 +1,11 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_T2_UNIFY_PEER_LEDGER_STORES.md -- disk ruling executed
 Type: DONE (disk reclamation only; T2 gates continuing)
 Date: 2026-08-31

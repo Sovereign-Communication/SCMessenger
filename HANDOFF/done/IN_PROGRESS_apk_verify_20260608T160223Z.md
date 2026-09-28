@@ -1,4 +1,13 @@
 # APK + Version Verify Report
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Time:** 2026-06-08T16:02:23Z (08:02:23 PT)
 **Verifier:** deepseek-v4-flash:cloud
 **Repo:** /mnt/e/SCMessenger-Github-Repo/SCMessenger

@@ -1,5 +1,15 @@
 # P2 — Android Kotlin warning triage (80 warnings, CI run 34907771392)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Filed: 2026-09-14 by the Freebuff lane, from the Android Debug APK compile log.
 Source: `w:` warnings enumerated in full from the CI build output (no
 truncation; full list preserved in the run log linked from PR #288).

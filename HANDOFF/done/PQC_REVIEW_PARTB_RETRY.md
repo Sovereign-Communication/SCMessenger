@@ -1,5 +1,13 @@
 # TASK: Adversarial security review of PQ ratchet + encrypt fallback (retry)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 CRITICAL INSTRUCTION, read this first: you are reviewing code, NOT writing
 or reproducing it. If your response contains the source code of any file
 listed below (a Rust `fn`, `struct`, `impl` block, etc. copied or

@@ -1,5 +1,15 @@
 # V040-T12 -- Stop burning the CI queue on superseded and irrelevant runs
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: MERGED -- platform path-filter work landed via PR #319 (merged
 2026-09-19) and related CI lane filter work via PR #328 (merged 2026-09-19).
 Verified 2026-09-20. Do not re-dispatch path-filter authoring. Residual CI

@@ -1,5 +1,13 @@
 # RCA: the four 0.4.0 blocking findings (TRN-04, TRN-07, AND-06, SEC-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - **Date:** 2026-09-17
 - **Base:** `main` @ `c2ce2f64` (PR #295 merge)
 - **Author:** Buffy (Freebuff lane)

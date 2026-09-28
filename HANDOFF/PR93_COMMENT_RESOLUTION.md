@@ -1,5 +1,15 @@
 # PR #93 Comment Resolution Log
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 This document maps every review comment on PR #93 to the concrete update made in this branch.
 
 ## 1) cubic-dev-ai — Batch range inconsistency (P2)

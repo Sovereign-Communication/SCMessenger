@@ -1,5 +1,13 @@
 # V040-T13 -- Rule-8 follow-ups from the #262 / #263 adversarial review
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN -- **F7 and F-DHT are RULED 2026-08-31**, see
         `inbox/RULING_2026-08-31_T13_FDHT_A_and_F7_B.md`.
         F-DHT: Option A (gate all four hearsay feeds, incl. the wasm arm).

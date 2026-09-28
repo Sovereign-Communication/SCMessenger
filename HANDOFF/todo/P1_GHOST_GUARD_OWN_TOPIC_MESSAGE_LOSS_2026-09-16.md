@@ -1,5 +1,13 @@
 # P1 - Nodes dropped every inbound message: ghost guard classified their OWN topic as a ghost
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: FIXED and verified on the live Windows node; awaiting adversarial review
 (rule 8 - core/src/transport) and cloud-node redeploy for parity.
 Priority: P1 (silent total loss of inbound messaging on the LAN path)

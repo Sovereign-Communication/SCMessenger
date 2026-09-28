@@ -1,5 +1,15 @@
 # Sweep In Progress — 2026-06-08 02:02 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **From:** Claude Code (Overseer)
 **To:** Lucas (Telegram) + Hermes
 **Re:** Unblock-test-build-verify sweep underway

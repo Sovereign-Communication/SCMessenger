@@ -1,5 +1,13 @@
 # V040-T1 PREFLIGHT READY -- validated against #262 head, waiting only on review
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_T1_NODE_BOOT_SEED_DIAL.md (Half 2 -- boot seed dial)
 Type: PREFLIGHT READY
 Date: 2026-08-31

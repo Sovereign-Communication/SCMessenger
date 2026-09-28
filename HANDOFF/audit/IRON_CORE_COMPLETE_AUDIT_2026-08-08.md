@@ -1,5 +1,15 @@
 # IronCore Comprehensive Security & Robustness Audit
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Date**: 2026-08-08
 **Target**: `core/src/iron_core.rs` (IronCore)
 **Status**: COMPLETE

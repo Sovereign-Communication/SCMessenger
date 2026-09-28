@@ -1,5 +1,15 @@
 # Agent Task: Integrate Security Tooling
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Delegated To:** triage-router (gemini-3-flash-preview:cloud)  
 **Priority:** P1 (Phase 3D prerequisite)  
 **Status:** pending_agent_dispatch  

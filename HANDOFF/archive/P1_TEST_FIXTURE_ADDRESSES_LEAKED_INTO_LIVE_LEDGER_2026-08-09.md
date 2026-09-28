@@ -1,5 +1,13 @@
 # P1 -- test-fixture addresses are in the live ledger and get dialled in production
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open
 Filed: 2026-08-09 (Windows lane, PR #139 CLI coordination run)
 Severity: P1 -- wastes dial budget, and puts unsolicited connection attempts on

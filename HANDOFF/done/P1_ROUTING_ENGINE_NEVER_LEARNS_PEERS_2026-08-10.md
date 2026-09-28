@@ -1,3 +1,11 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 > **RESOLVED 2026-09-10 -- moved to done/ with evidence (see below).**
 > Evidence (all run this session on main@45ab59f9): `routing_peer_seen` now has
 > production call sites at `core/src/transport/swarm.rs:5641` and `:8067`

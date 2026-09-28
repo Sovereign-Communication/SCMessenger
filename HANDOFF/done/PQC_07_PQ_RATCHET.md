@@ -1,5 +1,13 @@
 # TASK: PQC-07 — Post-quantum ratchet steps (hybrid forward secrecy + post-compromise security)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: PQC-06. Wave 3. Min tier: Sonnet ONLY — do not assign to Haiku. ADVERSARIAL REVIEW MANDATORY + release-gatekeeper before merge. This is the highest-risk task in the workstream.
 
 ## Why

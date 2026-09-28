@@ -1,5 +1,13 @@
 # AWS Cloud Node (100.56.248.69) Pre-Launch Checklist
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** EXECUTE NOW (independent of identity canonicalization)
 **Priority:** CRITICAL — must be ready to restart immediately when new image lands
 **Date:** 2026-08-04

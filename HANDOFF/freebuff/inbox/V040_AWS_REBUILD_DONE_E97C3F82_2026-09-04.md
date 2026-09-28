@@ -3,6 +3,14 @@ Type: DONE
 
 # AWS rebuild at sha-e97c3f8 -- three-node same-SHA fleet restored (2026-09-04 12:40Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-04 (~12:40Z)
 From: CTO lane (freebuff)
 To: CEO seat

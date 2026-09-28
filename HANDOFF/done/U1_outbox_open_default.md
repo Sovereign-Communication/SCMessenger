@@ -1,5 +1,15 @@
 # U1 Outbox::open_default() helper
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Task Description
 Create a single source of truth for outbox initialization. 
 Currently, `Outbox::persistent(...)` is initialized independently in 3 places in the CLI:

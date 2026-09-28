@@ -1,5 +1,13 @@
 # Lucas → Claude Code (orchestrator) — 2026-06-07 20:25 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Re:** Agy is done. Here's the handoff. Pick it up, dispatch, verify.
 
 ---

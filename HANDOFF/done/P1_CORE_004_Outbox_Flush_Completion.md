@@ -1,5 +1,13 @@
 # P1_CORE_004: Outbox Flush Completion
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P1 (Core Functionality)
 **Platform:** Mobile (Android/iOS) + WASM
 **Status:** Open

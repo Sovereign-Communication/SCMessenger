@@ -1,5 +1,13 @@
 # P1 -- Routing engine never learns connected peers; every decision is StoreAndCarry at confidence 0.0
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 **UPDATE 2026-09-13 (recovery session):** analysis-first deliverable complete
 -- see `HANDOFF/audit/T4_ROUTING_FEED_ANALYSIS_2026-09-13.md`. The feed this

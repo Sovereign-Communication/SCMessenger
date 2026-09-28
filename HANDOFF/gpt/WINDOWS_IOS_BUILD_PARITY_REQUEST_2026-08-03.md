@@ -1,5 +1,15 @@
 # Windows -> GPT: iOS build parity for the 5-node test
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ACTION REQUIRED before the matrix runs
 Date: 2026-08-03
 Tier: **GPT-5.4 mini** -- this is a build, install and capture task. No design

@@ -1,5 +1,15 @@
 ﻿# Strict cellular-delivery audit â€” 2026-09-11
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Criterion (operator): **PASS only if delivered WHILE still CELLULAR.**
 Delivery after WIFI return = **FAIL**.
 
