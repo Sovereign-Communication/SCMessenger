@@ -1,0 +1,16 @@
+{
+  "wp": "WP1",
+  "instruction": "<WP instruction text from the WiFi/identity implementation plan, section 3>",
+  "files": [
+    "core/src/..."
+  ],
+  "acceptance": [
+    "acceptance row 1: <text> -- met: <evidence citation>"
+  ],
+  "evidence": [
+    "command: <cmd> -- output: <log path or run URL>"
+  ],
+  "canon_identity": "one contact identity flavor (public-key hex) remains the addressing key",
+  "canon_routing_feed": "all data-link transports feed IronCore::routing_peer_seen",
+  "instruction_matches": "acceptance rows met with cited evidence"
+}
