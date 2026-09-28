@@ -1672,6 +1672,10 @@ impl MeshService {
         data: Vec<u8>,
     ) {
         tracing::info!("{} data received from {}", transport, peer_id);
+        // WP2: a frame that actually arrived is proof the data link is live.
+        // Feed the same routing entry the swarm uses for ConnectionEstablished;
+        // discovery adverts alone are intentionally not enough.
+        self.record_data_link_for_routing(&peer_id, &transport.to_string());
         if data.len() > transport.max_payload_size() {
             tracing::warn!(
                 "{} payload from {} exceeds max ({} > {}), dropping",
@@ -1772,6 +1776,8 @@ impl MeshService {
         ip_address: String,
         port: u16,
     ) {
+        // WP2: the platform confirmed a Wi-Fi Aware data path -- a real link.
+        self.record_data_link_for_routing(&peer_id, "wifi_aware");
         if let Some(aware_bridge) = self.wifi_aware_bridge.lock().as_ref() {
             aware_bridge.handle_data_path_confirmed(peer_id, ip_address, port);
         }
@@ -1802,10 +1808,13 @@ impl MeshService {
 
     pub fn on_wifi_direct_connection_info(
         &self,
-        _peer_id: String,
+        peer_id: String,
         group_owner_ip: String,
         is_group_owner: bool,
     ) {
+        // WP2: group info means this peer has a real Wi-Fi Direct link to us,
+        // so it feeds the routing engine the way a swarm connection does.
+        self.record_data_link_for_routing(&peer_id, "wifi_direct");
         let info = crate::transport::wifi_direct::GroupInfo {
             group_owner: is_group_owner,
             group_owner_ip: Some(group_owner_ip.clone()),
@@ -2049,6 +2058,40 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// WP2: record a verified platform data link in the shared routing engine.
+    ///
+    /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
+    /// path that came up, is proof that a real link to `peer_id` exists, so it
+    /// feeds the same `IronCore::routing_peer_seen` entry the swarm's
+    /// ConnectionEstablished handler uses. That keeps transport derivation and
+    /// the engine's parser in lockstep, and lets the engine's LocalCell learn
+    /// non-swarm paths too. Discovery callbacks deliberately do not feed the
+    /// engine: a peer seen in an advert is not yet a reachable path.
+    ///
+    /// Fails closed, matching the swarm's block-check semantics: no core
+    /// handle, an unreadable block list, or a blocked peer never raises
+    /// routing confidence.
+    fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {
+        let Some(core) = self.get_core() else {
+            tracing::debug!(peer_id, transport, "No core handle; routing feed skipped");
+            return;
+        };
+        match core.is_peer_blocked(peer_id.to_string(), None) {
+            Ok(false) => core.routing_peer_seen(peer_id.to_string(), transport.to_string()),
+            Ok(true) => tracing::warn!(
+                peer_id,
+                transport,
+                "Blocked peer excluded from routing feed"
+            ),
+            Err(error) => tracing::warn!(
+                ?error,
+                peer_id,
+                transport,
+                "Block lookup failed; routing feed fails closed"
+            ),
+        }
+    }
+
     /// Public-entry notification: deliver the event immediately, or stash
     /// it for the fixed-point drain when a notify window is open (R11-4).
     /// A same-event echo of the in-flight notification terminates inside
@@ -5224,6 +5267,108 @@ mod tests {
             discovery_interval_ms: 5_000,
             battery_floor_pct: 20,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // WP2: the routing feed from non-swarm data links
+    // -----------------------------------------------------------------------
+
+    /// A MeshService holding a core whose routing engine is installed, so the
+    /// assertions below read the engine itself rather than the wall clock.
+    fn routing_feed_fixture() -> (MeshService, Arc<crate::IronCore>) {
+        let service = MeshService::new(test_mesh_service_config());
+        let core = Arc::new(crate::IronCore::new());
+        core.routing_engine_handle()
+            .write()
+            .replace(crate::routing::OptimizedRoutingEngine::new(
+                [0u8; 32], [0u8; 8],
+            ));
+        *service.core.lock() = Some(core.clone());
+        (service, core)
+    }
+
+    /// What the engine would decide for `peer` right now. Confidence 0.0 means
+    /// it never learned the peer at all.
+    fn routing_confidence(core: &Arc<crate::IronCore>, peer: [u8; 32]) -> f64 {
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
+            .try_into()
+            .expect("8 byte hint");
+        let engine = core.routing_engine_handle();
+        let mut guard = engine.write();
+        guard
+            .as_mut()
+            .expect("engine installed")
+            .route_message_optimized(&peer_hint, &[7u8; 16], 50, 1000)
+            .confidence
+    }
+
+    #[test]
+    fn test_wifi_aware_data_path_feeds_routing_engine() {
+        // WP2 acceptance: a real data link (not a discovery advert) teaches the
+        // routing engine's LocalCell the peer.
+        let (service, core) = routing_feed_fixture();
+        let peer = [42u8; 32];
+
+        // Before the link: unknown peer, so the engine has no confidence.
+        assert_eq!(routing_confidence(&core, peer), 0.0);
+
+        service.on_wifi_aware_data_path_confirmed(hex::encode(peer), "127.0.0.1".to_string(), 4242);
+
+        let peer_hint: [u8; 8] = blake3::hash(&peer).as_bytes()[0..8]
+            .try_into()
+            .expect("8 byte hint");
+        let engine = core.routing_engine_handle();
+        let mut guard = engine.write();
+        let decision = guard
+            .as_mut()
+            .expect("engine installed")
+            .route_message_optimized(&peer_hint, &[7u8; 16], 50, 1000);
+
+        assert_eq!(
+            decision.decided_by,
+            crate::routing::RoutingLayer::Local,
+            "a live data link must let the LocalCell decide"
+        );
+        assert!(
+            decision.confidence >= 0.5,
+            "confidence must rise after a data link, got {}",
+            decision.confidence
+        );
+        match decision.primary {
+            crate::routing::NextHop::Direct { peer_id, transport } => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(transport, crate::routing::TransportType::WiFiAware);
+            }
+            other => panic!("expected Direct Wi-Fi Aware, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_blocked_peer_gets_no_routing_feed() {
+        // WP2 acceptance: the feed fails closed for a peer the block list owns.
+        let (service, core) = routing_feed_fixture();
+        let peer = [43u8; 32];
+        let peer_hex = hex::encode(peer);
+
+        core.block_peer(
+            peer_hex.clone(),
+            None,
+            Some("wp2 fail-closed test".to_string()),
+        )
+        .expect("block peer");
+        assert!(
+            core.is_peer_blocked(peer_hex.clone(), None)
+                .expect("block list readable"),
+            "precondition: the peer must be blocked before the feed is attempted"
+        );
+
+        service.on_wifi_aware_data_path_confirmed(peer_hex, "127.0.0.1".to_string(), 4242);
+
+        assert_eq!(
+            routing_confidence(&core, peer),
+            0.0,
+            "a blocked peer must never enter the routing feed"
+        );
     }
 
     fn all_proximity_transports() -> [ProximityTransport; 4] {
