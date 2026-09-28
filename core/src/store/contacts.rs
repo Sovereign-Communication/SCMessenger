@@ -2,12 +2,24 @@
 //
 // Refactored to use generic StorageBackend for cross-platform parity (Sled/IndexedDB/Memory).
 
+use crate::identity::keys::is_valid_public_key;
 use crate::identity::PublicKeyBundle;
 use crate::store::backend::StorageBackend;
 use crate::store::history::HistoryManager;
 use crate::IronCoreError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Notes annotation marking a contact whose public key could not be derived
+/// from its peer id. An empty `public_key` plus this marker IS the placeholder
+/// contract: verified material (a signed envelope, an explicit user add)
+/// backfills the key, and the peer id itself is never stored as the key.
+///
+/// Single owner. This module is compiled for every target, so the recovery
+/// path in `contacts_bridge` (native only) imports it rather than keeping a
+/// second copy of the string that could drift.
+pub const PLACEHOLDER_KEY_NOTE: &str =
+    "public_key unavailable: not self-certifying from peer id; awaiting verified key";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
@@ -469,67 +481,127 @@ impl ContactManager {
 
     /// Reconcile contacts from message history to recover potentially lost records.
     /// Scans all message records and creates a basic contact if the peer_id is unknown.
+    ///
+    /// WP1.1: a peer whose key cannot be derived is still recorded, but as a
+    /// PLACEHOLDER with an empty `public_key` plus a notes marker. The record
+    /// is deliberately NOT an encryptable send target until verified material
+    /// (a signed envelope, an explicit user add) backfills the key. Recording
+    /// the peer keeps it visible to the operator; leaving the key fabricated
+    /// or the record absent are both worse, and an empty key makes
+    /// `prepare_message` refuse rather than emit unopenable ciphertext.
     pub fn reconcile_from_history(&self, history: &HistoryManager) -> Result<u32, IronCoreError> {
         let all_messages = history.recent_including_hidden(None, 10000)?;
         let mut recovered_count = 0;
 
         for msg in all_messages {
             if self.get(msg.peer_id.clone()).is_ok() && self.get(msg.peer_id.clone())?.is_none() {
-                // We have the peer_id from history, but no contact record.
-                // Note: We lack the public key here unless we can derive it from the peer_id.
-                // In libp2p, the peer_id typically contains the public key.
-                if let Ok(pub_key) = self.derive_public_key_from_peer_id(&msg.peer_id) {
-                    let contact = Contact::new(msg.peer_id.clone(), pub_key);
-                    self.add(contact)?;
-                    recovered_count += 1;
-                }
+                // We have the peer_id from history but no contact record. A
+                // public key binds ONLY when it is self-certifying from the
+                // peer id; the peer id is never itself stored as the key.
+                let contact = match self.derive_public_key_from_peer_id(&msg.peer_id) {
+                    Ok(pub_key) => Contact::new(msg.peer_id.clone(), pub_key),
+                    Err(_) => {
+                        tracing::warn!(
+                            event = "contact_recovery_placeholder",
+                            "History peer has no self-certifying key binding; storing \
+                             placeholder record without a public key"
+                        );
+                        let mut c = Contact::new(msg.peer_id.clone(), String::new());
+                        c.notes = Some(PLACEHOLDER_KEY_NOTE.to_string());
+                        c
+                    }
+                };
+                self.add(contact)?;
+                recovered_count += 1;
             }
         }
         Ok(recovered_count)
     }
 
+    /// Recover a peer's Ed25519 public key from the identifier we hold for it.
+    ///
+    /// A key is returned ONLY when the identifier is SELF-CERTIFYING: either it
+    /// is already a valid Ed25519 point, or a libp2p identity-multihash peer id
+    /// that re-derives from the key extracted from it. Everything else --
+    /// SHA-256-hashed peer ids, arbitrary base58 blobs, `identity_id` hashes,
+    /// garbage -- yields `Err` so the caller stores a placeholder with an empty
+    /// key instead of a fabricated one.
+    ///
+    /// WP1.1 removed a "take the last 32 bytes of the multihash" fallback that
+    /// returned `Ok` for any base58 blob of length >= 32. For a non-identity
+    /// peer id those bytes are HASH OUTPUT, not a public key, so every send
+    /// encrypted to that value produced ciphertext the peer can never open --
+    /// and because the field then looked populated, no later layer re-checked
+    /// it. That is the same defect as storing `peer_id` as the key, reached by
+    /// a different route. Delegates to the single self-certifying helper the
+    /// recovery path in `contacts_bridge` already uses, so both agree by
+    /// construction rather than by parallel maintenance.
     fn derive_public_key_from_peer_id(&self, peer_id: &str) -> Result<String, IronCoreError> {
         let trimmed = peer_id.trim();
 
-        // If it's 64 hex chars, validate it's a genuine Ed25519 public key.
-        // identity_id is also 64 hex chars (Blake3 hash) but NOT a valid Ed25519 key.
-        // Rejecting identity_id here prevents reconcile_from_history from creating
-        // contacts with public_key = identity_id, which breaks future encryption.
+        // A 64-hex identifier is ALREADY in canonical key form, so there is
+        // nothing to derive: the answer is the value itself or nothing.
+        //
+        // WP1.1: an `identity_id` is also 64 hex chars, so shape cannot tell
+        // the two apart -- ~48% of blake3 digests pass curve decompression
+        // (measured on this tree: 966/2000). This function therefore does NOT
+        // attempt to guess: it returns the value unchanged when it has the
+        // shape of a key, and refuses otherwise. Reversing a hash into a key is
+        // impossible, so an identity_id that reaches here simply passes through
+        // as an identifier; whether it may be USED as an encryption key is
+        // decided at the point of use (`IronCore::prepare_message`), which is
+        // the only layer that can compare it against a known contact's key.
         if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-            if let Ok(bytes) = hex::decode(trimmed) {
-                if bytes.len() == 32 {
-                    if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                        if ed25519_dalek::VerifyingKey::from_bytes(&arr).is_ok() {
-                            return Ok(trimmed.to_lowercase());
-                        }
-                    }
-                }
+            if is_valid_public_key(trimmed) {
+                return Ok(trimmed.to_lowercase());
             }
-            // 64-hex but not a valid Ed25519 key -> likely identity_id; cannot derive pubkey.
             return Err(IronCoreError::InvalidInput);
         }
 
-        // Try to decode as libp2p PeerId (base58) and extract Ed25519 public key.
-        // Matches the protobuf prefix used by libp2p identity multihash:
-        // 0x00 0x24 0x08 0x01 0x12 0x20 <32 bytes>
-        if let Ok(bytes) = bs58::decode(trimmed).into_vec() {
-            if bytes.len() == 38
-                && bytes[0] == 0x00
-                && bytes[1] == 0x24
-                && bytes[2] == 0x08
-                && bytes[3] == 0x01
-                && bytes[4] == 0x12
-                && bytes[5] == 0x20
-            {
-                return Ok(hex::encode(&bytes[6..38]));
-            }
-            // Fallback: take last 32 bytes for non-standard PeerIds
-            if bytes.len() >= 32 {
-                return Ok(hex::encode(&bytes[bytes.len() - 32..]));
-            }
-        }
+        // libp2p peer id: only the strict identity multihash embeds a key, and
+        // the helper re-derives the peer id from the extracted key before
+        // returning it, so a crafted blob cannot smuggle a binding through.
+        crate::store::ledger_entry::public_key_hex_from_libp2p_peer_id(trimmed)
+            .map(|k| k.to_lowercase())
+            .ok_or(IronCoreError::InvalidInput)
+    }
 
-        Err(IronCoreError::InvalidInput)
+    /// The canonical key a contact is stored and looked up under.
+    ///
+    /// This is the SINGLE owner of "what is the contact key". Both the write
+    /// path (`add`) and the read path (`get`) ask this function, so the rule
+    /// cannot drift between them -- which is exactly the asymmetry that let
+    /// `get` miss a row `add` had just written under a different spelling.
+    ///
+    /// Order is the long-standing unification contract, unchanged:
+    ///   1. a supplied key that is ed25519-shaped IS the canonical identity
+    ///      (V2 contract, asserted by `lookup_by_public_key_resolves_peer_keyed_contact`);
+    ///   2. otherwise derive from the peer id (libp2p identity multihash);
+    ///   3. otherwise the peer id is already a canonical key;
+    ///   4. otherwise there is no canonical key and the caller keeps whatever
+    ///      it was given.
+    ///
+    /// Note this answers a SHAPE question via
+    /// [`crate::identity::keys::is_valid_public_key`], the single owner of that
+    /// predicate. Roughly half of all 32-byte values pass curve decompression,
+    /// so shape never decides whether a value is the right key for a peer --
+    /// that is decided where a key is used, in `IronCore::prepare_message`.
+    fn canonical_contact_key(&self, peer_id: &str, public_key: &str) -> Option<String> {
+        let peer_id = peer_id.trim();
+        if peer_id.is_empty() {
+            return None;
+        }
+        let public_key = public_key.trim();
+        if is_valid_public_key(public_key) {
+            return Some(public_key.to_lowercase());
+        }
+        if let Ok(derived) = self.derive_public_key_from_peer_id(peer_id) {
+            return Some(derived.to_lowercase());
+        }
+        if is_valid_public_key(peer_id) {
+            return Some(peer_id.to_lowercase());
+        }
+        None
     }
 
     pub fn add(&self, mut contact: Contact) -> Result<(), IronCoreError> {
@@ -537,21 +609,10 @@ impl ContactManager {
         // Prevents new 12D3 entries that would duplicate already-migrated hex nodes until next load.
         let peer_id_trimmed = contact.peer_id.trim().to_string();
         if !peer_id_trimmed.is_empty() {
-            let canonical_hex: Option<String> = if contact.public_key.trim().len() == 64
-                && contact.public_key.chars().all(|c| c.is_ascii_hexdigit())
-                && hex::decode(contact.public_key.trim()).is_ok()
-            {
-                Some(contact.public_key.trim().to_lowercase())
-            } else if let Ok(derived) = self.derive_public_key_from_peer_id(&peer_id_trimmed) {
-                Some(derived.to_lowercase())
-            } else if peer_id_trimmed.len() == 64
-                && peer_id_trimmed.chars().all(|c| c.is_ascii_hexdigit())
-                && hex::decode(&peer_id_trimmed).is_ok()
-            {
-                Some(peer_id_trimmed.to_lowercase())
-            } else {
-                None
-            };
+            // The rule lives in `canonical_contact_key`; the read path asks the
+            // same function, so the two cannot disagree about the key.
+            let canonical_hex: Option<String> =
+                self.canonical_contact_key(&peer_id_trimmed, &contact.public_key);
             if let Some(canonical) = canonical_hex {
                 if peer_id_trimmed.to_lowercase() != canonical {
                     tracing::info!(
@@ -562,9 +623,7 @@ impl ContactManager {
                     );
                     contact.peer_id = canonical.clone();
                     // Ensure public_key is populated/normalized when peer_id was libp2p
-                    let pk_valid = contact.public_key.trim().len() == 64
-                        && contact.public_key.chars().all(|c| c.is_ascii_hexdigit())
-                        && hex::decode(contact.public_key.trim()).is_ok();
+                    let pk_valid = is_valid_public_key(contact.public_key.trim());
                     // Clippy: both arms set public_key to canonical; collapse.
                     if !pk_valid
                         || (contact.public_key.trim().to_lowercase() == canonical
@@ -630,6 +689,24 @@ impl ContactManager {
             // If not found by peer_id, try resolving as identity_id
             if let Ok(Some(public_key)) = self.resolve_identity_id(&peer_id) {
                 return self.get(public_key);
+            }
+            // WP1: `add()` canonicalizes a libp2p peer id to the contact's
+            // public-key hex before writing, so the row is filed under the hex.
+            // Resolve through the SAME owner the write path uses, or
+            // `get(base58_peer_id)` misses a row this very manager just wrote.
+            // That asymmetry is not cosmetic: the envelope-learning path looks a
+            // contact up by the peer id it saw on the wire, and a miss there
+            // skips the nickname-preference logic and rebuilds the record.
+            //
+            // The guard bounds the recursion: for a value that is already the
+            // canonical key the owner returns it unchanged, and re-entering
+            // `get` would look up the same missing key forever. An uppercase
+            // hex input case-folds to lowercase on the first hop and then
+            // stops.
+            if let Some(canonical) = self.canonical_contact_key(&peer_id, "") {
+                if !canonical.eq_ignore_ascii_case(&peer_id) {
+                    return self.get(canonical);
+                }
             }
             Ok(None)
         }
@@ -942,11 +1019,334 @@ fn current_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::keys::self_certifying_keypair;
     use crate::store::backend::MemoryStorage;
     use std::sync::Arc;
 
     fn make_manager() -> ContactManager {
         ContactManager::new(Arc::new(MemoryStorage::new()))
+    }
+
+    /// Build a genuine self-certifying (peer id, key hex) pair.
+
+    /// A base58-encoded SHA-256 multihash (`0x12 0x20 <32 bytes>`): a valid
+    /// libp2p peer id shape that is NOT an identity multihash, so it embeds no
+    /// public key. This is the input the removed fabrication fallback used to
+    /// "recover" a key from.
+    fn sha256_multihash_peer_id() -> String {
+        let mut bytes = vec![0x12u8, 0x20];
+        bytes.extend(0u8..32);
+        bs58::encode(bytes).into_string()
+    }
+
+    // -----------------------------------------------------------------------
+    // WP1.1 -- recovery never fabricates a public key
+    // -----------------------------------------------------------------------
+
+    /// WP1.1: a non-identity peer id carries no public key. The removed
+    /// "last 32 bytes of the multihash" fallback returned `Some` for exactly
+    /// this input, so a send encrypted to a hash nobody holds.
+    #[test]
+    fn derive_refuses_non_identity_multihash_peer_id() {
+        let mgr = make_manager();
+        let peer = sha256_multihash_peer_id();
+        assert!(
+            mgr.derive_public_key_from_peer_id(&peer).is_err(),
+            "a SHA-256 multihash peer id must not yield a public key"
+        );
+    }
+
+    /// WP1.1: the self-certifying case must still work. A fix that refuses
+    /// everything would satisfy the test above while breaking every real send.
+    #[test]
+    fn derive_accepts_self_certifying_peer_id() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-derive-accept");
+        assert_eq!(
+            mgr.derive_public_key_from_peer_id(&peer_id).unwrap(),
+            key_hex
+        );
+    }
+
+    /// WP1.1: garbage and truncated peer ids yield no key.
+    #[test]
+    fn derive_refuses_garbage_identifiers() {
+        let mgr = make_manager();
+        for bad in [
+            "",
+            "not-a-peer-id",
+            "abc",
+            // Short, wrong-width, and non-hex values are what the shape filter
+            // is for. A base58 `12D3Koo...` id is a REAL peer id that simply
+            // is not an identity multihash, so it is rejected by
+            // self-certification rather than by shape -- see
+            // `derive_refuses_non_identity_multihash_peer_id`.
+            "zz",
+            "00",
+        ] {
+            assert!(
+                mgr.derive_public_key_from_peer_id(bad).is_err(),
+                "identifier {bad:?} must not yield a public key"
+            );
+        }
+    }
+
+    /// WP1.1 + WP1.2: an `identity_id` is 64 hex chars and decodes to 32 bytes,
+    /// so width-based checks admit it, and ~48% of blake3 digests also pass
+    /// curve decompression. The store therefore CANNOT distinguish an identity_id
+    /// from a public key, and must not pretend to. What it must guarantee is
+    /// narrower and real: it never INVENTS a key. Derivation returns either the
+    /// identifier unchanged (already canonical) or an error -- never a key
+    /// reconstructed from bytes that are not one.
+    ///
+    /// The hash-vs-key decision belongs to the point of use, where a comparison
+    /// against a known contact's key is possible. See
+    /// `identity_hash_not_usable_as_recipient` in iron_core.
+    #[test]
+    fn derive_never_invents_a_key_from_an_identity_id() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-identity-id");
+        let identity_id =
+            crate::identity::keys::identity_id_from_public_key_hex(&key_hex).expect("identity id");
+
+        assert_eq!(identity_id.len(), 64, "identity_id is also 64 hex chars");
+        assert!(
+            hex::decode(&identity_id).is_ok(),
+            "and it decodes to 32 bytes"
+        );
+        assert_ne!(identity_id, key_hex);
+
+        // A hash does not self-certify as a peer id, so it can never be
+        // mistaken for a binding -- this is the property that holds
+        // deterministically, unlike the shape check.
+        assert!(
+            !crate::store::ledger_entry::is_self_certifying_binding(&identity_id, &identity_id),
+            "an identity_id must not self-certify as its own key"
+        );
+
+        // Whatever `derive` returns for the hash, it is either the value
+        // unchanged (canonical pass-through) or a refusal. It is NEVER some
+        // third value reconstructed from the hash.
+        match mgr.derive_public_key_from_peer_id(&identity_id) {
+            Err(_) => {}
+            Ok(passed_through) => assert_eq!(
+                passed_through,
+                identity_id.to_lowercase(),
+                "a 64-hex identifier must pass through unchanged or be refused, \
+                 never be turned into a different value"
+            ),
+        }
+
+        // The genuine key and peer id both resolve to the real key, so the
+        // function is discriminating rather than blanket-refusing.
+        assert_eq!(
+            mgr.derive_public_key_from_peer_id(&key_hex).unwrap(),
+            key_hex
+        );
+        assert_eq!(
+            mgr.derive_public_key_from_peer_id(&peer_id).unwrap(),
+            key_hex
+        );
+    }
+
+    /// WP1.2: a supplied key that is NOT a valid 64-hex value must not become
+    /// the stored key, and must not rewrite `peer_id` to itself. This is the
+    /// half of the write path that IS decidable locally.
+    #[test]
+    fn add_refuses_malformed_key() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-add-malformed");
+
+        for bad in [
+            "zz-not-hex",
+            "deadbeef",
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefzz",
+        ] {
+            mgr.add(Contact::new(peer_id.clone(), bad.to_string()))
+                .unwrap();
+            let stored = mgr
+                .get(key_hex.clone())
+                .unwrap()
+                .expect("contact canonicalized from the self-certifying peer id");
+            assert!(
+                !stored.public_key.eq_ignore_ascii_case(bad),
+                "malformed key {bad:?} must not be stored as the encryption key"
+            );
+            assert!(
+                is_valid_public_key(&stored.public_key),
+                "the derived real key must win, got {}",
+                stored.public_key
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // WP1.2 -- writes only ever store a self-certifying binding
+    // -----------------------------------------------------------------------
+
+    /// WP1.2: read and write must agree on the contact key. `add()`
+    /// canonicalizes a libp2p peer id to the contact's public-key hex, so the
+    /// row is filed under the hex -- a `get()` by the base58 peer id must
+    /// still find it.
+    ///
+    /// This asymmetry was live: `add(Contact::new(peer_id, peer_id))` wrote a
+    /// correct, self-certifying row under the hex, and `get(peer_id)` returned
+    /// `None` for the row the same manager had just written. Callers that key
+    /// off the wire peer id -- notably CLI envelope learning -- silently missed
+    /// the contact, skipped the nickname-preference branch, and rebuilt the
+    /// record, dropping a user-set local nickname.
+    #[test]
+    fn get_resolves_peer_id_that_add_canonicalized_to_hex() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-read-write-symmetry");
+
+        mgr.add(Contact::new(peer_id.clone(), key_hex.clone()))
+            .unwrap();
+
+        // Written under the canonical hex...
+        let by_hex = mgr.get(key_hex.clone()).unwrap().expect("row by hex");
+        // ...and reachable by the peer id it was added under.
+        let by_peer = mgr
+            .get(peer_id.clone())
+            .unwrap()
+            .expect("row by peer id must resolve");
+        assert_eq!(by_peer.peer_id, by_hex.peer_id);
+        assert_eq!(by_peer.public_key, key_hex);
+    }
+
+    /// The legacy poison shape -- a libp2p peer id stored as the public key --
+    /// must be repaired by `add()` and then be readable by either spelling.
+    /// This is the exact fixture the CLI envelope-learning test seeds.
+    #[test]
+    fn legacy_peer_id_as_public_key_is_repaired_and_readable() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-legacy-poison");
+
+        mgr.add(Contact::new(peer_id.clone(), peer_id.clone()))
+            .unwrap();
+
+        for lookup in [peer_id.clone(), key_hex.clone()] {
+            let stored = mgr
+                .get(lookup.clone())
+                .unwrap()
+                .unwrap_or_else(|| panic!("contact must resolve by {lookup}"));
+            assert_eq!(
+                stored.public_key.to_lowercase(),
+                key_hex,
+                "the peer id must never survive as the stored key"
+            );
+            assert_ne!(stored.public_key, peer_id);
+            // Self-certification is checked against the ORIGINAL base58 id: the
+            // stored `peer_id` field is canonicalized to the key hex, so
+            // comparing the hex to itself would prove nothing.
+            assert!(
+                crate::store::ledger_entry::is_self_certifying_binding(&peer_id, &key_hex),
+                "the repaired key must still re-derive the original peer id"
+            );
+        }
+    }
+
+    /// A lookup that cannot be canonicalized must stay a clean miss, not an
+    /// error and not an infinite fallback.
+    #[test]
+    fn get_returns_none_for_unrelated_identifier() {
+        let mgr = make_manager();
+        let (peer_id, _) = self_certifying_keypair(b"wp1-miss");
+        mgr.add(Contact::new(peer_id, String::new())).unwrap();
+
+        assert!(
+            mgr.get("nobody-by-that-name".to_string())
+                .unwrap()
+                .is_none(),
+            "an unrelated identifier must miss cleanly"
+        );
+    }
+
+    /// WP1.2: the canonical write shape -- libp2p peer id + its real key --
+    /// canonicalizes to the hex key, and the binding is self-certifying. This
+    /// is the case the unification exists to serve, so it must not regress.
+    #[test]
+    fn add_canonicalizes_self_certifying_binding() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-add-canonical");
+        mgr.add(Contact::new(peer_id.clone(), key_hex.clone()))
+            .unwrap();
+
+        // Looked up by the canonical key hex, which is how the row is stored.
+        let stored = mgr.get(key_hex.clone()).unwrap().expect("contact");
+        assert_eq!(stored.peer_id, key_hex, "peer_id canonicalizes to key hex");
+        assert_eq!(stored.public_key, key_hex);
+        assert!(is_valid_public_key(&stored.public_key));
+        assert!(crate::store::ledger_entry::is_self_certifying_binding(
+            &peer_id,
+            &stored.public_key
+        ));
+    }
+
+    /// WP1.1: recovery of a history peer with no derivable key stores a
+    /// PLACEHOLDER -- recorded so the operator can see the peer, with an EMPTY
+    /// key so it cannot be used as an encrypt target.
+    #[test]
+    fn reconcile_stores_placeholder_for_non_derivable_peer() {
+        use crate::store::history::{HistoryManager, MessageRecord};
+
+        let mgr = make_manager();
+        let history = HistoryManager::new(Arc::new(MemoryStorage::new()));
+        let peer = sha256_multihash_peer_id();
+
+        history
+            .add(MessageRecord {
+                id: "wp1-placeholder-msg".to_string(),
+                direction: crate::store::history::MessageDirection::Received,
+                peer_id: peer.clone(),
+                content: "hello".to_string(),
+                timestamp: 1,
+                sender_timestamp: 1,
+                delivered: false,
+                hidden: false,
+            })
+            .unwrap();
+
+        let recovered = mgr.reconcile_from_history(&history).unwrap();
+        assert_eq!(recovered, 1, "the peer is recorded, not silently dropped");
+
+        let stored = mgr.get(peer.clone()).unwrap().expect("placeholder contact");
+        assert!(
+            stored.public_key.is_empty(),
+            "placeholder must carry no key, got {}",
+            stored.public_key
+        );
+        assert_ne!(stored.public_key, peer, "never peer-id-as-public-key");
+        assert_eq!(stored.notes.as_deref(), Some(PLACEHOLDER_KEY_NOTE));
+    }
+
+    /// WP1.1: a self-certifying history peer still recovers its real key, so
+    /// the placeholder change did not turn every recovery into a placeholder.
+    #[test]
+    fn reconcile_derives_key_for_self_certifying_keypair() {
+        use crate::store::history::HistoryManager;
+
+        let mgr = make_manager();
+        let history = HistoryManager::new(Arc::new(MemoryStorage::new()));
+        let (peer_id, key_hex) = self_certifying_keypair(b"wp1-reconcile-derived");
+
+        history
+            .add(crate::store::history::MessageRecord {
+                id: "wp1-derived-msg".to_string(),
+                direction: crate::store::history::MessageDirection::Received,
+                peer_id: peer_id.clone(),
+                content: "hello".to_string(),
+                timestamp: 1,
+                sender_timestamp: 1,
+                delivered: false,
+                hidden: false,
+            })
+            .unwrap();
+
+        assert_eq!(mgr.reconcile_from_history(&history).unwrap(), 1);
+        let stored = mgr.get(key_hex.clone()).unwrap().expect("derived contact");
+        assert_eq!(stored.public_key, key_hex);
+        assert!(is_valid_public_key(&stored.public_key));
     }
 
     #[test]
