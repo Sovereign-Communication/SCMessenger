@@ -1,5 +1,16 @@
 # 0.4.0 train -- status after the WP1-WP4 pass (2026-09-21)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+It is the Freebuff lane's own train status, written by this lane.
+
 Status: Active dispatch status for the train in
 `HANDOFF/freebuff/README.md` "THE SINGLE TRAIN (0.4.0)".
 Lane: Freebuff (status author). Merges, HANDOFF ticket moves, WP5 and the
