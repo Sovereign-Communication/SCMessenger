@@ -15,6 +15,9 @@ Checks (mirrors AGENTS.md hard rules 1, 3, 4):
   3. No .py files in the repo root (scripts/ only).
   4. No lowercase ios/ top-level path (CI enforces uppercase iOS/).
   5. No private-key blocks (----BEGIN ... PRIVATE KEY----).
+  6. Every staged handoff document passes the repository-local ownership gate;
+     the gate reads the Git index so unstaged worktree edits cannot hide a
+     mixed handoff from the commit.
 
 Exit 0 = clean, exit 1 = violations printed as [FAIL] lines.
 Exempt: docs/historical/, tmp/, binary files (decode failures are skipped).
@@ -22,6 +25,22 @@ Exempt: docs/historical/, tmp/, binary files (decode failures are skipped).
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+try:
+    from scripts.validate_handoff_scope import (
+        POLICY,
+        is_handoff_path,
+        validate_index_documents,
+        validate_paths,
+    )
+except ModuleNotFoundError:
+    from validate_handoff_scope import (  # type: ignore
+        POLICY,
+        is_handoff_path,
+        validate_index_documents,
+        validate_paths,
+    )
 
 PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 ARTIFACT_SUFFIXES = (".log", ".pid", ".logcat")
@@ -124,6 +143,17 @@ def check(path: str, skip_content: bool = False) -> list:
     return fails
 
 
+def handoff_scope_failures(files: list, staged: bool) -> list:
+    """Check only handoff documents, using staged bytes during commit."""
+    handoffs = [path for path in files if is_handoff_path(path)]
+    if not handoffs:
+        return []
+    root = Path(__file__).resolve().parents[1]
+    if staged:
+        return validate_index_documents(handoffs, POLICY, root)
+    return validate_paths(handoffs, POLICY, root, use_index=False)
+
+
 def main() -> int:
     args = sys.argv[1:]
     staged_mode = args == ["--staged"]
@@ -135,6 +165,7 @@ def main() -> int:
     all_fails = []
     for f in files:
         all_fails.extend(check(f, skip_content=f in ws_only))
+    all_fails.extend(handoff_scope_failures(files, staged_mode))
     if all_fails:
         print("rules_check: FAILED -- commit blocked (see AGENTS.md / CLAUDE.md)", file=sys.stderr)
         for line in all_fails:
