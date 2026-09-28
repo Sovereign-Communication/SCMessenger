@@ -1,7 +1,7 @@
 # Build & CI Rules
 
 Status: Active
-Last updated: 2026-09-24 (Harness immutable-tag admission and bounded canary policy)
+Last updated: 2026-09-23 (Harness immutable-tag admission and bounded canary policy)
 
 Loaded on demand. The always-on summary lives in `CLAUDE.md`; this file holds
 the detail. Prefer the `build-verify` skill over running these commands by hand.
@@ -56,10 +56,12 @@ stops you paying it twice for dead work.
 Standing practice for SCMessenger completion work:
 
 1. **Toolchain:** **SCMessenger-local** harness only —
-   `python scripts/update_local_harness.py` refreshes
-   `vendor/sovereign-harness` from the official harness GitHub remote.
-   Do **not** edit `Documents/GitHub/Harness` product trees.
-   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
+   `python scripts/update_local_harness.py --mode admit-tag`
+   admits the immutable source into `vendor/sovereign-harness`.
+   `python scripts/update_local_harness.py --mode canary-main` creates only
+   an isolated exact-SHA candidate. Do **not** edit
+   `Documents/GitHub/Harness` product trees. All callers use
+   `scripts/harness_source.py`; `local_harness.py` is the JEV adapter.
 2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
    (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
    `scripts/scmessenger_issue_sort_pack.json`).
@@ -70,25 +72,24 @@ Standing practice for SCMessenger completion work:
    or a typed JEV question pack — do not invent a new root-cause plan.
 5. Full design: `HANDOFF/V040_JEV_HARMESS_INTEGRATION_2026-09-21.md`.
 
-### Harness admission and update gate (2026-09-24)
+### Harness admission and update gate (2026-09-23)
 
 The production Harness source of truth is the immutable release tag `v0.4.1`
 and its peeled commit, not a moving branch and not a local checkout. The
 verified baseline is:
 
 - Harness `v0.4.1` -> `ad4a30052955e1f574c90f426edfc7a274e16ebf`.
-- Harness `origin/main` -> `6d5a2f818d3029b10635566a8131c6e8be234371`,
-  untagged and 55 commits beyond `v0.4.1`; it is a bounded canary source only.
-- The local Harness checkout is 30 commits behind `origin/main` and dirty;
-  it is diagnostic context, never production evidence.
+- Harness `origin/main` is moving and must be re-resolved for each canary.
+- External Harness checkouts are diagnostic context, never production evidence.
 
-Admission is fail-closed. A candidate is admitted only after an exact remote
-ref is resolved, the source is clean, the package and public/private SCMessenger
-imports are checked, the Harness CLI/report contract is checked, and the
-upstream CI run for the exact SHA is green. `origin/main` may be tested in a
-separate `tmp/` staging path for 0.5.0 compatibility, but a moving branch must
-never be used directly by a release gate. If the branch advances, the old
-canary is invalid and a new exact SHA must be admitted.
+Local admission is fail-closed. A candidate is promoted only after an exact
+remote ref is resolved, the source is clean, the package and public/private
+SCMessenger imports are checked, and the Harness CLI/report contract is
+checked. Release evidence separately requires green upstream CI for the exact
+SHA. `origin/main` may be tested in a separate `tmp/` staging path for 0.5.0
+compatibility, but a moving branch must never be used directly by a release
+gate. If the branch advances, the old canary is invalid and a new exact SHA
+must be admitted.
 
 SCMessenger owns the consumer wrapper, admission manifest, and rollback
 procedure. The Harness maintainer owns upstream tags, API compatibility, and
@@ -96,27 +97,28 @@ Harness CI. The SCMessenger orchestrator owns the 0.4.0 freeze and merge
 sequence; platform owners own Android, CLI, cloud, and native behavior. No
 external Harness worktree is edited by SCMessenger.
 
-The local update flow below is the required target behavior. The current
-floating updater is not yet compliant and must not be treated as admission
-until the modes and exact-SHA checks are implemented.
+The local update flow below is implemented by `harness_admission.py` and
+exposed by `update_local_harness.py`. The manifest and source resolver are
+implemented by `harness_source.py`; callers must not add another fallback.
 
-1. `bootstrap`: create a clean consumer copy from the admitted tag in
-   `tmp/harness-admission/<tag>-<sha>`; never use the system temp directory.
-2. `admit-tag`: fetch the tag, verify the peeled commit, run the hermetic
-   contract probe, and record the exact SHA before promotion.
-3. `canary-main`: resolve one `origin/main` SHA, run the same probe in a
-   separate staging path, and label the result `CANARY`, never production.
-4. `rollback`: restore the previous admitted tag/SHA and its manifest; leave a
-   failed candidate in place for evidence rather than overwriting the active
-   consumer copy.
+1. `admit-tag`: resolve the immutable tag, verify its peeled commit, run the
+   hermetic contract probe, then promote it and write the exact manifest.
+2. `canary-main`: resolve one `origin/main` SHA, run the same probe in a
+   separate `tmp/` staging path, label the result `CANARY`, then remove the
+   candidate; it never changes production.
+3. `rollback`: restore the retained previous tag/SHA and manifest; retain the
+   displaced active source under `tmp/harness-admission/` for evidence.
 
 A dirty vendor copy, unknown version, missing imported symbol, wrong remote,
-wrong SHA, report-schema mismatch, or unavailable required key is a refusal,
-not a warning. Structural JEV fallback is never a canonical pass. The existing
+wrong SHA, report-schema mismatch, or unexpected key state in the hermetic
+no-key probe is a refusal, not a warning. Structural JEV fallback is never a
+canonical pass. The existing
 consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
-`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) must all
-resolve the same admitted source; direct installed-package fallback is not
-allowed.
+`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) all resolve
+through `harness_source.py`; direct installed-package fallback is not allowed.
+The hermetic lifecycle tests are in `scripts/test_harness_admission.py`.
+Upstream and SCMessenger CI remain external release gates; the local updater
+does not infer CI status from its probes.
 
 ## Windows parallelism (measured on this box)
 
