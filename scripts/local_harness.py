@@ -3,22 +3,21 @@
 Operator 2026-09-21: TypeSafe Jev account returned Internal Server Error.
 Fallback uses the OpenRouter API with model ``~typesafe/jev-latest``.
 
-This module never edits the external Harness product tree. It only consumes
-``vendor/sovereign-harness`` primitives and adds a consumer-side fallback.
+This module never discovers or edits a Harness checkout. It loads the
+admitted source through ``harness_source.py`` and adds only the consumer-side
+JEV fallback behavior.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-REPO = Path(__file__).resolve().parents[1]
-DEFAULT_VENDOR = REPO / "vendor" / "sovereign-harness"
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+from harness_source import HarnessSourceError, import_harness_modules
+
 # Operator 2026-09-21: ~typesafe/jev-latest is an OpenRouter **decisions** model
 # — it must use the alpha decisions API, not chat/completions.
 OPENROUTER_JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
@@ -27,54 +26,30 @@ OPENROUTER_JEV_MODEL = os.environ.get(
 )
 
 
-def local_harness_root() -> Path:
-    env = os.environ.get("HARNESS_REPO")
-    if env:
-        p = Path(env)
-        if (p / "harness" / "jev.py").is_file():
-            return p
-        raise SystemExit(f"[FAIL] HARNESS_REPO={p} missing harness/jev.py")
-    if (DEFAULT_VENDOR / "harness" / "jev.py").is_file():
-        return DEFAULT_VENDOR
-    raise SystemExit(
-        "[FAIL] Run python scripts/update_local_harness.py "
-        f"(expected {DEFAULT_VENDOR})"
-    )
-
-
 def import_harness():
-    root = local_harness_root()
-    path = str(root)
-    if path not in sys.path:
-        sys.path.insert(0, path)
-    from harness.config import resolve_api_key, resolve_jev_key  # type: ignore
-    from harness.jev import JevEvaluationResult, JevEvaluator, jev_cost  # type: ignore
-    from harness.jev_packs import (  # type: ignore
-        issue_sort_question_pack,
-        match_keywords,
-        validate_operator_pack,
-    )
-    from harness.jev_policy import JevPolicy  # type: ignore
-
+    """Load the declared Harness surface from the resolved checkout only."""
     try:
-        key = resolve_jev_key() or None
+        mod = import_harness_modules()
+    except HarnessSourceError as exc:
+        raise SystemExit(f"[FAIL] {exc}") from exc
+    try:
+        key = mod["resolve_jev_key"]() or None
     except Exception:  # noqa: BLE001
         key = None
     try:
-        or_key = resolve_api_key() or None
+        or_key = mod["resolve_api_key"]() or None
     except Exception:  # noqa: BLE001
         or_key = os.environ.get("OPENROUTER_API_KEY") or None
     return {
-        "root": root,
+        "root": mod["root"],
         "key": key,
         "openrouter_key": or_key,
-        "JevEvaluator": JevEvaluator,
-        "JevPolicy": JevPolicy,
-        "JevEvaluationResult": JevEvaluationResult,
-        "jev_cost": jev_cost,
-        "validate_operator_pack": validate_operator_pack,
-        "issue_sort_question_pack": issue_sort_question_pack,
-        "match_keywords": match_keywords,
+        "JevEvaluator": mod["JevEvaluator"],
+        "JevPolicy": mod["JevPolicy"],
+        "JevEvaluationResult": mod["JevEvaluationResult"],
+        "jev_cost": mod["jev_cost"],
+        "_validate_questions": mod["_validate_questions"],
+        "_parse_answer": mod["_parse_answer"],
     }
 
 
@@ -237,20 +212,21 @@ def evaluate_jev_with_openrouter_fallback(
     if not answers_raw:
         meta["endpoint"] = "typesafe"
         meta["fallback_used"] = False
-        meta["openrouter_error"] = or_resp.get("error") if isinstance(or_resp, dict) else "parse"
+        meta["openrouter_error"] = (
+            or_resp.get("error") if isinstance(or_resp, dict) else "parse"
+        )
         return primary, meta
 
-    # Validate/normalize via harness _validate_questions + local parse if available
+    # Validate/normalize through the same admitted Harness symbols.
     try:
-        from harness.jev import _validate_questions  # type: ignore
-        from harness.jev import _parse_answer  # type: ignore
-
-        expected = _validate_questions(questions)
+        expected = mod["_validate_questions"](questions)
         answers = {}
         for key_q, question in expected.items():
             if key_q not in answers_raw:
                 raise ValueError(f"OpenRouter response missing {key_q}")
-            answers[key_q] = _parse_answer(answers_raw[key_q], question["type"], key_q, question)
+            answers[key_q] = mod["_parse_answer"](
+                answers_raw[key_q], question["type"], key_q, question
+            )
         nouls = [a["noul"] for a in answers.values() if a.get("type") == "noul"]
         action_conf = [
             a["confidence"]
@@ -262,8 +238,7 @@ def evaluate_jev_with_openrouter_fallback(
         min_conf = getattr(evaluator, "min_confidence", 0.70)
         verdict = (
             "pass"
-            if supported >= min_conf
-            and (not action_conf or confidence >= min_conf)
+            if supported >= min_conf and (not action_conf or confidence >= min_conf)
             else "fail"
         )
         reasons = []
@@ -284,7 +259,9 @@ def evaluate_jev_with_openrouter_fallback(
         if isinstance(or_resp, dict):
             usage = or_resp.get("usage") or {}
         input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        output_tokens = int(
+            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        )
         cost = mod["jev_cost"](input_tokens) if input_tokens else 0.0
         result = mod["JevEvaluationResult"](
             verdict,

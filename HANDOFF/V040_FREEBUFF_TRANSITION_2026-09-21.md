@@ -135,7 +135,7 @@ For any WP / 0.4.0-working claim:
 2. JEV:
 
 ```text
-python scripts/update_local_harness.py
+python scripts/update_local_harness.py --mode admit-tag
 python scripts/jev_canonical_check.py --wp WP2 --state-file tmp/wp2_state.json
 ```
 
