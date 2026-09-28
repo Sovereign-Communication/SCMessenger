@@ -157,8 +157,8 @@ Reply: GO <id> | MERGED <pr> | SKIP <id> | STOP
 
 | Node | Build | Identity / peer | Access |
 |---|---|---|---|
-| Windows CLI | KEEP `1bc78c85`, `tmp/radio-candidates/1bc78c85/scmessenger-cli.exe`, sha256 454cc346811f30a51e4a42bfb7f51f7daf458313f82ad7a5d2a8477de1fab061 | 985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826 / 12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw | local; control API 127.0.0.1:9876; supervised |
-| AWS (always-on) | KEEP image `testbotz/scmessenger:sha-45b0f8b` (id sha256:5403c7f98e13...), container `scm-node`, mount `/opt/scm-relay-data:/data` | 37eb75612c179d57a83801ba71f3545ffdf3d009adbf73c652dae37536b1d006 / 12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31 | ssh `ec2-user`, key `~/.ssh/scm-node-key.pem`; host by discovery (scripts/aws_deploy.sh; last known 18.234.62.247); API :9876 |
+| Windows CLI | LIVE `bceacb94` (2026-09-26 rollout), `C:/Users/SCM/.local/bin/scmessenger-cli.exe`, sha256 3a1ac11f2ee1c163ac6486e2e9f24d8b5d352aeb93dc78645ec74a5e32af7fe9. Rollback: `1bc78c85`, `tmp/radio-candidates/1bc78c85/scmessenger-cli.exe`, sha256 454cc346811f30a51e4a42bfb7f51f7daf458313f82ad7a5d2a8477de1fab061 | 985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826 / 12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw | local; control API 127.0.0.1:9876; supervised by `scripts/run_node_supervised.ps1` (restart on crash; supervisor log and node logs in `C:/Users/SCM/AppData/Local/scmessenger/logs/`); relaunch method in 7.2 |
+| AWS (always-on) | LIVE `bceacb94` (per `/version`, 2026-09-28); image tag by the aws_deploy convention `testbotz/scmessenger:sha-bceacb9` (confirm with `docker inspect` over ssh). Rollback: `sha-45b0f8b` (id sha256:5403c7f98e13...). Container `scm-node`, mount `/opt/scm-relay-data:/data` | 37eb75612c179d57a83801ba71f3545ffdf3d009adbf73c652dae37536b1d006 / 12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31 | ssh `ec2-user`, key `~/.ssh/scm-node-key.pem`; host by discovery (scripts/aws_deploy.sh; last known 18.234.62.247); API :9876 |
 | Pixel 6a | the CI APK from 2026-09-23 | **identity WIPED**; the old triad 779e9ea3... is still a contact on Windows | wireless adb; package `com.scmessenger.android` |
 | OpenClaw cloud node | v040d9degrade-672dffcb (OC lane owns it) | 821f161c... / 12D3KooWDgLQ8jn... | not driven by this train |
 
@@ -320,6 +320,38 @@ LoC landed: 0. Rescue branches are archives.
 - CI APK signing state (H-2)
 - Record all three. Nothing is provoked on the device.
 
+**P0-8 BK-01 -- back up everything to GitHub, then reclaim only what is safe** (operator directive 2026-09-27/28; runs now, while MT-00a waits on CI).
+- **Rule:** uncommitted work (WIP) is never removed, reset, cleaned, stashed or switched. It is backed up to GitHub and left in place.
+- **Tool:** `C:/Users/SCM/Documents/GitHub/scm-train-state/backup_purge.sh` (v2, SAFE; read its header first).
+  - Never perform any of its steps by hand.
+  - Edit it only to fix a crash, and put the diff in the REPORT.
+- **Steps,** in `STATE_DIR`:
+  1. `bash backup_purge.sh inventory`
+  2. `bash backup_purge.sh backup`
+     - It pushes every working state to `refs/heads/backup/20260927/...`.
+     - It uploads ignored non-build files to the DRAFT release `backup-local-20260927` (maintainers only).
+     - Any `[FAIL]`: stop and report.
+  3. `bash backup_purge.sh verify` -- must end with `0 missing`.
+  4. `bash backup_purge.sh purge --dry-run` -- read `backup_purge/decisions.tsv`.
+  5. `bash backup_purge.sh purge`
+  6. `bash backup_purge.sh report`
+- **Purge may remove only:**
+  - clean worktrees that are fully on GitHub and hold no local-only data
+  - the lane's scratch copies whose full working state is byte-identical to a `rescue/*` commit on GitHub
+  - local branches whose commits are all on GitHub
+  - build output, via `scripts/reclaim_safe.py`
+- **Purge never touches:**
+  - any worktree with WIP (KEEP-WIP)
+  - secrets and node/app data (KEEP-LOCAL-DATA)
+  - `tmp/` and every other non-build file
+  - the kept checkouts: primary, `wt-train`, `wt-train-plan`
+  - the running Windows node (it lives outside every checkout)
+- **The backup is permanent:** refs under `backup/20260927/` and the draft release `backup-local-20260927` must never be archived or deleted (T-2/T-3).
+- **Acceptance:**
+  - verify prints `0 missing`
+  - `decisions.tsv` has no REMOVE for a worktree with WIP
+  - REPORT on #403 with counts only: no secret or vault paths
+
 ---
 
 ## 5. Phase 1 -- Triage (the Harness pull already ran it on 2026-09-27; re-run before any deletion)
@@ -350,6 +382,10 @@ LoC landed: 0. Rescue branches are archives.
 - Push each tag by name.
 - Then `git push origin --delete <branch>`, one command per branch.
 - The tags keep every commit reachable.
+- **Constraint:** the repo's pre-push hook blocks remote-branch deletions from agent sessions (AGENTS.md rule 5).
+  - The executor pushes the archive tags and prepares the exact delete commands in `STATE_DIR/T3_DELETE_COMMANDS.sh`.
+  - The operator runs the deletions.
+- **Never archive or delete:** `backup/20260927/*` and `rescue/*`.
 
 **T-4 Carry-forward.**
 - Read `HANDOFF/freebuff/V040_0_LANE_UNIFY_MERGE_TRAIN_2026-09-23.md`, the queue files it supersedes, `recovery/harness-plan-snapshot-20260924` (#369) and `freebuff/v040-v050-harness-plan`.
@@ -360,7 +396,7 @@ LoC landed: 0. Rescue branches are archives.
 
 ## 6. Phase 2 -- v0.4.0 train
 
-**Order:** MT-01 (if the scan gates PRs) -> MT-00a -> MT-00b and MT-02 in parallel -> MT-03 -> MT-06 -> MT-04 -> MT-05 -> MT-07 -> MT-08 -> MT-09 -> MT-10 -> MT-11 -> MT-12 -> TRI-040 (section 7) -> TAG-040 (section 8).
+**Order:** BK-01 (P0-8, runs while MT-00a waits on CI) -> MT-01 (if the scan gates PRs) -> MT-00a -> MT-00b and MT-02 in parallel -> MT-03 -> MT-06 -> MT-04 -> MT-05 -> MT-07 -> MT-08 -> MT-09 -> MT-10 -> MT-11 -> MT-12 -> TRI-040 (section 7) -> TAG-040 (section 8).
 
 **Car pattern** (every car unless it says otherwise):
 1. Run the car's "verify" step. If its acceptance already holds on origin/main, write a DONE inbox report with the command output, mark the car DONE-VERIFIED, and move on.
@@ -393,6 +429,11 @@ LoC landed: 0. Rescue branches are archives.
   - #396 `orchestrate/jev-completion-gate` (CLEAN, +665/-8, 5 files): keyed JEV completion evidence + exact-SHA control-plane gate.
   - #397 `freebuff/mobile-android-gate` (CLEAN, +30).
   - #402 `freebuff/handoff-gate-lane-separation-20260927` (MERGEABLE): the handoff-scope gate. Its CI job calls `scripts/validate_handoff_scope.py`.
+- **Status 2026-09-28:**
+  - The operator merged #402 (merge commit faf22a57db).
+  - #396 and #397 were updated onto main with update-branch; CI is re-running.
+  - Before the update, #396's only failure was CodeQL, which is not a required check. Required checks: Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest), Handoff ownership scope.
+  - When both are green, raise the merge GATE.
 - **Scope correction:**
   - After these land, every later PR must pass the new jobs.
   - #402 enforces single-owner handoff documents. When a docs PR mixes owners, split it per owner; do not weaken the gate.
@@ -611,9 +652,21 @@ This covers SHIP_PLAN G3 (gates D4, D6, D7) and P0 umbrella WP5.
   - Drive it only via ssh, calling `curl http://127.0.0.1:9876/...` on the host. That way the drive keeps working after MT-09g hardens the public bind.
   - Rollback: `IMAGE_TAG=testbotz/scmessenger:sha-45b0f8b scripts/aws_deploy.sh`.
 - **Windows:**
-  - Stage C's CI artifact at `tmp/radio-candidates/<C>/scmessenger-cli.exe` and record its sha256.
-  - Keep `1bc78c85` for rollback.
-  - Restart through the node's supervisor as NODE.md/docs/runbooks document (the 2026-09-23 restore used this path). Preserve the identity and data dir.
+  - Stage C's CI Windows artifact at `tmp/radio-candidates/<C>/scmessenger-cli.exe` and record its sha256.
+  - The current live build is `bceacb94` at `C:/Users/SCM/.local/bin/scmessenger-cli.exe`; keep it as the rollback.
+  - Stop the supervisor first, then the node. Otherwise the supervisor restarts the node:
+    - stop the `powershell.exe` whose command line contains `run_node_supervised.ps1`
+    - then `Stop-Process -Name scmessenger-cli`
+  - Relaunch supervised and detached from the session (WMI):
+    - Put the auto-reply text in `SCM_AUTO_REPLY`: the supervisor splits `-NodeArgs` on spaces.
+    - Use the exact form from 2026-09-28:
+      `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c set "SCM_AUTO_REPLY=<text>" && powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:\Users\SCM\Documents\GitHub\SCMessenger\scripts\run_node_supervised.ps1" -ExePath "<exe>" -NodeArgs "start -p 9001" -LogFile "C:\Users\SCM\AppData\Local\scmessenger\logs\node-supervisor.log"'; CurrentDirectory = 'C:\Users\SCM\AppData\Local\scmessenger' }`
+  - Pass when all of these hold:
+    - `/health` is healthy
+    - `/version` names C
+    - the newest `scm.log.*` shows `Identity initialized: Some("985a25f9...")`
+    - `/api/diagnostics` peers include the AWS peer
+  - The identity and data dir (`C:/Users/SCM/AppData/Local/scmessenger`) are never moved or reset.
 - **Pixel:**
   - Get the CI APK for C, following CI_APK_TO_PHONE.md steps 1-3. Record `output-metadata.json` applicationId and versionCode, plus the run headSha.
   - Install with `adb install -r`.
@@ -630,7 +683,7 @@ This covers SHIP_PLAN G3 (gates D4, D6, D7) and P0 umbrella WP5.
   - `adb logcat -v threadtime,UTC,year > android.log`, running from before C1 until after the last case. The device clock is set to HST, so keep UTC stamps.
   - Then `adb exec-out run-as com.scmessenger.android cat files/logs/scmessenger-mesh.log > mesh.log`. The file is UTF-16 (FF FE): decode it before grepping.
 - **AWS:** `ssh ... "sudo docker logs -t --since <T0> scm-node" > aws.log`.
-- **Windows:** the node's log file for the window.
+- **Windows:** the hourly node logs `C:/Users/SCM/AppData/Local/scmessenger/logs/scm.log.<YYYY-MM-DD-HH>` covering the window.
 - **All:** sha256 of every log into `manifest.json`.
 
 **7.4 Message matrix** (75 driven messages).
@@ -892,6 +945,10 @@ Tag through `[OPERATOR GATE] TAG-050`.
   - The operator and other sessions post cross-session updates there: pushes, rulings, gate answers.
   - A comment from the operator that answers a GATE counts as that GO.
 - **Retired:** the v1 draft `HANDOFF/freebuff/TRAIN_V040_V050_UNIFY_2026-09-27.md` (never committed; deleted). Any state carried over from it must be re-verified with commands.
+- **2026-09-28 update,** from the operator via the Opus session (details in the #403 comment of that date):
+  - #402 merged; #396 and #397 updated onto main.
+  - The Windows node is running `bceacb94` under the supervisor.
+  - BK-01 is inserted as P0-8.
 
 ---
 
@@ -1016,7 +1073,7 @@ HANDOFF/freebuff/inbox/README.md, then sections 0-3 of the task file. Read later
 time, when you reach them.
 1. State: C:/Users/SCM/Documents/GitHub/scm-train-state/TRAIN_STATE.md. Re-read before every step;
    update after every step.
-2. Order: P0-1..P0-7, T-1..T-4, then the section 6 car table. One car in local work at a time; while
+2. Order: P0-1..P0-8 (P0-8 = BK-01), T-1..T-4, then the section 6 car table. One car in local work at a time; while
    a car waits on CI or review you may prepare the next car whose deps are met. Never two builds
    at once; CI is the primary verifier; no local build while disk_budget.py exits 2.
 3. Each car: verify step first, then its steps, its acceptance commands, the JEV gate (2.3), then
