@@ -142,6 +142,14 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): latch the user stop here,
+        // synchronously, before anything suspends. decideCommand() sets it too,
+        // but that runs inside serviceScope.launch -- i.e. after this function
+        // has already chosen its return value -- so a STOP delivery could still
+        // hand the system a sticky restart request.
+        if (action == ACTION_STOP) {
+            userStoppedForSession = true
+        }
         // R6-2: ACTION_ENSURE is delivered via startForegroundService() too,
         // so the 5-second startForeground() contract applies even when the
         // user-stop latch later resolves the delivery to NoOp.
@@ -185,7 +193,15 @@ class MeshForegroundService : Service() {
             }
         }
 
-        return START_STICKY
+        // A latched stop must not invite the system to redeliver a null-action
+        // restart; every other delivery keeps the sticky default so the mesh
+        // stays alive while the app is backgrounded.
+        return if (shouldReturnSticky(userStoppedForSession, action)) {
+            START_STICKY
+        } else {
+            Timber.i("Returning START_NOT_STICKY: user stop in effect")
+            START_NOT_STICKY
+        }
     }
 
     private fun startMeshService() {
@@ -792,6 +808,19 @@ class MeshForegroundService : Service() {
             Resume,
             NoOp
         }
+
+        /**
+         * STOP-TEARDOWN-TIMEOUT-001: should this delivery return START_STICKY?
+         *
+         * Only while no user stop is latched, or when the delivery is an
+         * explicit ACTION_START. While the stop is latched, a sticky restart
+         * asks the system to redeliver this service, and the latch then resolves
+         * that delivery to NoOp -- a request that exists only to be refused, at
+         * the cost of a service the user believes is stopped. Pure, so the rule
+         * is unit-testable without an Android runtime.
+         */
+        internal fun shouldReturnSticky(latched: Boolean, action: String?): Boolean =
+            !(latched && action != ACTION_START)
 
         internal fun decideCommand(
             action: String?,

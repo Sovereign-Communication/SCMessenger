@@ -115,13 +115,35 @@ impl ContactManager {
         // A previous manager may have been released after an app lifecycle
         // transition. Drop its expired weak entry before opening a new store.
         registry.remove(&path);
-        let db = sled::Config::default()
-            .path(&path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .context("Failed to open contacts database")
-            .map_err(|_| crate::IronCoreError::StorageError)?;
+        // MESSAGE-STORE-LOCK-001 (2026-09-21): a just-stopped MeshService can
+        // still hold this store's sled lock, because its UniFFI wrapper is
+        // released by the GC/cleaner rather than by `stop()` -- and a
+        // stop -> Start on the Pixel reaches exactly here. Open through the
+        // shared, teardown-sized retry so a transient holder is not reported
+        // as a broken store; a real holder still fails loud.
+        let (db, open_attempt) = crate::store::backend::open_with_lock_retry(|| {
+            sled::Config::default()
+                .path(&path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open()
+        })
+        .map_err(|(attempts, err)| {
+            tracing::error!(
+                "ContactManager::new: sled failed to open {:?} after {} attempts: {}",
+                path,
+                attempts,
+                err
+            );
+            crate::IronCoreError::StorageError
+        })?;
+        if open_attempt > 1 {
+            tracing::warn!(
+                "ContactManager::new: opened {:?} on attempt {} (previous holder still releasing)",
+                path,
+                open_attempt
+            );
+        }
 
         let db: SharedContactDatabase = Arc::new(Mutex::new(db));
         registry.insert(path, Arc::downgrade(&db));
