@@ -43,7 +43,8 @@ HANDOFF/freebuff/README.md  the live queue index -- read it first
 1. An agent (usually the CEO/CTO seat) writes a task file into `queue/`.
 2. The operator opens Freebuff desktop, selects an unmetered model, pastes the
    task file's contents.
-3. Freebuff implements, self-verifies, and opens a PR.
+3. Freebuff implements, self-verifies, commits to a scoped branch, pushes
+   (fast-forward only; the pre-push hook binds every lane), and opens a PR.
 4. Whoever merges moves the task file to `done/` with the PR number appended to
    its Status line.
 
@@ -141,6 +142,17 @@ workflow and config edits, test authoring, doc corrections, PR-queue burndown.
   passively pulling SCMessenger logs (`adb logcat`, and reading its own app
   files/data through `run-as`). Everything else about device state is observed
   from logs, never provoked. Operator directive, 2026-09-16, mandatory.
+
+**May, since 2026-09-22 (operator directive, CI-primary):** commit your own
+ task's files to a scoped branch and push that branch (fast-forward only; the
+ `.githooks/pre-push` gate binds this lane exactly as it binds every other).
+ CI -- not a local build -- is the primary verifier for the lane: push early,
+ let the run's gates score the work, and download artifacts from the run
+ rather than building them locally. If a local build IS required (CI down,
+ failover debugging), it falls under the CI-Primary Build Doctrine in
+ `docs/rules/BUILD_AND_CI.md`: preflight disk, one build at a time, and
+ reclaim build output immediately afterwards via `scripts/reclaim_safe.py` /
+ `scripts/clean_target.sh`.
 
 **May not, without a human in the loop:**
 - Merge its own PR. Green CI is necessary, not sufficient.
