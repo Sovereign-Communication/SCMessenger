@@ -1,5 +1,17 @@
 # RCA: "Message Store Unavailable" on stop -> Start (MESSAGE-STORE-LOCK-001)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+It is an SCMessenger-side record written by this lane; any external tooling it
+names appears in prose only, and no foreign-repository finding, status or
+remediation is carried here.
 Status: RCA complete, fix implemented on this branch
 Date: 2026-09-21 (RCA), 2026-09-22 (fix landed here)
 Reported by: operator (recurring regression: stop+start on the mesh shows
