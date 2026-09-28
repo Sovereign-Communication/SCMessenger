@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- FINAL Rule-8 APPROVE pass: #267 @ 80197ef5 and #272 @ 3891d11c (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **COMPLETE 2026-09-03 -- BOTH PLAIN APPROVE** (first launch returned a vacuous
 REQUEST_CHANGES -- payload lacked the final trees; re-dispatched with
 tmp/rev272c_final.diff + tmp/rev267c_final.diff attached; both APPROVE verdicts on file).

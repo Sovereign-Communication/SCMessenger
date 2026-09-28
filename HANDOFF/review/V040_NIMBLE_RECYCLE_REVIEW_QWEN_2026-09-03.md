@@ -1,5 +1,13 @@
 # PR #274 review record -- dial dispatch self/connected guards
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 - PR: https://github.com/Sovereign-Communication/SCMessenger/pull/274
 - Branch: freebuff/v040-nimble-peer (base cto/v040-candidate-2026-09-02)
 - Reviewer: qwen3.8-2.4t-a95b (ledger-confirmed 100%/1M, free lane)

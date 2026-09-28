@@ -1,3 +1,11 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_T2_UNIFY_PEER_LEDGER_STORES.md (blocked by disk, needs a ruling)
 Type: QUESTION
 Date: 2026-08-31

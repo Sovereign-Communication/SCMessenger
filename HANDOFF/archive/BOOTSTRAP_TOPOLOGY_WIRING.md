@@ -1,5 +1,13 @@
 # TASK: Wire Identity Discovery via Bootstrap Script
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR QWEN DELEGATION
 Owner: Qwen (implementation)
 Context: Farm-sim topology has `/api/identity` and `/api/contacts` endpoints already built. Just needs orchestration script to wire them together at startup.

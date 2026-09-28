@@ -1,5 +1,15 @@
 # Ticket: CELL-ROUTE-AWS-001
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN
 Filed: 2026-09-11T06:40Z CTO seat
 Related: `HANDOFF/audit/RCA_STOP_RACE_AND_CELL_STORED_2026-09-11.md`

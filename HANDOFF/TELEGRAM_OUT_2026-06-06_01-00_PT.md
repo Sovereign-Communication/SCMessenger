@@ -1,5 +1,13 @@
 # TELEGRAM — P0_024 shipped, P0_025 fix committed, retest BLOCKED by phone offline
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-06 01:00 PT
 **Phase 1+2 status:** Both P0 fixes committed locally; no push (your gate).
 

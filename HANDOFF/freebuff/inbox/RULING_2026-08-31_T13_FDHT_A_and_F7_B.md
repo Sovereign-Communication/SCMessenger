@@ -1,5 +1,13 @@
 # OPERATOR RULING -- F-DHT: Option A. F7: Option B.
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: RULED -- implement
 From: Operator, via CEO seat
 Date: 2026-08-31

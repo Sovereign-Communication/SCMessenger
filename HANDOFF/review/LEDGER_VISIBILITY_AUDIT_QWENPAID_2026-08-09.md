@@ -1,5 +1,15 @@
 # ORCHESTRATOR HEADER -- read before trusting the audit body below
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Dispatched 2026-08-09, lake `qwenpaid`, model `qwen3.8-max-preview`, THINK
 tier, read-only audit, 1 round. Ledger: `LEDGER_VISIBILITY_AUDIT` result ok.
 Footer parsed clean (`degraded: false`, `RESULT: DONE`,

@@ -1,5 +1,13 @@
 # 2026-06-05 21:25 PT — Hermes forwards Lucas's "fix it all" decision to Overseer
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Summary
 
 Lucas said: **"I'm not sure what you're asking. I want it all fixed."**

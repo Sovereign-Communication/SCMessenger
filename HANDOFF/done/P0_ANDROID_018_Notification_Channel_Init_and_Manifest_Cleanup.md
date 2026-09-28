@@ -1,5 +1,13 @@
 # P0_ANDROID_018: Notification Channel Init and Manifest Cleanup
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Problem
 
 1. `NotificationHelper.createNotificationChannels()` was never called during app startup. This caused all notifications (including the mesh foreground service notification) to crash on Android 8+ (API 26+) with `android.app.RemoteServiceException: Bad notification for startForeground`.

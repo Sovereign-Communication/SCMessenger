@@ -1,5 +1,13 @@
 # V040 Three-node validation runbook -- candidate 177bd840
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_3NODE_VALIDATION_RUNBOOK_2026-09-03.md
 Type: RUNBOOK (execution record; gates marked PASS/FAIL/UNVERIFIED as evidence lands)
 Date: 2026-09-03

@@ -1,5 +1,13 @@
 # Farm-Sim Phase 2&3 Testing Report
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-07-18  
 **Instance:** AWS EC2 m7i-flex.large (i-00e068c0837ac0857) at 32.197.246.78  
 **Topology:** 7-node farm-sim (alice, bob, carol, david, eve, relay1, relay2)  

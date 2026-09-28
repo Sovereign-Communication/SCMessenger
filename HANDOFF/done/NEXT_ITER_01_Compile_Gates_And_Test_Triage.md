@@ -1,5 +1,13 @@
 # NEXT_ITER_01: Run All Compile Gates + Android Unit Test Triage
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0 (gates the Fable 5 stabilization sprint commit chain)
 **Recommended worker:** sonnet (mechanical triage with judgment); haiku is fine if the gates just pass
 **Source:** Fable 5 session 2026-07-05/06 handoff (operator directive: hand compile

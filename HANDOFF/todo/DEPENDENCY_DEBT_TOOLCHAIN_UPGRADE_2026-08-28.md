@@ -1,5 +1,15 @@
 # Dependency Debt — Coordinated Android Toolchain Upgrade (0.5.0)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN — planned 2026-08-28 (Buffy orchestrator, Phase 5 of
 ORCHESTRATOR_TAKEOVER_2026-08-28)
 Owner: orchestrator + IMPLEMENTER subagent; operator approves merge.

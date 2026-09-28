@@ -1,5 +1,13 @@
 # 2026-06-05 — UniFFI binding gen race fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Incident
 Background gradle build (`proc_dd98199660eb`) failed with:
 

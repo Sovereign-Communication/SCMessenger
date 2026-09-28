@@ -1,5 +1,15 @@
 # P1 -- Contact recovery writes the PeerId into the public_key field, blocking outbound sends
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active
 Severity: P1 (blocks all outbound encryption to any affected peer)
 Filed: 2026-08-10

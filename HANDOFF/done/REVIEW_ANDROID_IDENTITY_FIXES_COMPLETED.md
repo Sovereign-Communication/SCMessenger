@@ -1,5 +1,15 @@
 # Gatekeeper Review: Android Identity Fixes (All Tasks)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Review Required For:** P0_ANDROID_IDENTITY_001, _002, _003
 
 ## Changes Summary (8 files modified, 165 insertions, 24 deletions)

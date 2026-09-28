@@ -5,8 +5,19 @@ Created: 2026-08-14
 Owner: Operator (Treystu)
 Supersedes for execution purposes: `HANDOFF/todo/_QUEUE.md` (see Amnesty, S0-4)
 
-This is the **only** execution queue until v0.4.0 is tagged and downloadable.
-If a task is not on this page, it is not being worked on.
+**2026-09-20 EXECUTION POINTER:** **working-first.** Operator interview ruled:
+no tag / no secrets pressure until reliable day-to-day mesh is proven. Use
+**`HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`** for sequencing. The older
+`HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md` remains the D1-D7 archive.
+Operator rulings:
+`HANDOFF/freebuff/inbox/V040_OPERATOR_DECISIONS_TAGPATH_2026-09-20.md`.
+D1-D7 definitions in §0 remain the **future** release exit criteria, not the
+current work bar.
+
+This is the **only** execution queue until v0.4.0 is tagged and downloadable,
+as narrowed and reconciled by the unified path document above. If a task is
+not on that path (and not in this file as a D1-D7 definition), it is not
+being worked on for the tag.
 
 ---
 

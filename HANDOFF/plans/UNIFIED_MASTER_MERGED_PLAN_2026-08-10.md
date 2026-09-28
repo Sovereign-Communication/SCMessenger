@@ -1,5 +1,13 @@
 # Unified master merged plan -- PR #139 field gate + Android transport lane
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Written: 2026-08-10 (HST)
 Supersedes: nothing. **Reconciles** three existing documents; it does not

@@ -1,5 +1,13 @@
 # iOS + macOS Log Pull Request -- 2026-08-08 Android/iOS Field Test
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-08-08
 Lane: MAC LANE (GPT-MAC)

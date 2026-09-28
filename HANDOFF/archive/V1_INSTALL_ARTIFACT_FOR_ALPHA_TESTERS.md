@@ -1,5 +1,13 @@
 # Produce a real, shareable install link (not a local debug build)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY -- waiting on CI green + Lucas go-ahead to tag
 Filed: 2026-07-20
 

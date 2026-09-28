@@ -6,6 +6,7 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.service.MeshEventBus
 import com.scmessenger.android.service.MessageEvent
 import com.scmessenger.android.utils.toEpochMillis
+import com.scmessenger.android.utils.inCausalOrder
 import com.scmessenger.android.utils.PeerIdValidator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -132,7 +133,9 @@ class ChatViewModel @Inject constructor(
                 // disagree. senderTimestamp is sender provenance, never a sort key
                 // (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK: a reply rendered before the
                 // message that caused it under the old senderTimestamp sort).
-                _messages.value = mergedMessages.sortedBy { it.timestamp }
+                // MSG-ORDER-003: the sort itself lives in utils/MessageOrder.kt,
+                // which also breaks a same-second tie on the store's insertion fact.
+                _messages.value = mergedMessages.inCausalOrder()
 
                 Timber.d("Loaded ${messageList.size} messages for $currentPeer (merged with ${currentMessages.size} existing)")
             } catch (e: Exception) {
@@ -207,7 +210,7 @@ class ChatViewModel @Inject constructor(
                 // Add to UI immediately
                 val currentMessages = _messages.value.toMutableList()
                 currentMessages.add(tempMessage)
-                _messages.value = currentMessages.sortedBy { it.timestamp }
+                _messages.value = currentMessages.inCausalOrder()
 
                 meshRepository.sendMessage(normalizedPeerId, content)
 
@@ -343,7 +346,7 @@ class ChatViewModel @Inject constructor(
                     }
 
                     if (!viewModelScope.isActive) return@collect
-                    _messages.value = currentMessages.sortedBy { it.timestamp }
+                    _messages.value = currentMessages.inCausalOrder()
                 }
             }
         }

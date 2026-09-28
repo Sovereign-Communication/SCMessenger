@@ -1,5 +1,13 @@
 # PR #139 iOS and macOS lane status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 DATE: 2026-08-09
 PR_HEAD: `d48558a89eec24a267fff4b7d9fe352a983ec09a`
 

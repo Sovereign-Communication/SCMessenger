@@ -1,10 +1,24 @@
 # ID Unification Implementation Plan
 
-**Status:** Active Implementation
-**Date:** 2026-03-10
-**Tracking:** WS13+ Core Work
+**Status:** SUPERSEDED / HISTORICAL — do not implement from this document
+**Date filed:** 2026-03-10
+**Superseded:** 2026-09-20 (canonical outlier audit CO-B-002; CTO disposition)
+**Tracking:** was WS13+ Core Work
 
-## Executive Summary
+## Canonical authority (use this, not the body below)
+
+- Canonical contact/identity key for storage and UI routing is the
+  **Ed25519 public key hex (64-char)**, not `libp2p_peer_id`.
+  See `core/src/api.udl` (IdentityInfo / canonical identity), and
+  `core/src/message/types.rs` UNIFICATION notes.
+- `libp2p_peer_id` is a **derived transport routing id**, not the primary
+  contact key.
+- Any sentence below that says contacts MUST use `libp2p_peer_id` as THE
+  canonical identifier is **wrong** and must not be implemented.
+
+This file is retained as history only. Indexed nowhere as Active.
+
+## Executive Summary (historical — 2026-03-10)
 
 SCMessenger currently uses multiple identifier types across different layers:
 - **Public Key** (canonical identity - Ed25519 64-char hex)

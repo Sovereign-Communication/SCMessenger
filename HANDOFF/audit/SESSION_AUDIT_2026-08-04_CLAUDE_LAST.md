@@ -1,5 +1,15 @@
 # Session Audit: 2026-08-04 — Last Claude Session (opus5_continuefromhere)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Source Session**: `HANDOFF/Last_session_opus5_continuefromhere.md`
 **Date Audited**: 2026-08-04
 **Auditor**: Qwen Subagent

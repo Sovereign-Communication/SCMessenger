@@ -1,5 +1,15 @@
 # FARM FINAL PLAN — Puna Seed Deployment (v1.0.0 field target)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active — supersedes nothing; refines the Farm Use Case directive in
 `HANDOFF/todo/_QUEUE.md` (2026-07-11) into the definitive deployment plan.
 Last updated: 2026-07-13

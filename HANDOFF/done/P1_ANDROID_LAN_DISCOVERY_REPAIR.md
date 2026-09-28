@@ -2,6 +2,14 @@ VERIFIED FIXED as of 2026-07-03  see commit 87d1ef61 (fix(android): FAB reappear
 
 # TASK: Android LAN Auto-Discovery Not Working (Cannot See Windows or Ubuntu Peers)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Agent Role
 Agent 5: Android Networking/Debug (multi-file, P1)
 

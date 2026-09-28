@@ -1,5 +1,15 @@
 # V040 #272 VERDICT RE-PIN -- b0f7ac4e (post-#276-merge head)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-06 (~01:2xZ session clock)
 PR: #272 (architecture candidate, branch cto/v040-candidate-2026-09-02)
 Head being re-pinned: b0f7ac4eb2551dd3d6b7d28a308c1765c824007e

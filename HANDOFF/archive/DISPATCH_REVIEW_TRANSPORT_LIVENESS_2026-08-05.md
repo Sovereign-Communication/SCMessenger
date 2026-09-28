@@ -1,5 +1,15 @@
 # DISPATCH: ADVERSARIAL REVIEW -- Transport Liveness Phase 1
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Mode: ADVERSARIAL SECURITY/CORRECTNESS REVIEW. Read-only. No code changes.
 Verdict required in the report format below. This review is the AGENTS.md
 rule 8 gate before the change can merge.

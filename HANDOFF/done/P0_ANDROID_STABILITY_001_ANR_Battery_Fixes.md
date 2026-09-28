@@ -1,5 +1,13 @@
 # P0_ANDROID_STABILITY_001: ANR and Battery Drain Fixes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** TODO
 **Priority:** P0  Blocks Play Store submission (ANR + battery drain flags)
 **Estimated LoC Impact:** ~150

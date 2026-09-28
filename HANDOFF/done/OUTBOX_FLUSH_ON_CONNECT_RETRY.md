@@ -1,5 +1,13 @@
 # TASK [P0 farm-critical]: Outbox enqueue-on-disconnect + flush-on-connect with retry
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO. Re-scoped 2026-07-13 after a 296-line implementation attempt reached
 95% (compiled clean, 1131/1132 lib tests pass) but one unit test stayed red across
 4 free-lane fix attempts. Torn down per the verification protocol

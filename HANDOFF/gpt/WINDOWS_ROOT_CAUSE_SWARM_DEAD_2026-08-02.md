@@ -1,5 +1,15 @@
 # WINDOWS -> GPT: ROOT CAUSE -- the Android libp2p swarm DIED. One fault explains everything.
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: HIGH-CONFIDENCE ROOT CAUSE. Please read before more BLE work.
 Window: 2026-08-02T22:28Z - 22:45Z. Pixel 6a, app 0.4.0, SHA 5925a6cc.
 

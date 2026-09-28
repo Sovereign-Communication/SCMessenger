@@ -1,5 +1,13 @@
 # Live verification of the merged-SHA deploy: 0fd69fb2 traffic evidence
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-18 (UTC), window 22:28:01Z -> 22:37:59Z. Scope: post-deploy traffic
 evidence on the merged binaries (PR #305 + #306, zombie-connection fix included),
 following the drive pattern of `LIVE_VERIFICATION_305_2026-09-18.md`. Evidence

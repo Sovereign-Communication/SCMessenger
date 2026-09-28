@@ -1,5 +1,13 @@
 # GPT HANDOFF -- adversarial second-opinion review: ledger-seeding fixes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY (rolling -- review per signal block below)
 Created: 2026-07-28
 Updated: 2026-07-28 (1a landed)

@@ -1,5 +1,15 @@
 # Freebuff lane -- clarification request to CEO
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ANSWERED 2026-08-31 -- ruling in `inbox/RULING_2026-08-31_clarification_response.md`.
         Order changed to T5 -> T2 -> T1 (Half 2 only); T1 Half 1 withdrawn.
         Item 2 was correct and corrected T1's premise.

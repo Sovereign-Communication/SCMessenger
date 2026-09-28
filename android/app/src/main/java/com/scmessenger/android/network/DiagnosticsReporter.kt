@@ -163,21 +163,33 @@ open class DiagnosticsReporter @Inject constructor(
             recs.add("TLS handshake failures detected -- check device date/time and certificate stores")
         }
 
+        // Doctrine (AGENTS.md): there are no dedicated relay servers as a
+        // product tier -- every node relays, store-and-forward is a behavior
+        // every node performs. Operator-facing text must not reintroduce the
+        // old mental model by naming a role that does not exist
+        // (canonical outlier audit CO-A-002). Say "node" and name the
+        // behavior instead.
         if (failureSummary.totalConnectionRefusedFailures > 0) {
-            recs.add("Connection refused -- relay servers may be down, try again later")
+            recs.add("Connection refused -- the destination node may be unreachable right now, try again later")
         }
 
-        if (testResults.relayConnectivity.values.all { !it }) {
-            recs.add("All relay servers unreachable -- check firewall or try a different network")
+        // `relayConnectivity` is empty whenever no node was actually probed (the
+        // production probe iterates an empty host map), and `all {}` is vacuously
+        // true for an empty collection. Without the isNotEmpty() guard this claims
+        // every node was unreachable on every report.
+        if (testResults.relayConnectivity.isNotEmpty() &&
+            testResults.relayConnectivity.values.all { !it }
+        ) {
+            recs.add("No node could be reached for store-and-forward -- check firewall or try a different network")
         }
 
         // P0_NETWORK_001 Phase 7: Circuit breaker recommendations
         if (cbStats.openCount > 0) {
-            recs.add("${cbStats.openCount} relay(s) circuit-broken (open) -- will retry after cooldown. " +
+            recs.add("${cbStats.openCount} node(s) circuit-broken (open) -- will retry after cooldown. " +
                 "Switching networks may help.")
         }
         if (cbStats.halfOpenCount > 0) {
-            recs.add("${cbStats.halfOpenCount} relay(s) in half-open probe state -- recovery in progress")
+            recs.add("${cbStats.halfOpenCount} node(s) in half-open probe state -- recovery in progress")
         }
 
         // Transport priority recommendation

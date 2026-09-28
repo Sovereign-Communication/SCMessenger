@@ -1,0 +1,33 @@
+{
+  "wp": "WP2",
+  "ticket": "HANDOFF/freebuff/queue/V050_WP2_ROUTING_FEED_ALL_TRANSPORTS_2026-09-21.md",
+  "instruction": "Feed IronCore::routing_peer_seen from every non-swarm data-link establish path (BLE / WiFiAware / WiFiDirect) in core/src/mobile_bridge.rs, using the SAME single core entry point the swarm ConnectionEstablished handler uses, failing closed for blocked peers and unknown cores, and inventing no second routing-presence API. Tests: blocked peer gets no feed; establish makes the routing engine LocalCell learn the peer.",
+  "files_touched": [
+    "core/src/mobile_bridge.rs (+146/-1) -- only file changed on this branch"
+  ],
+  "acceptance": [
+    "Grep: the routing feed is reachable from non-swarm establish paths",
+    "Unit test: blocked peer -> no routing feed (fails closed)",
+    "Unit test: establish -> routing engine LocalCell learns the peer and decides Direct/WiFiAware",
+    "No second routing-presence API introduced; routing_peer_seen is the only entry",
+    "No 'WiFi fixed' claim: WP5 live 3-node proof is still outstanding and is not asserted here"
+  ],
+  "evidence": {
+    "diff_stat": "$ git diff --stat origin/main...HEAD -> core/src/mobile_bridge.rs | 147 ++++++++++++++++++++++++++++++++++++++++++++++ 1 file changed, 146 insertions(+), 1 deletion(-)",
+    "grep_call_sites": "$ git grep -n record_data_link_for_routing origin/freebuff/v050-wp2-routing-feed-all-transports -- core/src/mobile_bridge.rs\n1678:  self.record_data_link_for_routing(&peer_id, &transport.to_string());\n1780:  self.record_data_link_for_routing(&peer_id, \"wifi_aware\");\n1817:  self.record_data_link_for_routing(&peer_id, \"wifi_direct\");\n2074:  fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {\n2080:  Ok(false) => core.routing_peer_seen(peer_id.to_string(), transport.to_string()),",
+    "grep_single_entry": "$ git grep -c routing_peer_seen origin/main -- core/src  -> swarm.rs only (the existing entry point); this branch adds call sites for that same entry, no new presence API",
+    "tests": "$ cargo test -p scmessenger-core --lib routing_   (run in an isolated worktree of main at 8b13b8dc)\nrunning 15 tests\ntest mobile_bridge::tests::test_wifi_aware_data_path_feeds_routing_engine ... ok\ntest mobile_bridge::tests::test_blocked_peer_gets_no_routing_feed ... ok\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1479 filtered out",
+    "ci": "PR #349 required contexts all SUCCESS: Lint, Rust Linting, Test (ubuntu-latest), Test (windows-latest), Test (macos-latest), Repository Hygiene Checks, FFI Surface Contract, Android Wiring Gate, Android Debug APK, Bindings (Kotlin), Bindings (Swift), WASM, iOS Build",
+    "mechanical": "$ cargo check -p scmessenger-core --all-targets exit 0; $ cargo fmt --all -- --check exit 0; $ python scripts/rules_check.py exit 0; $ python scripts/check_wiring.py [OK] all wired",
+    "rule8": "core/src/mobile_bridge.rs is outside core/src/{crypto,transport,routing,privacy}; the gate is not triggered by path. Reviewer should still confirm feed semantics."
+  },
+  "canon_rows": {
+    "canon_identity": "untouched by this WP: no contact addressing change; hex contact key and derived libp2p peer id are unchanged",
+    "canon_routing_feed": "upheld: one routing feed entry point. All three new call sites route through the single private helper that calls IronCore::routing_peer_seen, the same entry the swarm ConnectionEstablished path uses. No parallel presence API was added. Discovery adverts deliberately do not feed the engine.",
+    "instruction_matches": "acceptance rows 1-4 are met with the greps and the two named unit tests; row 5 (WP5 proof) is explicitly NOT claimed and remains outstanding on the P0 umbrella ticket."
+  },
+  "not_claimed": [
+    "WiFi delivery is not claimed fixed; WP5 live 3-node proof is outstanding.",
+    "No Android/Kotlin path was changed."
+  ]
+}

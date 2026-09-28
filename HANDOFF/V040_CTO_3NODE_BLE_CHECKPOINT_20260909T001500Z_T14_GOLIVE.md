@@ -1,5 +1,13 @@
 # V040 CTO three-node checkpoint - T14 + BLE-01 go-live (Windows node live, APK staged)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `GOLIVE_T14_BLE01` (live node cutover + artifact staging; NOT three-node completion)

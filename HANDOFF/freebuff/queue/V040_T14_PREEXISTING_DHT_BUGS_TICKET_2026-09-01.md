@@ -1,5 +1,15 @@
 # V040-T14 -- Two pre-existing DHT bugs (found by Rule-8 review of #267)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: MERGED -- both fixes landed as PR #269 (merged 2026-09-03). Status
 corrected 2026-09-19 from "PR FILED -- #269 open" by the queue-reconcile pass;
 the ticket body below is unchanged.

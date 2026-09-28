@@ -1,3 +1,13 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 VERDICT: BLOCK
 
 The proposed design reintroduces the exact asymmetric mixing desync that killed attempt 1, shifted by one message round-trip. Tying the PQ mix to `handle_dh_ratchet` fails the core synthesized requirement because `handle_dh_ratchet` is strictly a receiver-side operation triggered by the peer's DH rotation. The sender and receiver do not reach this point together for the same message, guaranteeing an immediate root-key divergence and AEAD failure.

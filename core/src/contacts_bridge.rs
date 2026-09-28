@@ -610,6 +610,7 @@ mod tests {
                     delivered: false,
                     status: crate::mobile_bridge::MessageStatus::default(),
                     hidden: false,
+                    stored_at_millis: 0,
                 })
                 .map_err(|_| crate::IronCoreError::StorageError)?;
         }

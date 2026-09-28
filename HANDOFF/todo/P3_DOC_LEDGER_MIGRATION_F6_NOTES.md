@@ -1,5 +1,15 @@
 # P3 — Doc line: ledger migration doc contradicts archiving behavior (Opus review F6)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 - **Priority:** P3 (doc-only, [INFO] finding from the recorded rule-8 review)
 - **Filed:** 2026-09-13, Buffy (Freebuff recovery session)
 - **Origin:** F6 of `HANDOFF/freebuff/inbox/RULE8_PR262_PR263_VERDICT_OPUS.md`

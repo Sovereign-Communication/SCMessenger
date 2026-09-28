@@ -1,5 +1,13 @@
 # GPT HANDOFF -- strategic planning: 0.4.0 completion + 0.5.0 (iOS parity)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR KICKOFF
 Created: 2026-07-28
 Executor: GPT-5.6 Sol (xhigh) on the operator's MacBook

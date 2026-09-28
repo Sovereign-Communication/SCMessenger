@@ -1,5 +1,13 @@
 # Alpha Test Setup: Lucas <-> Josh Cross-Internet Messaging
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Relay deploying (2026-07-18), instructions ready for both sides
 Purpose: Validate reliable cross-internet messaging between two real people
 on real, independent networks (Lucas on fiber, Josh on cellular/WiFi) ahead

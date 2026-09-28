@@ -1,5 +1,13 @@
 # D4 Exit Criterion: AWS Always-On Node Rebuild Runbook
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** Ready for execution upon SHA freeze and CI image publication
 **Target:** D4 Milestone (Pixel 6a <-> AWS Node Verified E2E Delivery Receipt)
 **Author:** Orchestrator Lane C

@@ -1,5 +1,13 @@
 # v0.4.0 Completion Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Last updated: 2026-08-01
 Supersedes: the critical-path list in `HANDOFF/todo/_QUEUE.md` (2026-07-28 header)

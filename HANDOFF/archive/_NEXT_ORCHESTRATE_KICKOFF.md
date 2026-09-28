@@ -1,5 +1,13 @@
 # Next /orchestrate Kickoff -- Post-PR-136 Wave (Field Parity + v0.4.0 Gates)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- Windows lane orchestrator session running
 Last updated: 2026-08-09 (Windows lane resumed; see session block below)
 

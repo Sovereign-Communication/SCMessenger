@@ -1,5 +1,13 @@
 # PR 139 orchestration state — continue from here
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Updated: 2026-08-10 05:29 UTC
 Pull request: https://github.com/Sovereign-Communication/SCMessenger/pull/139
 

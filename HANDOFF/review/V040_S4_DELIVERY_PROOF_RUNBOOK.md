@@ -1,5 +1,13 @@
 # 040-S4 RUNBOOK -- fresh CLI<->Android-emulator E2E delivery proof at current HEAD
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY (execute after final S1 tree)
 Authority: PR #115 (GPT plan) gate 040-S4; vehicle HANDOFF/todo/D-04.
 Scope honesty: the local lab proves fresh CLI<->emulator delivery at

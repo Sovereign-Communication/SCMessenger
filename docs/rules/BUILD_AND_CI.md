@@ -1,11 +1,122 @@
 # Build & CI Rules
 
 Status: Active
-Last updated: 2026-08-08 (extracted from `.claude/rules/build.md` for Tier 1
-on-demand loading; Windows parallelism section added)
+Last updated: 2026-09-24 (Harness immutable-tag admission and bounded canary policy)
 
 Loaded on demand. The always-on summary lives in `CLAUDE.md`; this file holds
 the detail. Prefer the `build-verify` skill over running these commands by hand.
+
+## CI queue hygiene (standing practice — operator 2026-09-20)
+
+GitHub Actions runners are a **shared finite resource**. A merge train that
+leaves superseded runs queued makes every later gate wait for work that can no
+longer land. **Common practice, not an emergency measure:**
+
+1. **After every merge to `main` (or update-branch on a PR), cancel superseded
+   runs** that cannot contribute evidence for the SHA you still care about:
+   - push/workflow runs on **older `main` SHAs** that are no longer tip
+   - pull_request runs on **branches whose PR is already MERGED or CLOSED**
+   - docs-only PR runs when the PR is not being merged this hour (optional;
+     free the slot for the candidate SHA)
+2. **Keep only the live candidate.** For fleet deploy that is usually one
+   `main` tip SHA. Required contexts + artifact jobs (CI Windows CLI, Mobile
+   Android APK, Docker Publish) on that SHA are what you wait on — not the
+   full history of the merge train.
+3. **Cancel commands (orchestrator / host agents):**
+
+```
+gh run list --limit 40 --status queued
+gh run list --limit 40 --status in_progress
+gh run cancel <run-id>
+```
+
+   List **all** live runs (do not assume the API default page is the total —
+   rule 15). Cancel by run id; a cancel that returns "already completed" is
+   fine.
+4. **Zombie runs:** a run stuck `queued` for days on a deleted workflow branch
+   (e.g. historical `fix/h2-rustsec-*` Hygiene) may be uncancellable
+   (`Cannot cancel a workflow run that is completed` or never dispatches).
+   Record it; it does not consume runners when it never starts. Do not treat
+   it as a reason to wait.
+5. **Never cancel required contexts on the SHA you are about to merge** or
+   artifact jobs you need for deploy (`windows-cli-<sha>`, `android-debug-apk`,
+   Docker Publish on the deploy SHA).
+6. **When waiting on CI, say what you are waiting for** (workflow name +
+   head SHA + run id), not "CI is slow."
+7. Same rule applies **before** a long `update-branch` storm: one PR at a
+   time when the queue is saturated; cancel that PR's old head runs after the
+   new push.
+
+Related: branch protection `strict: true` serializes merges and re-queues
+every other PR (SHIP_PLAN I-31). Queue hygiene does not remove that cost; it
+stops you paying it twice for dead work.
+
+## JEV / harness verification (orchestrator + implementers — 2026-09-21)
+
+Standing practice for SCMessenger completion work:
+
+1. **Toolchain:** **SCMessenger-local** harness only —
+   `python scripts/update_local_harness.py` refreshes
+   `vendor/sovereign-harness` from the official harness GitHub remote.
+   Do **not** edit `Documents/GitHub/Harness` product trees.
+   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
+2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
+   (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
+   `scripts/scmessenger_issue_sort_pack.json`).
+3. **WP / canonical DONE:** mechanical CI + greps **and**
+   `python scripts/jev_canonical_check.py --wp WPn --state-file ...`
+   (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
+4. **Clarification:** if confidence <99% on a claim/design, run harness verify
+   or a typed JEV question pack — do not invent a new root-cause plan.
+5. Full design: `HANDOFF/V040_JEV_HARMESS_INTEGRATION_2026-09-21.md`.
+
+### Harness admission and update gate (2026-09-24)
+
+The production Harness source of truth is the immutable release tag `v0.4.1`
+and its peeled commit, not a moving branch and not a local checkout. The
+verified baseline is:
+
+- Harness `v0.4.1` -> `ad4a30052955e1f574c90f426edfc7a274e16ebf`.
+- Harness `origin/main` -> `6d5a2f818d3029b10635566a8131c6e8be234371`,
+  untagged and 55 commits beyond `v0.4.1`; it is a bounded canary source only.
+- The local Harness checkout is 30 commits behind `origin/main` and dirty;
+  it is diagnostic context, never production evidence.
+
+Admission is fail-closed. A candidate is admitted only after an exact remote
+ref is resolved, the source is clean, the package and public/private SCMessenger
+imports are checked, the Harness CLI/report contract is checked, and the
+upstream CI run for the exact SHA is green. `origin/main` may be tested in a
+separate `tmp/` staging path for 0.5.0 compatibility, but a moving branch must
+never be used directly by a release gate. If the branch advances, the old
+canary is invalid and a new exact SHA must be admitted.
+
+SCMessenger owns the consumer wrapper, admission manifest, and rollback
+procedure. The Harness maintainer owns upstream tags, API compatibility, and
+Harness CI. The SCMessenger orchestrator owns the 0.4.0 freeze and merge
+sequence; platform owners own Android, CLI, cloud, and native behavior. No
+external Harness worktree is edited by SCMessenger.
+
+The local update flow below is the required target behavior. The current
+floating updater is not yet compliant and must not be treated as admission
+until the modes and exact-SHA checks are implemented.
+
+1. `bootstrap`: create a clean consumer copy from the admitted tag in
+   `tmp/harness-admission/<tag>-<sha>`; never use the system temp directory.
+2. `admit-tag`: fetch the tag, verify the peeled commit, run the hermetic
+   contract probe, and record the exact SHA before promotion.
+3. `canary-main`: resolve one `origin/main` SHA, run the same probe in a
+   separate staging path, and label the result `CANARY`, never production.
+4. `rollback`: restore the previous admitted tag/SHA and its manifest; leave a
+   failed candidate in place for evidence rather than overwriting the active
+   consumer copy.
+
+A dirty vendor copy, unknown version, missing imported symbol, wrong remote,
+wrong SHA, report-schema mismatch, or unavailable required key is a refusal,
+not a warning. Structural JEV fallback is never a canonical pass. The existing
+consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
+`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) must all
+resolve the same admitted source; direct installed-package fallback is not
+allowed.
 
 ## Windows parallelism (measured on this box)
 

@@ -1,5 +1,13 @@
 # Agent 4 Complete — QA & Interoperability Test Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Summary
 
 Created the QA strategy and test suite for the SCMessenger KMP Compose Multiplatform desktop client.

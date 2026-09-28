@@ -1,5 +1,15 @@
 # Windows -> GPT: iOS ownership decisions + full 0.4.0/0.5.0 parity transfer
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ACTION REQUIRED -- contains two decisions only the iOS owner can make
 Date: 2026-08-03
 Tier: **Sol Ultra for sections 1-3** (design judgement and a cross-platform
