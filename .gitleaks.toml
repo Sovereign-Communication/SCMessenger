@@ -104,15 +104,22 @@ tags = ["android", "keystore", "password"]
 # android-keystore-password, 3 findings on 2 paths):
 #
 #   .github/actions/sign-debug-apk/action.yml
-#     KEYSTORE="$WORK/debug-pinned.keystore"
-#     A FILE PATH. The keystore itself arrives at runtime as KEYSTORE_B64 via
-#     the secrets context (action.yml KEYSTORE_B64: ${{ inputs['keystore-base64'] }}),
-#     is base64-decoded to that path, and its password is never in the repo.
+#     The KEYSTORE variable is assigned a FILE PATH built from a $WORK prefix.
+#     The keystore itself arrives at runtime as KEYSTORE_B64 via the secrets
+#     context, is base64-decoded to that path, and its password is never in
+#     the repo. The rule matched the path because the variable is named
+#     "keystore" and the assigned value is a quoted 6+ char string.
 #
 #   scripts/verify_release_keystore.sh
-#     KEYSTORE="${1:-}"
-#     A CLI POSITIONAL PARAMETER -- the script's own usage line reads
-#     `<keystore-file> <alias>`. The password is prompted for at runtime.
+#     The KEYSTORE variable is assigned a CLI POSITIONAL PARAMETER -- the
+#     script's own usage line reads <keystore-file> <alias>. The password is
+#     prompted for at runtime. Same mechanism: a quoted 6+ char value under a
+#     variable named "keystore".
+#
+# NOTE: this comment deliberately does NOT quote the two offending source
+# lines verbatim. Doing so put the matches inside this very file -- gitleaks
+# scans .gitleaks.toml, and the first run of this change failed with 2 new
+# findings here at lines 107 and 113 for exactly that reason.
 #
 # This is deliberately a [rules.allowlist] on one rule, not a global path
 # allowlist and not a rule disable:
@@ -123,7 +130,7 @@ tags = ["android", "keystore", "password"]
 #     scripts/qwen_*_worker.py, operator-owed rotation) is in neither path and
 #     is untouched.
 [rules.allowlist]
-description = "KEYSTORE= here names a file path or a CLI argument, not a password (P0-4)"
+description = "keystore here names a file path or a CLI argument, not a password (P0-4)"
 paths = [
     '''^\.github/actions/sign-debug-apk/action\.yml$''',
     '''^scripts/verify_release_keystore\.sh$''',
