@@ -1,7 +1,7 @@
 # Freebuff lane -- live queue
 
 Status: Active
-Last updated: 2026-09-24 (immutable Harness admission; bounded main canary)
+Last updated: 2026-09-23 (immutable Harness admission; bounded main canary)
 Rules: `docs/rules/FREEBUFF.md`
 **SESSION HANDOFF (canonical, read first):**
 `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
@@ -24,8 +24,8 @@ umbrella ticket.
 
 **JEV / harness (local only):** see
 `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
-- Planned production command: `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1` -> `vendor/sovereign-harness` (the current updater must be upgraded before use)
-- Planned canary command: `python scripts/update_local_harness.py --mode canary-main` -> isolated one-SHA `origin/main` candidate only
+- Production admission: `python scripts/update_local_harness.py --mode admit-tag` -> `vendor/sovereign-harness`
+- Canary command: `python scripts/update_local_harness.py --mode canary-main` -> temporary one-SHA `origin/main` candidate only
 - `python scripts/jev_repo_insights.py --mode full` (bucket/triage read)
 - `python scripts/jev_canonical_check.py --wp WPn --state-file <state.json>`
 - TypeSafe first; OpenRouter `~typesafe/jev-latest` on
