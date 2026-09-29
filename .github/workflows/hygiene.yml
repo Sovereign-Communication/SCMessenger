@@ -308,6 +308,19 @@ jobs:
             python3 scripts/check_queue_status.py --changed-only --base-ref "$BASE" --warn-only
           fi
 
+      # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
+      # ------------------------------------------
+      # The repository may name ONE authoritative execution queue (the
+      # "EXECUTION POINTER (authoritative)" block in SHIP_PLAN.md) and that name
+      # has to be true: the file must exist in the tree and must not declare
+      # itself superseded. Before this check the ratified plan lived on an
+      # unmerged pull request while SHIP_PLAN.md still called itself the only
+      # queue, and two stale pointers had stacked up in SHIP_PLAN.md. This is a
+      # required context already, so the check costs no new workflow. It judges
+      # the merged tree the runner checks out; see scripts/check_execution_pointer.py.
+      - name: Verify the authoritative execution pointer resolves
+        run: python3 scripts/check_execution_pointer.py
+
       - name: Summary
         if: always()
         run: |
