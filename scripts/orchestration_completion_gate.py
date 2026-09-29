@@ -247,7 +247,7 @@ def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
         "endpoint": payload["endpoint"],
         "model": payload["model"],
         "confidence": float(confidence),
-        "supported": payload.get("supported"),
+        "supported": float(supported),
         "cost": payload.get("cost"),
         "input_tokens": payload.get("input_tokens"),
         "output_tokens": payload.get("output_tokens"),

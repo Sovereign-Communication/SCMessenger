@@ -343,6 +343,7 @@ NOTES: [\"fixture verifies durable assignment binding\"]
                 mechanical_gate={"command": "true", "returncode": 0},
             )
             self.assertEqual(evidence["status"], "PASSED")
+            self.assertIsInstance(evidence["jev"]["validated"]["supported"], float)
             self.assertEqual(evidence["identity"], {
                 "task_id": task_id,
                 "base_sha": "a" * 40,
