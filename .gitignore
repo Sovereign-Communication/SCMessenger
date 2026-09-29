@@ -390,3 +390,14 @@ scratch/*
 
 # Freebuff tool state (worktree tracking) - never commit
 .freebuff/
+
+# secrets hygiene
+.claude/*.env
+.claude/*.env.*
+.claude/*.bak*
+*.env.bak*
+.env.*
+*.key
+*.p12
+*.pfx
+id_rsa*
