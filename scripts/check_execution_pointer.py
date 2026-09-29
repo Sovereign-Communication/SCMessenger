@@ -25,6 +25,21 @@ MARKER = "EXECUTION POINTER (authoritative)"
 WINDOW = 9  # marker line plus the eight lines after it
 PATH_RE = re.compile(r"`([^`\n]+\.md)`")
 
+# Session entry points. Each may say who the "execution authority" is, but only by
+# naming SHIP_PLAN.md (the pointer's home) or the file the pointer names; a
+# different .md there is the drift this check exists to stop. Only the header
+# region is scanned: the state files carry thousands of lines of legitimate history.
+ENTRY_POINTS = (
+    ".claude/commands/CTO.md",
+    ".claude/commands/CEO.md",
+    ".agents/skills/ceo/SKILL.md",
+    "HANDOFF/CTO_STATE.md",
+    "HANDOFF/CEO_STATE.md",
+)
+ENTRY_HEADER_LINES = 40
+AUTHORITY_RE = re.compile(r"execution authority", re.IGNORECASE)
+AUTHORITY_WINDOW = 3  # the line that says it plus the two lines after it
+
 
 def find_pointer(ship_plan_text):
     """Return the .md path named by the authoritative pointer block, or None."""
@@ -35,6 +50,29 @@ def find_pointer(ship_plan_text):
             match = PATH_RE.search(block)
             return match.group(1) if match else ""
     return None
+
+
+def check_entry_points(root, pointer):
+    """Errors for entry points whose header names an execution authority other than the pointer."""
+    root = Path(root).resolve()
+    # AGENTS.md is the rules contract, not an execution queue: naming it beside the
+    # authority sentence ("after AGENTS.md ...") is not a competing pointer.
+    allowed = {pointer, "SHIP_PLAN.md", "AGENTS.md"}
+    errors = []
+    for rel in ENTRY_POINTS:
+        path = root / rel
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")[:ENTRY_HEADER_LINES]
+        for index, line in enumerate(lines):
+            if not AUTHORITY_RE.search(line):
+                continue
+            for match in PATH_RE.finditer("\n".join(lines[index:index + AUTHORITY_WINDOW])):
+                if match.group(1) not in allowed:
+                    errors.append(
+                        f"{rel}:{index + 1} names a different execution authority: "
+                        f"{match.group(1)} (the authoritative pointer is {pointer})")
+    return errors
 
 
 def check(root):
@@ -63,7 +101,7 @@ def check(root):
     for line in target.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")[:60]:
         if line.startswith("**Status:**") and "SUPERSEDED" in line.upper():
             return [f"the authoritative pointer target declares itself superseded: {pointer}: {line.strip()[:160]}"]
-    return []
+    return check_entry_points(root, pointer)
 
 
 def main(argv=None):

@@ -11,7 +11,7 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 Status: Active
 Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CEO command added)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
-**Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+**Execution authority:** the `EXECUTION POINTER (authoritative)` block in `SHIP_PLAN.md` (see also the tracker PR #403)
 
 ## Harness-side audit note (2026-09-22, append-only)
 

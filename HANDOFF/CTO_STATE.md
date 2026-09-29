@@ -1,8 +1,78 @@
 # CTO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+Status: Active
+Last updated: 2026-09-29 (orchestrator unification pass; see RESUME HERE 2026-09-29 below)
+Entry point: `/CTO`. **Execution authority:** the `EXECUTION POINTER (authoritative)` block in `SHIP_PLAN.md`.
+
+# ===== RESUME HERE (2026-09-29, orchestrator session: unification pass) =====
+
+**Execution authority:** the `EXECUTION POINTER (authoritative)` block in
+`SHIP_PLAN.md`. Today it names the merge-train task file
+`HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md`; live state is
+the tracker PR #403 (`gh pr view 403 --comments`). Read those before anything
+below, which is history. The header of this file used to name
+`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`; that file is context only.
+
+## Rulings in force (operator, 2026-09-29, answered in chat; recorded on #403 and in task-file section 14.6)
+
+1. **JEV POST-MERGE.** A1's JEV condition is a post-merge closing gate: scored on
+   the merge SHA right after each merge, >= 85 with hard gates clear before the
+   next dependent car merges and before any tag; a miss is a 14.5 stop. Every
+   other A1 condition stays pre-merge. MT-00a is exempt. Why: `pr_merged` is a
+   25-point hard gate, so the pre-merge ceiling is 75.
+2. **#404 FIX+REVIEW.** The dispatch identity is validated before any checkout;
+   MT-00a lands as PR #414, which supersedes #407 and #404.
+3. **A2 step 2 is supplied by the orchestrator session** through clean-context,
+   read-only Claude reviewers that never authored the change. Multi-model panels
+   still cannot clear Rule-8.
+
+## What this pass established (each item is re-derivable; the commands outrank this list)
+
+- **The drift was structural.** Five session entry points (`.claude/commands/CTO.md`,
+  `.claude/commands/CEO.md`, `.agents/skills/ceo/SKILL.md`, this file and
+  `HANDOFF/CEO_STATE.md`) hard-coded `V040_FREEBUFF_TRANSITION_2026-09-21.md` as
+  the execution authority, `SHIP_PLAN.md` pointed at
+  `V040_WORKING_FIRST_PATH_2026-09-20.md`, and the operator-ratified plan lived only
+  on the unmerged PR #403. They now name the one pointer in `SHIP_PLAN.md` by
+  reference, and `scripts/check_execution_pointer.py` (a step of the required
+  Repository Hygiene job) fails a PR if the pointer does not resolve or an entry
+  point names a different authority.
+- **Harness admission.** `docs/rules/BUILD_AND_CI.md` ("Harness admission and
+  update gate") names the immutable tag `v0.4.1` as production and `origin/main`
+  as a canary. The tag has the `jev-phase` CLI but its MCP server has no
+  `jev_phase` tool, and the merge-train lane's P0-x gate runs used a canary ref
+  (11 commits to `jev_completion.py` past the tag). The post-merge routine
+  `scripts/jev_post_merge.py` uses the admitted tag, derives every input from
+  `gh` output, and attributes red lanes by delta against the merge commit's first
+  parent (a scheduled-run failure on the same SHA is not the merge's lane).
+- **Board.** Three runs on the landing path, all `DEFERRED_PANEL_SHORTFALL`
+  (`HANDOFF/BOD_STATE.md` session note): the learned-BYOK org filter removes
+  `deepseek/*` and `google/*` seats. There is no approval; one run on the admitted
+  tag recorded a REJECT on governance exceptions at the merge gate and the Rule-8
+  authorization boundary, which is why the A2 sign-off must stay strictly independent.
+- **`delete_branch_on_merge` is true**, so merging auto-deletes PR head branches,
+  against the spirit of A3 (archive tags only). It is an operator setting; nothing
+  was changed.
+- **The primary checkout is not clean and is not this seat's.** It sits on
+  `glm/canonical-outlier-audit` (PR #359, 154 ahead / 24 behind main) with 82
+  uncommitted entries (a staged `vendor/libp2p-swarm-0.48.0` D9 patch and edits under
+  `core/`, `cli/`, `android/`) that belong to other sessions. Work in a worktree.
+
+# ===== END RESUME 2026-09-29 =====
+
+# ===== PRIOR HEADER (2026-09-21, kept as history) =====
+
 Status: Active
 Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
-Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+Entry point: `/CTO`. Execution authority at that time: see the RESUME HERE 2026-09-29 section above, which supersedes it.
 
 # ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
 

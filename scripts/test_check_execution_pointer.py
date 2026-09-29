@@ -58,6 +58,43 @@ class ExecutionPointerTests(unittest.TestCase):
         with tmp:
             self.assertIn("repository-relative", cep.check(root)[0])
 
+    def test_entry_point_naming_a_different_authority_is_an_error(self):
+        tmp, root = make_root(POINTER, "**Status:** IN PROGRESS\n")
+        with tmp:
+            entry = root / ".claude" / "commands" / "CTO.md"
+            entry.parent.mkdir(parents=True)
+            entry.write_text("# cto\n\n**Execution authority:**\n`HANDOFF/V040_OLD_TRANSITION.md`.\n", encoding="utf-8")
+            errors = cep.check(root)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("names a different execution authority: HANDOFF/V040_OLD_TRANSITION.md", errors[0])
+
+    def test_entry_point_referencing_ship_plan_or_the_pointer_target_is_ok(self):
+        tmp, root = make_root(POINTER, "**Status:** IN PROGRESS\n")
+        with tmp:
+            entry = root / "HANDOFF" / "CEO_STATE.md"
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text("**Execution authority:** the block in `SHIP_PLAN.md`, today `HANDOFF/queue/plan.md`.\n", encoding="utf-8")
+            self.assertEqual(cep.check(root), [])
+
+    def test_naming_the_rules_contract_beside_the_authority_sentence_is_ok(self):
+        tmp, root = make_root(POINTER, "**Status:** IN PROGRESS\n")
+        with tmp:
+            entry = root / ".claude" / "commands" / "CEO.md"
+            entry.parent.mkdir(parents=True)
+            entry.write_text("**Execution authority:** the block in `SHIP_PLAN.md` (after `AGENTS.md` + state files).\n", encoding="utf-8")
+            self.assertEqual(cep.check(root), [])
+
+    def test_a_different_path_far_from_the_phrase_or_deep_in_history_is_ignored(self):
+        tmp, root = make_root(POINTER, "**Status:** IN PROGRESS\n")
+        with tmp:
+            entry = root / "HANDOFF" / "CTO_STATE.md"
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            history = "\n".join(["filler"] * 60)
+            entry.write_text(
+                "**Execution authority:** see `SHIP_PLAN.md`.\n\n\n\n`HANDOFF/V040_OLD_TRANSITION.md` is context.\n"
+                + history + "\nExecution authority (old): `HANDOFF/V040_OLD_TRANSITION.md`\n", encoding="utf-8")
+            self.assertEqual(cep.check(root), [])
+
     def test_absolute_path_is_rejected(self):
         tmp, root = make_root(POINTER.replace("HANDOFF/queue/plan.md", "/etc/passwd.md"))
         with tmp:
