@@ -46,9 +46,51 @@ class PostMergeLogicTests(unittest.TestCase):
 
     def test_status_row_claims_completion_only_with_a_merge_sha(self):
         row = jpm.status_row("MT-00b", "doctrine unification", 414, "0123456789abcdef")
-        self.assertIn("COMPLETE", row)
+        self.assertIn("| COMPLETE |", row)
         self.assertIn("PR #414 merged 01234567", row)
         self.assertEqual(jpm.hostile_words(row.replace("MT-00b", "X")), [])
+
+    def test_status_row_is_built_from_computed_values_not_hard_coded(self):
+        row = jpm.status_row("MT-06", "android lifecycle", 411, "0123456789abcdef", complete=False, ci_green=False)
+        self.assertIn("| NOT COMPLETE |", row)
+        self.assertIn("CI not green", row)
+        self.assertNotIn("| COMPLETE |", row)
+        self.assertNotIn("CI green", row)
+
+    def test_a_new_failing_job_inside_an_already_red_workflow_is_attributed(self):
+        now, before = [run("CI", "failure")], [run("CI", "failure")]
+        attributable, baseline = jpm.attribute_reds(now, before, {"CI": {"Docs", "Test (ubuntu-latest)"}}, {"CI": {"Docs"}})
+        self.assertEqual(baseline, [])
+        self.assertEqual(len(attributable), 1)
+        self.assertIn("Test (ubuntu-latest)", attributable[0][1])
+
+    def test_the_same_failing_jobs_on_both_sides_stay_baseline(self):
+        now, before = [run("CI", "failure")], [run("CI", "failure")]
+        attributable, baseline = jpm.attribute_reds(now, before, {"CI": {"Docs"}}, {"CI": {"Docs"}})
+        self.assertEqual((attributable, baseline), ([], ["CI"]))
+
+    def test_without_job_data_a_workflow_red_on_both_sides_is_baseline(self):
+        attributable, baseline = jpm.attribute_reds([run("CI", "failure")], [run("CI", "failure")])
+        self.assertEqual((attributable, baseline), ([], ["CI"]))
+
+    def test_harness_provenance_requires_the_admitted_sha_and_a_clean_tree(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for command in (["git", "init", "-q"], ["git", "config", "user.email", "t@example.invalid"],
+                            ["git", "config", "user.name", "t"], ["git", "config", "commit.gpgsign", "false"]):
+                subprocess.run(command, cwd=repo, check=True)
+            (repo / "f.txt").write_text("x\n", encoding="utf-8")
+            subprocess.run(["git", "add", "f.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "c"], cwd=repo, check=True)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+            self.assertTrue(jpm.harness_provenance(repo, head)[0])
+            self.assertFalse(jpm.harness_provenance(repo, "0" * 40)[0], "a different SHA is not the admitted source")
+            (repo / "f.txt").write_text("dirty\n", encoding="utf-8")
+            self.assertFalse(jpm.harness_provenance(repo, head)[0], "a dirty tree is not the admitted source")
+        self.assertFalse(jpm.harness_provenance(Path(tempfile.gettempdir()) / "definitely-not-a-repo-xyz", "0" * 40)[0])
 
 
 if __name__ == "__main__":
