@@ -19,6 +19,48 @@ session. Two actions were refused by Claude Code's auto-mode classifier today (s
 section 4); the classifier applies to Opus 5.5 in Claude Code too, so do not route
 around either.
 
+## 0. Update at about 22:20Z (this section wins wherever it conflicts with the rest)
+
+- **Recipient.** The operator's last instruction was "get all our work committed and then
+  cleaned up fully. Handoff for Codex by wrapping up and pushing and then halting." So
+  Codex (Astra) takes the work now; Claude Opus 5.5 is the Claude lane's successor once the
+  weekly limit resets. Everything below is written for whichever lane resumes.
+- **The Claude lane has HALTED.** No subagent, build or lock of it is running. Every
+  worktree it made was clean with nothing unpushed before cleanup (section 9 lists what was
+  removed and kept).
+- **POLICY: no local builds.** The operator: "no local builds are authorized. we moved to
+  CI!" All compiling and testing is done by GitHub Actions; wait for the PR's checks
+  instead. The subagent that made #421 ran `cargo check` and `clippy` locally (about 12
+  minutes cold) and started a test build that took the disk to 0 bytes free. The Compile
+  gate line in `CLAUDE.md` and the build-lock guidance are stale against this instruction;
+  ask the operator to update them.
+- **Changed since section 2.** #420 (this record) was merged by the operator at 21:46Z;
+  `main` is `10f5642e`. The connection-cap stopgap is PR #421 (branch
+  `fix/conn-cap-per-peer-64`, `MAX_ESTABLISHED_PER_PEER = 64`, a compile-time floor of 16,
+  and the one test that hard-coded 4). The lane updated its branch with `main` at about
+  22:18Z (a merge commit by Treystu). Its only local verification was `cargo fmt`, `check`
+  and `clippy`; the changed `swarm.rs` test has never been compiled or run, so the PR's
+  CI is its first run. It is unmerged and the adversarial review has not happened (#417).
+- **Merge state.** After #420 every open train PR is BEHIND `main` (#399, #400, #401, #403,
+  #405, #406, #408 to #411, #413, #415, #416, and #421 until its update settles); #412 is
+  CLEAN. The auto-mode classifier still refused the lane's merges ("Merge Without Review"),
+  so merges are the operator's or Codex's. Update one branch at a time
+  (`gh pr update-branch <n>`), then merge with `--merge --match-head-commit <full sha>`.
+- **Disk.** 100% used, about 2.3 GB free at 22:15Z (12 GB free at 21:30Z). The subagent's
+  target directory (2.2 GB) is deleted; the rest of the drop is unexplained.
+  `pagefile.sys` is 26.8 GB and `hiberfil.sys` 5.5 GB. The Windows node was healthy at
+  22:06Z with no write errors, but a full disk can corrupt its sled store, so fix the disk
+  before anything else: reboot (a system-managed pagefile shrinks then), or run
+  `scripts/reclaim_safe.py` (dry run first).
+- **Recommended order.** (1) Let #421's checks finish (Test (ubuntu-latest) is the long
+  pole) and merge it. `Docker Publish` then builds `testbotz/scmessenger:sha-<7 chars>` from
+  `main` (no local build). (2) Deploy the relay:
+  `IMAGE_TAG=testbotz/scmessenger:sha-<7 chars> bash scripts/aws_deploy.sh 18.234.62.247`
+  (A6; roll back with `sha-bceacb9`). (3) The operator repeats the cell test with the
+  phone's current APK (the fix is relay-side) and the passive pull follows section 7.
+  (4) The docs PRs #416 and #415 are cheap in CI (docs-only short-circuit): update, merge,
+  then open MT-12', then the rest of section 6.
+
 ## 1. What the operator asked in this stretch
 
 1. Unify, merge and land the v0.4.0 and v0.5.0 work on the merge train, with one
@@ -172,6 +214,24 @@ Evidence: branch `evidence/20260929-cell-test` on `Treystu/SCMessenger-backup`
 - The Harness spend key has a $0.75 daily limit (about $0.07 used today). A2 first passes
   cost $0.001 to $0.003; the admitted release for gates is tag `v0.4.1`
   (`wt-harness-canonical`).
-- Worktrees created today (all disposable once merged): `wt-orch-mt00a`, `wt-orch-mt00b`,
-  `wt-orch-mt12`, `wt-bod-unify`, `wt-a2-414`, `wt-harness-canonical`,
-  `wt-harness-canary`, `wt-astra-handoff`, and `wt-cap64` (the subagent's).
+- The worktrees the lane created today are listed, with what was removed and kept, in
+  section 9.
+
+## 9. Cleanup performed at wrap-up (2026-09-29, about 22:25Z)
+
+- Each worktree below was clean with nothing unpushed before removal. Every branch stays
+  on origin, so recreate a checkout with `git worktree add <path> <branch>`.
+- REMOVED (SCMessenger repo): `wt-a2-414` (detached review checkout), `wt-cap64` (the
+  subagent's; branch `fix/conn-cap-per-peer-64`, PR #421), `wt-orch-mt00b` (`orch/mt00b-amend`,
+  PR #416), `wt-orch-mt12` (`orch/mt12-drift-guard`, no PR yet; it carries
+  `scripts/jev_post_merge.py`), `wt-bod-unify` (`orch/bod-unify-20260929`, PR #415) and
+  `wt-astra-handoff` (this record's branch).
+- KEPT: `wt-orch-mt00a`, because it holds `tmp/evidence/20260929` and the runbook forbids
+  deleting `tmp/` evidence (the same 29 files are on the private backup repo, branch
+  `evidence/20260929-cell-test`); its downloaded APK copy and scratch scripts were removed.
+  In the Harness repo: `wt-harness-canonical` (the admitted v0.4.1 used for gates) and
+  `wt-harness-canary` (the Harness MCP server's registered checkout).
+- NOT TOUCHED: the primary checkout and every other session's worktree, all branches and
+  remote refs, the backup refs, and the running Windows node (supervised, healthy). The adb
+  server the lane started is left running because the operator uses it.
+- Temporary files the lane made in the user temp folder were deleted.
