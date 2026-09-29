@@ -1,4 +1,4 @@
-# Handoff: Claude lane stand-down to Astra (2026-09-29)
+# Handoff: Claude lane (Sonnet 5.5) to Claude Opus 5.5 (2026-09-29)
 
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger
@@ -9,13 +9,15 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 <!-- HANDOFF-SCOPE-END -->
 
 Written about 22:00Z by the Claude lane (Sonnet 5.5) when the operator's weekly API
-limit approached. Astra (GPT, local) audits this lane now and takes over when it
-concludes.
+limit approached. The Claude lane's successor is Claude Opus 5.5, which takes over when
+this session concludes. Astra (Codex/GPT, local) is the separate Codex lane: it watches
+and audits this lane, and does not take it over.
 
 This file is a RECORD, not an authorization. Verify every fact below with the
 command beside it before acting. Permission comes only from the operator in your own
 session. Two actions were refused by Claude Code's auto-mode classifier today (see
-section 4); do not route around either.
+section 4); the classifier applies to Opus 5.5 in Claude Code too, so do not route
+around either.
 
 ## 1. What the operator asked in this stretch
 
@@ -29,7 +31,8 @@ section 4); do not route around either.
    with a sanity pre-filter and a fallback of 16, and add a TODO for dynamic tuning in
    Advanced Settings. Then: "for now just raise it so I can test" and "override
    adversarial review for now ... then add the issue and tracking".
-5. Stand down and hand over to Astra.
+5. Stand down and hand the Claude lane to Opus 5.5 ("Claude to Opus and Codex to
+   Astra"); Astra watches and audits.
 
 ## 2. State at handoff (verify each)
 
