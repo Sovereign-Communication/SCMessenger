@@ -81,6 +81,25 @@ jobs:
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
 
+  orchestration:
+    name: Orchestration control plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Runs on every pull request and every push, on the default merge checkout.
+      # The manual exact-SHA variant of this gate is a SEPARATE workflow
+      # (orchestration-dispatch.yml): this file hosts required status contexts and
+      # must not gain a workflow_dispatch trigger.
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate orchestration contract
+        run: python scripts/orchestration_contract.py
+      - name: Run deterministic orchestration tests
+        run: python scripts/test_orchestration_v2.py
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
