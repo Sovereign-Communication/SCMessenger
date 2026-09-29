@@ -86,9 +86,11 @@ runs:
         # the test and doc legs, but nothing in the iOS or Android artifacts
         # reads their SOURCES -- they raise rust_relevant alone. Their MANIFESTS
         # are different: the Android build runs `cargo ndk build -p
-        # scmessenger-core` at the workspace root, and cargo resolves every
-        # member's Cargo.toml, so a broken member manifest breaks that build.
-        IOS_PATHS='^(iOS/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/build_xcframework\.sh$)'
+        # scmessenger-core` and the iOS build runs `cargo build --target ... -p
+        # scmessenger-core` (scripts/build_xcframework.sh), both at the workspace
+        # root, and cargo resolves every member's Cargo.toml, so a broken member
+        # manifest breaks either build.
+        IOS_PATHS='^(iOS/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/build_xcframework\.sh$|(cli|wasm|desktop_bridge)/Cargo\.toml$)'
         ANDROID_PATHS='^(android/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/check_wiring\.py$|scripts/test_check_wiring\.py$|(cli|wasm|desktop_bridge)/Cargo\.toml$)'
         RUST_PATHS='^(core/|mobile/|cli/|wasm/|desktop_bridge/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/)'
 

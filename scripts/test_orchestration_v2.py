@@ -24,6 +24,25 @@ from jev_canonical_check import CANON_QUESTIONS
 from parse_orchestration_footer import parse_footer
 
 
+def honest_jev_payload(**overrides):
+    """The result file jev_canonical_check.py writes for a genuine keyed pass over the canonical pack.
+
+    The pack is purely `noul`, so harness/jev.py (`_parse_jev_response`) reports confidence 0.0 --
+    only Choice/Score answers carry an action confidence -- and `supported` is the smallest noul
+    probability. Each answer has the shape `_parse_answer` returns. Fixtures shaped any other way
+    (for example confidence 0.91 with no action answer) describe a result no Harness emits.
+    """
+    payload = {
+        "schema_version": "1.0.0", "wp": "WP-TEST", "is_passing": True, "is_fallback": False,
+        "fallback_used": False, "keyed": True, "endpoint": "typesafe", "model": "deterministic-jev",
+        "confidence": 0.0, "supported": 0.93,
+        "answers": {question: {"type": "noul", "noul": 0.93} for question in CANON_QUESTIONS},
+        "reasons": [], "cost": 0.0, "input_tokens": 100, "output_tokens": 10,
+    }
+    payload.update(overrides)
+    return payload
+
+
 class OrchestrationV2Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -320,20 +339,7 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             stderr_path.write_text("", encoding="utf-8")
             if any("jev_canonical_check.py" in str(item) for item in command):
                 result_path = Path(command[command.index("--result-file") + 1])
-                result_path.write_text(json.dumps({
-                    "schema_version": "1.0.0",
-                    "wp": "WP-TEST",
-                    "is_passing": True,
-                    "is_fallback": False,
-                    "fallback_used": False,
-                    "keyed": True,
-                    "endpoint": "typesafe",
-                    "model": "deterministic-jev",
-                    "confidence": 0.91,
-                    "supported": 1.0,
-                    "answers": {question: {"noul": 1.0} for question in CANON_QUESTIONS},
-                    "reasons": [],
-                }), encoding="utf-8")
+                result_path.write_text(json.dumps(honest_jev_payload()), encoding="utf-8")
             return {"returncode": 0, "timed_out": False}
 
         try:
@@ -344,6 +350,9 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             )
             self.assertEqual(evidence["status"], "PASSED")
             self.assertIsInstance(evidence["jev"]["validated"]["supported"], float)
+            self.assertAlmostEqual(evidence["jev"]["validated"]["supported"], 0.93)
+            self.assertEqual(evidence["jev"]["validated"]["confidence"], 0.0,
+                             "a purely-noul pack reports confidence 0.0 by design")
             self.assertEqual(evidence["identity"], {
                 "task_id": task_id,
                 "base_sha": "a" * 40,
@@ -359,34 +368,50 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             self.remove_repo(root)
 
     def test_completion_gate_rejects_failure_fallback_and_missing_evidence(self):
+        # Each case changes exactly ONE thing about an otherwise genuine pass and names the message the
+        # gate must give for it, so deleting any single check turns its own case red instead of another
+        # check catching the same result by accident. `honest-control` proves the fixture is a pass.
         root = self.make_repo("completion-reject")
-        cases = (
-            ("h", "harness-failed"), ("mho", "missing-harness-output"),
-            ("t", "timeout"), ("f", "fallback"), ("u", "unverified"),
-            ("m", "malformed"), ("k", "missing-key"), ("r", "missing-result"),
-        )
+        expected = {
+            "honest-control": None,
+            "harness-failed": "Harness completion gate failed",
+            "missing-harness-output": "Harness completion evidence is missing",
+            "empty-harness-output": "Harness completion gate produced no output",
+            "timeout": "JEV completion gate timed out",
+            "missing-result": "JEV completion evidence is missing",
+            "empty-jev-output": "JEV completion gate produced no output",
+            "malformed": "JEV result evidence is malformed",
+            "unverified": "JEV returned UNVERIFIED-JEV",
+            "fallback": "JEV fallback is not admissible",
+            "missing-key": "JEV result is not keyed",
+            "wrong-endpoint": "requires the keyed TypeSafe endpoint",
+            "not-passing": "not a canonical pass",
+            "wrong-wp": "does not match the controller task",
+            "empty-model": "JEV result model is missing",
+        }
+        mutants = {
+            "fallback": {"is_fallback": True, "fallback_used": True},
+            "missing-key": {"keyed": False},
+            "wrong-endpoint": {"endpoint": "openrouter"},
+            "not-passing": {"is_passing": False},
+            "wrong-wp": {"wp": "WP-OTHER"},
+            "empty-model": {"model": ""},
+        }
         try:
-            for short, case in cases:
-                task_id = f"V2-JEV-{short.upper()}"
-                state = {
-                    "task_id": task_id,
-                    "base_sha": "a" * 40,
-                    "task": {"id": task_id, "wp": "WP-TEST", "files": ["worker.txt"]},
-                    "changed_files": ["worker.txt"],
-                    "worker_diff": {"base_sha": "a" * 40, "sha256": "b" * 64},
-                }
+            for index, (case, message) in enumerate(expected.items()):
+                state = self.completion_state(f"V2-JEV-{index}")
                 calls = []
 
-                def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+                def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds, case=case, calls=calls):
                     calls.append(list(command))
                     is_harness = any("harness_gate.py" in str(item) for item in command)
-                    if case != "missing-harness-output" or not is_harness:
-                        stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+                    if not (is_harness and case == "missing-harness-output"):
+                        silent = ((is_harness and case == "empty-harness-output")
+                                  or (not is_harness and case == "empty-jev-output"))
+                        stdout_path.write_text("" if silent else "[INFO] deterministic fixture\n", encoding="utf-8")
                         stderr_path.write_text("", encoding="utf-8")
-                    if is_harness and case == "harness-failed":
-                        return {"returncode": 1, "timed_out": False}
                     if is_harness:
-                        return {"returncode": 0, "timed_out": False}
+                        return {"returncode": 1 if case == "harness-failed" else 0, "timed_out": False}
                     if case == "timeout":
                         return {"returncode": 124, "timed_out": True}
                     if case == "missing-result":
@@ -395,32 +420,23 @@ NOTES: [\"fixture verifies durable assignment binding\"]
                     if case == "malformed":
                         result_path.write_text("not-json", encoding="utf-8")
                     else:
-                        fallback = case == "fallback"
-                        result_path.write_text(json.dumps({
-                            "schema_version": "1.0.0",
-                            "wp": "WP-TEST",
-                            "is_passing": True,
-                            "is_fallback": fallback,
-                            "fallback_used": fallback,
-                            "keyed": case != "missing-key",
-                            "endpoint": "typesafe",
-                            "model": "deterministic-jev",
-                            "confidence": 0.91,
-                            "supported": 1.0,
-                            "answers": {},
-                            "reasons": [],
-                        }), encoding="utf-8")
+                        result_path.write_text(json.dumps(honest_jev_payload(**mutants.get(case, {}))), encoding="utf-8")
                         if case == "unverified":
                             stdout_path.write_text("UNVERIFIED-JEV\n", encoding="utf-8")
                     return {"returncode": 0, "timed_out": False}
 
-                with self.assertRaises(CompletionGateError) as raised:
+                if message is None:
+                    evidence = run_completion_gate(
+                        state, root / f"s{index}", root, process_runner=fake_runner,
+                        mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertEqual(evidence["status"], "PASSED", case)
+                    continue
+                with self.assertRaises(CompletionGateError, msg=case) as raised:
                     run_completion_gate(
-                        state, root / f"s{short}", root,
-                        process_runner=fake_runner,
-                        mechanical_gate={"command": "true", "returncode": 0},
-                    )
-                self.assertEqual(raised.exception.evidence["status"], "FAILED")
+                        state, root / f"s{index}", root, process_runner=fake_runner,
+                        mechanical_gate={"command": "true", "returncode": 0})
+                self.assertIn(message, str(raised.exception), case)
+                self.assertEqual(raised.exception.evidence["status"], "FAILED", case)
                 self.assertEqual(raised.exception.evidence["identity"]["patch_sha256"], "b" * 64)
                 if case == "harness-failed":
                     self.assertEqual(len(calls), 1)
@@ -483,53 +499,117 @@ NOTES: [\"fixture verifies durable assignment binding\"]
         finally:
             self.remove_repo(root)
 
-    def test_completion_gate_enforces_the_canonical_confidence_and_question_coverage(self):
-        root = self.make_repo("canonical")
-        full = {question: {"noul": 1.0} for question in CANON_QUESTIONS}
-        one_missing = dict(list(full.items())[:-1])
-        cases = {
-            "confidence-0.10": {"confidence": 0.10, "answers": full, "supported": 1.0},
-            "confidence-just-below": {"confidence": 0.6999, "answers": full, "supported": 1.0},
-            "no-answers": {"confidence": 0.91, "answers": {}, "supported": 1.0},
-            "one-question-missing": {"confidence": 0.91, "answers": one_missing, "supported": 1.0},
-            "supported-none": {"confidence": 0.91, "answers": full, "supported": None},
-            "supported-out-of-range": {"confidence": 0.91, "answers": full, "supported": 1.5},
-            "supported-boolean": {"confidence": 0.91, "answers": full, "supported": True},
-            "supported-string": {"confidence": 0.91, "answers": full, "supported": "1.0"},
-            "positive-control-at-the-minimum": {"confidence": 0.70, "answers": full, "supported": 1.0},
-            "positive-control-integer-supported": {"confidence": 0.91, "answers": full, "supported": 1},
-        }
+    @staticmethod
+    def jev_runner(payload):
+        """A process runner that plays the Harness smoke step and the JEV helper, writing `payload` as the result."""
+        def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+            stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+            stderr_path.write_text("", encoding="utf-8")
+            if any("jev_canonical_check.py" in str(item) for item in command):
+                Path(command[command.index("--result-file") + 1]).write_text(json.dumps(payload), encoding="utf-8")
+            return {"returncode": 0, "timed_out": False}
+        return fake_runner
 
-        def runner_for(overrides):
-            def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
-                stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
-                stderr_path.write_text("", encoding="utf-8")
-                if any("jev_canonical_check.py" in str(item) for item in command):
-                    payload = {
-                        "schema_version": "1.0.0", "wp": "WP-TEST", "is_passing": True, "is_fallback": False,
-                        "fallback_used": False, "keyed": True, "endpoint": "typesafe", "model": "deterministic-jev",
-                        "reasons": [], **overrides,
-                    }
-                    Path(command[command.index("--result-file") + 1]).write_text(json.dumps(payload), encoding="utf-8")
-                return {"returncode": 0, "timed_out": False}
-            return fake_runner
-
+    def assert_gate_verdicts(self, cases, label):
+        """Run each (name, payload, message) through the gate: message None must PASS, else it must fail with it."""
+        root = self.make_repo(label)
         try:
-            for index, (name, overrides) in enumerate(cases.items()):
-                state = self.completion_state(f"V2-CANON-{index}")
-                if name.startswith("positive-control"):
+            for index, (name, payload, message) in enumerate(cases):
+                state = self.completion_state(f"V2-{label.upper()}-{index}")
+                if message is None:
                     evidence = run_completion_gate(
-                        state, root / f"s{index}", root, process_runner=runner_for(overrides),
+                        state, root / f"s{index}", root, process_runner=self.jev_runner(payload),
                         mechanical_gate={"command": "true", "returncode": 0})
                     self.assertEqual(evidence["status"], "PASSED", name)
                     self.assertIn("NOT an independent verification", evidence["attests"])
                 else:
-                    with self.assertRaises(CompletionGateError, msg=name):
+                    with self.assertRaises(CompletionGateError, msg=name) as raised:
                         run_completion_gate(
-                            state, root / f"s{index}", root, process_runner=runner_for(overrides),
+                            state, root / f"s{index}", root, process_runner=self.jev_runner(payload),
                             mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertIn(message, str(raised.exception), name)
         finally:
             self.remove_repo(root)
+
+    def test_completion_gate_applies_the_harness_predicate_to_real_shaped_results(self):
+        # harness/jev.py: a purely-noul pack (the canonical one) reports confidence 0.0, because only
+        # Choice/Score answers carry an action confidence; the threshold applies to `supported`, the
+        # smallest noul probability. The gate recomputes both from the answers instead of trusting the
+        # helper's own numbers. A floor on `confidence` would reject every genuine pass.
+        names = list(CANON_QUESTIONS)
+
+        def noul(value):
+            return {"type": "noul", "noul": value}
+
+        def answers(value):
+            return {name: noul(value) for name in names}
+
+        def first_answer(value):
+            return {**answers(0.93), names[0]: value}
+
+        weak = first_answer(noul(0.50))
+        self.assert_gate_verdicts((
+            ("genuine pass, confidence 0.0 by design", honest_jev_payload(), None),
+            ("smallest probability exactly at the minimum",
+             honest_jev_payload(supported=0.70, answers=answers(0.70)), None),
+            ("probabilities given as integers", honest_jev_payload(supported=1, answers=answers(1)), None),
+            ("just below the minimum",
+             honest_jev_payload(supported=0.6999, answers=answers(0.6999)), "below the canonical minimum"),
+            ("one weak answer, honestly reported",
+             honest_jev_payload(supported=0.50, answers=weak), "below the canonical minimum"),
+            ("supported forged above a weak answer",
+             honest_jev_payload(supported=0.93, answers=weak), "do not match its own answers"),
+            ("supported zero but flagged passing", honest_jev_payload(supported=0.0), "do not match its own answers"),
+            ("confidence claimed with no action answer",
+             honest_jev_payload(confidence=0.91), "do not match its own answers"),
+            ("no answers", honest_jev_payload(answers={}), "do not match the canonical questions"),
+            ("one question unanswered",
+             honest_jev_payload(answers={name: noul(0.93) for name in names[:-1]}),
+             "do not match the canonical questions"),
+            ("an unexpected extra answer",
+             honest_jev_payload(answers={**answers(0.93), "extra": noul(0.99)}),
+             "do not match the canonical questions"),
+            ("answer of the wrong type",
+             honest_jev_payload(answers=first_answer({"type": "score", "score": 1.0, "confidence": 0.9})),
+             "is not a noul answer"),
+            ("probability as a string", honest_jev_payload(answers=first_answer(noul("0.93"))),
+             "probability is missing"),
+            ("probability as a boolean", honest_jev_payload(answers=first_answer(noul(True))),
+             "probability is missing"),
+            ("probability not a number", honest_jev_payload(answers=first_answer(noul(float("nan")))),
+             "probability is missing"),
+            ("probability above one", honest_jev_payload(answers=first_answer(noul(1.5))),
+             "probability is missing"),
+            ("supported absent", honest_jev_payload(supported=None), "supported fraction is missing"),
+            ("supported as a string", honest_jev_payload(supported="0.93"), "supported fraction is missing"),
+            ("supported as a boolean", honest_jev_payload(supported=True), "supported fraction is missing"),
+            ("supported above one", honest_jev_payload(supported=1.5), "supported fraction is missing"),
+            ("confidence as a boolean", honest_jev_payload(confidence=False), "confidence is missing"),
+        ), "predicate")
+
+    def test_completion_gate_requires_action_confidence_when_the_pack_has_a_choice_or_score_question(self):
+        # Confidence 0.0 means "no Choice/Score question was asked". Once one is asked, its confidence
+        # is a real signal and must clear the floor; 0.0 is then a failing value like any other.
+        pack = {"ok": {"type": "noul"}, "route": {"type": "choice"}}
+
+        def payload(answer_confidence, reported_confidence):
+            return honest_jev_payload(
+                confidence=reported_confidence, supported=0.95,
+                answers={
+                    "ok": {"type": "noul", "noul": 0.95},
+                    "route": {"type": "choice", "choice": "diff",
+                              "probabilities": {"diff": 0.9, "frontier": 0.1}, "confidence": answer_confidence},
+                })
+
+        with patch.dict(CANON_QUESTIONS, pack, clear=True):
+            self.assert_gate_verdicts((
+                ("action confidence above the minimum", payload(0.90, 0.90), None),
+                ("action confidence below the minimum", payload(0.50, 0.50), "below the canonical minimum"),
+                ("action confidence of zero is not 'absent' once a choice was asked",
+                 payload(0.0, 0.0), "below the canonical minimum"),
+                ("reported confidence higher than the answer's", payload(0.50, 0.90), "do not match its own answers"),
+                ("reported confidence zero over a confident answer", payload(0.90, 0.0), "do not match its own answers"),
+            ), "action-confidence")
 
     def test_completion_judges_must_match_the_base_commit(self):
         root = self.make_repo("judges")

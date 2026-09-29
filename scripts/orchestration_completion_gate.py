@@ -16,9 +16,13 @@ What a PASSED record attests, and what it does not. The Harness step is
 unrelated to the patch; the JEV helper judges controller-supplied metadata (file
 names, patch SHA, the verify command and its exit code), not the diff itself. So
 PASSED means: the mechanical gate returned an integer 0, the Harness is healthy,
-and keyed JEV accepted that metadata at the canonical confidence for every
-canonical question. It is NOT an independent verification of the patch content,
-and under ``--no-openrouter`` the helper asserts its own ``endpoint``. The strict
+and keyed JEV accepted that metadata: every canonical answer, so the ``supported``
+fraction recomputed from them, is at or above the canonical 0.70. The canonical
+pack is purely ``noul``, so a genuine pass reports ``confidence`` 0.0 by design
+(harness/jev.py takes it only from Choice/Score answers); the gate applies the
+Harness predicate to the recomputed signals, not to numbers the helper reports
+about itself. It is NOT an independent verification of the patch content, and
+under ``--no-openrouter`` the helper asserts its own ``endpoint``. The strict
 kernel refuses to run this gate unless the judge scripts are byte-identical to
 the base commit (``judge_integrity_violations`` in orchestrate_strict.py).
 """
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -43,7 +48,10 @@ except ImportError:  # imported by path from another working directory
 
 EVIDENCE_SCHEMA_VERSION = "1.0.0"
 DEFAULT_TIMEOUT_SECONDS = 900
-MIN_CONFIDENCE = 0.70  # the canonical JEV minimum (jev_canonical_check.py --min-confidence default)
+# The canonical JEV threshold: the --min-confidence default of jev_canonical_check.py and of
+# JevEvaluationResult.is_passing in harness/jev.py. It applies to the recomputed ``supported``
+# fraction always, and to the action ``confidence`` when the pack has Choice/Score answers.
+MIN_CONFIDENCE = 0.70
 
 
 class CompletionGateError(RuntimeError):
@@ -79,7 +87,7 @@ def _write_output(path: Path, value: Any) -> None:
 def _file_record(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"path": str(path), "exists": False, "sha256": None}
-    return {"path": str(path), "exists": True, "sha256": _sha256(path)}
+    return {"path": str(path), "exists": True, "sha256": _sha256(path), "bytes": path.stat().st_size}
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -204,6 +212,46 @@ def _validate_mechanical_gate(mechanical_gate: Any) -> None:
         raise CompletionGateError("mechanical gate did not succeed with an integer exit code 0")
 
 
+def _unit_number(value: Any, label: str) -> float:
+    """A real number in [0, 1]. Booleans, strings, NaN and the infinities are not numbers here."""
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0.0 <= value <= 1.0):
+        raise CompletionGateError(f"JEV result {label} is missing, malformed or outside [0, 1]")
+    return float(value)
+
+
+def _derive_signals(answers: dict[str, Any]) -> tuple[float, float, bool]:
+    """Recompute (supported, confidence, has_action_confidence) from the answers, as harness/jev.py does.
+
+    ``_parse_jev_response`` there takes ``supported`` as the smallest noul probability and
+    ``confidence`` as the smallest Choice/Score confidence, and ``confidence`` is 0.0 when the pack
+    has no Choice or Score question. The canonical pack is purely noul, so a genuine pass reports
+    confidence 0.0: a floor on ``confidence`` would reject every one. Recomputing both signals means
+    the threshold is applied to the evidence, not to numbers the helper reports about itself.
+    """
+    missing = sorted(set(CANON_QUESTIONS) - set(answers))
+    unexpected = sorted(set(answers) - set(CANON_QUESTIONS))
+    if missing or unexpected:
+        raise CompletionGateError(
+            f"JEV result answers do not match the canonical questions (missing: {missing}; unexpected: {unexpected})")
+    nouls: list[float] = []
+    action_confidences: list[float] = []
+    for key, question in CANON_QUESTIONS.items():
+        kind = question["type"]
+        answer = answers[key]
+        if not isinstance(answer, dict) or answer.get("type") != kind:
+            raise CompletionGateError(f"JEV result answer {key} is not a {kind} answer")
+        if kind == "noul":
+            nouls.append(_unit_number(answer.get("noul"), f"answer {key} probability"))
+        elif kind in ("choice", "score"):
+            action_confidences.append(_unit_number(answer.get("confidence"), f"answer {key} confidence"))
+        else:
+            raise CompletionGateError(f"canonical question {key} has type {kind}, which this gate cannot check")
+    supported = min(nouls) if nouls else 1.0
+    confidence = min(action_confidences) if action_confidences else 0.0
+    return supported, confidence, bool(action_confidences)
+
+
 def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise CompletionGateError("JEV result evidence is not a JSON object")
@@ -221,23 +269,26 @@ def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
         raise CompletionGateError("JEV completion requires the keyed TypeSafe endpoint")
     if not isinstance(payload.get("model"), str) or not payload["model"]:
         raise CompletionGateError("JEV result model is missing")
-    confidence = payload.get("confidence")
-    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-        raise CompletionGateError("JEV result confidence is malformed")
-    if not 0.0 <= float(confidence) <= 1.0:
-        raise CompletionGateError("JEV result confidence is outside the valid range")
-    if float(confidence) < MIN_CONFIDENCE:
-        raise CompletionGateError(
-            f"JEV result confidence {float(confidence)} is below the canonical minimum {MIN_CONFIDENCE}")
     answers = payload.get("answers")
     if not isinstance(answers, dict) or not isinstance(payload.get("reasons"), list):
         raise CompletionGateError("JEV result answers or reasons are malformed")
-    missing = sorted(set(CANON_QUESTIONS) - set(answers))
-    if missing:
-        raise CompletionGateError("JEV result answers do not cover the canonical questions: " + ", ".join(missing))
-    supported = payload.get("supported")
-    if isinstance(supported, bool) or not isinstance(supported, (int, float)) or not 0.0 <= float(supported) <= 1.0:
-        raise CompletionGateError("JEV result supported fraction is missing or outside the valid range")
+    derived_supported, derived_confidence, has_action_confidence = _derive_signals(answers)
+    supported = _unit_number(payload.get("supported"), "supported fraction")
+    confidence = _unit_number(payload.get("confidence"), "confidence")
+    if not (math.isclose(supported, derived_supported, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(confidence, derived_confidence, rel_tol=0.0, abs_tol=1e-9)):
+        raise CompletionGateError(
+            "JEV result supported and confidence do not match its own answers "
+            f"(reported {supported}/{confidence}, recomputed {derived_supported}/{derived_confidence})")
+    if derived_supported < MIN_CONFIDENCE:
+        raise CompletionGateError(
+            f"JEV result supported fraction {derived_supported} is below the canonical minimum {MIN_CONFIDENCE}")
+    # Confidence 0.0 means "no Choice/Score question was asked", not "no confidence": it is accepted
+    # only when the recomputed value says so. Once a Choice/Score answer exists, its confidence must
+    # clear the floor, and 0.0 is a failing value like any other (harness/jev.py would let it through).
+    if has_action_confidence and derived_confidence < MIN_CONFIDENCE:
+        raise CompletionGateError(
+            f"JEV result action confidence {derived_confidence} is below the canonical minimum {MIN_CONFIDENCE}")
     return {
         "wp": payload["wp"],
         "is_passing": True,
@@ -246,8 +297,8 @@ def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
         "keyed": True,
         "endpoint": payload["endpoint"],
         "model": payload["model"],
-        "confidence": float(confidence),
-        "supported": float(supported),
+        "confidence": confidence,
+        "supported": supported,
         "cost": payload.get("cost"),
         "input_tokens": payload.get("input_tokens"),
         "output_tokens": payload.get("output_tokens"),
@@ -298,7 +349,8 @@ def run_completion_gate(
         "identity": identity,
         "mechanical_gate": mechanical_gate,
         "attests": ("mechanical gate exit 0 + Harness liveness (smoke) + keyed JEV over controller-supplied "
-                    "metadata at the canonical confidence; NOT an independent verification of the patch content"),
+                    "metadata with every canonical answer at or above the canonical threshold; NOT an "
+                    "independent verification of the patch content"),
         "jev_state": _file_record(jev_state_path),
         "harness": {},
         "jev": {},
@@ -348,6 +400,10 @@ def run_completion_gate(
             _fail(record, evidence_dir, "Harness completion gate failed")
         if not harness_stdout.is_file() or not harness_stderr.is_file():
             _fail(record, evidence_dir, "Harness completion evidence is missing")
+        # A genuine smoke run always prints its [RESULT] line (harness_gate.py), so a zero-byte log
+        # with exit 0 is a stub or a runner that did not run the command, not evidence.
+        if harness_stdout.stat().st_size == 0:
+            _fail(record, evidence_dir, "Harness completion gate produced no output")
 
         jev_command = [
             sys.executable,
@@ -373,6 +429,9 @@ def run_completion_gate(
             _fail(record, evidence_dir, "JEV completion gate failed")
         if not jev_stdout.is_file() or not jev_stderr.is_file() or not jev_result_path.is_file():
             _fail(record, evidence_dir, "JEV completion evidence is missing")
+        # The helper prints its [INFO] header before it evaluates anything; silence is not a pass.
+        if jev_stdout.stat().st_size == 0:
+            _fail(record, evidence_dir, "JEV completion gate produced no output")
         jev_output = (jev_stdout.read_text(encoding="utf-8", errors="replace") + "\n" +
                       jev_stderr.read_text(encoding="utf-8", errors="replace"))
         if "UNVERIFIED-JEV" in jev_output:
