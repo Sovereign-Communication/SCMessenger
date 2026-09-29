@@ -29,6 +29,37 @@ use libp2p::{
 use uuid::Uuid;
 use web_time::Duration;
 
+/// Per-peer cap on simultaneously established connections.
+///
+/// Handover ghost slots (#417): when a mobile peer switches from Wi-Fi to
+/// cellular, its old sockets die without a FIN or RST. This node keeps counting
+/// them against the per-peer cap until the ping timeout reaps them, roughly
+/// 47-58 s later. A low cap (it was 4) fills up with those dead connections, so
+/// every fresh cellular connection from the same peer is accepted and then
+/// denied ("connection_limits: limit N reached") and the handover stalls for
+/// about a minute. The cap therefore has to sit far above the connection count
+/// of a healthy peer (direct path, relay circuit, retry headroom) plus the
+/// ghosts of several back-to-back handovers.
+///
+/// This value currently equals `max_established_incoming` (64), so a single
+/// peer can now book every inbound slot; the global limit is the real resource
+/// ceiling until the dial-candidate pre-filter and dynamic tuning tracked in
+/// #417 and #418 land.
+///
+/// A value below `MAX_ESTABLISHED_PER_PEER_FLOOR` fails the build.
+pub const MAX_ESTABLISHED_PER_PEER: u32 = 64;
+
+/// Lowest value `MAX_ESTABLISHED_PER_PEER` may take. Below this, one Wi-Fi to
+/// cellular handover can exhaust the per-peer cap with ghost sockets (#417).
+const MAX_ESTABLISHED_PER_PEER_FLOOR: u32 = 16;
+
+// Compile-time guard: the per-peer cap cannot silently regress to a value that
+// handover ghost slots can exhaust.
+const _: () = assert!(
+    MAX_ESTABLISHED_PER_PEER >= MAX_ESTABLISHED_PER_PEER_FLOOR,
+    "MAX_ESTABLISHED_PER_PEER is below its floor; see #417 (handover ghost slots)"
+);
+
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
@@ -526,10 +557,12 @@ impl IronCoreBehaviour {
                 .with_max_pending_outgoing(Some(32))
                 .with_max_established_outgoing(Some(128))
                 .with_max_established_incoming(Some(64))
-                // Keep direct path, relay path, and headroom for mobile interface
-                // handover (Wi-Fi to Cellular transition) before dead sockets time out,
-                // while keeping per-peer connection count bounded.
-                .with_max_established_per_peer(Some(4)),
+                // Per-peer cap, see MAX_ESTABLISHED_PER_PEER. A mobile peer's
+                // Wi-Fi to cellular handover leaves its dead Wi-Fi sockets counted
+                // here for up to about a minute (until the ping timeout), and while
+                // they fill the cap the peer's fresh connections are denied (#417).
+                // The cap has to absorb those handover ghost slots.
+                .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER)),
         );
 
         Ok(Self {
