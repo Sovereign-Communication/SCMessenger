@@ -63,6 +63,20 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 > supplied sign-off). D1 to D3 are also explicit operator rulings of
 > 2026-09-29 (recorded on PR #403), which the operator may issue over the
 > Board; D4 to D7 are proposals not yet ratified by the Board or the operator.
+>
+> **Corrections recorded after an adversarial audit of the plan (same day).**
+> (1) The proposal text says the admitted tag "lacks jev_phase, the gate tool the
+> plan requires". That premise is misleading: the tag has the `jev-phase` CLI
+> (the plan's gate 2.3(b) names both the CLI and the MCP tool); only its MCP
+> server lacks a `jev_phase` tool. (2) **D5 is withdrawn.** As worded it admits an
+> exact commit SHA, which loosens BUILD_AND_CI.md's fail-closed admission by
+> immutable tag; the remedy is a new Harness tag that carries the phase-id and
+> merge-evidence fixes, admitted through BUILD_AND_CI.md. D4, D6 and D7 proceed only
+> as the cars already ratified in the merge-train plan (MT-00b, MT-12, section 10).
+> (3) The Board script's shortfall line is wrong when a vote is UNKNOWN: entries
+> such as `bod-a8ebe243` print "Only 5/5 models submitted valid votes" beside an
+> UNKNOWN vote (4 valid). It is a defect in `scripts/bod_governance.py`, not fixed
+> here.
 
 ### Resolution bod-9ee86618 [APPROVED]
 - **Timestamp**: 2026-09-14T19:29:30.035909+00:00
