@@ -495,7 +495,9 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             "supported-none": {"confidence": 0.91, "answers": full, "supported": None},
             "supported-out-of-range": {"confidence": 0.91, "answers": full, "supported": 1.5},
             "supported-boolean": {"confidence": 0.91, "answers": full, "supported": True},
+            "supported-string": {"confidence": 0.91, "answers": full, "supported": "1.0"},
             "positive-control-at-the-minimum": {"confidence": 0.70, "answers": full, "supported": 1.0},
+            "positive-control-integer-supported": {"confidence": 0.91, "answers": full, "supported": 1},
         }
 
         def runner_for(overrides):
@@ -590,6 +592,50 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             self.assertEqual((root / "worker.txt").read_text(encoding="utf-8"), "base\n")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(root / "tmp/orchestration/worktrees/V2-JEV-FAIL")], cwd=root, check=False)
+            self.remove_repo(root)
+
+    def test_a_patch_that_rewrites_a_completion_judge_is_refused_before_any_gate_runs(self):
+        # judge_integrity_violations is unit-tested above; this proves complete_integration
+        # actually calls it. If that call were removed, the stubbed gate below would pass and
+        # the task would reach COMPLETE, so this test would fail.
+        root = self.make_repo("judge-rewrite")
+        state_root = root / "state"
+        task_id = "V2-JUDGE-REWRITE"
+        judge = "scripts/harness_gate.py"
+        try:
+            (root / "scripts").mkdir()
+            (root / judge).write_text("judge\n", encoding="utf-8")
+            subprocess.run(["git", "add", judge], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "judge at base"], cwd=root, check=True)
+            worker = create(task_id, root=root)
+            worker_root = Path(worker["path"])
+            (worker_root / judge).write_text("the worker rewrote the judge\n", encoding="utf-8")
+            state = {
+                "task_id": task_id, "protocol_version": self.manifest["protocol_version"],
+                "state_schema_version": self.manifest["state_schema_version"], "history": [],
+                "task": {"id": task_id, "role": "IMPLEMENTER", "files": [judge], "verify_gate": "true"},
+                "assigned_provider": "test", "assigned_model": "test", "base_sha": worker["base_sha"],
+                "changed_files": [judge], "worktree": worker,
+                "worker_result": {"result": "DONE", "task": task_id, "degraded": False}, "evidence": [],
+            }
+            write_state(self.manifest, state_root, task_id, state, "INTAKE")
+            write_state(self.manifest, state_root, task_id, state, "CLASSIFIED")
+            write_state(self.manifest, state_root, task_id, state, "PACKET_READY")
+            write_state(self.manifest, state_root, task_id, state, "DISPATCHED")
+            write_state(self.manifest, state_root, task_id, state, "WORKER_DONE")
+            state["worker_diff"] = capture_worker_diff(state_root, task_id, worker_root, worker["base_sha"])
+            write_state(self.manifest, state_root, task_id, state, "VERIFY")
+            write_state(self.manifest, state_root, task_id, state, "REVIEW")
+            write_state(self.manifest, state_root, task_id, state, "INTEGRATE")
+            with patch("orchestrate_strict.run_completion_gate", return_value={"status": "PASSED"}) as gate:
+                result = complete_integration(self.manifest, state_root, task_id, root)
+            gate.assert_not_called()
+            self.assertEqual(result["state"], "RETRY")
+            self.assertEqual(result["integration_state"], "COMPLETION_GATE_FAILED")
+            self.assertIn(judge, result["completion_gate"]["failure"])
+            self.assertEqual((root / judge).read_text(encoding="utf-8"), "judge\n")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(root / f"tmp/orchestration/worktrees/{task_id}")], cwd=root, check=False)
             self.remove_repo(root)
 
     def test_dial_gates_are_persisted_and_require_their_declared_reviews(self):
