@@ -310,12 +310,19 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
   the re-run); (b) every REQUIRED check is green on the head SHA, the list
   re-read immediately before each merge via
   `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`;
-  (c) the car's JEV gate (2.3) is >= 85 with all hard gates clear; (d) gated
-  code (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) carries
-  an A2 APPROVE naming that exact head SHA; (e) no unresolved review threads
-  or requested changes; (f) any failing NON-required check has been
-  investigated and shown not to be a real defect. Green CI is still necessary,
-  not sufficient -- (c) through (f) are the rest of it.
+  (c) JEV (2.3) is a POST-MERGE closing gate (operator ruling 2026-09-29,
+  "JEV POST-MERGE": the pre-merge ceiling is 75 because `pr_merged` is a
+  25-point hard gate that is only true after a merge) -- it is scored on the
+  merge SHA immediately after each merge and must be >= 85 with all hard gates
+  clear before the next dependent car merges and before any tag; a miss stops
+  the train, and the fix or revert goes through the same gates; the PRs that
+  add the JEV gate itself (MT-00a) are exempt; (d) gated code
+  (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) carries an A2
+  APPROVE naming that exact head SHA; (e) no unresolved review threads or
+  requested changes; (f) any failing NON-required check has been investigated
+  and shown not to be a real defect. Green CI is still necessary, not
+  sufficient -- (a), (b) and (d) through (f) are the pre-merge gate and (c) is
+  the post-merge closing gate.
 - **A6 -- AWS node: full drive (2026-09-28).** You MAY ssh as `ec2-user` with
   `~/.ssh/scm-node-key.pem` for these uses ONLY: `scripts/aws_deploy.sh` deploy
   and rollback; `sudo docker logs`; API calls to `127.0.0.1:9876` on the host;

@@ -8,7 +8,7 @@ foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
 
-**Status:** TODO -- awaiting operator GO on Phase 0
+**Status:** IN PROGRESS -- Phase 0 and T-1..T-4 are done; the merge train executes under section 14; live state is the tracker PR #403; amended 2026-09-29 (see 14.6)
 **Priority:** P0 (the v0.4.0 tag path)
 **Lane:** Freebuff. Any lane may execute within its own limits (0.2).
 **Created:** 2026-09-27
@@ -971,7 +971,7 @@ These supersede section 3 and any conflicting line in FREEBUFF.md or AGENTS.md f
 - The branch is up to date with main. Use `gh pr update-branch <n>` and wait for the re-run.
 - Every REQUIRED check is green on the head SHA. Re-read the list before each merge:
   `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`
-- The car's JEV gate (2.3) is >= 85 with hard gates clear.
+- POST-MERGE closing gate (ruling 14.6, 2026-09-29): the car's JEV gate (2.3) is scored on the merge SHA immediately after the merge and is >= 85 with hard gates clear before the next dependent car merges and before any tag. The PRs that add the JEV gate itself (MT-00a) are exempt. Every other condition in this list is a pre-merge hard gate.
 - Gated code (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) has an A2 APPROVE on that exact head SHA.
 - There are no unresolved review threads or requested changes.
 - Any failing non-required check has been investigated and shown not to be a real defect.
@@ -1111,6 +1111,21 @@ Operator objections on #403 apply from the moment the lane sees them.
 - A spend cap would be exceeded.
 - A destructive action not covered by 14.1.
 - Any TRI rule failure. Roll back per 7.7.
+
+### 14.6 Rulings of 2026-09-29 (operator, answered in chat; recorded on #403)
+
+Three [OPERATOR GATE] items were answered with the recommended option each.
+
+| Gate | Ruling | Effect |
+|---|---|---|
+| JEV-ORDER | JEV POST-MERGE | A1's JEV bullet is a post-merge closing gate (see A1). Every other A1 condition stays a pre-merge hard gate. A miss after a merge is a 14.5 stop: fix-forward or revert through the same gates, and it blocks the next dependent car and the tag. The MT-00a PRs that add the gate are exempt. |
+| #404 Rule-8 REJECT | FIX+REVIEW | The dispatch identity is validated BEFORE any checkout. The fix and the anchor land as one PR, #414, which supersedes #407 and #404 (close them under A4 only after #414 merges). |
+| A2 step 2 | Supplied by the orchestrator session | Clean-context, read-only Claude reviewers (sonnet by default, opus for the D9 vendored-libp2p and transport PRs), dispatched from the orchestrator session, sign only the exact head SHA reviewed and never author the change. The Harness first pass stays <= $0.10 per gated PR. Multi-model panels still cannot clear Rule-8. |
+
+Consequences recorded here so no file contradicts them: the evidence for the
+post-merge JEV gate is captured from commands after the merge (Appendix B), a
+status row never claims a merge that has not happened, and `pr_merged` is read
+from `gh pr view <n> --json state,mergeCommit`, not from prose.
 
 ---
 

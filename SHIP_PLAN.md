@@ -5,7 +5,21 @@ Created: 2026-08-14
 Owner: Operator (Treystu)
 Supersedes for execution purposes: `HANDOFF/todo/_QUEUE.md` (see Amnesty, S0-4)
 
-**2026-09-20 EXECUTION POINTER:** **working-first.** Operator interview ruled:
+**2026-09-29 EXECUTION POINTER (authoritative):** the v0.4.0 and v0.5.0
+execution queue is the merge-train task file
+**`HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md`**, with live
+state on the tracker PR #403, the operator rulings of 2026-09-28 (its section 14)
+and of 2026-09-29 (its section 14.6). It supersedes the 2026-09-20 pointer
+below, which is kept only as history. D1-D7 in section 0 remain the release exit
+criteria with these operator rulings applied: **D2 (signed APK) is SKIPPED for
+v0.4.0** (ruling H-1: there is no signed release APK and the release notes say
+so); the tag is the **final `v0.4.0`** (G4-1), not `v0.4.0-alpha.1`; the
+external audit in G4-2 is replaced **for v0.4.0** by AUD-040, an audit plus JEV
+gates (ruling H-7), recorded in the release notes; D4, D6 and D7 evidence comes
+from the three-node proof TRI-040 (plan sections 7 and 8). If this pointer and
+any other file disagree about what is being worked on, this pointer wins.
+
+**2026-09-20 EXECUTION POINTER (SUPERSEDED 2026-09-29, history only):** **working-first.** Operator interview ruled:
 no tag / no secrets pressure until reliable day-to-day mesh is proven. Use
 **`HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`** for sequencing. The older
 `HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md` remains the D1-D7 archive.
@@ -38,7 +52,7 @@ being worked on for the tag.
 | # | Exit criterion | Evidence required |
 |---|---|---|
 | D1 | `main` is green | All CI lanes pass on a push to `main`, run URL recorded |
-| D2 | Signed APK is downloadable | `gh release view v0.4.0-alpha.1` lists an APK asset |
+| D2 | Signed APK is downloadable. **SKIPPED for v0.4.0 (operator ruling H-1, 2026-09-28; see the 2026-09-29 pointer)** | `gh release view v0.4.0-alpha.1` lists an APK asset (not required for v0.4.0) |
 | D3 | README explains the product and how to install | File is non-empty, links resolve |
 | D4 | Message + receipt between the two endpoints (Android handset <-> Windows CLI node) | Receiver-side decrypt + durable history + receipt, per `project_fleet_run_scoring_evidence` -- NOT transport ACKs |
 | D5 | No long-lived integration branch | PR #139 merged or closed; `main` is trunk |
@@ -127,7 +141,7 @@ This is **native verdict checkpoint 1**, and it satisfies D1.
 |---|---|---|---|
 | S2-1 | ~~Write `README.md`. It is currently 0 bytes.~~ **DONE / CLAIM FALSE (verified 2026-08-31: 4,309 bytes, accurate -- see 6.1 D3).** Retained for history; do not action. Use the existing repo description as the opening line; sections: what it is, threat model in three sentences, install (Android APK, CLI), build from source, project status honesty note. | Qwen drafts, **native edits** | File is non-empty and accurate |
 | S2-2 | Wire release signing (depends on S1-1) and produce a signed APK from a tagged commit with `SCM_GIT_HASH` embedded -- `816422fc` already exports it. | Operator + agy | APK installs on the Pixel 6a |
-| S2-3 | Tag `v0.4.0-alpha.1` and publish a release with the APK attached and real release notes drawn from `CHANGELOG.md`. Latest public release is v0.1.9 from March -- close that five-month gap. | Operator | D2 + D3 satisfied |
+| S2-3 | Tag `v0.4.0-alpha.1` and publish a release with the APK attached and real release notes drawn from `CHANGELOG.md`. Latest public release is v0.1.9 from March -- close that five-month gap. **Superseded 2026-09-29: the tag is the final `v0.4.0` (G4-1), D2 is skipped (H-1), and tagging and publishing follow the merge-train task file (A10).** | Operator | D2 + D3 satisfied |
 | S2-4 | Set the repo homepage URL to the install guide. Enable Discussions as the inbound channel. | Operator | Repo metadata updated |
 
 **S2 exit: native verdict checkpoint 2** -- read the README as a stranger would
@@ -448,7 +462,7 @@ Task files live in `HANDOFF/freebuff/queue/`; the lane's rules are
 | ID | Task |
 |---|---|
 | G4-1 | Promote to final `v0.4.0`, not another `rc`. `release.yml` marks any tag containing `rc`/`alpha`/`beta` as a **draft**, and a draft is not a public download. `verify_versions.sh` passes for a final `v0.4.0` |
-| G4-2 | Publish gate: external crypto audit **COMMISSIONED** (firm, scope, price, dates). Standing board ruling. Commissioning is the gate, not completion |
+| G4-2 | Publish gate: external crypto audit **COMMISSIONED** (firm, scope, price, dates). Standing board ruling. Commissioning is the gate, not completion. **For v0.4.0 this is replaced by AUD-040, an audit plus JEV completion gates (operator ruling H-7, 2026-09-28); the release notes record it.** |
 | G4-3 | Fill the section 5 ledger from G3 evidence; delete `API_RESET_EXECUTION_CHARTER_2026-08-28.md`; retire `V040_COMPLETION_PLAN.md` |
 
 ### G5 -- Backlog truth (free lanes, blocks nothing)

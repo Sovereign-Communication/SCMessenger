@@ -180,19 +180,28 @@ doctrine record of it.
 - (b) Every REQUIRED check is green **on the head SHA**. Re-read the list
   before every merge:
   `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`.
-- (c) The car's JEV gate (2.3) scores >= 85 with all hard gates clear.
+- (c) POST-MERGE closing gate (operator ruling 2026-09-29, "JEV POST-MERGE",
+  see below): the car's JEV gate (2.3) is scored on the merge SHA immediately
+  after the merge and must be >= 85 with all hard gates clear before the next
+  dependent car merges and before any tag.
 - (d) Gated code (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`)
   carries an A2 APPROVE naming that exact head SHA.
 - (e) No unresolved review threads and no requested changes.
 - (f) Any failing NON-required check has been investigated and shown not to be
   a real defect.
 
-The 2026-09-28 merge-train execution found one of these conditions to be
-unreachable pre-merge (`pr_merged` is both a scored axis and a hard gate, so
-the pre-merge ceiling is 75 and the bar cannot pass before a merge). That
-question is with the operator; A1 as written is the grant, and it is not
-self-clearing. See
-`HANDOFF/freebuff/inbox/MT-00a_A1_jev_premerge_premise_wrong_2026-09-28.md`.
+The 2026-09-28 merge-train execution found the JEV condition unreachable
+pre-merge (`pr_merged` is both a scored axis and a hard gate, so the pre-merge
+ceiling is 75 and the bar cannot pass before a merge); the lane reported it as
+a premise-wrong finding on the tracker PR #403 (2026-09-28).
+
+**Ruling of 2026-09-29 (operator, in chat; recorded on #403): JEV POST-MERGE.**
+Conditions (a), (b), (d), (e) and (f) stay pre-merge hard gates. (c) is scored
+on the merge SHA right after each merge; a miss is a 14.5 stop -- the fix or
+revert goes through the same gates, and it blocks the next dependent car and
+the tag. The PRs that add the JEV gate itself (MT-00a) are exempt from (c).
+The evidence for (c) is captured from commands after the merge (Appendix B of
+the task file); a status row must never claim a merge that has not happened.
 
 **A6 -- AWS node: full drive.** ssh as `ec2-user` with
 `~/.ssh/scm-node-key.pem`, for these uses ONLY:
