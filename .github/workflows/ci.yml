@@ -141,7 +141,10 @@ jobs:
             printf '[ERROR] workflow_sha=%s candidate_sha=%s\n' "$WORKFLOW_SHA" "$CANDIDATE_SHA" >&2
             exit 1
           fi
-          branch_sha="$(git ls-remote -- "https://github.com/${REPOSITORY}.git" "refs/heads/${GIT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+          # ls-remote patterns match the TAIL of a ref name, so a decoy such as
+          # refs/heads/x/refs/heads/<branch> can also be listed and can sort
+          # first. Select the exact ref name instead of the first line.
+          branch_sha="$(git ls-remote -- "https://github.com/${REPOSITORY}.git" "refs/heads/${GIT_BRANCH}" | awk -v ref="refs/heads/${GIT_BRANCH}" '$2 == ref { print $1; exit }')"
           if [[ -z "$branch_sha" || "$branch_sha" != "$CANDIDATE_SHA" ]]; then
             echo "[ERROR] dispatch branch does not resolve to candidate_sha" >&2
             printf '[ERROR] branch=%s branch_sha=%s candidate_sha=%s\n' "$GIT_BRANCH" "$branch_sha" "$CANDIDATE_SHA" >&2
