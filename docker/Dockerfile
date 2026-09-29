@@ -36,15 +36,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests (must include every workspace member from the root
-# Cargo.toml: core, cli, wasm, mobile, desktop_bridge - a missing member's
-# Cargo.toml makes the workspace build fail with "failed to read
-# <member>/Cargo.toml").
+# Cargo.toml: core, cli, wasm, mobile, desktop_bridge, vendor/libp2p-swarm-0.48.0
+# - a missing member's Cargo.toml makes the workspace build fail with "failed
+# to read <member>/Cargo.toml").
 COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml core/
 COPY cli/Cargo.toml cli/
 COPY mobile/Cargo.toml mobile/
 COPY wasm/Cargo.toml wasm/
 COPY desktop_bridge/Cargo.toml desktop_bridge/
+# The D9 vendored workspace member is resolved from the build context as well.
+COPY vendor/libp2p-swarm-0.48.0/Cargo.toml vendor/libp2p-swarm-0.48.0/
+COPY vendor/libp2p-swarm-0.48.0/src vendor/libp2p-swarm-0.48.0/src
 
 # Copy source code
 COPY core/src core/src
