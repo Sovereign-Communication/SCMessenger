@@ -298,6 +298,24 @@ GATE_SCENARIOS = (
     ("ios-only diff", "pull_request",
      ["iOS/SCMessenger/Views/ChatView.swift"], False,
      {"ios_relevant": "true", "android_relevant": "false"}),
+    # Regression scenarios for the platform gate (each one reproduced a real false negative):
+    # a diff larger than the pipe buffer made `printf | grep -q` exit 141 under pipefail, which
+    # read as "no match" and turned a genuine Android change into android_relevant=false.
+    ("large android diff (exceeds the pipe buffer)", "pull_request",
+     [f"android/app/src/main/java/com/scmessenger/android/generated/File{index:04d}.kt"
+      for index in range(3000)], False,
+     {"ios_relevant": "false", "android_relevant": "true", "rust_relevant": "false"}),
+    # Rename detection reports only the NEW path, so a file moved out of android/ into docs/
+    # looked inert; the gate must see the old path too.
+    ("rename out of android/", "pull_request", [], False,
+     {"ios_relevant": "false", "android_relevant": "true"},
+     (("android/app/src/main/java/com/scmessenger/android/Moved.kt", "docs/Moved.md"),)),
+    # cli/, wasm/ and desktop_bridge/ SOURCES are Android-irrelevant, but the Android build runs cargo
+    # at the workspace root, which resolves every member's manifest.
+    ("workspace member manifest", "pull_request", ["cli/Cargo.toml"], False,
+     {"ios_relevant": "false", "android_relevant": "true", "rust_relevant": "true"}),
+    ("workspace member source", "pull_request", ["cli/src/main.rs"], False,
+     {"ios_relevant": "false", "android_relevant": "false", "rust_relevant": "true"}),
 )
 
 GIT_IDENTITY = ("-c", "user.email=gate-harness@example.invalid",
@@ -315,8 +333,8 @@ def scratch_git(repo, *args):
                           capture_output=True, text=True, timeout=60, check=True)
 
 
-def make_scratch_repo(root, paths):
-    """A real repository whose second commit changes exactly `paths`.
+def make_scratch_repo(root, paths, renames=()):
+    """A real repository whose second commit changes exactly `paths` and moves each (old, new) in `renames`.
 
     The gate reads its changed-path set from git itself, so a real diff is the
     only fixture that exercises the classifier the way production does. A git
@@ -331,6 +349,11 @@ def make_scratch_repo(root, paths):
     repo = root / "repo"
     repo.mkdir(parents=True)
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    for old, _new in renames:
+        source = repo / old
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("a file that will be renamed, long enough for rename detection to pair it\n" * 4,
+                          encoding="utf-8")
     scratch_git(repo, "init", "-q")
     scratch_git(repo, "add", "-A")
     scratch_git(repo, "commit", "-qm", "base")
@@ -338,12 +361,17 @@ def make_scratch_repo(root, paths):
         target = repo / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture\n", encoding="utf-8")
+    for old, new in renames:
+        destination = repo / new
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        scratch_git(repo, "mv", old, new)
     scratch_git(repo, "add", "-A")
     # --allow-empty: the push/dispatch and uncomputable scenarios name no
     # changed paths, and their verdict comes from the trigger, not the diff.
     scratch_git(repo, "commit", "-qm", "changed", "--allow-empty")
     base = scratch_git(repo, "rev-parse", "HEAD~1").stdout.strip()
-    observed = sorted(scratch_git(repo, "diff", "--name-only", base, "HEAD").stdout.split())
+    # --no-renames: report both sides of a move, the same way the gate itself must read the diff.
+    observed = sorted(scratch_git(repo, "diff", "--name-only", "--no-renames", base, "HEAD").stdout.split())
     return repo, base, observed
 
 
@@ -352,10 +380,12 @@ def run_gate_scenarios(script_text, declared_outputs):
     harness_root.mkdir(exist_ok=True)
     findings, results = [], []
 
-    for label, event, changed, diff_fails, expected in GATE_SCENARIOS:
+    for label, event, changed, diff_fails, expected, *extra in GATE_SCENARIOS:
+        renames = extra[0] if extra else ()
         workdir = Path(tempfile.mkdtemp(prefix="gate-harness-", dir=str(harness_root)))
-        fixture_paths = sorted(changed or [])
-        repo, base_sha, observed = make_scratch_repo(workdir, fixture_paths)
+        # What git must report for this scenario: the added paths plus both sides of every move.
+        fixture_paths = sorted(list(changed or []) + [side for pair in renames for side in pair])
+        repo, base_sha, observed = make_scratch_repo(workdir, sorted(changed or []), renames)
         if observed != fixture_paths:
             findings.append(
                 f"gate scenario '{label}': the scratch repository does not produce the diff it "

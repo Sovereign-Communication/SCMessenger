@@ -54,7 +54,9 @@ runs:
           git fetch --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 || true
         fi
 
-        CHANGED="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || true)"
+        # --no-renames: a rename must list its OLD path too. Rename detection would
+        # report only the new path, so android/X.kt -> docs/X.md would read as inert.
+        CHANGED="$(git diff --name-only --no-renames "$BASE_SHA" HEAD 2>/dev/null || true)"
         if [ -z "$CHANGED" ]; then
           # Diff unavailable (shallow edge cases). Fail open: run everything.
           emit_all
@@ -82,9 +84,12 @@ runs:
         # every Rust build including the cross-compiles. cli/, wasm/ and
         # desktop_bridge/ are workspace members, so they are real Rust work for
         # the test and doc legs, but nothing in the iOS or Android artifacts
-        # reads them -- they raise rust_relevant alone.
+        # reads their SOURCES -- they raise rust_relevant alone. Their MANIFESTS
+        # are different: the Android build runs `cargo ndk build -p
+        # scmessenger-core` at the workspace root, and cargo resolves every
+        # member's Cargo.toml, so a broken member manifest breaks that build.
         IOS_PATHS='^(iOS/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/build_xcframework\.sh$)'
-        ANDROID_PATHS='^(android/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/check_wiring\.py$|scripts/test_check_wiring\.py$)'
+        ANDROID_PATHS='^(android/|core/|mobile/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/|scripts/check_wiring\.py$|scripts/test_check_wiring\.py$|(cli|wasm|desktop_bridge)/Cargo\.toml$)'
         RUST_PATHS='^(core/|mobile/|cli/|wasm/|desktop_bridge/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.cargo/)'
 
         # A changed path in none of the three sets (a workflow edit, a new
@@ -101,8 +106,12 @@ runs:
         # output. A fourth lane is one more call, not another copy of the same
         # if/else. (No heredoc here: a terminator at column 0 would end this
         # YAML block scalar, which is a parse error, not a style choice.)
+        # A here-string, not a pipe: under `set -o pipefail`, `printf | grep -q`
+        # returns 141 (SIGPIPE) when grep exits at its first match while printf is
+        # still writing, which happens once the diff is large enough to fill the
+        # pipe, and that turned a genuine match into "false".
         emit_flag() {
-          if printf '%s\n' "$NON_INERT" | grep -qE "$2"; then
+          if grep -qE "$2" <<<"$NON_INERT"; then
             echo "$1=true" >> "$GITHUB_OUTPUT"
           else
             echo "$1=false" >> "$GITHUB_OUTPUT"

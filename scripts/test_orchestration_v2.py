@@ -15,10 +15,12 @@ from orchestration_completion_gate import CompletionGateError, run_completion_ga
 from orchestration_worktree import create, plan
 from orchestrator_guard import evaluate
 from orchestrate_strict import (
-    advance_review, capture_worker_diff, complete_integration, has_independent_review_evidence,
-    initialize_state, is_in_scope, load_state, record_review_evidence, register_review_assignment, recover_interrupted_dispatch,
+    COMPLETION_JUDGE_FILES, advance_review, capture_worker_diff, complete_integration, has_independent_review_evidence,
+    initialize_state, is_in_scope, judge_integrity_violations, load_state, record_review_evidence,
+    register_review_assignment, recover_interrupted_dispatch,
     required_review_roles, state_for_task, write_state,
 )
+from jev_canonical_check import CANON_QUESTIONS
 from parse_orchestration_footer import parse_footer
 
 
@@ -329,7 +331,7 @@ NOTES: [\"fixture verifies durable assignment binding\"]
                     "model": "deterministic-jev",
                     "confidence": 0.91,
                     "supported": 1.0,
-                    "answers": {"canon_identity": {"noul": 1.0}},
+                    "answers": {question: {"noul": 1.0} for question in CANON_QUESTIONS},
                     "reasons": [],
                 }), encoding="utf-8")
             return {"returncode": 0, "timed_out": False}
@@ -421,6 +423,131 @@ NOTES: [\"fixture verifies durable assignment binding\"]
                 self.assertEqual(raised.exception.evidence["identity"]["patch_sha256"], "b" * 64)
                 if case == "harness-failed":
                     self.assertEqual(len(calls), 1)
+        finally:
+            self.remove_repo(root)
+
+    @staticmethod
+    def completion_state(task_id):
+        return {
+            "task_id": task_id,
+            "base_sha": "a" * 40,
+            "task": {"id": task_id, "wp": "WP-TEST", "files": ["worker.txt"]},
+            "changed_files": ["worker.txt"],
+            "worker_diff": {"base_sha": "a" * 40, "sha256": "b" * 64},
+        }
+
+    def test_completion_gate_requires_a_genuine_successful_mechanical_gate(self):
+        root = self.make_repo("mechanical")
+        calls = []
+
+        def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+            calls.append(list(command))
+            return {"returncode": 0, "timed_out": False}
+
+        try:
+            for index, bad in enumerate((
+                None, {}, {"command": "true"}, {"command": "true", "returncode": 7},
+                {"command": "true", "returncode": False}, {"command": "true", "returncode": "0"},
+                {"command": "", "returncode": 0}, "ok",
+            )):
+                with self.assertRaises(CompletionGateError, msg=repr(bad)):
+                    run_completion_gate(
+                        self.completion_state(f"V2-MECH-{index}"), root / f"s{index}", root,
+                        process_runner=fake_runner, mechanical_gate=bad,
+                    )
+            self.assertEqual(calls, [], "no judge may run without a successful mechanical gate")
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_does_not_accept_boolean_or_string_return_codes(self):
+        # False == 0 in Python, so `returncode != 0` alone would wave a boolean through as success.
+        root = self.make_repo("returncode-types")
+        try:
+            for index, bad_code in enumerate((False, "0", None, 0.0)):
+                calls = []
+
+                def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+                    calls.append(list(command))
+                    stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+                    stderr_path.write_text("", encoding="utf-8")
+                    return {"returncode": bad_code, "timed_out": False}
+
+                with self.assertRaises(CompletionGateError, msg=repr(bad_code)) as raised:
+                    run_completion_gate(
+                        self.completion_state(f"V2-RC-{index}"), root / f"s{index}", root,
+                        process_runner=fake_runner, mechanical_gate={"command": "true", "returncode": 0},
+                    )
+                self.assertEqual(raised.exception.evidence["status"], "FAILED")
+                self.assertEqual(len(calls), 1, "the JEV judge must not run after a bad Harness return code")
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_enforces_the_canonical_confidence_and_question_coverage(self):
+        root = self.make_repo("canonical")
+        full = {question: {"noul": 1.0} for question in CANON_QUESTIONS}
+        one_missing = dict(list(full.items())[:-1])
+        cases = {
+            "confidence-0.10": {"confidence": 0.10, "answers": full, "supported": 1.0},
+            "confidence-just-below": {"confidence": 0.6999, "answers": full, "supported": 1.0},
+            "no-answers": {"confidence": 0.91, "answers": {}, "supported": 1.0},
+            "one-question-missing": {"confidence": 0.91, "answers": one_missing, "supported": 1.0},
+            "supported-none": {"confidence": 0.91, "answers": full, "supported": None},
+            "supported-out-of-range": {"confidence": 0.91, "answers": full, "supported": 1.5},
+            "supported-boolean": {"confidence": 0.91, "answers": full, "supported": True},
+            "positive-control-at-the-minimum": {"confidence": 0.70, "answers": full, "supported": 1.0},
+        }
+
+        def runner_for(overrides):
+            def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+                stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+                stderr_path.write_text("", encoding="utf-8")
+                if any("jev_canonical_check.py" in str(item) for item in command):
+                    payload = {
+                        "schema_version": "1.0.0", "wp": "WP-TEST", "is_passing": True, "is_fallback": False,
+                        "fallback_used": False, "keyed": True, "endpoint": "typesafe", "model": "deterministic-jev",
+                        "reasons": [], **overrides,
+                    }
+                    Path(command[command.index("--result-file") + 1]).write_text(json.dumps(payload), encoding="utf-8")
+                return {"returncode": 0, "timed_out": False}
+            return fake_runner
+
+        try:
+            for index, (name, overrides) in enumerate(cases.items()):
+                state = self.completion_state(f"V2-CANON-{index}")
+                if name.startswith("positive-control"):
+                    evidence = run_completion_gate(
+                        state, root / f"s{index}", root, process_runner=runner_for(overrides),
+                        mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertEqual(evidence["status"], "PASSED", name)
+                    self.assertIn("NOT an independent verification", evidence["attests"])
+                else:
+                    with self.assertRaises(CompletionGateError, msg=name):
+                        run_completion_gate(
+                            state, root / f"s{index}", root, process_runner=runner_for(overrides),
+                            mechanical_gate={"command": "true", "returncode": 0})
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_judges_must_match_the_base_commit(self):
+        root = self.make_repo("judges")
+        try:
+            for rel in COMPLETION_JUDGE_FILES:
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("judge\n", encoding="utf-8")
+            subprocess.run(["git", "add", *COMPLETION_JUDGE_FILES], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "judges"], cwd=root, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                                  text=True, check=True).stdout.strip()
+            self.assertEqual(judge_integrity_violations(root, base), [])
+            (root / "scripts/harness_gate.py").write_text("tampered in the working tree\n", encoding="utf-8")
+            self.assertEqual(judge_integrity_violations(root, base), ["scripts/harness_gate.py"])
+            (root / "orchestration/manifest.yaml").write_text("tampered and staged (what git apply --index does)\n", encoding="utf-8")
+            subprocess.run(["git", "add", "orchestration/manifest.yaml"], cwd=root, check=True)
+            self.assertEqual(sorted(judge_integrity_violations(root, base)),
+                             ["orchestration/manifest.yaml", "scripts/harness_gate.py"])
+            self.assertEqual(len(judge_integrity_violations(root, "0" * 40)), 1,
+                             "an unknown base must fail closed, not read as clean")
         finally:
             self.remove_repo(root)
 

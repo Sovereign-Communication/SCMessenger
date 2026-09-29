@@ -5,16 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      git_branch:
-        description: "Branch that must resolve to candidate_sha"
-        required: true
-        type: string
-      candidate_sha:
-        description: "Full lowercase commit SHA to verify and test"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -64,7 +54,6 @@ jobs:
 
   lint:
     name: Lint
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -97,80 +86,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # DISPATCH IDENTITY IS PROVEN BEFORE ANYTHING IS CHECKED OUT
-      # ---------------------------------------------------------------
-      # `inputs.candidate_sha` and `inputs.git_branch` are caller-controlled.
-      # Two rules follow from that, and both are load-bearing:
-      #
-      #   1. The dispatch is validated BEFORE any repository content is
-      #      fetched. The first step runs no repository code, reads workflow
-      #      context only through `env:` (never interpolated into the script
-      #      text), and resolves the branch tip with `git ls-remote` against
-      #      the repository URL, so a mismatched dispatch fails closed with
-      #      nothing checked out. (It needs no credentials because this
-      #      repository is public; if that ever changes it fails closed.)
-      #   2. The checkout uses `${{ github.sha }}`, never `inputs.candidate_sha`,
-      #      so no caller-chosen value is an input to `ref:`. CodeQL flagged the
-      #      previous shape as actions/cache-poisoning/poisonable-step. Rule 1
-      #      already requires the two to be equal, so this is
-      #      behaviour-identical on every run that passes.
-      #
-      # The post-checkout assertion is kept as defense in depth: it proves the
-      # checkout produced the commit that rule 1 validated. Do not "restore"
-      # inputs.candidate_sha as the checkout ref -- add an assertion instead.
-      - name: Verify dispatch identity before any checkout
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-          GIT_BRANCH: ${{ inputs.git_branch }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "[ERROR] candidate_sha must be a full lowercase commit SHA" >&2
-            exit 1
-          fi
-          if [[ ! "$GIT_BRANCH" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]]; then
-            echo "[ERROR] git_branch is not a plain branch name" >&2
-            exit 1
-          fi
-          if [[ "$WORKFLOW_SHA" != "$CANDIDATE_SHA" ]]; then
-            echo "[ERROR] workflow source SHA does not match candidate_sha" >&2
-            printf '[ERROR] workflow_sha=%s candidate_sha=%s\n' "$WORKFLOW_SHA" "$CANDIDATE_SHA" >&2
-            exit 1
-          fi
-          # ls-remote patterns match the TAIL of a ref name, so a decoy such as
-          # refs/heads/x/refs/heads/<branch> can also be listed and can sort
-          # first. Select the exact ref name instead of the first line.
-          branch_sha="$(git ls-remote -- "https://github.com/${REPOSITORY}.git" "refs/heads/${GIT_BRANCH}" | awk -v ref="refs/heads/${GIT_BRANCH}" '$2 == ref { print $1; exit }')"
-          if [[ -z "$branch_sha" || "$branch_sha" != "$CANDIDATE_SHA" ]]; then
-            echo "[ERROR] dispatch branch does not resolve to candidate_sha" >&2
-            printf '[ERROR] branch=%s branch_sha=%s candidate_sha=%s\n' "$GIT_BRANCH" "$branch_sha" "$CANDIDATE_SHA" >&2
-            exit 1
-          fi
-      - name: Checkout dispatched candidate
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-      - name: Checkout repository
-        if: github.event_name != 'workflow_dispatch'
-        uses: actions/checkout@v7
-      - name: Assert checked-out commit matches the validated candidate
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-        run: |
-          set -euo pipefail
-          checked_out_sha="$(git rev-parse HEAD)"
-          if [[ "$checked_out_sha" != "$CANDIDATE_SHA" ]]; then
-            echo "[ERROR] checked-out SHA does not match candidate_sha" >&2
-            printf '[ERROR] checked_out_sha=%s candidate_sha=%s\n' "$checked_out_sha" "$CANDIDATE_SHA" >&2
-            exit 1
-          fi
+      # Runs on every pull request and every push, on the default merge checkout.
+      # The manual exact-SHA variant of this gate is a SEPARATE workflow
+      # (orchestration-dispatch.yml): this file hosts required status contexts and
+      # must not gain a workflow_dispatch trigger.
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -182,7 +102,6 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -229,7 +148,6 @@ jobs:
 
   docs:
     name: Docs
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -251,7 +169,6 @@ jobs:
 
   ffi-surface:
     name: FFI Surface Contract
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -284,7 +201,6 @@ jobs:
 
   windows-cli-artifact:
     name: Windows CLI Artifact
-    if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

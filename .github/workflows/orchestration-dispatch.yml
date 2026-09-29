@@ -1,0 +1,124 @@
+name: Orchestration exact-SHA gate
+
+# Manual, exact-SHA variant of the orchestration control-plane gate.
+#
+# WHY THIS IS ITS OWN WORKFLOW AND NOT A TRIGGER ON ci.yml
+# --------------------------------------------------------
+# ci.yml hosts required status contexts (Lint, Test (ubuntu-latest), Handoff
+# ownership scope). A workflow_dispatch run of ci.yml on a pull-request branch
+# would post same-named check runs on that SHA, and a job skipped by an `if:`
+# reports success, so a manual dispatch could green-wash a required context.
+# Keeping the dispatch-only gate here means no dispatch run can ever produce a
+# required context: this workflow's job name is not, and must never be, a
+# required status check (scripts/check_required_contexts.py fails if it is).
+#
+# DISPATCH IDENTITY IS PROVEN BEFORE ANYTHING IS CHECKED OUT
+# ----------------------------------------------------------
+# `inputs.candidate_sha` and `inputs.git_branch` are caller-controlled. Two
+# rules follow, and both are load-bearing:
+#
+#   1. The dispatch is validated BEFORE any repository content is fetched. The
+#      first step runs no repository code, reads workflow context only through
+#      `env:` (never interpolated into the script text), and resolves the branch
+#      tip with `git ls-remote` against the repository URL, so a mismatched
+#      dispatch fails closed with nothing checked out. (It needs no credentials
+#      because this repository is public; if that ever changes it fails closed.)
+#   2. The checkout uses `${{ github.sha }}`, never `inputs.candidate_sha`, so no
+#      caller-chosen value is an input to `ref:`. Rule 1 already requires the two
+#      to be equal, so this is behaviour-identical on every run that passes.
+#
+# The post-checkout assertion is kept as defense in depth: it proves the checkout
+# produced the commit that rule 1 validated. Do not "restore" inputs.candidate_sha
+# as the checkout ref -- add an assertion instead.
+#
+# The guard is an integrity binding, not authorization: whoever can dispatch a
+# workflow can already push a branch, so a passing run proves "this exact SHA is
+# the tip of that branch and is what ran", nothing more.
+#
+# HOW TO RUN (the workflow file must exist on the default branch to be dispatchable):
+#   gh workflow run orchestration-dispatch.yml --ref <branch> \
+#     -f git_branch=<branch> -f candidate_sha=<full 40-hex SHA of that branch's tip>
+# The guard accepts only the CURRENT tip of the named branch, so for a post-merge
+# check run it right after the merge and before the next one lands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_branch:
+        description: "Branch that must resolve to candidate_sha"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Full lowercase commit SHA to verify and test"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  exact-sha-gate:
+    name: Orchestration exact-SHA gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify dispatch identity before any checkout
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          GIT_BRANCH: ${{ inputs.git_branch }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "[ERROR] candidate_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$GIT_BRANCH" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]]; then
+            echo "[ERROR] git_branch is not a plain branch name" >&2
+            exit 1
+          fi
+          if [[ "$WORKFLOW_SHA" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] workflow source SHA does not match candidate_sha" >&2
+            printf '[ERROR] workflow_sha=%s candidate_sha=%s\n' "$WORKFLOW_SHA" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          # ls-remote patterns match the TAIL of a ref name, so a decoy such as
+          # refs/heads/x/refs/heads/<branch> can also be listed and can sort
+          # first. Select the exact ref name instead of the first line.
+          branch_sha="$(git ls-remote -- "https://github.com/${REPOSITORY}.git" "refs/heads/${GIT_BRANCH}" | awk -v ref="refs/heads/${GIT_BRANCH}" '$2 == ref { print $1; exit }')"
+          if [[ -z "$branch_sha" || "$branch_sha" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] dispatch branch does not resolve to candidate_sha" >&2
+            printf '[ERROR] branch=%s branch_sha=%s candidate_sha=%s\n' "$GIT_BRANCH" "$branch_sha" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
+      - name: Checkout dispatched candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Assert checked-out commit matches the validated candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$CANDIDATE_SHA" ]]; then
+            echo "[ERROR] checked-out SHA does not match candidate_sha" >&2
+            printf '[ERROR] checked_out_sha=%s candidate_sha=%s\n' "$checked_out_sha" "$CANDIDATE_SHA" >&2
+            exit 1
+          fi
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate orchestration contract
+        run: python scripts/orchestration_contract.py
+      - name: Run deterministic orchestration tests
+        run: python scripts/test_orchestration_v2.py

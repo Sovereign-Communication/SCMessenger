@@ -10,6 +10,17 @@ The gate never trusts a worker footer or an unstructured success message. It
 runs the repository's canonical Harness wrapper, runs the canonical JEV helper
 with OpenRouter fallback disabled, validates the structured JEV result, and
 binds the resulting evidence to the task, base SHA, and worker patch SHA.
+
+What a PASSED record attests, and what it does not. The Harness step is
+``harness_gate.py --kind smoke``, a spend and ledger liveness probe that is
+unrelated to the patch; the JEV helper judges controller-supplied metadata (file
+names, patch SHA, the verify command and its exit code), not the diff itself. So
+PASSED means: the mechanical gate returned an integer 0, the Harness is healthy,
+and keyed JEV accepted that metadata at the canonical confidence for every
+canonical question. It is NOT an independent verification of the patch content,
+and under ``--no-openrouter`` the helper asserts its own ``endpoint``. The strict
+kernel refuses to run this gate unless the judge scripts are byte-identical to
+the base commit (``judge_integrity_violations`` in orchestrate_strict.py).
 """
 from __future__ import annotations
 
@@ -24,8 +35,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+try:
+    from jev_canonical_check import CANON_QUESTIONS
+except ImportError:  # imported by path from another working directory
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from jev_canonical_check import CANON_QUESTIONS
+
 EVIDENCE_SCHEMA_VERSION = "1.0.0"
 DEFAULT_TIMEOUT_SECONDS = 900
+MIN_CONFIDENCE = 0.70  # the canonical JEV minimum (jev_canonical_check.py --min-confidence default)
 
 
 class CompletionGateError(RuntimeError):
@@ -166,6 +184,26 @@ def _run_and_record(
     return outcome
 
 
+def _returncode_ok(outcome: dict[str, Any]) -> bool:
+    """True only for a genuine integer 0: ``False``, ``"0"`` and ``None`` are not success.
+
+    ``False == 0`` in Python, so a plain ``!= 0`` comparison would wave a boolean through.
+    """
+    code = outcome.get("returncode")
+    return type(code) is int and code == 0
+
+
+def _validate_mechanical_gate(mechanical_gate: Any) -> None:
+    """Fail closed unless the authoritative mechanical gate record is present and succeeded."""
+    if not isinstance(mechanical_gate, dict):
+        raise CompletionGateError("completion gate requires the authoritative mechanical gate record")
+    command = mechanical_gate.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise CompletionGateError("mechanical gate record has no command")
+    if not _returncode_ok(mechanical_gate):
+        raise CompletionGateError("mechanical gate did not succeed with an integer exit code 0")
+
+
 def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise CompletionGateError("JEV result evidence is not a JSON object")
@@ -188,8 +226,18 @@ def _validate_jev_result(payload: Any, wp: str) -> dict[str, Any]:
         raise CompletionGateError("JEV result confidence is malformed")
     if not 0.0 <= float(confidence) <= 1.0:
         raise CompletionGateError("JEV result confidence is outside the valid range")
-    if not isinstance(payload.get("answers"), dict) or not isinstance(payload.get("reasons"), list):
+    if float(confidence) < MIN_CONFIDENCE:
+        raise CompletionGateError(
+            f"JEV result confidence {float(confidence)} is below the canonical minimum {MIN_CONFIDENCE}")
+    answers = payload.get("answers")
+    if not isinstance(answers, dict) or not isinstance(payload.get("reasons"), list):
         raise CompletionGateError("JEV result answers or reasons are malformed")
+    missing = sorted(set(CANON_QUESTIONS) - set(answers))
+    if missing:
+        raise CompletionGateError("JEV result answers do not cover the canonical questions: " + ", ".join(missing))
+    supported = payload.get("supported")
+    if isinstance(supported, bool) or not isinstance(supported, (int, float)) or not 0.0 <= float(supported) <= 1.0:
+        raise CompletionGateError("JEV result supported fraction is missing or outside the valid range")
     return {
         "wp": payload["wp"],
         "is_passing": True,
@@ -221,6 +269,7 @@ def run_completion_gate(
     result, missing credential signal, or identity mismatch raises
     ``CompletionGateError``. The evidence directory is retained on failure.
     """
+    _validate_mechanical_gate(mechanical_gate)
     root = Path(controller_root).resolve()
     state_path = Path(state_dir)
     if not state_path.is_absolute():
@@ -247,7 +296,9 @@ def run_completion_gate(
         "status": "RUNNING",
         "started_at": _now(),
         "identity": identity,
-        "mechanical_gate": mechanical_gate or {},
+        "mechanical_gate": mechanical_gate,
+        "attests": ("mechanical gate exit 0 + Harness liveness (smoke) + keyed JEV over controller-supplied "
+                    "metadata at the canonical confidence; NOT an independent verification of the patch content"),
         "jev_state": _file_record(jev_state_path),
         "harness": {},
         "jev": {},
@@ -261,7 +312,7 @@ def run_completion_gate(
         "instruction": task.get("description", ""),
         "acceptance": task.get("acceptance", []),
         "evidence": [
-            {"kind": "mechanical_gate", **(mechanical_gate or {})},
+            {"kind": "mechanical_gate", **mechanical_gate},
             {
                 "kind": "worker_patch",
                 "base_sha": identity["base_sha"],
@@ -293,7 +344,7 @@ def run_completion_gate(
         }
         if harness_outcome.get("timed_out"):
             _fail(record, evidence_dir, "Harness completion gate timed out")
-        if harness_outcome.get("returncode") != 0:
+        if not _returncode_ok(harness_outcome):
             _fail(record, evidence_dir, "Harness completion gate failed")
         if not harness_stdout.is_file() or not harness_stderr.is_file():
             _fail(record, evidence_dir, "Harness completion evidence is missing")
@@ -318,7 +369,7 @@ def run_completion_gate(
         }
         if jev_outcome.get("timed_out"):
             _fail(record, evidence_dir, "JEV completion gate timed out")
-        if jev_outcome.get("returncode") != 0:
+        if not _returncode_ok(jev_outcome):
             _fail(record, evidence_dir, "JEV completion gate failed")
         if not jev_stdout.is_file() or not jev_stderr.is_file() or not jev_result_path.is_file():
             _fail(record, evidence_dir, "JEV completion evidence is missing")
