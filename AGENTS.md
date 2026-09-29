@@ -315,8 +315,10 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
   25-point hard gate that is only true after a merge) -- it is scored on the
   merge SHA immediately after each merge and must be >= 85 with all hard gates
   clear before the next dependent car merges and before any tag; a miss stops
-  the train, and the fix or revert goes through the same gates; the PRs that
-  add the JEV gate itself (MT-00a) are exempt; (d) gated code
+  the train, and the fix or revert goes through the same gates (a car with
+  merged dependents is fixed forward, never reverted); the MT-00a anchor PR
+  (#414) is exempt from (c) because it adds the gate, and it is still scored
+  after its merge; (d) gated code
   (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) carries an A2
   APPROVE naming that exact head SHA; (e) no unresolved review threads or
   requested changes; (f) any failing NON-required check has been investigated

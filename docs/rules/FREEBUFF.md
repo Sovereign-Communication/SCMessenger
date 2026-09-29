@@ -199,9 +199,19 @@ a premise-wrong finding on the tracker PR #403 (2026-09-28).
 Conditions (a), (b), (d), (e) and (f) stay pre-merge hard gates. (c) is scored
 on the merge SHA right after each merge; a miss is a 14.5 stop -- the fix or
 revert goes through the same gates, and it blocks the next dependent car and
-the tag. The PRs that add the JEV gate itself (MT-00a) are exempt from (c).
-The evidence for (c) is captured from commands after the merge (Appendix B of
-the task file); a status row must never claim a merge that has not happened.
+the tag. Only the MT-00a anchor PR (#414) is exempt from (c), because it adds the
+gate; it is still scored after its merge. The evidence for (c) is captured from
+commands after the merge (Appendix B of the task file); a status row must never
+claim a merge that has not happened.
+
+Two limits to know, both found by an adversarial review of the ruling. First, a
+car with merged dependents is fixed forward, never reverted: reverting it and then
+updating a dependent silently drops the car's content from that dependent, and
+re-landing it then needs a revert of the revert; only a tip car (no merged
+dependents) may be reverted. Second, the scorer has no per-car acceptance
+contract for an unknown phase id, so an acceptance item of the car that has no
+command evidence must be recorded as an open blocker; without that, "JEV >= 85"
+means only "merged, CI green, no unresolved threads".
 
 **A6 -- AWS node: full drive.** ssh as `ec2-user` with
 `~/.ssh/scm-node-key.pem`, for these uses ONLY:
