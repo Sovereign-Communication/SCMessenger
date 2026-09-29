@@ -62,9 +62,60 @@ below, which is history. The header of this file used to name
   against the spirit of A3 (archive tags only). It is an operator setting; nothing
   was changed.
 - **The primary checkout is not clean and is not this seat's.** It sits on
-  `glm/canonical-outlier-audit` (PR #359, 154 ahead / 24 behind main) with 82
-  uncommitted entries (a staged `vendor/libp2p-swarm-0.48.0` D9 patch and edits under
-  `core/`, `cli/`, `android/`) that belong to other sessions. Work in a worktree.
+  `glm/canonical-outlier-audit` (PR #359, 154 commits BEHIND and 24 ahead of
+  main: `git rev-list --left-right --count origin/main...HEAD` prints `154 24`,
+  left = behind) with 82 uncommitted entries (a staged
+  `vendor/libp2p-swarm-0.48.0` D9 patch and edits under `core/`, `cli/`,
+  `android/`) that belong to other sessions. Its rules files are therefore stale
+  relative to main; work in a worktree cut from `origin/main`.
+
+## Next actions, in order (state as of the last edit of this file; re-derive with `gh pr view 403 --comments`)
+
+1. **MT-00a is PR #414.** Its first A2 (head `18f9dcb5`) ended in an independent
+   REJECT on the completion-gate script and a plan audit flagged `workflow_dispatch`
+   in the required-check workflow; both were fixed at head `221dc819` (record on
+   #414). Re-run BOTH A2 steps on `221dc819` (Harness first pass on the admitted tag
+   `v0.4.1`, then an independent clean-context Claude reviewer; the orchestrator
+   authored the fix, so give the reviewer a mechanically built packet), then merge
+   with `gh pr merge 414 --merge` after re-reading the required contexts and the
+   base tip. Take an `archive/<branch>` tag first: `delete_branch_on_merge` is true.
+2. **Post-merge JEV (14.6) after every merge**, before the next dependent car:
+   `HARNESS_REPO=<admitted-tag worktree> python scripts/jev_post_merge.py --pr N
+   --phase <car> --purpose "..." --out-dir tmp/jev` (until it lands on main, run it
+   from branch `orch/mt12-drift-guard`). A car with merged dependents is fixed
+   forward, never reverted: reverting it and then updating a dependent silently
+   drops the car's content from the dependent.
+3. **Land the doctrine and the guard.** Branch `orch/mt00b-amend` = #408 plus the
+   2026-09-29 rulings and the SHIP_PLAN reconciliation; open it as a PR after
+   #414 lands, then close #408 under A4 (never merge #408 as-is: it still carries
+   the unsatisfiable pre-merge JEV bullet). PR #415 records the Board runs. Branch
+   `orch/mt12-drift-guard` (MT-12 hook, the pointer check, the entry-point fixes,
+   `jev_post_merge.py`, the harness runbook) lands after `orch/mt00b-amend`
+   because its check fails on today's main by design.
+4. **Then the diamond, one car at a time** (`gh pr update-branch` only for the NEXT
+   car, never in bulk): #409 (MT-02), #410 (MT-03), #411 (MT-06); #405 and #406 are
+   independent; #412's base is `freebuff/train-mt00b` and must be retargeted to main
+   once the operator freezes the log pack. Re-prove ancestry with the live SHAs
+   before each merge: at the live heads #410 does not contain #409's newest commit
+   and #411 lacks two of #410's, so the runbook's proof in TRAIN_STATE.md is stale.
+5. **Perimeter cars need A2 on the exact head** (Harness first pass on the admitted
+   tag, then an independent Claude sign-off, opus for the D9 vendored libp2p and
+   transport PRs): #413 (also blocked on the MT-07 wasm scope ruling), MT-05, #399,
+   #355, #356. Rule-8 is enforced by process only (no required review, no
+   Rule-8 check), so `gh pr merge` on a CLEAN perimeter PR lands unreviewed
+   perimeter code: do not.
+6. **Operator-only, still open:** the MT-07 wasm scope ruling; setting
+   `SCMESSENGER_DEBUG_KEYSTORE_BASE64` (without it a CI APK cannot `adb install -r`
+   over the Pixel: identity loss); AWS CLI for the churn case; freezing or vetoing
+   the JEV-LOG pack (#412); the Pixel taps and fresh onboarding; BK-01-PURGE or
+   skip; turning off `delete_branch_on_merge`, squash and rebase merges; rotating
+   the `sk-ws-` key that a tag's source archive will carry.
+7. **Stage for v0.5.0 now (docs only), decide before V5-01:** the canonical
+   PeerIdentity form and the SEC-03 migration stance, one carrier for the D9
+   vendored libp2p patch (it is in #361, #364, #372 and staged in the primary
+   checkout), a new Harness tag that carries the "merge evidence stop lying" fix and
+   MCP protocol negotiation (admit it through BUILD_AND_CI), and Rule-8 reviewer
+   capacity (the lane's Claude authorization has expired).
 
 # ===== END RESUME 2026-09-29 =====
 
