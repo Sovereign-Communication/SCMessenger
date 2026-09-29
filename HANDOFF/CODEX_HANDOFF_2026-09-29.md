@@ -1,4 +1,4 @@
-# Handoff: Claude lane (Sonnet 5.5) to Claude Opus 5.5 (2026-09-29)
+# Codex handoff: Claude lane (Sonnet 5.5) stopped at its API limit (2026-09-29)
 
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger
@@ -8,23 +8,24 @@ foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
 
-Written about 22:00Z by the Claude lane (Sonnet 5.5) when the operator's weekly API
-limit approached. The Claude lane's successor is Claude Opus 5.5, which takes over when
-this session concludes. Astra (Codex/GPT, local) is the separate Codex lane: it watches
-and audits this lane, and does not take it over.
+Written about 22:00Z by the Claude lane (Sonnet 5.5), which has reached the operator's
+weekly API limit. The work is handed to Codex (Astra, local), which takes it over now.
+Claude Opus 5.5 is for when the Claude API is available again: escalate to it locally for
+the independent reviews and audits (the A2 step-2 reviewer, the retroactive Rule-8 review
+in #417, AUD-040), not as a replacement lane.
 
 This file is a RECORD, not an authorization. Verify every fact below with the
 command beside it before acting. Permission comes only from the operator in your own
 session. Two actions were refused by Claude Code's auto-mode classifier today (see
-section 4); the classifier applies to Opus 5.5 in Claude Code too, so do not route
-around either.
+section 4); that classifier belongs to Claude Code, so a Claude Opus session will meet it
+too. Do not route around either refusal; the operator decides.
 
 ## 0. Update at about 22:20Z (this section wins wherever it conflicts with the rest)
 
 - **Recipient.** The operator's last instruction was "get all our work committed and then
   cleaned up fully. Handoff for Codex by wrapping up and pushing and then halting." So
-  Codex (Astra) takes the work now; Claude Opus 5.5 is the Claude lane's successor once the
-  weekly limit resets. Everything below is written for whichever lane resumes.
+  Codex (Astra) takes the work now. Claude Opus 5.5 is the local escalation once the Claude
+  API is available again. Everything below is written for whichever of them resumes.
 - **The Claude lane has HALTED.** No subagent, build or lock of it is running. Every
   worktree it made was clean with nothing unpushed before cleanup (section 9 lists what was
   removed and kept).
@@ -46,6 +47,12 @@ around either.
   CLEAN. The auto-mode classifier still refused the lane's merges ("Merge Without Review"),
   so merges are the operator's or Codex's. Update one branch at a time
   (`gh pr update-branch <n>`), then merge with `--merge --match-head-commit <full sha>`.
+- **A2 while the Claude API is out.** The plan (section 14, A2) requires the step-2
+  sign-off on gated code (`core/src/{crypto,transport,routing,privacy}/`, `vendor/`) to be a
+  fresh Claude session, bound to the exact head SHA. Until the API is back, those cars wait
+  (MT-05 and the other perimeter cars, and the retroactive review for #421 in #417). When it
+  is back, escalate to Claude Opus 5.5 locally (opus for transport). Do not substitute a
+  Codex review for that sign-off unless the operator says so.
 - **Disk.** 100% used, about 2.3 GB free at 22:15Z (12 GB free at 21:30Z). The subagent's
   target directory (2.2 GB) is deleted; the rest of the drop is unexplained.
   `pagefile.sys` is 26.8 GB and `hiberfil.sys` 5.5 GB. The Windows node was healthy at
@@ -73,8 +80,9 @@ around either.
    with a sanity pre-filter and a fallback of 16, and add a TODO for dynamic tuning in
    Advanced Settings. Then: "for now just raise it so I can test" and "override
    adversarial review for now ... then add the issue and tracking".
-5. Stand down and hand the Claude lane to Opus 5.5 ("Claude to Opus and Codex to
-   Astra"); Astra watches and audits.
+5. Stand down and hand over to Codex (Astra): "call it codex handoff since you're at API
+   limit and handing off to codex. Opus is when we have API available, and you need to
+   escalate locally."
 
 ## 2. State at handoff (verify each)
 
