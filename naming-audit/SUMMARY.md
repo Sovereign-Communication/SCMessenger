@@ -270,16 +270,16 @@ Honest accounting, most-material first.
    for *what ships* and wrong for *how much a rename touches*, and `tests/` and `examples/`
    hold real call sites, which is why FINDINGS' two evidence tables use `--basis wide`
    instead. *The restatement also surfaced a defect the old numbers hid: whole-word matching
-   excludes compound identifiers, so `peer` 3461 is a floor — the peer vocabulary is 9737
+   excludes compound identifiers, so `peer` 3605 is a floor — the peer vocabulary is 9853
    once `peer_id` and `peerId` are counted, and the middle of the A-1 ranking inverts.
    GLOSSARY A-1 carries both.*
 
-3. **Occurrence counts are identifier-atom matches, not semantic matches.** `peer` 3461 counts
-   `peerId`, `peer_id`, `PeerDiscoveryInfo`, `peers`. That is right for ranking blast radius and
-   wrong for reading as "the concept Peer appears 3461 times". Every count in the report is
-   now measured by that script counts the bare word only. The compounds are counted
-   separately and reported in GLOSSARY A-1: `peer` the word is 3461, `peer` the vocabulary is
-   9737.
+3. **Occurrence counts are identifier-atom matches, not semantic matches.** A count of
+   `peer` produced by that script is the bare word only — whole-word matching does not cross
+   `_` or a case change, so `peer_id`, `peerId` and `peers` are not in it. That is right for
+   ranking blast radius and wrong for reading as "the concept Peer appears 3605 times". The
+   compounds are counted separately and reported in GLOSSARY A-1: `peer` the word is 3605,
+   `peer` the vocabulary is 9853.
 
 4. **I sampled `core/src/transport/swarm.rs` (11,190 lines) and `MeshRepository.kt` (12,622 lines)
    rather than reading them end to end.** They are 2 of the 4 largest first-party files. The

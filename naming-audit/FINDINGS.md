@@ -222,14 +222,15 @@ unified; the type was not). Delete `Contact::tombstone` and `is_tombstone` unles
 
 ## F-22 — `HistoryManager` / `HistoryStats` / `MessageDirection` are each defined twice
 
-**Severity: MEDIUM** · **Blast radius: `HistoryManager` 110, `HistoryStats` 45, `MessageDirection` 110**
+**Severity: MEDIUM** · **Blast radius: `HistoryManager` 111, `HistoryStats` 45, `MessageDirection` 131**
 
 **Basis for that line:** `--basis wide`, the wider corpus defined in
 `scripts/measure_uncompiled_counts.py`; this table quotes names that live mostly in tests
 and generated bindings, which the glossary's corpus excludes. Regenerate with
-`python scripts/measure_uncompiled_counts.py --basis wide`. Two of the three reproduce
-exactly; `HistoryManager` reads 110 here and **109** on a fresh run, one occurrence of
-drift from work that has landed in the tree since the scan.
+`python scripts/measure_uncompiled_counts.py --basis wide`. All three reproduce exactly. An
+earlier version of this note recorded `HistoryManager` and `MessageDirection` as off by one
+and blamed drift; that was a property of the tree the audit was written in, not of the
+measurement, and both are exact at this commit.
 
 | Concept | `store/history.rs` | `mobile_bridge.rs` |
 |---|---|---|
@@ -784,22 +785,20 @@ The two relay copies merge into one. Effort S.
 
 ## F-29 — `serviceInfo` names three different types, one of them a raw `ByteArray`
 
-**Severity: MEDIUM** · **Blast radius: 99 occurrences across 9 Android files, 3 distinct types**
+**Severity: MEDIUM** · **Blast radius: 98 occurrences across 8 Android files, 3 distinct types**
 
 **Locations and the three things the one name refers to:**
 
 | Where | What `serviceInfo` actually is | Count |
 |---|---|---|
-| `android/.../transport/MdnsServiceDiscovery.kt:56,183` | `NsdServiceInfo` — an Android framework mDNS record | 36 |
+| `android/.../transport/MdnsServiceDiscovery.kt:56,183` | `NsdServiceInfo` — an Android framework mDNS record | 37 |
 | `android/.../transport/WifiDirectTransport.kt:226` | `WifiP2pDnsSdServiceInfo` — a different Android framework record | 2 |
-| `android/.../transport/WifiAwareTransport.kt:35,51`; `TransportManager.kt:35,384`; `AndroidPlatformBridge.kt:463`; `MeshRepository.kt:1319` | **`ByteArray`** — raw, hand-decoded TLV bytes | 15 |
+| `android/.../transport/WifiAwareTransport.kt:35,51`; `TransportManager.kt:35,384`; `AndroidPlatformBridge.kt:463`; `MeshRepository.kt:1319` | **`ByteArray`** — raw, hand-decoded TLV bytes | 15 (see note) |
 
-**On the Count column:** two of these three are whole-corpus counts that have drifted by one
-occurrence since the scan — `NsdServiceInfo` reads 36 here and 37 on a fresh run, and this
-finding's own `serviceInfo` blast radius reads 99 against 98 now — because this checkout is
-shared and work has landed in `android/` since. The third, `ByteArray` 15, is **not** a
-corpus count at all: it is the number of `ByteArray`-typed `serviceInfo` sites this table
-enumerates, where the corpus figure for that name is 133. The two must not be compared.
+**On the Count column:** the first two are whole-corpus counts and reproduce exactly on
+`--basis wide`. The third, `ByteArray` 15, is **not** a corpus count at all: it is the number
+of `ByteArray`-typed `serviceInfo` sites this table enumerates, where the corpus figure for
+that name is 129. The two must not be compared.
 
 **Evidence — the third case is the tautology, because the suffix promises structure the type does
 not carry:**
@@ -1335,23 +1334,24 @@ column with
 
     python scripts/measure_uncompiled_counts.py --basis wide
 
-**12 of the 14 figures reproduce exactly on that command**, `envelopeData` included once
-A-4 counts it. The two that do not are named rather than quietly adjusted: `removeValue`
-reads 47 here and 48 on a fresh run, and `getIdentityInfo` reads 76 here and 75 — one
-occurrence each, from work that has landed in the tree since the scan. Neither can move a
-naming judgement, and both are framework vocabulary. `RelayPeerInfo` 15 was the one figure
-in this table no command could check; it is measured now and reproduces.
+**All 14 figures reproduce exactly on that command**, `envelopeData` included once A-4
+counts it. An earlier version of this note listed two that did not — `removeValue` and
+`getIdentityInfo`, each off by one — and explained the gap as drift from a tree being edited
+underneath the measurement. That was true of the tree this audit was written in and is not
+true here: these figures are measured at the commit named in GLOSSARY's header, so there is
+nothing to drift. `RelayPeerInfo` 15 was the one figure in this table no command could check;
+it is measured now and reproduces.
 
 | Name | Count | Why it stays |
 |---|---:|---|
 | `envelopeData` / `envelope_data` | counted in **A-4** | Distinguishes the *serialized bytes* (`Vec<u8>`, from `PreparedMessage`) from the parsed `Envelope` struct. It also is a UDL dictionary field (`core/src/api.udl:63`), i.e. a public API name. |
 | `completeData` | 35 / 4 files | `BleGattClient.kt:737` — the reassembled buffer, built by concatenating sorted chunks. It is load-bearing precisely because it contrasts with the `chunk`s it is assembled from. |
 | `userInfo` | 35 / 3 files | `NotificationManager.swift:100` — `notificationContent.userInfo` is the **UNUserNotificationCenter framework key**. Framework-mandated, not first-party. |
-| `rawValue`, `newValue`, `removeValue`, `initialValue` | 51, 19, 47, 21 | Android Compose / SwiftUI framework API (`TextFieldValue.rawValue`, `StateFlow` conventions). Not project vocabulary. |
+| `rawValue`, `newValue`, `removeValue`, `initialValue` | 51, 19, 48, 21 | Android Compose / SwiftUI framework API (`TextFieldValue.rawValue`, `StateFlow` conventions). Not project vocabulary. |
 | `PeerInfo`, `RelayPeerInfo`, `BleAdapterInfo` | 55, 15, 14 | Conventional DTO suffixes naming a *thing*; the base noun is the concept. Contrast `GroupInfo` (F-31), where the base noun fully subsumes the fields. |
 | `PeerDiscoveryInfo` | 33 | Names a distinct, richer type (11 fields incl. `transports: Set<String>`) than any other peer DTO. A local variable `discoveryInfo` at `MeshRepository.kt:1736` drops the "Peer" qualifier — a minor inconsistency, not worth a finding. |
 | `JSONObject`, `withJSONObject` | 17, 10 | `org.json.JSONObject`; framework type. |
-| `publishIdentityInfo`, `getIdentityInfo` | 29, 76 | Verb + noun, not a suffix tautology. |
+| `publishIdentityInfo`, `getIdentityInfo` | 29, 75 | Verb + noun, not a suffix tautology. |
 
 Candidates that did **not** survive review are written up individually, not listed here: F-28 and
 F-31 are in the REMAINDER above, F-29 is under **RC-4** and F-30 under **RC-5**.
@@ -1380,15 +1380,21 @@ turn up in test fixtures and generated bindings as readily as in `src/`. Regener
 
     python scripts/measure_uncompiled_counts.py --basis wide
 
-**20 of the 21 rows reproduce exactly on that command.** The exception is named rather than
-quietly adjusted: `Output` reads **83** here and **20** when re-measured, and no corpus or
-matching rule tested recovers 83 — it is a common English word, and the original figure
-appears to have counted something other than this word. The row's evidence is its four
+**19 of the 20 rows reproduce exactly on that command.** The exception is named rather
+than quietly adjusted: `Output` reads **83** in the original scan and **20** when re-measured,
+and no corpus or matching rule tested recovers 83 — it is a common English word, and the
+original appears to have counted something other than this word.
+
+**One row was removed rather than renumbered.** `Args` was listed here as two definitions
+in `cli/src/bin/conn-fanout.rs` and `cli/src/bin/stress-test.rs`. `conn-fanout.rs` does not
+exist at this commit, so the name is defined once and is not a duplicate-type row at all. It
+is dropped rather than kept with a stale citation — a table of names that are declared more
+than once cannot carry a row whose second declaration is gone. The row's evidence is its four
 definitions, not its frequency, and it is here because the definitions are duplicated.
 
 | Name | Occurrences | Defs | Definitions | Note |
 |---|---:|---:|---|---|
-| `IronCore` | 561 | 2 | `core/src/iron_core.rs:167`; `wasm/src/lib.rs:200` | |
+| `IronCore` | 556 | 2 | `core/src/iron_core.rs:167`; `wasm/src/lib.rs:200` | |
 | `BlockedIdentity` | 158 | 2 | `core/src/blocked_bridge.rs:16`; `core/src/store/blocked.rs:32` | bridge vs store, the RC-1 shape |
 | `MeshSettings` | 153 | 2 | `core/src/settings.rs:12`; `wasm/src/lib.rs:28` | `wasm` crate, not built by CI |
 | `Output` | 83 | 4 | `core/src/dspy/modules.rs:17,106,165,218` | per-module, intentional — also in the rejected list |
@@ -1407,7 +1413,6 @@ definitions, not its frequency, and it is here because the definitions are dupli
 | `Input` | 17 | 4 | `core/src/dspy/modules.rs:16,105,164,217` | per-module, intentional — also in the rejected list |
 | `ScanResult` | 15 | 2 | `core/src/store/backend.rs:6`; `core/src/transport/ble/scanner.rs:183` | a `type` alias against a `struct` — not the same kind of thing under one name |
 | `BleAdapterInfo` | 14 | 2 | `cli/src/ble_daemon.rs:211`; `desktop_bridge/src/types.rs:123` | |
-| `Args` | 4 | 2 | `cli/src/bin/conn-fanout.rs:34`; `cli/src/bin/stress-test.rs:15` | separate binaries, correct — also in the rejected list |
 | `LegacyReceivedMessage` | 4 | 2 | `core/src/store/inbox.rs:14`; `core/src/store/inbox.rs:551` | same file, two shapes, worth a look |
 
 **The two that most likely deserve a finding, and why neither is written up here:**
@@ -1443,20 +1448,20 @@ it contains three HIGH findings and therefore outranks everything here.
 
 ## F-26 — "the other party" is called peer, contact, node, or relay, sometimes in one expression
 
-**Severity: MEDIUM** · **Blast radius: 3461 `peer`, 1392 `relay`, 1378 `contact`, 567 `node`**
+**Severity: MEDIUM** · **Blast radius: 3605 `peer`, 1409 `relay`, 1347 `contact`, 632 `node`**
 
 ```
- 3461  161 files  peer
- 1392   97 files  relay
- 1378   63 files  contact
-  567   64 files  node
+ 3605  161 files  peer
+ 1409   96 files  relay
+ 1347   64 files  contact
+  632   65 files  node
 ```
 
 Restated onto the basis GLOSSARY states; regenerate with
 `python scripts/measure_uncompiled_counts.py`. What these were and why they moved is in
 GLOSSARY A-1. **The finding is unchanged, but a ranking claim here did not survive the
-restatement:** `peer` still leads by a factor of two and a half, and `relay` (1392) and
-`contact` (1378) are 14 occurrences apart — a tie whose order flips once compound
+restatement:** `peer` still leads by a factor of two and a half, and `relay` (1409) and
+`contact` (1347) are 62 occurrences apart — a tie whose order flips once compound
 identifiers are counted. All four figures are bare words; GLOSSARY A-1 carries the compound
 counts.
 
@@ -1480,14 +1485,14 @@ M (any rename), and no rename is actually required for correctness.
 
 ## F-23 — Read verbs: `get` / `fetch` / `load` / `retrieve` / `poll` with no rule
 
-**Severity: MEDIUM** · **Blast radius: 663 `get`, 203 `load`, 20 `fetch`, 8 `retrieve`**
+**Severity: MEDIUM** · **Blast radius: 655 `get`, 207 `load`, 20 `fetch`, 8 `retrieve`**
 
 ```
-   663  113 files  get
-   493   76 files  read
-   363   79 files  list
-   203   36 files  load
-    95   26 files  resolve
+   655  112 files  get
+   496   76 files  read
+   374   81 files  list
+   207   37 files  load
+    82   26 files  resolve
    133   40 files  find
     25   11 files  poll
     20   10 files  fetch
@@ -1611,14 +1616,14 @@ M (if clients need aliases).
 | Cluster | Counts (restated — GLOSSARY §D owns the basis and the previous figures) | Assessment |
 |---|---|---|
 | config | `config` 998/55 files, `settings` 472/48, `cfg` **42/14 files** (27/9 comment-excluded) (corrected 2026-09-29 — the earlier figure of 667/170 counted Rust's `#[cfg]` attribute, and a further 4 of the 31 real hits are in the uncompiled `cli/src/api_axum.rs`; see GLOSSARY §D and F-32), `prefs` 74/5, `params` 98/6, `options` 47/14 | **Real problem.** `cfg` has *more files* than `config` despite a third of the occurrences — it is the local-idiom form and the split is structural. `cfg` vs `config` should be decided; `settings` vs `config` is a genuine semantic distinction worth keeping (see Q-7) |
-| message | `message` 1731/176, `text` 618/70, `msg` 734/54, `body` 160/37 | **Real problem** at the FFI/wire boundary. `msg` appears in 128 files; `text` and `body` mean different things (see Q-8) |
-| address | `addr` 1019/39, `address` 824/60, `multiaddr` 809/34, `url` 121, `host` 212, `endpoint` 86 | `multiaddr` is a libp2p term of art and correctly distinct. `addr` vs `address` is a coin-flip per author |
-| auth | `session` 301, `token` 162, `authorization` 1, `authentication` 26, `auth` **6** | `auth` is used only 6 times and is a UniFFI/ODR keyword echo — leave it |
+| message | `message` 1742/177, `text` 619/71, `msg` 756/54, `body` 158/37 | **Real problem** at the FFI/wire boundary. `msg` appears in 128 files; `text` and `body` mean different things (see Q-8) |
+| address | `addr` 1022/39, `address` 829/59, `multiaddr` 823/34, `url` 121, `host` 214, `endpoint` 87 | `multiaddr` is a libp2p term of art and correctly distinct. `addr` vs `address` is a coin-flip per author |
+| auth | `session` 298, `token` 168, `authorization` 1, `authentication` 26, `auth` **6** | `auth` is used only 6 times and is a UniFFI/ODR keyword echo — leave it |
 
 **Remediation:** pick `config` and `message`; migrate `cfg` → `config` and `msg` → `message` in
 identifiers only, never in serialized keys (see GLOSSARY §D for the canonical names and §F for
 compatibility). Counts: GLOSSARY §D owns them. Effort: `msg` → `message` is **M**
-(734 hits, 54 files, scriptable); `cfg` → `config` is **S** (42 hits, 14 files — 27 in 9
+(756 hits, 54 files, scriptable); `cfg` → `config` is **S** (42 hits, 14 files — 27 in 9
 once comments are excluded).
 
 ---
@@ -1636,7 +1641,7 @@ Kept out of the findings above to preserve signal; listed so the owner knows the
   modules disambiguate. Low value.
 - **`handle_*` in `cli/src/api.rs` (23 handlers)** — this is the axum handler convention, applied
   consistently. Not a catch-all-naming problem.
-- **`serviceInfo` in Android (99 occurrences, 6 files)** — **WITHDRAWN, now F-29.** The original
+- **`serviceInfo` in Android (98 occurrences, 8 files)** — **WITHDRAWN, now F-29.** The original
   rejection claimed "the surrounding types disambiguate at every call site I sampled". Reading the
   call sites showed the third use (`WifiAwareTransport.kt:51`) is a raw `ByteArray` hand-decoded as
   TLV, which the other two are not. The rejection was wrong.

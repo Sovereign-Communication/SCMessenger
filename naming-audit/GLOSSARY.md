@@ -9,6 +9,14 @@
     python scripts/measure_uncompiled_counts.py            # the table
     python scripts/measure_uncompiled_counts.py --json     # machine-readable
 
+**What these numbers describe.** Every occurrence count in these three reports was measured
+at commit `755eb6aa664a548d1851d20d2c45c8be57745441` (`755eb6aa`), which was `origin/main` when this was written. That matters
+more than it sounds: an earlier version of this report was measured in a shared working
+tree carrying other people's uncommitted changes, and 13 of its figures reproduced on
+neither the branch tip nor `main`. **A tree is a moving target and a count is a fact about
+a tree, not about a project.** If the command above disagrees with a number printed here,
+the number is stale and the command is right — re-derive it and say so in the entry.
+
 **Basis: defined once, in the `BASIS` block of `scripts/measure_uncompiled_counts.py`,
 and deliberately not restated here.** That file owns it because it is what implements the
 rules — a second copy in prose would be a second thing to keep in sync, and this report
@@ -34,8 +42,8 @@ the published figures and none reproduced them. Two things changed at once — t
 narrowed to first-party code, and matching became case-sensitive — so nearly every figure
 falls. **This was a basis change, not a set of corrections**, and where a figure fell far
 enough to change what it measures, the entry says so. Every entry whose figures moved
-carries a *Count basis* note recording what it was before. `TransportType` (710), `peer`
-(3461), `config` (998) and `MessageRecord` (125) are unchanged and needed no note.
+carries a *Count basis* note recording what it was before. `TransportType` (710) and `config`
+(998) are unchanged and needed no note.
 
 ## The convention, applied identically in all twelve entries
 
@@ -84,29 +92,29 @@ definition that will be wrong in two places.
 
 | Name in the tree | Count | Representative sites |
 |---|---|---|
-| `Peer` | 3461 / 161 files | no single site — it is the default term and genuinely has no densest location; seen at `core/src/store/contacts.rs:31`, `core/src/transport/swarm.rs:2705` |
-| `Contact` | 1378 / 63 files | `core/src/store/contacts.rs:25`, `core/src/contacts_bridge.rs:19`, `core/src/api.udl:292` |
-| `Node` | 567 / 64 files | `core/src/transport/swarm.rs:2760` (`SwarmHandle`), `core/src/iron_core.rs:167` — means the **local** process in much of the codebase and *any* party in others |
-| `Relay` | 1392 / 97 files | `core/src/store/relay_custody.rs:333` — historical identifier, see A-2 |
+| `Peer` | 3605 / 161 files | no single site — it is the default term and genuinely has no densest location; seen at `core/src/store/contacts.rs:31`, `core/src/transport/swarm.rs:2705` |
+| `Contact` | 1347 / 64 files | `core/src/store/contacts.rs:25`, `core/src/contacts_bridge.rs:19`, `core/src/api.udl:292` |
+| `Node` | 632 / 65 files | `core/src/transport/swarm.rs:2760` (`SwarmHandle`), `core/src/iron_core.rs:167` — means the **local** process in much of the codebase and *any* party in others |
+| `Relay` | 1409 / 96 files | `core/src/store/relay_custody.rs:333` — historical identifier, see A-2 |
 
 > **Count basis.** Previously published as `Peer` 20887, `Contact` 3757, `Node` 1797,
-> `Relay` 5419. Now 3461, 1378, 567, 1392. The fall is the basis change, not a
+> `Relay` 5419. Now 3605, 1347, 632, 1409. The fall is the basis change, not a
 > retraction: the old figures counted the token case-insensitively across a corpus that
 > included docs, scripts and tests, and so swept in `PEER`, `RELAY` and similar.
 >
 > **These four numbers are a floor, and there is a second reason for the fall that the
 > sentence above does not name.** Whole-word matching does not cross `_` or a case change,
-> so 3461 counts the bare word `peer` and **excludes** `peer_id` (3155), `peerId` (2151),
-> `peers` (949), `peer_ids` (10) and `peerIds` (11). The peer vocabulary is about
-> **9737**, not 3461. The same applies to the rest of the row: `relay` excludes `relays`
-> (176), `RelayCustodyStore` (64), `relay_custody` (12), `relay_id` (4) and `relayId` (4),
-> for 1652; `contact` excludes `contacts` (513) and `contactId` (30), for 1921; `node`
-> excludes `nodes` (192), `node_id` (19) and `nodeId` (18), for 796. Every one of those
+> so 3605 counts the bare word `peer` and **excludes** `peer_id` (3119), `peerId` (2151),
+> `peers` (957), `peer_ids` (10) and `peerIds` (11). The peer vocabulary is about
+> **9853**, not 3605. The same applies to the rest of the row: `relay` excludes `relays`
+> (178), `RelayCustodyStore` (73), `relay_custody` (13), `relay_id` (4) and `relayId` (4),
+> for 1681; `contact` excludes `contacts` (504) and `contactId` (30), for 1881; `node`
+> excludes `nodes` (194), `node_id` (19) and `nodeId` (18), for 863. Every one of those
 > compounds is in the script's term list and regenerates with the same command.
 >
 > One of them is worth a reader's attention on its own: **`contact_id` appears zero
 > times.** The three headwords are not spelled consistently with each other. `peer` uses
-> both conventions heavily (`peer_id` 3155, `peerId` 2151); `node` uses both sparingly
+> both conventions heavily (`peer_id` 3119, `peerId` 2151); `node` uses both sparingly
 > (`node_id` 19, `nodeId` 18); `contact` uses camelCase only (`contactId` 30,
 > `contact_id` 0). **Which convention a headword adopts is decided per headword, not per
 > project** — a fact a frequency count on one term would never have surfaced, and one that
@@ -114,12 +122,12 @@ definition that will be wrong in two places.
 > variant rather than inherit one.
 >
 > **This moves the ranking in the middle, so an earlier version of this note claimed more
-> than it could support.** On bare words: `Peer` 3461 > `Relay` 1392 > `Contact` 1378 >
-> `Node` 567. With compounds: `Peer` 9737 > `Contact` 1921 > `Relay` 1652 > `Node` 796 —
-> **`Contact` and `Relay` swap**, and they were 14 occurrences apart to begin with, so
+> than it could support.** On bare words: `Peer` 3605 > `Relay` 1409 > `Contact` 1347 >
+> `Node` 632. With compounds: `Peer` 9853 > `Contact` 1881 > `Relay` 1681 > `Node` 863 —
+> **`Contact` and `Relay` swap**, and they were 62 occurrences apart to begin with, so
 > their order was never a real signal. The claim this entry rests on survives both, and is
-> stronger with compounds: `Peer` is first by 7816 over the runner-up, and the two
-> runners-up are 269 apart from each other. Read the four numbers as *the bare word
+> stronger with compounds: `Peer` is first by 7972 over the runner-up, and the two
+> runners-up are 200 apart from each other. Read the four numbers as *the bare word
 > appears N times*, not *the concept is used N times*.
 
 **Decision — what this entry proposes**
@@ -179,9 +187,9 @@ definition that will be wrong in two places.
 
 | Name in the tree | Count | Representative sites |
 |---|---|---|
-| `MessageRecord` — storage-layer struct | 125 / 24 files (shared count) | `core/src/store/history.rs:17` |
-| `MessageRecord` — FFI-layer struct | 125 / 24 files (shared count) | `core/src/mobile_bridge.rs:3126` |
-| `MessageRecord` — UDL dictionary | 125 / 24 files (shared count) | `core/src/api.udl:324` |
+| `MessageRecord` — storage-layer struct | 132 / 23 files (shared count) | `core/src/store/history.rs:17` |
+| `MessageRecord` — FFI-layer struct | 132 / 23 files (shared count) | `core/src/mobile_bridge.rs:3126` |
+| `MessageRecord` — UDL dictionary | 132 / 23 files (shared count) | `core/src/api.udl:324` |
 | `HistoryStats` | 15 / 9 files | `core/src/store/history.rs:81`, `core/src/mobile_bridge.rs:3151` — duplicated, see F-22 |
 | `MessageDto`, `HistoryMessage` | not separately counted | `cli/src/api.rs` — the transport shape has no consistent name |
 | `StoredMessage` | 19, **all in unreachable files** | `wasm/src/storage.rs:47` — defined nowhere the build reads; FINDINGS F-33. **This name is not free**: F-02 offers it as an alternative, and A-3's decision below deliberately does not. |
@@ -189,7 +197,7 @@ definition that will be wrong in two places.
 The one name `MessageRecord` covers three declarations, two of which have different field sets
 (FINDINGS F-02).
 
-> **Count basis.** `MessageRecord` was 125 and is still 125 — unchanged. `HistoryStats`
+> **Count basis.** `MessageRecord` was 125 and is now 132 — a small move. `HistoryStats`
 > was 45, now 15. The old figure swept in the `HistoryStats` fields on the FFI copy as
 > well as the storage copy; the new one is the same term measured the same way as every
 > other row here.
@@ -222,8 +230,8 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 | `Envelope` | 51 / 13 files | no single densest site — spread across all layers by design; `core/src/message/types.rs:147`, `core/src/transport/behaviour.rs` |
 | `WireEnvelope` | (subset of the above) | `core/src/message/types.rs:147` — the serialized form |
 | `DriftEnvelope` | 74 / 9 files | `core/src/drift/envelope.rs:38` — the drift protocol's own wire format |
-| `payload`, `packet`, `frame`, `blob` | 689 / 32 / 92 / 13 | `core/src/transport/swarm.rs` (all four) — transport-layer terms one level down |
-| `envelopeData` / `envelope_data` | 41 / 4 files and 172 / 20 files | `core/src/api.udl:63` — the *serialized* bytes, held distinct from the parsed `Envelope` |
+| `payload`, `packet`, `frame`, `blob` | 685 / 32 / 91 / 11 | `core/src/transport/swarm.rs` (all four) — transport-layer terms one level down |
+| `envelopeData` / `envelope_data` | 41 / 4 files and 173 / 20 files | `core/src/api.udl:63` — the *serialized* bytes, held distinct from the parsed `Envelope` |
 
 > **Count basis — this entry changed what it measures, so read it before using the
 > numbers.** `Envelope` was published as 2184 across 93 files and is now 51 across 13.
@@ -232,7 +240,7 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 > type the second is the right one — but a reader who took 2184 as "how often the type
 > is named" will find the number has fallen by 40x, and the reason is the question
 > changed, not the code. `payload`/`packet`/`frame`/`blob` were 1582/163/269/51 and are
-> now 689/32/92/13 for the same reason. **The structural claim this entry makes — that
+> now 685/32/91/11 for the same reason. **The structural claim this entry makes — that
 > four transport-layer words sit one level below `Envelope` and mean different things —
 > rests on the field sets, not on the counts, and is unaffected.**
 >
@@ -272,7 +280,7 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 | `routePeerId` | the peer to send via, on a chosen path | 309 / 4 files | `android/.../MeshRepository.kt:765` |
 | `blePeerId` | BLE-specific encoding | 184 / 13 files | `android/.../MeshRepository.kt:730` |
 | `libp2pPeerId` | libp2p-specific encoding | 368 / 21 files | `android/.../MeshRepository.kt:841` |
-| `identity_id` | a Blake3 hash of the public key | 605 / 32 files | `core/src/lib.rs:116`, defined with its siblings at `core/src/identity/keys.rs:87-95` |
+| `identity_id` | a Blake3 hash of the public key | 583 / 32 files | `core/src/lib.rs:116`, defined with its siblings at `core/src/identity/keys.rs:87-95` |
 
 > **Count basis.** `canonicalPeerId` was 279 (Android) and is now 279 / 7 files — the
 > figure itself did not move. The four rows that read "—" now carry counts, because the
@@ -307,20 +315,20 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 
 | Verb in the tree | Count | Representative sites |
 |---|---|---|
-| `get` | 663 / 113 files | no single densest site — `get` is the default verb; `core/src/iron_core.rs:1266` (`get_registration_state`), `android/.../MeshRepository.kt:437` |
-| `read` | 493 / 76 files | `core/src/iron_core.rs` |
-| `list` | 363 / 79 files | `core/src/store/contacts.rs:782` (`list`), `android/.../DashboardViewModel.kt` |
+| `get` | 655 / 112 files | no single densest site — `get` is the default verb; `core/src/iron_core.rs:1266` (`get_registration_state`), `android/.../MeshRepository.kt:437` |
+| `read` | 496 / 76 files | `core/src/iron_core.rs` |
+| `list` | 374 / 81 files | `core/src/store/contacts.rs:782` (`list`), `android/.../DashboardViewModel.kt` |
 | `find` | 133 / 40 files | `core/src/relay/findmy.rs`, `core/src/store/ledger_entry.rs` |
-| `load` | 203 / 36 files | `core/src/store/ledger_entry.rs:845` (`pub fn load`) |
-| `resolve` | 95 / 26 files | `core/src/iron_core.rs`, `android/.../MeshRepository.kt` |
+| `load` | 207 / 37 files | `core/src/store/ledger_entry.rs:845` (`pub fn load`) |
+| `resolve` | 82 / 26 files | `core/src/iron_core.rs`, `android/.../MeshRepository.kt` |
 | `poll` | 25 / 11 files | `cli/src/api.rs:1547` (`handle_poll_status`), `cli/src/bin/heartbeat-probe.rs` |
 | `fetch` | 20 / 10 files | `cli/src/api.rs:1569` (`handle_fetch_artifact`) — the only `fetch_` in *compiled* code; the uncompiled `cli/src/api_axum.rs:746` declares the same route again (**D-4**, F-32); also `iOS/.../NotificationBackgroundProcessor.swift` |
-| `query` | 136 / 26 files | `cli/src/api.rs` |
+| `query` | 135 / 26 files | `cli/src/api.rs` |
 | `retrieve` | 8 / 5 files | genuinely thin and spread; densest is `cli/src/server.rs` (5 hits) |
 
 > **Count basis.** Previously published as `get` 5470, `read` 1961, `list` 1689,
 > `load` 731, `resolve` 579, `find` 352, `poll` 164, `fetch` 121, `query` 294,
-> `retrieve` 22. Now 663, 493, 363, 203, 95, 133, 25, 20, 136, 8. The basis change
+> `retrieve` 22. Now 655, 496, 374, 207, 82, 133, 25, 20, 135, 8. The basis change
 > accounts for it. **The conclusion this entry argues is unchanged**: `get` still
 > outnumbers every other read verb by at least 2x, and `retrieve` is still thin enough
 > at 8 occurrences that retiring it is a single afternoon. What the old numbers implied
@@ -352,23 +360,23 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 
 | Verb in the tree | Count | Representative sites | Note |
 |---|---|---|---|
-| `remove` | 423 / 98 files | `core/src/store/contacts.rs:733`, `core/src/contacts_bridge.rs:181`, `android/.../MeshRepository.kt:4855` | |
-| `clear` | 203 / 71 files | `android/.../MeshRepository.kt`, `cli/src/main.rs` | |
-| `delete` | 47 / 22 files | `android/.../ContactsScreen.kt:251` (`onDelete`), `iOS/.../ContactsViewModel.swift:238` | UI-layer only |
-| `drop` | 137 / 48 files | — | mostly `Iterator::drop` / lifetime mechanics, not a domain verb |
+| `remove` | 429 / 98 files | `core/src/store/contacts.rs:733`, `core/src/contacts_bridge.rs:181`, `android/.../MeshRepository.kt:4855` | |
+| `clear` | 205 / 72 files | `android/.../MeshRepository.kt`, `cli/src/main.rs` | |
+| `delete` | 59 / 24 files | `android/.../ContactsScreen.kt:251` (`onDelete`), `iOS/.../ContactsViewModel.swift:238` | UI-layer only |
+| `drop` | 144 / 49 files | — | mostly `Iterator::drop` / lifetime mechanics, not a domain verb |
 | `purge` | 11 / 9 files | `core/src/store/relay_custody.rs:62` (`purged_records`) | the one genuine domain use |
-| `forget` | 25 / 9 files | `wasm/src/transport.rs` (12 hits), `android/.../MeshRepository.kt` | 11 of the 61 raw hits are "fire-and-forget", a different meaning, excluded |
-| `destroy` | 19 / 12 files | — | |
-| `expire` | 12 / 9 files | — | |
+| `forget` | 26 / 10 files | `wasm/src/transport.rs` (12 hits), `android/.../MeshRepository.kt` | 11 of the 61 raw hits are "fire-and-forget", a different meaning, excluded |
+| `destroy` | 18 / 12 files | — | |
+| `expire` | 17 / 10 files | — | |
 | `unlink` | 0 / 0 files | — | |
 
 > **Count basis — one figure was wrong, not merely on another basis.** `unlink` was
 > published as 21 occurrences in 7 files. There are **none**: it does not appear in
 > first-party code at all, and the 21 came from prose outside the corpus. The other
-> figures move as the rest do: `remove` 1074 → 423, `clear` 669 → 203, `delete` 339 →
-> 47, `drop` 260 → 137, `purge` 57 → 11, `forget` 50 → 25, `destroy` 31 → 19,
-> `expire` 24 → 12. **`remove` still dominates, so the conclusion of this entry stands**, but
-> `delete` at 47 is far smaller than 339 suggested — it is mostly a UI-layer word, and
+> figures move as the rest do: `remove` 1074 → 429, `clear` 669 → 205, `delete` 339 →
+> 59, `drop` 260 → 144, `purge` 57 → 11, `forget` 50 → 26, `destroy` 31 → 18,
+> `expire` 24 → 17. **`remove` still dominates, so the conclusion of this entry stands**, but
+> `delete` at 59 is far smaller than 339 suggested — it is mostly a UI-layer word, and
 > this is code-only counting, so treat the entry as a `remove` problem.
 
 **Decision — what this entry proposes**
@@ -399,21 +407,21 @@ The one name `MessageRecord` covers three declarations, two of which have differ
 
 | Verb in the tree | Count | Representative sites | Note |
 |---|---|---|---|
-| `new` | 3657 / 161 files | `core/src/iron_core.rs:167`, `core/src/mobile_bridge.rs:3615` | constructors |
+| `new` | 3662 / 160 files | `core/src/iron_core.rs:167`, `core/src/mobile_bridge.rs:3615` | constructors |
 | `create` | 146 / 46 files | `core/src/mobile_bridge.rs` | |
-| `add` | 361 / 62 files | `core/src/store/contacts.rs:607`, `android/.../AddContactScreen.kt` | |
+| `add` | 352 / 62 files | `core/src/store/contacts.rs:607`, `android/.../AddContactScreen.kt` | |
 | `insert` | 512 / 69 files | `core/src/transport/swarm.rs`, `cli/src/server.rs` | storage layer |
-| `make` | 34 / 23 files | `core/src/routing/global.rs` | |
-| `register` | 54 / 17 files | `core/src/store/blocked.rs`, `core/src/transport/dial_policy.rs` | |
+| `make` | 36 / 23 files | `core/src/routing/global.rs` | |
+| `register` | 56 / 17 files | `core/src/store/blocked.rs`, `core/src/transport/dial_policy.rs` | |
 | `save` | 54 / 15 files | `core/src/store/ledger_entry.rs:845` | |
 | `put` | 178 / 24 files | `android/.../MeshRepository.kt` | |
 | `upsert` | 15 / 5 files | — | |
 
-> **Count basis.** `new` was 5168 and is now 3657 — the least-changed figure here, and
-> it is unchanged in rank. `create` was 1095 → 146, `add` 1612 → 361, `insert` 651 →
-> 512, `make` 1087 → 34, `register` 492 → 54, `save` 300 → 54, `put` 287 → 178,
+> **Count basis.** `new` was 5168 and is now 3662 — the least-changed figure here, and
+> it is unchanged in rank. `create` was 1095 → 146, `add` 1612 → 352, `insert` 651 →
+> 512, `make` 1087 → 36, `register` 492 → 56, `save` 300 → 54, `put` 287 → 178,
 > `upsert` 55 → 15. The basis change accounts for it. **The conclusion is unchanged and
-> in one place stronger**: `insert` at 512 is now within reach of `add` at 361, so the
+> in one place stronger**: `insert` at 512 is now within reach of `add` at 352, so the
 > storage-layer/UI-layer split this entry describes is the live one.
 
 **Decision — what this entry proposes**
@@ -521,15 +529,15 @@ column records where — if anywhere — each term is pinned down, and was estab
 | configuration | `prefs` | 74 / 5 files | `android/.../MeshRepository.kt`, `PreferencesRepository.kt` | self-defining |
 | configuration | `params` | 98 / 6 files | `core/src/wasm_support/rpc.rs:17` | self-defining |
 | configuration | `options` | 47 / 14 files | `wasm/src/notification_manager.rs` | self-defining |
-| message | `msg` | 734 / 54 files | `core/src/store/outbox.rs:226` (`enqueue(&mut self, msg: QueuedMessage)`) | **No** — `grep -rn "/// .*msg"` over `core/src` returns zero |
-| message | `text` | 618 / 70 files | `android/.../SettingsScreen.kt` | self-defining |
-| message | `body` | 160 / 37 files | `cli/src/server.rs` | self-defining |
-| network address | `addr` | 1019 / 39 files | `core/src/transport/swarm.rs:141` (`is_discoverable_multiaddr(addr: &Multiaddr)`) | **No** — ~210 of these are stdlib/libp2p type names (`SocketAddr`, `IpAddr`, `Ipv4Addr`, `Ipv6Addr`) which are not the project's to rename |
-| network address | `address` | 824 / 60 files | `android/.../BleGattClient.kt` | self-defining |
-| network address | `multiaddr` | 809 / 34 files | `core/src/transport/swarm.rs` | **Yes** — a libp2p term of art, defined in `docs/` |
-| network address | `url`, `host`, `endpoint` | 121 / 212 / 86 — **`url` is 39 hits (32%) uncompiled** | `iOS/.../MeshRepository.swift`, `android/.../SubnetProbe.kt`, `core/src/notification.rs:79` | self-defining, and distinct terms |
-| authentication | `session` | 301 / 35 files | `core/src/crypto/encrypt.rs`, `core/src/crypto/session_manager.rs` | self-defining |
-| authentication | `token` | 162 / 7 files | `core/src/relay/invite.rs` | self-defining |
+| message | `msg` | 756 / 54 files | `core/src/store/outbox.rs:226` (`enqueue(&mut self, msg: QueuedMessage)`) | **No** — `grep -rn "/// .*msg"` over `core/src` returns zero |
+| message | `text` | 619 / 71 files | `android/.../SettingsScreen.kt` | self-defining |
+| message | `body` | 158 / 37 files | `cli/src/server.rs` | self-defining |
+| network address | `addr` | 1022 / 39 files | `core/src/transport/swarm.rs:141` (`is_discoverable_multiaddr(addr: &Multiaddr)`) | **No** — ~210 of these are stdlib/libp2p type names (`SocketAddr`, `IpAddr`, `Ipv4Addr`, `Ipv6Addr`) which are not the project's to rename |
+| network address | `address` | 829 / 59 files | `android/.../BleGattClient.kt` | self-defining |
+| network address | `multiaddr` | 823 / 34 files | `core/src/transport/swarm.rs` | **Yes** — a libp2p term of art, defined in `docs/` |
+| network address | `url`, `host`, `endpoint` | 121 / 214 / 87 — **`url` is 39 hits (32%) uncompiled** | `iOS/.../MeshRepository.swift`, `android/.../SubnetProbe.kt`, `core/src/notification.rs:79` | self-defining, and distinct terms |
+| authentication | `session` | 298 / 33 files | `core/src/crypto/encrypt.rs`, `core/src/crypto/session_manager.rs` | self-defining |
+| authentication | `token` | 168 / 7 files | `core/src/relay/invite.rs` | self-defining |
 | authentication | `authorization`, `authentication` | 1 / 26 | `iOS/.../NotificationManager.swift`, `core/src/crypto/ratchet.rs` | self-defining |
 | authentication | `auth` | 6 / 3 files | `core/src/store/contacts.rs`, `android/.../MeshRepository.kt` | **No** — the one near-hit is a different sense: "auth tag" at `core/src/crypto/backup.rs:221` is the AEAD authentication tag, a standard term |
 
@@ -558,7 +566,7 @@ column records where — if anywhere — each term is pinned down, and was estab
 > things (Q-8). Do not attempt to rename stdlib `SocketAddr`/`IpAddr`/`Ipv6Addr`.
 - **Risk:** LOW for `cfg`; MEDIUM for `msg`, because `msg_id`/`message_id` appear as JSON keys.
 - **Effort:** S for `cfg` → `config` (42 occurrences, 14 files — 27 in 9 once comments are
-  excluded; see the note above); M for `msg` → `message` (734 occurrences, 54 files,
+  excluded; see the note above); M for `msg` → `message` (756 occurrences, 54 files,
   scriptable).
 - **Status:** `PROPOSED`. The authentication cluster is `ACCEPTED-AS-IS` — the counts already show a
   consistent preference and no rename is proposed.
@@ -575,17 +583,17 @@ column records where — if anywhere — each term is pinned down, and was estab
 
 | Term in the tree | Code hits | Defined where |
 |---|---:|---|
-| `drift` | 101 | `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE_MODULE_MAP.md`; module doc at `core/src/drift/mod.rs` |
-| `custody` | 144 | `docs/ARCHITECTURE_MODULE_MAP.md`; `AGENTS.md` ("store-and-forward custody is a behavior all nodes perform"); `core/src/drift/relay.rs:123` |
+| `drift` | 102 | `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE_MODULE_MAP.md`; module doc at `core/src/drift/mod.rs` |
+| `custody` | 182 | `docs/ARCHITECTURE_MODULE_MAP.md`; `AGENTS.md` ("store-and-forward custody is a behavior all nodes perform"); `core/src/drift/relay.rs:123` |
 | `beacon` | 151 | **nowhere.** Two mechanisms share the word: the identity BLE beacon (`android/.../MeshRepository.kt:3341,3440`) and the Apple Find My compatible encoding (`core/src/relay/findmy.rs:1-5`) |
-| `UNIFICATION` (+ 5 variants) | 220 | **nowhere.** The only `docs/` hits are an unrelated *filename*, `ANDROID_ID_UNIFICATION_BUG_2026-03-14.md` (`docs/ARCHIVE_WORK_TRACKING.md:287,304,319`) |
+| `UNIFICATION` (+ 5 variants) | 223 | **nowhere.** The only `docs/` hits are an unrelated *filename*, `ANDROID_ID_UNIFICATION_BUG_2026-03-14.md` (`docs/ARCHIVE_WORK_TRACKING.md:287,304,319`) |
 | `mycorrhizal` / `mycelium` / `rhizomorph` | 8 / 0 / 0 | `core/src/routing/engine.rs:4`; `core/src/routing/mod.rs:2-6` defines the three-layer model |
 | `triad` | 27 | `core/src/identity/keys.rs:87-95` — a full doc comment enumerating all three members and their relationships. Not in `docs/`. |
 | `mule`, `hopscotch`, `dialplan`, `salting` | 0 code hits | n/a — archived `docs/` planning material only, not code vocabulary |
 
 > **Count basis.** Previously published as `drift` 547, `custody` 468, `beacon` 283,
-> `UNIFICATION` 279, `mycorrhizal`/`mycelium`/`rhizomorph` 21/3/3, `triad` 37. Now 101, 144,
-> 151, 220, 8/**0**/**0**, 27. Two of those are worth more than the basis change. **`mycelium`
+> `UNIFICATION` 279, `mycorrhizal`/`mycelium`/`rhizomorph` 21/3/3, `triad` 37. Now 102, 182,
+> 151, 223, 8/**0**/**0**, 27. Two of those are worth more than the basis change. **`mycelium`
 > and `rhizomorph` have no code occurrences at all** — the 3 each were counting prose in
 > `docs/historical/SOVEREIGN_MESH_PLAN.md`, which this column ("Code hits") excludes by its
 > own header. So the three-layer model this row describes is a *documented* concept with a
@@ -619,8 +627,8 @@ Inventory — the six spellings in the tree and their counts:
 
 | Spelling | Count |
 |---|---:|
-| `UNIFICATION` | 220 |
-| `UNIFICATION_V2` | 21 |
+| `UNIFICATION` | 223 |
+| `UNIFICATION_V2` | 22 |
 | `UNIFICATION_V2_IDENTITY` | 8 |
 | `UNIFICATION_V3` | 7 |
 | `UNIFICATION_V2_TRANSPORT` | 6 |
@@ -719,16 +727,16 @@ covered by the note underneath.
 | `node_id` | A-1 | 19 | 12 (1 file) | 63% |
 | `url` | §D | 121 | 39 (1 file) | 32% |
 | `triad` | D-2 | 27 | 7 (1 file) | 26% |
-| `node` | A-1 | 567 | 125 (2 files) | 22% |
-| `register` | B-3 | 54 | 9 (1 file) | 17% |
+| `node` | A-1 | 632 | 125 (2 files) | 20% |
+| `register` | B-3 | 56 | 9 (1 file) | 16% |
 | `config` | §D | 998 | 133 (7 files) | 13% |
-| `drop` | B-2 | 137 | 18 (5 files) | 13% |
+| `drop` | B-2 | 144 | 18 (5 files) | 12% |
 | `fetch` | B-1 | 20 | 2 (2 files) | 10% |
 | `cfg` | §D | 42 | 4 (1 file) | 10% |
-| `relays` | A-1 | 176 | 14 (4 files) | 8% |
+| `relays` | A-1 | 178 | 14 (4 files) | 8% |
 | `insert` | B-3 | 512 | 40 (6 files) | 8% |
-| `msg` | §D | 734 | 54 (2 files) | 7% |
-| `read` | B-1 | 493 | 30 (5 files) | 6% |
+| `msg` | §D | 756 | 54 (2 files) | 7% |
+| `read` | B-1 | 496 | 30 (5 files) | 6% |
 
 ### Terms with no uncompiled occurrences at all
 
@@ -744,7 +752,7 @@ code, so these entries need no qualification.
 
 ### Terms below the line, and why the line is there
 
-27 terms sit between 0% and 5%, the highest being `new` at 4.6%. A share that small cannot change a
+27 terms sit between 0% and 5%, the highest being `resolve` at 4.9%. A share that small cannot change a
 decision about a name: it means a handful of occurrences in files nobody builds, not a
 competing vocabulary. The 5% line is a reading aid, not a finding, and it is stated here so
 that a term's absence from the table above reads as a measurement rather than an omission.
