@@ -41,23 +41,30 @@ use web_time::Duration;
 /// of a healthy peer (direct path, relay circuit, retry headroom) plus the
 /// ghosts of several back-to-back handovers.
 ///
-/// This value currently equals `max_established_incoming` (64), so a single
-/// peer can now book every inbound slot; the global limit is the real resource
-/// ceiling until the dial-candidate pre-filter and dynamic tuning tracked in
-/// #417 and #418 land.
+/// Keep this cap below the global inbound limit so one peer cannot book every
+/// inbound slot. Dial-candidate pre-filtering and dynamic tuning are tracked
+/// separately in #417 and #418.
 ///
-/// A value below `MAX_ESTABLISHED_PER_PEER_FLOOR` fails the build.
-pub const MAX_ESTABLISHED_PER_PEER: u32 = 64;
+/// A value below `MAX_ESTABLISHED_PER_PEER_FLOOR` or at least the global
+/// inbound limit fails the build.
+pub const MAX_ESTABLISHED_PER_PEER: u32 = 16;
+
+/// Global cap on simultaneously established inbound connections.
+const MAX_ESTABLISHED_INCOMING: u32 = 64;
 
 /// Lowest value `MAX_ESTABLISHED_PER_PEER` may take. Below this, one Wi-Fi to
 /// cellular handover can exhaust the per-peer cap with ghost sockets (#417).
 const MAX_ESTABLISHED_PER_PEER_FLOOR: u32 = 16;
 
-// Compile-time guard: the per-peer cap cannot silently regress to a value that
-// handover ghost slots can exhaust.
+// Compile-time guard: preserve handover headroom without allowing one peer to
+// consume the entire global inbound capacity.
 const _: () = assert!(
     MAX_ESTABLISHED_PER_PEER >= MAX_ESTABLISHED_PER_PEER_FLOOR,
     "MAX_ESTABLISHED_PER_PEER is below its floor; see #417 (handover ghost slots)"
+);
+const _: () = assert!(
+    MAX_ESTABLISHED_PER_PEER < MAX_ESTABLISHED_INCOMING,
+    "MAX_ESTABLISHED_PER_PEER must be below MAX_ESTABLISHED_INCOMING"
 );
 
 /// The Iron Core network behaviour combining all protocols.
@@ -556,7 +563,7 @@ impl IronCoreBehaviour {
             connection_limits::ConnectionLimits::default()
                 .with_max_pending_outgoing(Some(32))
                 .with_max_established_outgoing(Some(128))
-                .with_max_established_incoming(Some(64))
+                .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
                 // Per-peer cap, see MAX_ESTABLISHED_PER_PEER. A mobile peer's
                 // Wi-Fi to cellular handover leaves its dead Wi-Fi sockets counted
                 // here for up to about a minute (until the ping timeout), and while
