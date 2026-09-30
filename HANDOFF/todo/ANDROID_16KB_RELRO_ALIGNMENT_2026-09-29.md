@@ -52,4 +52,4 @@ libraries in the APK are stored DEFLATED, so zip alignment is not the issue.
 - Add the ELF check to `scripts/verify_apk_native_libs.py` (CI already runs it on
   the debug APK) so the alignment cannot regress silently.
 
-Tracking: GitHub issue #419; the wider state is in `HANDOFF/OPUS_HANDOFF_2026-09-29.md`.
+Tracking: GitHub issue #419; the wider state is in `HANDOFF/CODEX_HANDOFF_2026-09-29.md`.
