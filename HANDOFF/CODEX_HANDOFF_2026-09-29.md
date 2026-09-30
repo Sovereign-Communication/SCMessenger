@@ -60,11 +60,14 @@ too. Do not route around either refusal; the operator decides.
   before anything else: reboot (a system-managed pagefile shrinks then), or run
   `scripts/reclaim_safe.py` (dry run first).
 - **Recommended order.** (1) Let #421's checks finish (Test (ubuntu-latest) is the long
-  pole) and merge it. `Docker Publish` then builds `testbotz/scmessenger:sha-<7 chars>` from
-  `main` (no local build). (2) Deploy the relay:
+  pole), then merge only after an independent exact-head review records the required
+  Rule-8/A2 approval, or the operator makes a fresh, explicit ruling on the specific
+  exception for #421. This handoff does not waive that gate. `Docker Publish` then builds
+  `testbotz/scmessenger:sha-<7 chars>` from `main` (no local build). (2) Deploy the cloud
+  node:
   `IMAGE_TAG=testbotz/scmessenger:sha-<7 chars> bash scripts/aws_deploy.sh 18.234.62.247`
   (A6; roll back with `sha-bceacb9`). (3) The operator repeats the cell test with the
-  phone's current APK (the fix is relay-side) and the passive pull follows section 7.
+  phone's current APK (the fix is node-side) and the passive pull follows section 7.
   (4) The docs PRs #416 and #415 are cheap in CI (docs-only short-circuit): update, merge,
   then open MT-12', then the rest of section 6.
 
@@ -131,7 +134,7 @@ snapshots.
   `12D3KooWR4GDL3hWKDirvzeQALdqDnwJA1bfyjnieW24KzBEkgGV`, public key
   `29876f3973f8e9f2705ec531c1a429583336c137bfc01bd313c69cd663e6e675`. It is NOT yet
   seeded as a contact on Windows or AWS (plan H-3, "re-seed"). The phone's clock runs
-  about 1.7 s ahead of the relay's.
+  about 1.7 s ahead of the cloud node's.
 - **Signing gap (the plan is wrong here)**: H-2 is recorded as done, but the repo secret
   `SCMESSENGER_DEBUG_KEYSTORE_BASE64` does NOT exist (only the release-keystore secrets
   do; the CI log for the run above says "not set"). Every CI APK carries a throwaway
@@ -153,11 +156,11 @@ snapshots.
 
 ## 5. The cell test failure (issue #417; evidence on the private repo)
 
-The operator's cell test ran 21:09:26 to 21:10:35Z. The relay denied every fresh
+The operator's cell test ran 21:09:26 to 21:10:35Z. The node denied every fresh
 cellular connection ("Inbound connection DENIED from /ip4/166.196.8.97/... limit 4
 reached", five times) because the phone's four dead Wi-Fi connections still held the
 per-peer cap (`core/src/transport/behaviour.rs`, `max_established_per_peer(Some(4))`)
-until ping timeout at 21:10:13 to 21:10:24Z. The relay's ZOMBIE-CONNECTION REAP
+until ping timeout at 21:10:13 to 21:10:24Z. The cloud node's ZOMBIE-CONNECTION REAP
 attributes by source IP, which a Wi-Fi to cellular handover changes. On the phone the
 relay-circuit dial to Windows died in 17 ms ("oneshot canceled"). Also seen: 20% of
 the phone's dials went to addresses that cannot work from a phone (`172.17.0.1`,
@@ -173,7 +176,7 @@ Evidence: branch `evidence/20260929-cell-test` on `Treystu/SCMessenger-backup`
    alone; tags are the branch name and `sha-<7 chars>`):
    `gh workflow run docker-publish.yml --ref fix/conn-cap-per-peer-64`, wait for it,
    then `IMAGE_TAG=testbotz/scmessenger:sha-<short> bash scripts/aws_deploy.sh 18.234.62.247`.
-   Only the relay needs the new cap for the cell retest; the phone keeps its APK. Record
+   Only the cloud node needs the new cap for the cell retest; the phone keeps its APK. Record
    the previous image (`sha-bceacb9`) for rollback. Ask the operator to repeat the cell
    test, then pull logs the same way (section 7).
 2. **Merge #416** (operator), then run the post-merge JEV from the `orch/mt12-drift-guard`
