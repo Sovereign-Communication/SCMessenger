@@ -1,8 +1,53 @@
 # CTO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
-Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
-Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
+Entry point: `/CTO`. Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-09-30, Codex takeover) =====
+
+The Codex handoff is a record, not authorization. Section 0 takes precedence over
+older statements in that handoff. The previous Freebuff transition and the
+historical resume points below remain as records; do not use their PR, fleet,
+or release snapshots as current status.
+
+- At checkout creation, the isolated takeover worktree was at
+  `10f5642ea94cb6398f72ee60d3703aed26e9428d` (merge of #420); the
+  orchestrator then verified live `main` at that SHA. This is a historical
+  takeover-start snapshot. Recheck the remote immediately before any
+  outward-facing action.
+- The September 29 handoff records the operator's v0.4.0/v0.5.0 unification
+  and merge train. Follow its section 0 and section 6 order, one PR at a
+  time, while preserving the existing plan's gates and operator decisions.
+  Re-read the exact PR head, scope, checks, reviews, and merge state before
+  each action; the handoff's earlier table is historical.
+- The handoff records #421 as the 64-connection stopgap. The orchestrator's
+  cap-16 update to #421 is at head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`. At approximately
+  2026-09-30T01:21Z, #421 remained OPEN with no reviews; its new CI run was
+  queued or in progress. The physical cell test and independent Rule-8/A2
+  review of the exact head remain pending. PR #422 merged into `main` at
+  2026-09-30T01:17:49Z; the resulting `main` commit is
+  `064deb2d72cef8b293e182927ffa5119b6f2ae6f`.
+- The September 29 operator instruction is CI-only verification: no local
+  builds. Complete CI and the recorded review gates before claiming any car
+  done. No new v0.4.0/v0.5.0 release or three-node/BLE PASS is established
+  by this update. Re-derive Windows, AWS cloud node, and Pixel state before
+  making a live claim or deploying.
+- The handoff records that Claude stood down and that the primary checkout
+  contains unowned WIP. Preserve that work. The Codex takeover proceeds in
+  an isolated worktree. Do not delete or commit primary-checkout WIP until
+  its ownership and remote durability are established.
+
+# ===== END RESUME 2026-09-30 =====
 
 # ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
 
