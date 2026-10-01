@@ -1183,6 +1183,21 @@ concrete instance of a settled decision not having propagated to the data model.
 Android module will show them; the field is defaulted, so removal is source-compatible for
 construction sites but breaking for readers. Effort S.
 
+**Outcome, 2026-10-01 — partially applied, and this entry's premise was wrong.** The operator
+confirmed that *all nodes relay* is core philosophy and that nothing may question it at the code
+level. The deletion was NOT taken, because the field is not always false as this entry claims:
+`isKnownRelay()` and `isBootstrapRelayPeer()` do return `false` unconditionally, but `isRelayHop`
+and `isInfraRelay` still populate it true, and three consumers read it —
+`collectKnownRelayPeerIds` filters on it (Kotlin), `dynamicRelays` filters on it (iOS), and
+`isFull = !isRelay && ...` depends on it. Deleting it would therefore have been a behaviour
+change smuggled in as a rename.
+
+What was applied instead is the naming half: `isRelay` -> `isInfraNode`, 75 occurrences across
+`MeshRepository.kt`, `ContactsViewModel.kt`, `DashboardViewModel.kt`, `MeshRepository.swift` and
+`MeshDashboardView.swift`, satisfying rule A-2 (canonical role noun `node`). The field's real
+meaning -- infrastructure peers -- is now what it says. **Deleting it remains open** and needs a
+decision about those three consumers.
+
 ---
 
 ## F-10 — `calculate_next_attempt` returns a timestamp, and `isAtMaxDelay` is camelCase in a snake_case crate
