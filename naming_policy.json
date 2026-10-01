@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "_note": "The single source of truth for repository naming policy. scripts/check_naming.py is the only enforcement point and reads this file; docs/rules/NAMING.md points here and deliberately does NOT restate the table, because a definition copied into a second place is a definition that will be wrong in two places (naming-audit/GLOSSARY.md, 'Scope of counts'). Derived from naming-audit/GLOSSARY.md (PR #423). Change a rule by changing this file, in its own commit, with the audit entry named in `audit_ref`.",
+  "policy_version": "2026-10-01",
+  "source": "naming-audit/GLOSSARY.md (PR #423, merged as e76e0593)",
+
+  "_note_statuses": "A rule may only be enforced as 'block' when its `status` is in `enforceable_statuses`. This is the load-bearing constraint of the whole file: it makes it impossible to quietly promote an unratified PROPOSAL into something that blocks a merge. Promoting a proposal is a two-key edit (status, then enforcement) and therefore a visible policy change in its own right.",
+  "enforceable_statuses": ["FROZEN", "ACCEPTED-AS-IS", "DECIDED-BY-DOCTRINE"],
+
+  "_note_tiers": "'block' fails the gate and blocks a commit or a merge. 'warn' prints [WARNING] and never blocks: those entries are PROPOSED or BLOCKED on an open question in the audit, and the repository owner has not ratified them. 'legitimate' names are recorded so that a later consistency sweep does not 'correct' a term the audit deliberately accepted.",
+  "rules": [
+    {
+      "id": "A-2",
+      "tier": "block",
+      "status": "DECIDED-BY-DOCTRINE",
+      "concept": "The role that holds a message on behalf of others (store-and-forward custody)",
+      "audit_ref": "naming-audit/GLOSSARY.md#a-2-store-and-forward-custody-the-project-specific-term",
+      "canonical": ["node"],
+      "rule": "The ROLE is named `node`. `relay` is the VERB for the custody behaviour and must not be used to name the role. Denied terms name a role that the architecture doctrine says does not exist: there are no standalone relays, every node relays.",
+      "denied": ["isRelay", "relayPeer", "relayNode", "relayServer", "relayAgent"],
+      "grandfathered": [
+        "RelayCustodyStore", "RelayCustody", "relay_custody", "cmd_relay",
+        "relay_id", "relayId", "relays", "isRelayHop", "isKnownRelay",
+        "isBootstrapRelayPeer", "isInfraRelay"
+      ],
+      "grandfathered_note": "Named in GLOSSARY A-2 as historical identifiers carrying the verb, and as the persisted custody field pair. They are permitted, not endorsed: A-2 proposes no rename for them.",
+      "note": "`isRelay` is denied on its own terms as well: GLOSSARY A-2's rename plan and FINDINGS F-13 record that its own comment says it no longer distinguishes anything, that it is always false, and that it sits beside `isFull`, which does."
+    },
+    {
+      "id": "A-3",
+      "tier": "block",
+      "status": "FROZEN",
+      "concept": "The message as it is stored",
+      "audit_ref": "naming-audit/GLOSSARY.md#a-3-the-message-as-it-is-stored",
+      "canonical": ["MessageRecord", "MessageRecordDto"],
+      "rule": "One spelling per concept: `MessageRecord` for the stored row, `MessageRecordDto` for any transport shape. The names are FROZEN by a UDL dictionary that both mobile clients bind, so the fix for a competing spelling is to use the frozen one, never to rename it.",
+      "denied": ["MessageEntity", "MessageDto", "StoredMessage"],
+      "note": "`StoredMessage` is denied as new vocabulary: GLOSSARY D-4 records that every one of its occurrences sits in wasm/, a crate no CI job builds, and that the type 'does not exist in the build', so adopting it would bind a production name to a phantom type (F-02, F-33). The occurrences that already exist need no grandfather entry because the gate is a line ratchet: it only ever sees lines a change ADDS, so history is never re-litigated."
+    },
+    {
+      "id": "A-4",
+      "tier": "block",
+      "status": "ACCEPTED-AS-IS",
+      "concept": "The encrypted unit on the wire",
+      "audit_ref": "naming-audit/GLOSSARY.md#a-4-the-encrypted-unit-on-the-wire",
+      "canonical": ["Envelope", "WireEnvelope", "DriftEnvelope"],
+      "rule": "Three spellings, three distinct meanings, all ACCEPTED-AS-IS: `Envelope` the domain object, `WireEnvelope` its serialized form, `DriftEnvelope` the drift protocol's variant. Denied terms would be a FOURTH spelling of the same thing.",
+      "denied": ["EnvelopeDto", "EnvelopeRecord", "WireMessageEnvelope"]
+    },
+    {
+      "id": "A-5",
+      "tier": "block",
+      "status": "FROZEN",
+      "concept": "The identifier of a peer",
+      "audit_ref": "naming-audit/GLOSSARY.md#a-5-the-identifier-of-a-peer",
+      "canonical": ["PeerId", "identity_id"],
+      "rule": "`PeerId` is libp2p's own name for a wire-format identifier and is FROZEN; `identity_id` is serialized and FROZEN. Denied terms are new spellings of an id that the glossary does not own.",
+      "denied": ["peer_uuid", "peerUuid", "peerUuidString"],
+      "grandfathered": ["canonicalPeerId", "routePeerId", "blePeerId", "libp2pPeerId"],
+      "grandfathered_note": "Explicitly BLOCKED on Q-3 in GLOSSARY A-5. Permitted as-is; renaming them is a decision the owner has not made."
+    },
+
+    {
+      "id": "B-2",
+      "tier": "warn",
+      "status": "PROPOSED",
+      "concept": "Delete verbs",
+      "audit_ref": "naming-audit/GLOSSARY.md#b-2-delete-verbs",
+      "canonical": ["remove_*", "forget_*"],
+      "rule": "`remove_*` for the domain verb; `forget_*` reserved for ledger-evidence semantics. GLOSSARY B-2 proposes retiring `delete_` outside the UI. NOT ENFORCED: the proposal is unratified, so a new `delete_` warns rather than blocks.",
+      "denied": ["delete_*"]
+    },
+    {
+      "id": "C-1",
+      "tier": "warn",
+      "status": "PROPOSED",
+      "concept": "Cross-layer time fields",
+      "audit_ref": "naming-audit/GLOSSARY.md#c-1-last_seen--the-repositorys-worst-field-name",
+      "canonical": ["lastSeenMs"],
+      "rule": "Every binding field carries its unit; `lastSeenMs` is the only inventory name that already does and is the model. A bare `lastSeen` in a binding is the defect. NOT ENFORCED: unratified, and `lastSeenRaw` is BLOCKED on Q-1, which may be a live bug rather than a name.",
+      "denied": ["lastSeen"]
+    },
+    {
+      "id": "GAP-peer-id-casing",
+      "tier": "warn",
+      "status": "AUDIT-GAP",
+      "concept": "Competing spellings of the peer-id headword that the audit never measured",
+      "audit_ref": "naming-audit/GLOSSARY.md#a-5-the-identifier-of-a-peer",
+      "canonical": ["PeerId"],
+      "rule": "`peerID` and `PeerID` occur 67 times across the tree and appear NOWHERE in the audit's measured term list, so the audit has no finding about them. This is recorded as a gap for the owner to rule on, deliberately as 'warn': Swift's own API guidelines prefer `peerID`, so a blanket ban would be wrong, and the audit never decided the question. NOT ENFORCED.",
+      "denied": ["peerID", "PeerID"]
+    }
+  ],
+
+  "legitimate": [
+    {"term": "drift", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2. A domain term, not a violation."},
+    {"term": "custody", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2; it names the behaviour, not a role."},
+    {"term": "mycorrhizal", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2."},
+    {"term": "mycelium", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2."},
+    {"term": "rhizomorph", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2."},
+    {"term": "triad", "id": "C-2", "why": "ACCEPTED-AS-IS in GLOSSARY C-2."},
+    {"term": "UNIFICATION", "id": "C-2", "why": "BLOCKED on Q-10, not denied. Permitted until the owner answers."},
+    {"term": "beacon", "id": "D-3", "why": "BLOCKED on Q-11, not denied. D-3 reserves it for the identity broadcast."},
+    {"term": "EnvelopeType", "id": "A-4", "why": "A qualified variant of the A-4 trio, not a fourth spelling."},
+    {"term": "SignedEnvelope", "id": "A-4", "why": "A qualified variant carrying its own meaning; not denied by A-4."},
+    {"term": "lastSeenMs", "id": "C-1", "why": "ACCEPTED-AS-IS and named the model to follow."},
+    {"term": "lastSeenRaw", "id": "C-1", "why": "BLOCKED on Q-1: possibly a live unit bug, not a naming defect."}
+  ],
+
+  "_note_scope": "Scanned extensions: .rs .kt .kts .swift .ts .tsx .js .mjs .py .udl. Exempt prefixes: naming-audit/ (the audit quotes every denied term verbatim), HANDOFF/ and docs/ (prose that discusses the names), tmp/, and generated bindings, whose spellings are owned by the FFI Surface Contract job.",
+  "scan_extensions": [".rs", ".kt", ".kts", ".swift", ".ts", ".tsx", ".js", ".mjs", ".py", ".udl"],
+  "exempt_prefixes": ["naming-audit/", "HANDOFF/", "docs/", "tmp/", "target/", "node_modules/", "vendor/"],
+  "_note_exempt_files": "The policy machinery is not subject to the policy it implements. scripts/check_naming.py names every denied term in its self-test, and scripts/measure_uncompiled_counts.py names them because counting them is its job. A gate that flagged its own fixtures would be flagged out of existence on its first commit, and a gate that flags the measuring instrument cannot measure anything.",
+  "exempt_files": ["scripts/check_naming.py", "scripts/measure_uncompiled_counts.py"],
+  "generated_globs": ["**/Generated/**", "**/generated/**", "**/*.g.kt"]
+}
