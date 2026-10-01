@@ -7,7 +7,7 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-10-01T04:03Z (37-PR comparison, Pixel install, Docker publication, and bounded app-log review recorded; operator cellular-test report not independently confirmed by capture)
+Last updated: 2026-10-01T04:24Z (landing-plan dispatch coverage linked; no runtime or release status changed)
 Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
@@ -164,6 +164,12 @@ This checkpoint records the current GitHub review and the evidence boundary. It 
 - Docker Publish [run 36655697337](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36655697337) completed successfully for exact PR #421 head `7a6c271924a4625e24ff80a30cc89ee9adede356`; build-and-push job `109699454632` succeeded. The workflow log identifies source `testbotz/scmessenger`, tags `sha-7a6c271` and `fix-conn-cap-per-peer-64`, and manifest digest `sha256:c949405afcea2206f7a4d016b2085787d68e61f6ca4590b1154998c036692b5b`.
 - The successful image publication does not prove AWS deployment or establish the cloud node's running version. AWS/cloud-node state remains UNVERIFIED. PR #421 still has the recorded Rule-8 `REQUEST_CHANGES` findings for global inbound capacity exhaustion and repeated-handover starvation; successful CI and image publication do not resolve them.
 - Raw log evidence remains in local `tmp/cell-test-pr421-20261001`; it is not part of the documentation publication.
+
+### Landing-plan readiness update (2026-10-01T04:24Z)
+
+- [V040_V050_LANDING_PLAN_20261001.md](../HANDOFF/V040_V050_LANDING_PLAN_20261001.md) links the existing v0.4.0 working-first, merge-train, tag-path, and three-node runbooks plus the four V5 WP packets.
+- Its dispatch protocol records per-car ownership, candidate-SHA evidence, dependency ordering, remote durability, and sanctioned build-output reclaim prerequisites. PR #421's global inbound fairness and repeated-handover recovery have behavior-level acceptance, subject to the operator's policy decision and exact-head independent review.
+- Planning workflow only; no runtime, build, device, deployment, or release evidence is added.
 
 ---
 ## 3. Milestone Execution Progress Log
