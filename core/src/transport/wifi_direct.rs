@@ -79,7 +79,6 @@ pub fn compute_group_owner_intent(is_charging: bool, battery_pct: u8) -> i32 {
 // genuine `double_must_use` findings on hand-written code, and pinning the
 // toolchain to hide it would disable every future lint at once.
 // Ref: the Lint / Rust Linting CI jobs, 13 errors, both traits.
-
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WifiDirectPlatformBridge: Send + Sync {

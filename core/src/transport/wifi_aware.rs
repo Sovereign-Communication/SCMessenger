@@ -153,10 +153,6 @@ pub struct DiscoveredPeer {
 // PLATFORM BRIDGE TRAIT
 // ============================================================================
 
-/// Platform-specific WiFi Aware API abstraction
-///
-/// Implementers provide actual WiFi Aware API calls for their platform.
-/// This is typically implemented by platform-specific code (e.g., iOS/Android bindings).
 // `#[async_trait]` 0.1.91 emits `#[must_use]` on each desugared method whose
 // return type is already `#[must_use]`, so clippy's `double_must_use` fires once
 // per async method -- 7 here, 6 in WifiDirectPlatformBridge. The attribute is
@@ -166,7 +162,10 @@ pub struct DiscoveredPeer {
 // genuine `double_must_use` findings on hand-written code, and pinning the
 // toolchain to hide it would disable every future lint at once.
 // Ref: the Lint / Rust Linting CI jobs, 13 errors, both traits.
-
+/// Platform-specific WiFi Aware API abstraction
+///
+/// Implementers provide actual WiFi Aware API calls for their platform.
+/// This is typically implemented by platform-specific code (e.g., iOS/Android bindings).
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WifiAwarePlatformBridge: Send + Sync {
