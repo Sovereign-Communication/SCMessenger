@@ -31,6 +31,34 @@ Promoting one to `block` is therefore a two-key edit to `naming_policy.json` —
 a visible policy change, in its own commit, with the glossary entry updated
 first. The gate's self-test asserts this refusal, so weakening it breaks CI.
 
+### A ratified concept is not a ratified remedy
+
+That check alone is not enough, because one rule routinely bundles terms the
+audit rated differently. Every denied term therefore also carries the action
+the audit proposed for it — `rename`, `delete`, or `keep-as-is` — and the
+status the audit gave **that action**, in the rule's `remedies` list. A term
+produces `[FAIL]` only when the rule's status *and* that term's remedy status
+are both ratified. Otherwise it is still scanned and still printed, but as
+`[WARNING]` with the reason attached.
+
+Two terms are in that state today:
+
+| term | rule | action | status | why |
+|---|---|---|---|---|
+| `isRelay` | A-2 | `delete` | `PROPOSED` | GLOSSARY A-2 rates the vocabulary `DECIDED-BY-DOCTRINE` but says "the `isRelay` deletion is `PROPOSED`". |
+| `StoredMessage` | A-3 | `delete` | `PROPOSED` | A-3's own inventory says the name "is not free" because F-02 offers it as an alternative, and "A-3's decision below deliberately does not" take it up. F-02 and F-33 are findings carrying a severity, not decisions. |
+
+Every denied term must be classified. A term with no remedy, a remedy for a
+term the rule does not deny, an action outside the three above, and a `block`
+rule whose every remedy is unratified are all **policy errors that refuse to
+load**. Without those guards the two lists drift apart and an unratified
+remedy quietly inherits the concept's status again — which is the defect this
+mechanism exists to close.
+
+The point is not politeness toward unratified findings. A gate that blocks on
+something the audit never decided gets bypassed, and a bypassed gate is worse
+than no gate.
+
 `legitimate` entries record terms the audit deliberately accepted
 (`mycorrhizal`, `triad`, `lastSeenMs`, the Q-3-blocked `routePeerId` family).
 They exist so that a later consistency sweep does not "correct" a name that was
@@ -70,7 +98,11 @@ make the gate useless on the path it exists to protect.
    glossary; it does not lead it.
 2. Edit `naming_policy.json` **in its own commit**, naming the glossary entry
    in the rule's `audit_ref`.
-3. Run `python scripts/check_naming.py --repo-root . --self-test`. Add a case
+3. Classify every denied term in `remedies`, with the action the glossary
+   proposes and the status the glossary gives **that action**. If the glossary
+   does not settle it, the status is not one of `enforceable_statuses` and the
+   term warns instead of blocking. Leave it out and the policy will not load.
+4. Run `python scripts/check_naming.py --repo-root . --self-test`. Add a case
    for the new rule: one line it must reject, and — where the term is close to
    one already permitted — one it must not.
 

@@ -25,11 +25,30 @@ scripts/measure_uncompiled_counts.py is how you count them.
 
 WHY A PROPOSAL CANNOT BLOCK A MERGE
 -----------------------------------
-load_policy() refuses any rule whose tier is "block" while its status is not in
-`enforceable_statuses`. GLOSSARY marks most of its recommendations PROPOSED or
-BLOCKED on an open question, and an unratified recommendation must never be able
-to block someone's commit. Promoting one is a two-key edit to naming_policy.json
-and therefore a visible policy change in its own right.
+There are TWO conditions, and a rule must clear both.
+
+The first is the concept. A rule whose tier is "block" while its status is not in
+`enforceable_statuses` is refused outright. GLOSSARY marks most of its
+recommendations PROPOSED or BLOCKED on an open question, and an unratified
+recommendation must never be able to block someone's commit. Promoting one is a
+two-key edit to naming_policy.json and therefore a visible policy change in its
+own right.
+
+The second is the REMEDY, and it is per term. One block-tier rule routinely
+bundles denied terms the audit rated differently. A-2's vocabulary decision is
+DECIDED-BY-DOCTRINE, but GLOSSARY rates the deletion of the `isRelay` field
+PROPOSED; A-3 says outright that `StoredMessage` "is not free" because F-02
+offers it as an alternative. Checking the concept alone let those unratified
+remedies inherit a ratified status and fail builds.
+
+So every denied term carries the action the audit proposed for it (rename /
+delete / keep-as-is) and the status the audit gave THAT action. A term produces
+FAIL only when the concept's status AND that term's remedy status are both
+ratified. A term whose remedy is unratified is still scanned and still reported,
+as a [WARNING] -- the finding is never lost, it simply cannot block. A denied
+term with no remedy, or a remedy for a term the rule does not deny, is a policy
+error and refuses to load: that drift is precisely how an unratified remedy
+would quietly climb back into blocking.
 
 Exit 0 = clean, 1 = [FAIL] printed, 2 = BLOCKED (policy unreadable, not a git
 repository, wrong root). [WARNING] never changes the exit code.
@@ -49,11 +68,16 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 POLICY_FILE = "naming_policy.json"
 POLICY_SCHEMA = 1
 VALID_TIERS = ("block", "warn")
+# The three things a naming rule can say should happen to a term. The action is
+# recorded so a reader can see WHAT was proposed separately from whether the audit
+# ratified it: "delete, PROPOSED" and "rename, FROZEN" are different claims.
+VALID_REMEDY_ACTIONS = ("rename", "delete", "keep-as-is")
 
 RULE_FIELDS = {
     "id", "tier", "status", "concept", "audit_ref", "canonical", "rule",
-    "denied", "grandfathered", "grandfathered_note", "note",
+    "denied", "remedies", "grandfathered", "grandfathered_note", "note",
 }
+REMEDY_FIELDS = {"term", "action", "status"}
 LEGITIMATE_FIELDS = {"term", "id", "why"}
 TOP_LEVEL_KEYS = {
     "schema", "_note", "_note_statuses", "_note_tiers", "_note_scope",
@@ -84,6 +108,10 @@ class Rule:
     # __eq__/__repr__ micro-optimisation on a field nothing compares or
     # prints, so they are not worth working around.
     patterns: Tuple[re.Pattern, ...] = ()
+    # Denied terms whose REMEDY the audit ratified. A term outside this set is
+    # still scanned and still reported, but only ever as a WARNING: the gate
+    # reports what the audit has not yet decided, and enforces only what it has.
+    blocking: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
@@ -123,6 +151,126 @@ def _require_str_list(data: object, where: str) -> List[str]:
     return out
 
 
+def _remedies_for(remedies, rule_id, denied, tier, statuses, where):
+    """Return the denied terms of `rule_id` that a build may actually fail on.
+
+    Every denied term must be classified with the action the audit proposed for
+    it and the status the audit gave THAT action. A term may block only when
+    its remedy status is ratified; an unratified remedy is downgraded to a
+    warning, because the concept's status says nothing about it.
+    """
+    if not isinstance(remedies, list) or not remedies:
+        raise PolicyError(
+            f"{where} ({rule_id}): remedies must be a non-empty list; every denied "
+            f"term needs the action and status the audit gave it")
+    status_by_term = {}
+    action_by_term = {}
+    for index, rem in enumerate(remedies):
+        w = f"{where} ({rule_id}) remedies[{index}]"
+        if not isinstance(rem, dict):
+            raise PolicyError(f"{w} must be a JSON object")
+        extra = sorted(set(rem) - REMEDY_FIELDS)
+        missing = sorted(REMEDY_FIELDS - set(rem))
+        if missing or extra:
+            raise PolicyError(f"{w}: " + "; ".join(
+                ([f"missing {m}" for m in missing] + [f"unknown {e}" for e in extra])))
+        term, action, rem_status = rem["term"], rem["action"], rem["status"]
+        if not isinstance(term, str) or not term.strip():
+            raise PolicyError(f"{w}: term must be a non-empty string")
+        if term in status_by_term:
+            raise PolicyError(f"{w}: duplicate remedy for term {term!r}")
+        if action not in VALID_REMEDY_ACTIONS:
+            raise PolicyError(
+                f"{w}: action must be one of {VALID_REMEDY_ACTIONS}, got {action!r}")
+        if not isinstance(rem_status, str) or not rem_status.strip():
+            raise PolicyError(f"{w}: status must be a non-empty string")
+        status_by_term[term] = rem_status
+        action_by_term[term] = action
+
+    # Drift guards. A denied term with no remedy would inherit the concept's
+    # status again -- the exact defect this function exists to close. A remedy
+    # for a term the rule does not deny is the same drift the other way: it
+    # reads as ratified coverage for something the policy never checks.
+    unclassified = sorted(set(denied) - set(status_by_term))
+    if unclassified:
+        raise PolicyError(
+            f"{where} ({rule_id}): denied terms with no remedy classification: "
+            f"{unclassified}. Every denied term must carry an action and a status, "
+            f"or the rule would block on a remedy the audit never ratified.")
+    orphaned = sorted(set(status_by_term) - set(denied))
+    if orphaned:
+        raise PolicyError(
+            f"{where} ({rule_id}): remedies for terms this rule does not deny: "
+            f"{orphaned}")
+
+    if tier != "block":
+        return []
+    blocking = [t for t in denied if status_by_term[t] in statuses]
+    if not blocking:
+        detail = ", ".join(
+            f"{t}={action_by_term[t]}/{status_by_term[t]}" for t in denied)
+        raise PolicyError(
+            f"{where} ({rule_id}): tier 'block' but no denied term has a ratified "
+            f"remedy ({detail}). A rule whose every remedy is unratified can only "
+            f"warn, so say tier 'warn'.")
+    return blocking
+
+
+def _severity_for(rule, term):
+    """FAIL only for a ratified remedy on a block-tier rule; WARNING otherwise."""
+    return "FAIL" if rule.tier == "block" and term in rule.blocking else "WARNING"
+
+
+def _build_rules(entries, statuses):
+    """Validate and construct every rule. The one place tier/status are checked."""
+    if not isinstance(entries, list) or not entries:
+        raise PolicyError("rules must be a non-empty list, or the gate checks nothing")
+    rules = []
+    seen_ids = set()
+    for index, entry in enumerate(entries):
+        where = f"rules[{index}]"
+        if not isinstance(entry, dict):
+            raise PolicyError(f"{where} must be a JSON object")
+        extra = sorted(set(entry) - RULE_FIELDS)
+        missing = sorted({"id", "tier", "status", "concept", "audit_ref",
+                          "rule", "denied", "remedies"} - set(entry))
+        if missing or extra:
+            raise PolicyError(f"{where}: " + "; ".join(
+                ([f"missing {m}" for m in missing] + [f"unknown {e}" for e in extra])))
+        rule_id = entry["id"]
+        if rule_id in seen_ids:
+            raise PolicyError(f"duplicate rule id {rule_id!r}")
+        seen_ids.add(rule_id)
+        tier = entry["tier"]
+        if tier not in VALID_TIERS:
+            raise PolicyError(f"{where} ({rule_id}): tier must be one of {VALID_TIERS}, got {tier!r}")
+        status = entry["status"]
+        if not isinstance(status, str) or not status.strip():
+            raise PolicyError(f"{where} ({rule_id}): status must be a non-empty string")
+        # Constraint one of two: the CONCEPT must be ratified. Module docstring.
+        if tier == "block" and status not in statuses:
+            raise PolicyError(
+                f"{where} ({rule_id}): tier 'block' requires a status in "
+                f"enforceable_statuses {sorted(statuses)}, but status is {status!r}. "
+                f"A proposal that has not been ratified must not block a merge; either "
+                f"ratify it in the glossary first or set tier to 'warn'.")
+        denied = _require_str_list(entry["denied"], f"{where} ({rule_id}) denied")
+        # Constraint two of two: every REMEDY must be ratified, per term.
+        blocking = _remedies_for(entry["remedies"], rule_id, denied, tier, statuses, where)
+        for field_name in ("concept", "audit_ref", "rule"):
+            if not isinstance(entry[field_name], str) or not entry[field_name].strip():
+                raise PolicyError(f"{where} ({rule_id}): {field_name} must be a non-empty string")
+        rules.append(Rule(
+            id=rule_id, tier=tier, status=status, concept=entry["concept"],
+            audit_ref=entry["audit_ref"],
+            canonical=tuple(_require_str_list(entry.get("canonical", []),
+                                             f"{where} ({rule_id}) canonical")),
+            denied=tuple(denied),
+            patterns=tuple(compile_denied(t) for t in denied),
+            blocking=frozenset(blocking),
+        ))
+    return tuple(rules)
+
 def load_policy(root: Path) -> Policy:
     """Parse and validate naming_policy.json. Raises PolicyError on any problem."""
     path = root / POLICY_FILE
@@ -145,49 +293,7 @@ def load_policy(root: Path) -> Policy:
     if not statuses:
         raise PolicyError("enforceable_statuses must not be empty, or nothing could ever block")
 
-    rules = []
-    seen_ids = set()
-    for index, entry in enumerate(data.get("rules") or []):
-        where = f"rules[{index}]"
-        if not isinstance(entry, dict):
-            raise PolicyError(f"{where} must be a JSON object")
-        extra = sorted(set(entry) - RULE_FIELDS)
-        missing = sorted({"id", "tier", "status", "concept", "audit_ref", "rule", "denied"} - set(entry))
-        if missing or extra:
-            raise PolicyError(f"{where}: " + "; ".join(
-                ([f"missing {m}" for m in missing] + [f"unknown {e}" for e in extra])))
-        rule_id = entry["id"]
-        if rule_id in seen_ids:
-            raise PolicyError(f"duplicate rule id {rule_id!r}")
-        seen_ids.add(rule_id)
-        tier = entry["tier"]
-        if tier not in VALID_TIERS:
-            raise PolicyError(f"{where} ({rule_id}): tier must be one of {VALID_TIERS}, got {tier!r}")
-        status = entry["status"]
-        if not isinstance(status, str) or not status.strip():
-            raise PolicyError(f"{where} ({rule_id}): status must be a non-empty string")
-        # The load-bearing constraint. See the module docstring.
-        if tier == "block" and status not in statuses:
-            raise PolicyError(
-                f"{where} ({rule_id}): tier 'block' requires a status in "
-                f"enforceable_statuses {sorted(statuses)}, but status is {status!r}. "
-                f"A proposal that has not been ratified must not block a merge; either "
-                f"ratify it in the glossary first or set tier to 'warn'."
-            )
-        denied = _require_str_list(entry["denied"], f"{where} ({rule_id}) denied")
-        for field_name in ("concept", "audit_ref", "rule"):
-            if not isinstance(entry[field_name], str) or not entry[field_name].strip():
-                raise PolicyError(f"{where} ({rule_id}): {field_name} must be a non-empty string")
-        rules.append(Rule(
-            id=rule_id, tier=tier, status=status, concept=entry["concept"],
-            audit_ref=entry["audit_ref"],
-            canonical=tuple(_require_str_list(entry.get("canonical", []),
-                                             f"{where} ({rule_id}) canonical")),
-            denied=tuple(denied),
-            patterns=tuple(compile_denied(t) for t in denied),
-        ))
-    if not rules:
-        raise PolicyError("rules must not be empty, or the gate checks nothing")
+    rules = _build_rules(data.get("rules"), frozenset(statuses))
 
     legitimate = set()
     for index, entry in enumerate(data.get("legitimate") or []):
@@ -245,12 +351,19 @@ def findings_for_lines(rel_path: str, lines: Iterable[Tuple[int, str]], policy: 
     for lineno, text in lines:
         for rule_id, term in scan_text(text, policy):
             rule = next(r for r in policy.rules if r.id == rule_id)
-            severity = "FAIL" if rule.tier == "block" else "WARNING"
+            severity = _severity_for(rule, term)
             message = (
                 f"{rel_path}:{lineno}: `{term}` is denied by naming rule {rule_id} "
                 f"({rule.concept}); status {rule.status}, audit {rule.audit_ref}. "
                 f"Canonical: {', '.join('`' + c + '`' for c in _canonical_of(policy, rule_id))}"
             )
+            if rule.tier == "block" and severity == "WARNING":
+                # Say WHY it does not block, or a reader sees a block-tier rule
+                # warn and assumes the gate is broken.
+                message += (
+                    " -- reported but not enforced: the audit has not ratified "
+                    "the remedy for this term."
+                )
             findings.append((severity, rule_id, f"{rel_path}:{lineno}", message))
     return findings
 
@@ -307,8 +420,8 @@ def self_test(root: Path) -> int:
     policy = load_policy(root)
     cases: List[Tuple[str, str, str]] = [
         # (description, line, expected severity: FAIL / WARNING / clean)
-        ("a blocked doctrine violation is a FAIL",
-         "        val isRelay = true", "FAIL"),
+        ("isRelay warns, not fails: A-2 deletes it and GLOSSARY calls that PROPOSED",
+         "        val isRelay = true", "WARNING"),
         ("a blocked role-noun compound is a FAIL",
          "  let relayPeer = pick()", "FAIL"),
         ("a frozen-name variant is a FAIL",
@@ -335,22 +448,38 @@ def self_test(root: Path) -> int:
          "let peerID = remote.peerID", "WARNING"),
     ]
     failures = []
-    for description, line, expected in cases:
-        hits = scan_text(line, policy)
-        actual = "clean"
-        if hits:
-            rules = {r.id: r for r in policy.rules}
+    policy_cases = 0  # policy-validation assertions, counted not assumed
+
+    def policy_ok(message: str) -> None:
+        nonlocal policy_cases
+        policy_cases += 1
+        print(f"  [OK] {message}")
+
+    def policy_fail(message: str) -> None:
+        nonlocal policy_cases
+        policy_cases += 1
+        failures.append(f"  {message}")
+
+    def worst_severity(pol: Policy, line: str) -> str:
+        """Exercise the same severity path the real gate uses."""
+        by_id = {r.id: r for r in pol.rules}
+        worst = "clean"
+        for rule_id, term in scan_text(line, pol):
+            if _severity_for(by_id[rule_id], term) == "FAIL":
+                return "FAIL"
             worst = "WARNING"
-            for rule_id, _ in hits:
-                if rules[rule_id].tier == "block":
-                    worst = "FAIL"
-            actual = worst
+        return worst
+
+    for description, line, expected in cases:
+        actual = worst_severity(policy, line)
         if actual != expected:
             failures.append(f"  {description}: expected {expected}, got {actual} (line: {line!r})")
         else:
             print(f"  [OK] {description}")
 
-    # The load-bearing constraint: a proposal must not be able to block.
+    # The load-bearing constraint, part one: a PROPOSED CONCEPT must not be able
+    # to block. (Part two -- an unratified REMEDY on a ratified concept -- is the
+    # downgrade group below.)
     for description, mutate in (
         ("a block-tier PROPOSED rule is refused",
          lambda d: d["rules"].append({**d["rules"][0], "id": "X-1", "tier": "block", "status": "PROPOSED"})),
@@ -359,16 +488,91 @@ def self_test(root: Path) -> int:
     ):
         try:
             load_policy_from_mapping(mutate(_raw(root)))
-            failures.append(f"  {description}: policy was accepted")
+            policy_fail(f"{description}: policy was accepted")
         except PolicyError:
-            print(f"  [OK] {description}")
+            policy_ok(description)
+
+    # The load-bearing constraint, part two: a RATIFIED CONCEPT whose remedy for one
+    # specific term is unratified. The concept check above cannot see this case --
+    # A-2's vocabulary is DECIDED-BY-DOCTRINE while its `isRelay` deletion is
+    # PROPOSED. That term must be reported and must NOT be able to fail a build.
+    doc = _raw(root)
+    doc["rules"].append({
+        "id": "X-3", "tier": "block", "status": "DECIDED-BY-DOCTRINE",
+        "concept": "self-test fixture", "audit_ref": "self-test", "rule": "self-test fixture",
+        "denied": ["ratifiedTerm", "unratifiedTerm"],
+        "remedies": [
+            {"term": "ratifiedTerm", "action": "rename", "status": "FROZEN"},
+            {"term": "unratifiedTerm", "action": "delete", "status": "PROPOSED"},
+        ],
+    })
+    try:
+        split = load_policy_from_mapping(doc)
+    except PolicyError as exc:
+        policy_fail(f"a ratified concept with a mixed remedy is refused: {exc}")
+    else:
+        for term, expected, why in (
+            ("ratifiedTerm", "FAIL", "a ratified remedy still blocks"),
+            ("unratifiedTerm", "WARNING",
+             "an UNRATIFIED remedy on a ratified concept must not block"),
+        ):
+            actual = worst_severity(split, f"    let {term} = 1")
+            if actual != expected:
+                policy_fail(f"{why}: expected {expected}, got {actual}")
+            else:
+                policy_ok(f"{why} ({term} -> {expected})")
+
+    # ...and a block-tier rule whose EVERY remedy is unratified is a policy error,
+    # not a quietly-weakened gate: it should say tier 'warn'.
+    all_unratified = _raw(root)
+    all_unratified["rules"].append({
+        "id": "X-4", "tier": "block", "status": "DECIDED-BY-DOCTRINE",
+        "concept": "self-test fixture", "audit_ref": "self-test", "rule": "self-test fixture",
+        "denied": ["onlyUnratified"],
+        "remedies": [{"term": "onlyUnratified", "action": "delete", "status": "PROPOSED"}],
+    })
+    try:
+        load_policy_from_mapping(all_unratified)
+        policy_fail("a block-tier rule with only unratified remedies: was accepted")
+    except PolicyError:
+        policy_ok("a block-tier rule with only unratified remedies is refused")
+
+    for description, mutate in (
+        ("a denied term with no remedy classification is refused",
+         lambda d: d["rules"].append({
+             "id": "X-5", "tier": "warn", "status": "ACCEPTED-AS-IS",
+             "concept": "x", "audit_ref": "x", "rule": "x",
+             "denied": ["orphanTerm"],
+             "remedies": [{"term": "somethingElse", "action": "rename", "status": "FROZEN"}],
+         })),
+        ("an unknown remedy action is refused",
+         lambda d: d["rules"].append({
+             "id": "X-6", "tier": "warn", "status": "ACCEPTED-AS-IS",
+             "concept": "x", "audit_ref": "x", "rule": "x",
+             "denied": ["weirdTerm"],
+             "remedies": [{"term": "weirdTerm", "action": "purge", "status": "FROZEN"}],
+         })),
+        ("a remedy entry missing its status is refused",
+         lambda d: d["rules"].append({
+             "id": "X-7", "tier": "warn", "status": "ACCEPTED-AS-IS",
+             "concept": "x", "audit_ref": "x", "rule": "x",
+             "denied": ["partialTerm"],
+             "remedies": [{"term": "partialTerm", "action": "rename"}],
+         })),
+    ):
+        try:
+            load_policy_from_mapping(mutate(_raw(root)))
+            policy_fail(f"{description}: policy was accepted")
+        except PolicyError:
+            policy_ok(description)
 
     if failures:
         print(f"naming policy: SELF-TEST FAILED ({len(failures)} case(s))", file=sys.stderr)
         for line in failures:
             print(line, file=sys.stderr)
         return 1
-    print(f"[OK] self-test passed: {len(cases)} scan cases + 2 policy-validation cases")
+    print(f"[OK] self-test passed: {len(cases)} scan cases + "
+          f"{policy_cases} policy-validation cases")
     return 0
 
 
@@ -383,25 +587,10 @@ def load_policy_from_mapping(data: object) -> Policy:
     statuses = data.get("enforceable_statuses")
     if not isinstance(statuses, list) or not statuses:
         raise PolicyError("enforceable_statuses must be a non-empty list")
-    rules = data.get("rules")
-    if not isinstance(rules, list) or not rules:
-        raise PolicyError("rules must be a non-empty list")
-    for entry in rules:
-        tier, status = entry.get("tier"), entry.get("status")
-        if tier not in VALID_TIERS:
-            raise PolicyError(f"tier must be one of {VALID_TIERS}")
-        if tier == "block" and status not in statuses:
-            raise PolicyError(
-                f"rule {entry.get('id')!r}: tier 'block' requires status in {sorted(statuses)}, "
-                f"got {status!r}")
+    rules = _build_rules(data.get("rules"), frozenset(statuses))
     return Policy(
         enforceable_statuses=frozenset(statuses),
-        rules=tuple(Rule(id=e["id"], tier=e["tier"], status=e["status"],
-                         concept=e.get("concept", ""), audit_ref=e.get("audit_ref", ""),
-                         canonical=tuple(e.get("canonical", ())),
-                         denied=tuple(e.get("denied", ())),
-                         patterns=tuple(compile_denied(t) for t in e.get("denied", ())))
-                    for e in rules),
+        rules=rules,
         legitimate=frozenset(),
         extensions=frozenset(),
         exempt_prefixes=(),
@@ -476,8 +665,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"If a name is right and the policy is wrong, change {POLICY_FILE} in its own "
               f"commit -- do not weaken the rule in passing.", file=sys.stderr)
         return 1
-    print(f"[OK] naming policy: {scanned} file(s) in scope, no denied name added "
-          f"(policy {policy.version})")
+    if warnings:
+        print(f"[OK] naming policy: {scanned} file(s) in scope, no BLOCKING name "
+              f"added; {len(warnings)} warning(s) reported (policy {policy.version})")
+    else:
+        print(f"[OK] naming policy: {scanned} file(s) in scope, no denied name added "
+              f"(policy {policy.version})")
     return 0
 
 
