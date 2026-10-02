@@ -15,6 +15,7 @@ mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
+mod watchdog;
 
 #[cfg(target_os = "windows")]
 mod ble_windows;
@@ -2729,37 +2730,27 @@ async fn cmd_start(
         .and_then(|v| v.parse().ok())
         .unwrap_or(600);
     tokio::spawn(async move {
-        // Poll at 1/10th of the timeout (min 5s) so detection latency stays
-        // proportional to the configured threshold.
-        let poll = std::time::Duration::from_secs((heartbeat_timeout_secs / 10).max(5));
-        let mut ticker = tokio::time::interval(poll);
+        // WP4 (WATCH-POS): the exit decision is `watchdog::LogSilenceWatchdog`,
+        // a pure predicate with its own tests, so the positive case -- a quiet
+        // but healthy node is never killed -- is asserted as behaviour instead
+        // of being inferable only from a process that did not exit.
+        let mut silence_watchdog = watchdog::LogSilenceWatchdog::new(heartbeat_timeout_secs);
+        let mut ticker = tokio::time::interval(watchdog::poll_interval(heartbeat_timeout_secs));
         ticker.tick().await; // first tick is immediate
-                             // Two consecutive silence readings are required before exit. A
-                             // single bad measurement must never kill a healthy node -- observed
-                             // live 2026-09-15 when enumeration-cached metadata made the first
-                             // version read 659s of "silence" against logs written one second
-                             // earlier. Poll cadence is timeout/10, so this costs at most one
-                             // extra poll interval of detection latency (~60s at the default).
-        let mut consecutive_silence: u32 = 0;
         loop {
             ticker.tick().await;
-            if let Some(age) = config::latest_log_age_secs(&heartbeat_log_dir) {
-                if age > heartbeat_timeout_secs {
-                    consecutive_silence = consecutive_silence.saturating_add(1);
-                    if consecutive_silence >= 2 {
-                        tracing::error!(
-                            "log_silence_watchdog: no log output for {}s across {} consecutive readings (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
-                            age,
-                            consecutive_silence,
-                            heartbeat_timeout_secs
-                        );
-                        eprintln!(
-                            "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
-                            "[FAIL]".red(),
-                            age
-                        );
-                        std::process::exit(1);
-                    }
+            match silence_watchdog.observe(config::latest_log_age_secs(&heartbeat_log_dir)) {
+                // Fresh (or unreadable/missing) -- the streak is cleared inside
+                // `observe`. A missing log dir never triggers: startup writes log
+                // lines within seconds, so an absent heartbeat only exists
+                // pre-init.
+                watchdog::LogSilenceVerdict::Healthy => {}
+                // One silence reading warns and requires a second consecutive
+                // reading before exit: a single bad measurement must never kill
+                // a healthy node (observed live 2026-09-15 when
+                // enumeration-cached metadata made the first version read 659s
+                // of "silence" against logs written one second earlier).
+                watchdog::LogSilenceVerdict::Warning { age_secs: age, .. } => {
                     // Recorded in the watchdog's own log, NOT through the
                     // tracing appender: this task measures the directory that
                     // appender writes to, so its own warning must never feed
@@ -2784,13 +2775,25 @@ async fn cmd_start(
                             e
                         );
                     }
-                    continue;
+                }
+                watchdog::LogSilenceVerdict::Exit {
+                    age_secs: age,
+                    consecutive,
+                } => {
+                    tracing::error!(
+                        "log_silence_watchdog: no log output for {}s across {} consecutive readings (threshold {}s) -- node appears wedged; exiting so a restart can recover it",
+                        age,
+                        consecutive,
+                        heartbeat_timeout_secs
+                    );
+                    eprintln!(
+                        "{} No log output for {}s -- node appears wedged; exiting rather than running silently. Restart to recover.",
+                        "[FAIL]".red(),
+                        age
+                    );
+                    std::process::exit(1);
                 }
             }
-            // Fresh (or unreadable/missing) -- reset the streak. A missing
-            // log dir never triggers: startup writes log lines within
-            // seconds, so an absent heartbeat only exists pre-init.
-            consecutive_silence = 0;
         }
     });
 
