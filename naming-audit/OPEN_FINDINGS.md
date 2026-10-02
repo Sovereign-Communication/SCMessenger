@@ -39,11 +39,15 @@ Every count in this register was measured on:
 | | |
 |---|---|
 | Reference | `origin/main` @ `e76e0593` |
-| File set | `git ls-tree -r --name-only origin/main` — **487 code files** (`.rs .kt .kts .swift .ts .tsx .js .mjs .udl`) |
+| File set | `git ls-tree -r --name-only origin/main` — **631 code files**, on the
+naming gate's own scan set (`.rs .kt .kts .swift .ts .tsx .js .mjs .py .udl`) |
 | Matching | whole-word, identifier-boundary on both sides (`relayPeerId` does not count as `relayPeer`) |
 | Counts | **occurrences**, not matching lines |
 | Classification | every hit labelled IDENTIFIER / STRING / COMMENT |
 | Invariant | `IDENT + STRING + COMMENT == occurrence count`, 0 failures across 16 terms |
+| `.py` | **included**, because the gate scans it. Excluding it would understate
+`PeerID` by 5, `relays` by 7, and `relay_id` / `relayId` / `envelopeData` /
+`StoredMessage` by 1 each. |
 
 Three measurement errors were found and corrected during this pass. They are the reason an
 earlier draft's numbers do not match:
@@ -59,6 +63,28 @@ The corrected harness is `scripts/`-adjacent scratch under `tmp/audit/` and is n
 
 ---
 
+## Verification record
+
+**Verified 2026-10-01, against `origin/main` @ `e76e0593`.** This document was assembled by
+merging three working reports that had each contained numbers later proved false, so the
+merged document was itself re-measured entry by entry.
+
+| check | result |
+|---|---|
+| Occurrence counts, all 16 terms, on the gate scan set | **0 invariant failures** (`IDENT + STRING + COMMENT == occurrences`) |
+| `file:line` citations | **99 checked, 99 correct** |
+| Corrections table | **15 data rows, re-checked complete.** No correction was dropped in the merge; a first pass here miscounted them as 9 and duplicated four. |
+| Figures wrong on first publication | **13, across 8 entries** — baseline scope; OF-01 (union and `relays` row); OF-02; OF-04 (citation range and the `.gitignore` claim); OF-05 (two breakdowns); OF-13; OF-17 (two claims, one citing a file not in the directory); OF-18 (file and total bytes). All corrected and logged in §Corrections. |
+
+**What is NOT verified here.** Every entry's counts and citations were re-measured. These
+judgements were not, and are flagged in place rather than asserted: OF-06 and OF-07's
+*intended* behaviour (which one is correct is the repository owner's call); OF-10's and
+OF-14's and OF-16's open questions, each marked *"I cannot tell"* in its entry; OF-13's
+cause (an abandoned module or a wiring mistake). Nothing in this register depends on an
+unverified number.
+
+---
+
 ## Category 1 — Violations the policy layer does not catch
 
 The naming gate (`naming_policy.json` + `scripts/check_naming.py`, both on the
@@ -68,11 +94,11 @@ The naming gate (`naming_policy.json` + `scripts/check_naming.py`, both on the
 
 ### OF-01 — Five relay tokens are grandfathered under a rationale that is false for all five
 
-**Severity:** HIGH  **Occurrences:** 265 / 129 identifiers / 45 distinct code files
+**Severity:** HIGH  **Occurrences:** 272 / 130 identifiers / 49 distinct code files
 
 | term | occurrences | identifiers | files |
 |---|---:|---:|---:|
-| `relays` | 198 | 67 | 40 |
+| `relays` | 205 | 68 | 44 |
 | `isBootstrapRelayPeer` | 40 | 39 | 6 |
 | `isKnownRelay` | 17 | 13 | 3 |
 | `isRelayHop` | 7 | 7 | 1 |
@@ -122,7 +148,7 @@ by **14** occurrences across four files. Every one of them parses that single st
 | `scripts/run5.sh` | 8 | `.sh` | **no** |
 | `scripts/run5-live-feedback.sh` | 1 | `.sh` | **no** |
 
-`PeerID` is **0 identifiers** across all 12 code files where it occurs — it is a log-format
+`PeerID` is **0 identifiers** across all 14 code files where it occurs — it is a log-format
 token, never a name. This is a persisted-format boundary: renaming the log string would
 break parsing of logs already on disk, and the gate would catch 5 of the 14 sites.
 
@@ -161,9 +187,10 @@ that a UDL rename additionally requires `scripts/ffi_surface.sh --update`. Effor
 **Severity:** LOW-MEDIUM  **Occurrences:** 217 in 1 file
 
 `log-visualizer/public/data/wiring_graph.json` is a generated Cytoscape call graph,
-`generated_at` **2026-08-20**, built by `scripts/build_wiring_graph.py:518-569` from
-`HANDOFF_AUDIT/REPO_MAP.jsonl`. It is tracked, is **not** gitignored (no `log-visualizer`
-rule in `.gitignore`), and nothing in CI refreshes it.
+`generated_at` **2026-08-20**, built by `scripts/build_wiring_graph.py:518`, with the output
+path named at `:567`, from `HANDOFF_AUDIT/REPO_MAP.jsonl`. It is tracked and is **not**
+gitignored — `.gitignore:349` carries a `!log-visualizer/package-lock.json` negation, but
+no rule covers `log-visualizer/public/data/` — and nothing in CI refreshes it.
 
 | term | occurrences |
 |---|---:|
@@ -187,9 +214,11 @@ REPO_MAP. Effort S.
 
 - `RelayCustody` appears in `naming_policy.json`'s `grandfathered` list and occurs **zero
   times** anywhere, in code and in `naming-audit/` alike.
-- `relay_id` (9 occurrences, 4 files: `core/src/transport/swarm.rs` 4, one `HANDOFF/done/`
-  file 1, `naming-audit/GLOSSARY.md` 2, `scripts/measure_uncompiled_counts.py` 1) and
-  `relayId` (7, 3 files: `MeshRepository.kt` 3, GLOSSARY 2, measure script 1) are named in
+- `relay_id` (9 occurrences, 4 files: `core/src/transport/swarm.rs` 4;
+  `HANDOFF/done/[VALIDATED]/[VALIDATED]_P1_CORE_002_Mycorrhizal_Routing_Production_Wire.md`
+  2, both on line `:63`; `naming-audit/GLOSSARY.md` 2;
+  `scripts/measure_uncompiled_counts.py` 1) and `relayId` (7, 3 files:
+  `MeshRepository.kt` 4, GLOSSARY 2, measure script 1) are named in
   GLOSSARY.md:110 only inside a prose count list and again at `:748-749` in the abbreviation
   inventory. No rationale, no status.
 
@@ -238,10 +267,17 @@ The iOS filter works. The Android filter is `if (false) return`. **iOS hides clo
 peers from the Contacts Nearby list; Android shows them.** Same comment, same event, same
 intent, opposite result — caused entirely by one name resolving to two functions.
 
-Live call sites that would change behaviour if unified: `MeshRepository.kt` 15 (incl.
-`:10948` inside the wrapper), `ContactsViewModel.kt` 3 (`:292`, `:293`, `:387`),
-`MeshRepository.swift` 13 (incl. `:5936` inside `isKnownRelay`), `ContactsViewModel.swift` 3
-(`:272` wrapper, `:280`, `:343`), plus 3 in two test files.
+**34 live call sites** would change behaviour if the two implementations were unified.
+By file, counting each occurrence minus its definition:
+
+| file | occurrences | definitions | live | notes |
+|---|---:|---:|---:|---|
+| `MeshRepository.kt` | 16 | 2 | **14** | one of the 14 (`:10948`) is the call inside `isBootstrapRelayPeerFromKey` |
+| `ContactsViewModel.kt` | 3 | 0 | **3** | `:292`, `:293`, `:387` |
+| `MeshRepository.swift` | 14 | 1 | **13** | one of the 13 (`:5936`) is inside `isKnownRelay` |
+| `ContactsViewModel.swift` | 4 | 1 | **3** | one of the 3 (`:272`) is inside the delegating wrapper; `:280`, `:343` are direct |
+| 2 test files | 3 | 0 | **3** | — |
+| **total** | **40** | **4** | **34** | of which 32 are direct call sites |
 
 `MeshRepository.kt:10943` `isBootstrapRelayPeerFromKey` is a fourth definition — a wrapper
 that delegates to the dead function, so it is dead on arrival while its KDoc describes live
@@ -429,7 +465,7 @@ per entry so the two are not confused.
 
 ### OF-13 — `android/shared/` is an 18-file Gradle module that nothing builds
 
-**Severity:** MEDIUM-HIGH  **Occurrences:** 18 files, 40,359 bytes
+**Severity:** MEDIUM-HIGH  **Occurrences:** 18 files, 35,355 bytes
 
 **This is `FINDINGS.md` RC-2's blind spot.** RC-2's uncompiled-file inventory walked `.rs`
 crate roots. It never walked a Gradle module graph, so an entire Kotlin module escaped it.
@@ -561,8 +597,11 @@ The 4 orphans are `BATCH_P1_CORE_MYCO_ROUTING.md`, `BATCH_RUST_GROUPB_DSPY_MODUL
 `task_p0_android_play_readiness.md`, `task_p1_android_hardening.md`.
 
 These are not inert: `.context_cache/P0_JSONRPC_PARITY_EXPANSION_001.md` carries 3
-`StoredMessage` and 8 `isKnownRelay` occurrences, and
-`.context_cache/P1_CORE_002_Mycorrhizal_Routing_Production_Wire.md` carries 1 `relay_id`.
+`StoredMessage` and 9 `isKnownRelay` occurrences; four sibling files in the same
+directory carry 9 `isKnownRelay` each. **No `relay_id` occurs anywhere in
+`.context_cache/`** — the two occurrences on `origin/main` are in
+`HANDOFF/done/[VALIDATED]/[VALIDATED]_P1_CORE_002_Mycorrhizal_Routing_Production_Wire.md:63`,
+which is outside this directory.
 Both sit in scan-exempt paths, so neither is judged by the gate.
 
 **Why not deliberate:** a cache with **zero** identical entries and no refresh path is not a
@@ -577,14 +616,14 @@ Effort S.
 
 ### OF-18 — Four tracked build outputs under `dist/`
 
-**Severity:** LOW  **Occurrences:** 4 files, 84,737 bytes
+**Severity:** LOW  **Occurrences:** 4 files, 84,814 bytes
 
 | file | bytes |
 |---|---:|
 | `dist/wasm/scmessenger_wasm.js` | 75,406 |
 | `dist/index.html` | 3,648 |
 | `dist/main.js` | 3,305 |
-| `dist/josh_install/install-apk.bat` | 2,378 |
+| `dist/josh_install/install-apk.bat` | 2,455 |
 
 This is the complete set: a sweep of `origin/main` for
 `(^|/)(target|build|dist|\.build)/` outside `vendor/` returns exactly these four. None is
@@ -720,10 +759,12 @@ one stated in the entry.
 
 | item | working draft | final | cause |
 |---|---:|---:|---|
-| `PeerID` | 33 occ / 14 files | **27 / 12** | classifier counted identifier prefixes inside strings and comments |
-| `relays` | 215 / 42 | **198 / 40** | as above, plus `git grep -c` line counts |
+| `PeerID` | 33 occ / 14 files | **32 / 14** | the classifier counted identifier prefixes inside strings and comments; an intermediate **27 / 12** was also wrong because it omitted `.py` |
+| `relays` | 215 / 42 | **205 / 44** | as above, plus `git grep -c` line counts; an intermediate **198 / 40** was also wrong because it omitted `.py` |
 | `TransportHealth` | 31 / 8 | **24 / 4** | as above; 4 "files" were neighbour identifiers |
 | `PeerIdValidator` | 257 / 18 | **274 / 19** | index file set skipped `PeerIdValidatorCurveVectorTest.kt` (18 occurrences) |
+| `android/shared` total bytes | 40,359 | **35,355** | sum of the 18 per-file sizes, mis-added at OF-13 |
+| `dist/` total bytes | 84,737 | **84,814** | `install-apk.bat` is 2,455 bytes, not 2,378 |
 | `isInfrastructureAgent` body | `scm-always-on-node` | **recorded verbatim at OF-08** | — |
 | Rust duplicates | 45 | **40** | definitions counted instead of distinct files |
 | cross-platform names | 23 | **30** | index file set plus a platform-only filter |
