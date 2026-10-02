@@ -83,6 +83,7 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
+        const val MAX_SEEDS_PER_IMPORT = 16
 
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
@@ -6649,6 +6650,46 @@ open class MeshRepository(
             return
         }
         ledgerManager?.recordFailure(multiaddr)
+    }
+
+    /**
+     * Persist bootstrap addresses learned from an invite or QR join bundle.
+     *
+     * Android parity with iOS MeshRepository.importSeedAddresses: seeds remain
+     * lower-confidence until an active transport session identifies the peer,
+     * but they must survive this screen and app launch via the ledger.
+     *
+     * No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.
+     * Additive only: existing flows never call this, null ledger returns 0.
+     */
+    open fun importSeedAddresses(addresses: List<String>): Int {
+        val seeds = addresses
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .take(MAX_SEEDS_PER_IMPORT)
+            .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
+            .toList()
+        if (seeds.isEmpty()) {
+            return 0
+        }
+        return try {
+            val added = importSeedsToLedger(seeds)
+            Timber.i("Ledger: imported $added bootstrap seed(s) from join bundle")
+            added.toInt()
+        } catch (e: Exception) {
+            Timber.w(e, "Ledger: failed to import bootstrap seeds")
+            0
+        }
+    }
+
+    protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
+        val manager = ledgerManager
+        if (manager == null) {
+            Timber.w("Ledger: cannot import seeds - ledgerManager not initialized")
+            return 0u
+        }
+        return manager.importSeedEntries(seeds)
     }
 
     /**
