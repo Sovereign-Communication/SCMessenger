@@ -1682,6 +1682,55 @@ mod tests {
         assert!(!outbox.contains_for_recipient_key("restart", &recipient));
     }
 
+    /// A row written by a build that predates `receipt_auth_*` carries no
+    /// authorization record, so `remove_for_recipient_key` falls back to the
+    /// queue row itself. That fallback is the one path that could have
+    /// reintroduced the original bug -- an unauthenticated peer clearing retry
+    /// state for a message it was never sent -- so it is pinned directly here
+    /// rather than only via the ACK-migration path above.
+    #[test]
+    fn legacy_row_without_authorization_still_rejects_the_wrong_recipient() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("outbox").to_str().unwrap().to_string();
+        let recipient = [7u8; 32];
+        let recipient_id = hex::encode(recipient);
+        let stranger = [9u8; 32];
+
+        let backend = Arc::new(crate::store::backend::SledStorage::new(&path).unwrap());
+        // Legacy key form: no `receipt_auth_*` sibling exists for this message.
+        backend
+            .put(
+                format!("outbox_{recipient_id}_orphan").as_bytes(),
+                &bincode::serialize(&LegacyQueuedMessage {
+                    message_id: "orphan".to_string(),
+                    recipient_id: recipient_id.clone(),
+                    envelope_data: vec![1, 2, 3],
+                    queued_at: current_unix_secs(),
+                    attempts: 0,
+                    next_retry_at: None,
+                    in_custody: false,
+                    custody_established_at: 0,
+                    state: MessageState::Enqueued,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let mut outbox = Outbox::persistent(backend);
+
+        // The stranger must be refused on both the read path and the clearing
+        // path, and must leave the row intact for the real recipient.
+        assert!(!outbox.contains_for_recipient_key("orphan", &stranger));
+        assert!(!outbox.remove_for_recipient_key("orphan", &stranger));
+
+        // The intended recipient is still served by the fallback.
+        assert!(outbox.contains_for_recipient_key("orphan", &recipient));
+        assert!(outbox.remove_for_recipient_key("orphan", &recipient));
+        assert!(!outbox.contains_for_recipient_key("orphan", &recipient));
+    }
+
     #[test]
     fn expired_authorization_is_rejected() {
         let recipient = [11u8; 32];
