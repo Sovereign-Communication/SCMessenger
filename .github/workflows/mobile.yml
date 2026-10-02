@@ -13,6 +13,8 @@ on:
       - 'scripts/build_xcframework.sh'
       - 'scripts/check_wiring.py'
       - 'scripts/test_check_wiring.py'
+      - 'scripts/check_unbounded_runblocking.py'
+      - 'scripts/test_check_unbounded_runblocking.py'
       - 'core/src/api.udl'
       - 'mobile/**'
   pull_request:
@@ -25,6 +27,8 @@ on:
       - 'scripts/build_xcframework.sh'
       - 'scripts/check_wiring.py'
       - 'scripts/test_check_wiring.py'
+      - 'scripts/check_unbounded_runblocking.py'
+      - 'scripts/test_check_unbounded_runblocking.py'
       - 'core/src/api.udl'
       - 'mobile/**'
 
@@ -52,6 +56,13 @@ jobs:
         run: python scripts/test_check_wiring.py
       - name: Run Android wiring & reachability gate
         run: python scripts/check_wiring.py
+      # STOP-TEARDOWN-TIMEOUT-001: the same job, because this gate protects the
+      # same class of Android reachability/behaviour defect and adding a job
+      # would add a new status context for no benefit.
+      - name: Run unbounded-runBlocking gate unit tests
+        run: python scripts/test_check_unbounded_runblocking.py
+      - name: Run unbounded-runBlocking gate
+        run: python scripts/check_unbounded_runblocking.py
 
   # WHY THIS IS A SEPARATE JOB FROM "Android Debug APK"
   # -----------------------------------------------------

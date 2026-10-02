@@ -115,13 +115,35 @@ impl ContactManager {
         // A previous manager may have been released after an app lifecycle
         // transition. Drop its expired weak entry before opening a new store.
         registry.remove(&path);
-        let db = sled::Config::default()
-            .path(&path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .context("Failed to open contacts database")
-            .map_err(|_| crate::IronCoreError::StorageError)?;
+        // MESSAGE-STORE-LOCK-001 (2026-09-21): a just-stopped MeshService can
+        // still hold this store's sled lock, because its UniFFI wrapper is
+        // released by the GC/cleaner rather than by `stop()` -- and a
+        // stop -> Start on the Pixel reaches exactly here. Open through the
+        // shared, teardown-sized retry so a transient holder is not reported
+        // as a broken store; a real holder still fails loud.
+        let (db, open_attempt) = crate::store::backend::open_with_lock_retry(|| {
+            sled::Config::default()
+                .path(&path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open()
+        })
+        .map_err(|(attempts, err)| {
+            tracing::error!(
+                "ContactManager::new: sled failed to open {:?} after {} attempts: {}",
+                path,
+                attempts,
+                err
+            );
+            crate::IronCoreError::StorageError
+        })?;
+        if open_attempt > 1 {
+            tracing::warn!(
+                "ContactManager::new: opened {:?} on attempt {} (previous holder still releasing)",
+                path,
+                open_attempt
+            );
+        }
 
         let db: SharedContactDatabase = Arc::new(Mutex::new(db));
         registry.insert(path, Arc::downgrade(&db));
@@ -452,8 +474,10 @@ fn current_timestamp() -> u64 {
 /// from its peer id. The empty `public_key` + this marker is the placeholder
 /// contract: later verified material (signed envelope, user add) backfills
 /// the key; the peer_id itself must never be stored as the key.
-const PLACEHOLDER_KEY_NOTE: &str =
-    "public_key unavailable: not self-certifying from peer id; awaiting verified key";
+///
+/// Single owner: `store::contacts::PLACEHOLDER_KEY_NOTE`. Both recovery paths
+/// produce the same record shape, so they must produce the same marker.
+use crate::store::contacts::PLACEHOLDER_KEY_NOTE;
 
 /// Build a recovery contact for a history-known peer without an existing
 /// record. Binds a public key ONLY when it self-certifies (re-derives the
@@ -477,6 +501,7 @@ fn placeholder_or_derived_contact(peer_id: &str) -> Contact {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::self_certifying_keypair;
 
     #[test]
     fn test_contact_creation() {
@@ -542,22 +567,9 @@ mod tests {
         Ok(())
     }
 
-    /// Build a genuine self-certifying (peer id, key hex) pair for tests.
-    fn self_certifying_peer() -> (String, String) {
-        let mut seed = [0u8; 32];
-        seed[..16].copy_from_slice(b"scm-recover-test");
-        let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
-        let kp = libp2p::identity::ed25519::Keypair::from(signing);
-        let peer_id = libp2p::identity::PublicKey::from(kp.public())
-            .to_peer_id()
-            .to_string();
-        let key_hex = hex::encode(kp.public().to_bytes());
-        (peer_id, key_hex)
-    }
-
     #[test]
     fn recovery_binds_only_self_certifying_keys() {
-        let (peer_id, key_hex) = self_certifying_peer();
+        let (peer_id, key_hex) = self_certifying_keypair(b"scm-recover-test");
 
         // Self-certifying: the derived contact carries the real key.
         let derived = placeholder_or_derived_contact(&peer_id);
@@ -594,7 +606,7 @@ mod tests {
         let manager = ContactManager::new(storage_path.clone())?;
         let history = HistoryManager::new(storage_path)?;
 
-        let (self_certifying_id, key_hex) = self_certifying_peer();
+        let (self_certifying_id, key_hex) = self_certifying_keypair(b"scm-recover-test");
         for peer in [
             self_certifying_id.clone(),
             "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string(),
