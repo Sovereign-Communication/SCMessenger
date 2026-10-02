@@ -5,6 +5,7 @@ import timber.log.Timber
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
+import java.lang.ref.WeakReference
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -19,8 +20,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * HANG-MAIN-001: log() must never do FFI or disk I/O on the caller thread
  * (including main). Lines are enqueued to a single writer thread; on overflow
  * the oldest line is dropped rather than blocking the UI.
+ *
+ * MESSAGE-STORE-LOCK-001: this tree is process-wide (installed on
+ * `Timber.forest()` by MeshApplication) and MeshRepository injects the core
+ * into it for summarized logging. It holds that core WEAKLY (see [WeakHold])
+ * and the stop path clears it explicitly
+ * ([releaseCoreReferencesFromLoggingTrees]); a strong field here kept the Rust
+ * store locked for the life of the process after a stop, which made the next
+ * Start fail with "Message Store Unavailable".
  */
-class FileLoggingTree(context: Context) : Timber.Tree() {
+class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
     private val MAX_LOG_LINES = 10000
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
     // Thread-safe immutable date formatter (minSdk 26)
@@ -28,8 +37,9 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         .withZone(ZoneId.systemDefault())
     // Guard against recursion (Timber -> FileLoggingTree -> Timber -> ...)
     private val isLogging = ThreadLocal.withInitial { false }
-    @Volatile
-    private var ironCore: uniffi.api.IronCore? = null
+    // Held weakly on purpose; see the class KDoc and WeakHold. Guarded by this
+    // tree's monitor (the same one writeEntry takes).
+    private val coreRef = WeakHold<uniffi.api.IronCore>()
     private var estimatedFileBytes: Long = -1L
 
     private data class LogEntry(val line: String, val throwable: Throwable?)
@@ -61,8 +71,8 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         it.start()
     }
 
-    fun setIronCore(core: uniffi.api.IronCore?) {
-        synchronized(this) { this.ironCore = core }
+    override fun setIronCore(core: uniffi.api.IronCore?) {
+        synchronized(this) { coreRef.set(core) }
     }
 
     override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
@@ -99,7 +109,8 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
     private fun writeEntry(entry: LogEntry) {
         synchronized(this) {
             try {
-                runCatching { ironCore?.recordLog(entry.line) ?: false }
+                val summaryCore = coreRef.get()
+                runCatching { summaryCore?.recordLog(entry.line) ?: false }
                     .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
 
                 if (estimatedFileBytes < 0L) {
@@ -152,4 +163,55 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
             android.util.Log.e("FileLoggingTree", "Error truncating log file", e)
         }
     }
+}
+
+/**
+ * A reference that does not keep its referent alive.
+ *
+ * MESSAGE-STORE-LOCK-001: the Rust `IronCore` owns sled's file lock on the
+ * message store, and that lock is released only when the *last* reference to it
+ * goes. `MeshService::stop` drops its own `Arc<IronCore>`, which has no effect
+ * on Android while a Kotlin wrapper is still reachable -- and this tree is
+ * reachable for the whole process. With a strong field here, stopping the mesh
+ * left the store locked, the next Start fell back to DegradedStorage, and every
+ * start after that failed with "Message Store Unavailable" until the app was
+ * killed. Holding weakly makes that impossible by construction: logging can
+ * never extend the core's life, no matter which call site injects it.
+ *
+ * Written and read under the owning tree's monitor; `ref` is volatile as well
+ * so a future reader outside that monitor cannot observe a torn reference.
+ */
+internal class WeakHold<T : Any> {
+    @Volatile
+    private var ref: WeakReference<T>? = null
+
+    fun set(value: T?) {
+        ref = value?.let { WeakReference(it) }
+    }
+
+    fun get(): T? = ref?.get()
+}
+
+/**
+ * A log tree that keeps a core reference for summarized logging.
+ *
+ * MeshRepository injects the core on start (`setIronCore`) and MUST release it
+ * on stop; see [releaseCoreReferencesFromLoggingTrees].
+ */
+interface CoreReferenceHolder {
+    fun setIronCore(core: uniffi.api.IronCore?)
+}
+
+/**
+ * Drop the core reference from every logging tree in [forest].
+ *
+ * Called from the stop path next to where MeshRepository nulls its own
+ * references. Before this existed, the process-wide logging tree was the one
+ * reference a stop never released, so the previous instance kept sled's file
+ * lock on the message store and the next Start reported the store as degraded
+ * (MESSAGE-STORE-LOCK-001). The tree's own hold is weak, so this is the
+ * deterministic half of the same guarantee.
+ */
+fun releaseCoreReferencesFromLoggingTrees(forest: Iterable<Timber.Tree> = Timber.forest()) {
+    forest.filterIsInstance<CoreReferenceHolder>().forEach { it.setIronCore(null) }
 }
