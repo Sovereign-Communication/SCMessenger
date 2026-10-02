@@ -1557,7 +1557,7 @@ mod tests {
     fn legacy_queue_keyed_before_canonicalization_still_drains() {
         // Simulate a queue persisted by an older build, which wrote the raw key.
         let mut outbox = Outbox::new();
-        if let OutboxBackend::Memory { queues, total } = &mut outbox.backend {
+        if let OutboxBackend::Memory { queues, total, .. } = &mut outbox.backend {
             queues.insert(
                 BASE58_PEER.to_string(),
                 VecDeque::from(vec![make_msg("legacy", BASE58_PEER)]),
