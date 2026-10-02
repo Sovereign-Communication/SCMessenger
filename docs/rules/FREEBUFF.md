@@ -43,7 +43,8 @@ HANDOFF/freebuff/README.md  the live queue index -- read it first
 1. An agent (usually the CEO/CTO seat) writes a task file into `queue/`.
 2. The operator opens Freebuff desktop, selects an unmetered model, pastes the
    task file's contents.
-3. Freebuff implements, self-verifies, and opens a PR.
+3. Freebuff implements, self-verifies, commits to a scoped branch, pushes
+   (fast-forward only; the pre-push hook binds every lane), and opens a PR.
 4. Whoever merges moves the task file to `done/` with the PR number appended to
    its Status line.
 
@@ -142,6 +143,17 @@ workflow and config edits, test authoring, doc corrections, PR-queue burndown.
   files/data through `run-as`). Everything else about device state is observed
   from logs, never provoked. Operator directive, 2026-09-16, mandatory.
 
+**May, since 2026-09-22 (operator directive, CI-primary):** commit your own
+ task's files to a scoped branch and push that branch (fast-forward only; the
+ `.githooks/pre-push` gate binds this lane exactly as it binds every other).
+ CI -- not a local build -- is the primary verifier for the lane: push early,
+ let the run's gates score the work, and download artifacts from the run
+ rather than building them locally. If a local build IS required (CI down,
+ failover debugging), it falls under the CI-Primary Build Doctrine in
+ `docs/rules/BUILD_AND_CI.md`: preflight disk, one build at a time, and
+ reclaim build output immediately afterwards via `scripts/reclaim_safe.py` /
+ `scripts/clean_target.sh`.
+
 **May not, without a human in the loop:**
 - Merge its own PR. Green CI is necessary, not sufficient.
 - Merge anything touching `core/src/{crypto,transport,routing,privacy}` without a
@@ -151,6 +163,73 @@ workflow and config edits, test authoring, doc corrections, PR-queue burndown.
   worktree.
 - Revert, stash, delete, or commit a file it did not create. This checkout is
   shared with other agents and the operator; a clean `git status` is not a goal.
+
+### 4.1 Standing operator grants -- v0.4.0 merge train ONLY (2026-09-28)
+
+These three grants were issued in an operator interview on 2026-09-28 for the
+v0.4.0->v0.5.0 merge train. They **supersede the sentences above, for that
+train only**, and they do not transfer to any other lane, any other train, or
+any work outside the train's task file. The full text is section 14 of
+`HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md`; this is the
+doctrine record of it.
+
+**A1 -- this lane MAY merge.** `gh pr merge <n> --merge` (merge commit). Never
+`--admin`. Never force-push. All of the following must hold:
+- (a) The branch is up to date with main. `gh pr update-branch <n>`, then wait
+  for the re-run to finish.
+- (b) Every REQUIRED check is green **on the head SHA**. Re-read the list
+  before every merge:
+  `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`.
+- (c) POST-MERGE closing gate (operator ruling 2026-09-29, "JEV POST-MERGE",
+  see below): the car's JEV gate (2.3) is scored on the merge SHA immediately
+  after the merge and must be >= 85 with all hard gates clear before the next
+  dependent car merges and before any tag.
+- (d) Gated code (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`)
+  carries an A2 APPROVE naming that exact head SHA.
+- (e) No unresolved review threads and no requested changes.
+- (f) Any failing NON-required check has been investigated and shown not to be
+  a real defect.
+
+The 2026-09-28 merge-train execution found the JEV condition unreachable
+pre-merge (`pr_merged` is both a scored axis and a hard gate, so the pre-merge
+ceiling is 75 and the bar cannot pass before a merge); the lane reported it as
+a premise-wrong finding on the tracker PR #403 (2026-09-28).
+
+**Ruling of 2026-09-29 (operator, in chat; recorded on #403): JEV POST-MERGE.**
+Conditions (a), (b), (d), (e) and (f) stay pre-merge hard gates. (c) is scored
+on the merge SHA right after each merge; a miss is a 14.5 stop -- the fix or
+revert goes through the same gates, and it blocks the next dependent car and
+the tag. Only the MT-00a anchor PR (#414) is exempt from (c), because it adds the
+gate; it is still scored after its merge. The evidence for (c) is captured from
+commands after the merge (Appendix B of the task file); a status row must never
+claim a merge that has not happened.
+
+Two limits to know, both found by an adversarial review of the ruling. First, a
+car with merged dependents is fixed forward, never reverted: reverting it and then
+updating a dependent silently drops the car's content from that dependent, and
+re-landing it then needs a revert of the revert; only a tip car (no merged
+dependents) may be reverted. Second, the scorer has no per-car acceptance
+contract for an unknown phase id, so an acceptance item of the car that has no
+command evidence must be recorded as an open blocker; without that, "JEV >= 85"
+means only "merged, CI green, no unresolved threads".
+
+**A6 -- AWS node: full drive.** ssh as `ec2-user` with
+`~/.ssh/scm-node-key.pem`, for these uses ONLY:
+- `scripts/aws_deploy.sh` deploy and rollback;
+- `sudo docker logs`;
+- API calls to `127.0.0.1:9876` on the host;
+- the churn test's `aws ec2 stop-instances` / `start-instances` using the local
+  AWS CLI -- first confirm `aws sts get-caller-identity`, then discover the
+  instance exactly as `aws_deploy.sh` does.
+
+No other system changes, no installs, no firewall edits.
+
+**A10 -- tag and publish v0.4.0 and v0.5.0**, when every tag gate passes:
+1. Read which workflows fire on `v*` tags, and whether they succeed without D2
+   signing.
+2. Push the annotated tag on the proven commit C.
+3. Publish the release, with notes covering D2 skipped, the H-7 ruling, known
+   issues, and the TRI evidence summary.
 
 ---
 
