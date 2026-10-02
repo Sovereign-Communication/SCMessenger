@@ -946,7 +946,11 @@ async fn handle_send_message(
     Ok((
         http_status,
         AxumJson(SendMessageResponse {
-            success: true,
+            // "accepted" means the transport confirmed delivery; "retrying"
+            // means dispatch failed and the message is only queued for retry.
+            // Reporting success:true alongside an error made the two
+            // indistinguishable to API clients.
+            success: status == "accepted",
             error,
             message_id: Some(prepared.message_id),
             status: Some(status),
