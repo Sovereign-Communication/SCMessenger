@@ -963,17 +963,32 @@ impl IronCore {
             return Err(IronCoreError::InvalidInput);
         }
 
-        // Fast path first: if the recipient resolves to a known contact by
-        // PUBLIC KEY, it is the right kind of value and we are done. Only when
-        // that misses do we pay for a scan, so the common send path stays O(1)
-        // against the contact store rather than hashing every contact.
+        // Fast path first: if the recipient IS a known contact's PUBLIC KEY,
+        // it is the right kind of value and we are done. Only when that misses
+        // do we pay for a scan, so the common send path stays O(1) against the
+        // contact store rather than hashing every contact.
+        //
+        // `ContactManager::get` alone must NOT decide this. `get` falls back to
+        // `resolve_identity_id` (core/src/store/contacts.rs), an
+        // identity_id -> public_key index, so once a contact is stored its HASH
+        // resolves too. That satisfied this fast path, which left the
+        // hash-confusion guard below unreachable for exactly the input it was
+        // written for: the hash flowed on to be hex-decoded into `recipient_pk`
+        // and used as the X25519 key, encrypting to something nobody holds.
+        // So the fast path demands a public key match. The identity_id index is
+        // untouched and still resolves for every other consumer.
         let contacts = self.contact_manager.read();
         let known_by_pubkey = contacts
             .get(recipient_id.to_string())
             .ok()
             .flatten()
-            .or_else(|| contacts.get_by_public_key(recipient_id).ok().flatten())
-            .is_some();
+            .map(|contact| contact.public_key.eq_ignore_ascii_case(recipient_id))
+            .unwrap_or(false)
+            || contacts
+                .get_by_public_key(recipient_id)
+                .ok()
+                .flatten()
+                .is_some();
 
         if !known_by_pubkey {
             // Miss. Determine whether this is the hash/pubkey confusion, which
@@ -5919,5 +5934,354 @@ mod tests {
             .as_ref()
             .unwrap()
             .reputation_manager_is_configured());
+    }
+
+    /// WP1.1 (V050-WP1): the recovery path stores a placeholder contact with an
+    /// EMPTY public key when a peer id does not self-certify
+    /// (`contacts_bridge::placeholder_or_derived_contact`). Such a record -- and
+    /// any non-key identifier -- must never become an encryptable send target,
+    /// because encrypting to a PeerId or to an identity_id hash silently
+    /// produces ciphertext nobody can open.
+    #[test]
+    fn wp1_non_key_recipients_are_not_encryptable() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let info = core.get_identity_info();
+        let my_public_key = info.public_key_hex.expect("public key");
+        let my_identity_id = info.identity_id.expect("identity id");
+        assert_ne!(my_public_key, my_identity_id);
+
+        // Control: the real public key IS accepted, so a blanket-failure
+        // assertion cannot make this test pass vacuously.
+        assert!(
+            core.prepare_message(
+                my_public_key.clone(),
+                "wp1 control".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_ok(),
+            "control send to a real public key must succeed"
+        );
+
+        // 1. The recovery placeholder shape: empty key, awaiting a verified one.
+        let unknown_peer = "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string();
+        let mut placeholder = crate::store::Contact::new(unknown_peer.clone(), String::new());
+        placeholder.notes = Some(
+            "public_key unavailable: not self-certifying from peer id; awaiting verified key"
+                .to_string(),
+        );
+        core.contact_manager.read().add(placeholder).unwrap();
+        assert!(
+            core.prepare_message(
+                unknown_peer.clone(),
+                "wp1".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_err(),
+            "a PeerId-shaped recipient must not be encryptable"
+        );
+        assert!(
+            core.prepare_message(
+                String::new(),
+                "wp1".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_err(),
+            "an empty (placeholder) key must not be encryptable"
+        );
+
+        // 2. The identity_id (blake3 hash of the key) is 64 hex chars that decode
+        //    to 32 bytes, so only the contact scan can tell it apart from a key.
+        assert_eq!(
+            crate::identity::keys::identity_id_from_public_key_hex(&my_public_key),
+            Some(my_identity_id.clone()),
+            "identity_id must be the blake3 hash of the public key"
+        );
+
+        // 3. The hash case: CLOSED, and now asserted by outcome.
+        //
+        // A stored contact still resolves by its identity_id through
+        // `ContactManager::resolve_identity_id`. That index is deliberate and
+        // stays. What must not happen is a hash satisfying the send path's
+        // fast path in `prepare_message_internal`, because that function
+        // hex-decodes `recipient_id` straight into the X25519 `recipient_pk`.
+        // The fast path therefore demands a PUBLIC KEY match, which puts the
+        // hash-confusion guard back in reach of the input it was written for --
+        // and makes the refusal deterministic instead of depending on whether
+        // 32 hash bytes happen to parse as a curve point (roughly a coin flip,
+        // which is why this could only be pinned by mechanism before).
+        // See HANDOFF/audit/IDENTITY_HASH_VS_PUBKEY_CONFLICT.md.
+        core.contact_manager
+            .read()
+            .add(crate::store::Contact::new(
+                my_public_key.clone(),
+                my_public_key.clone(),
+            ))
+            .unwrap();
+        assert!(
+            core.contact_manager
+                .read()
+                .get(my_identity_id.clone())
+                .unwrap()
+                .is_some(),
+            "the identity_id index still resolves a stored contact"
+        );
+        assert!(
+            core.prepare_message(
+                my_identity_id.clone(),
+                "wp1 hash".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_err(),
+            "a recipient_id that is the identity_id of a known contact must be \
+             refused, not encrypted to"
+        );
+        // The control above still stands: sending to the real public key of the
+        // same contact works, so this is a discrimination, not a blanket ban.
+        assert!(
+            core.prepare_message(
+                my_public_key.clone(),
+                "wp1 control 2".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_ok(),
+            "the same contact must remain sendable by public key"
+        );
+    }
+
+    /// Captures the delegate callback arguments for the WP1.4 / CRYPTO-01 check.
+    struct Wp1CapturingDelegate {
+        seen: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>,
+    }
+
+    impl crate::CoreDelegate for Wp1CapturingDelegate {
+        fn on_peer_discovered(&self, _peer_id: String) {}
+
+        fn on_peer_disconnected(&self, _peer_id: String) {}
+
+        fn on_peer_identified(
+            &self,
+            _peer_id: String,
+            _agent_version: String,
+            _listen_addrs: Vec<String>,
+        ) {
+        }
+
+        fn on_message_received(
+            &self,
+            sender_id: String,
+            sender_public_key_hex: String,
+            _message_id: String,
+            _sender_timestamp: u64,
+            _data: Vec<u8>,
+        ) {
+            *self.seen.lock().unwrap() = Some((sender_id, sender_public_key_hex));
+        }
+
+        fn on_receipt_received(&self, _message_id: String, _status: String) {}
+    }
+
+    /// WP1.4 (V050-WP1) / CRYPTO-01 regression: the delegate must be handed the
+    /// AUTHENTICATED envelope public key plus the identity derived from it --
+    /// never the unauthenticated plaintext `sender_id`. For a legitimate sender
+    /// the payload `sender_id` is their public-key hex, so passing that through
+    /// unchanged would land here instead of the canonical identity_id, which is
+    /// the exact failure this asserts against.
+    #[test]
+    fn wp1_delegate_receives_authenticated_sender_binding() {
+        let alice = IronCore::new();
+        alice.grant_consent();
+        alice.initialize_identity().unwrap();
+        let bob = IronCore::new();
+        bob.grant_consent();
+        bob.initialize_identity().unwrap();
+
+        let alice_public_key = alice.get_identity_info().public_key_hex.expect("alice key");
+        let bob_public_key = bob.get_identity_info().public_key_hex.expect("bob key");
+        let alice_identity_id =
+            crate::identity::keys::identity_id_from_public_key_hex(&alice_public_key)
+                .expect("canonical identity id");
+        assert_ne!(alice_identity_id, alice_public_key);
+
+        let seen: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        bob.set_delegate(Some(Box::new(Wp1CapturingDelegate { seen: seen.clone() })));
+
+        let prepared = alice
+            .prepare_message(
+                bob_public_key,
+                "wp1 authenticated sender".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .expect("prepare_message must succeed");
+        let received = bob
+            .receive_message(prepared.envelope_data)
+            .expect("receive_message must succeed");
+
+        // The decrypted payload carries the sender's public-key hex.
+        assert_eq!(received.sender_id, alice_public_key);
+
+        let (delegate_sender_id, delegate_sender_key) = seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the delegate must be notified of the received message");
+        assert_eq!(
+            delegate_sender_key, alice_public_key,
+            "the delegate must receive the authenticated envelope public key"
+        );
+        assert_eq!(
+            delegate_sender_id, alice_identity_id,
+            "the delegate identity must be the canonical id derived from the authenticated key"
+        );
+        assert_ne!(
+            delegate_sender_id, delegate_sender_key,
+            "the payload sender_id must never be passed through as the delegate identity"
+        );
+    }
+
+    /// WP1.1 + WP1.3 (V050-WP1) "recovery restart": the real disaster-recovery
+    /// path, not a hand-built lookalike. A peer we have history with but no
+    /// contact record is recovered by `emergency_recover`, which must bind the
+    /// key it DERIVES from the peer id (never the peer id itself), and that
+    /// binding must survive a restart. No test in this crate called
+    /// `emergency_recover` before this one.
+    #[test]
+    fn wp1_recovery_binds_derived_key_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = dir.path().join("storage").to_string_lossy().to_string();
+
+        // A self-certifying Ed25519 peer id is the case recovery CAN bind.
+        let mut seed = [0u8; 32];
+        seed[..12].copy_from_slice(b"wp1-recovery");
+        let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+        let kp = libp2p::identity::ed25519::Keypair::from(signing);
+        let expected_key_hex = hex::encode(kp.public().to_bytes());
+        let peer_id = libp2p::identity::PublicKey::from(kp.public())
+            .to_peer_id()
+            .to_string();
+
+        let recovered_count = {
+            let core = IronCore::with_storage(storage.clone());
+            core.history_manager
+                .add(MessageRecord {
+                    id: "wp1-recovery-1".to_string(),
+                    direction: MessageDirection::Received,
+                    peer_id: peer_id.clone(),
+                    content: "history-only peer".to_string(),
+                    timestamp: 1_700_000_000,
+                    sender_timestamp: 1_700_000_000,
+                    delivered: true,
+                    hidden: false,
+                })
+                .unwrap();
+            core.emergency_recover().expect("recovery must not fail")
+        };
+        assert!(
+            recovered_count >= 1,
+            "the history-only peer must be recovered"
+        );
+
+        // Restart over the same storage.
+        let core = IronCore::with_storage(storage.clone());
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let contacts = core.contacts_store_manager();
+        let recovered = contacts
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.public_key.eq_ignore_ascii_case(&expected_key_hex))
+            .expect("the recovered contact must survive a restart");
+
+        // The key is the DERIVED public key, never the peer id itself.
+        assert_eq!(recovered.public_key.to_lowercase(), expected_key_hex);
+        assert_ne!(recovered.public_key, peer_id);
+        assert!(!recovered.public_key.is_empty());
+
+        // And a derived key is a legitimate encrypt recipient.
+        assert!(
+            core.prepare_message(
+                recovered.public_key.clone(),
+                "wp1 recovered".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_ok(),
+            "a recovered contact with a derived key must be encryptable"
+        );
+    }
+
+    /// WP1.3 (V050-WP1): one helper decides hex versus legacy base58, and a
+    /// nickname leads to the same key. The CLI wraps exactly this --
+    /// `peer_id_from_contact_identifier` calls `parse::<PeerId>()` and then
+    /// `peer_id_from_public_key_hex` -- so the resolution property is asserted
+    /// against the canonical helper here, in a target that actually runs.
+    ///
+    /// It is NOT asserted in `cli/src/main.rs`: that bin declares
+    /// `test = false` (cli/Cargo.toml), so every `#[test]` inside it is never
+    /// compiled or run: see
+    /// `HANDOFF/freebuff/inbox/WP1_FINDINGS_CLI_DEAD_TESTS_AND_HASH_GUARD_2026-09-21.md`
+    /// (12 `#[test]` functions in that file have never been compiled or run).
+    #[test]
+    fn wp1_send_identifiers_resolve_to_one_peer_id() {
+        let mut seed = [0u8; 32];
+        seed[..10].copy_from_slice(b"wp1-send-k");
+        let signing = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+        let kp = libp2p::identity::ed25519::Keypair::from(signing);
+        let key_hex = hex::encode(kp.public().to_bytes());
+        let peer_id = libp2p::identity::PublicKey::from(kp.public()).to_peer_id();
+
+        // 1. Canonical hex (how contacts are stored and listed) derives the id.
+        assert_eq!(
+            crate::store::peer_id_from_public_key_hex(&key_hex).as_deref(),
+            Some(peer_id.to_string().as_str())
+        );
+
+        // 2. Legacy base58 still parses directly.
+        assert_eq!(
+            peer_id.to_string().parse::<libp2p::PeerId>().unwrap(),
+            peer_id
+        );
+
+        // 3. A nickname resolves to the contact row, whose key is the hex form.
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let contacts = core.contacts_store_manager();
+        contacts
+            .add(
+                crate::store::Contact::new(key_hex.clone(), key_hex.clone())
+                    .with_nickname("Alice".to_string()),
+            )
+            .unwrap();
+        let found = contacts.search("alice".to_string()).unwrap();
+        assert_eq!(found.len(), 1, "nickname search must find the contact");
+        assert_eq!(found[0].public_key.to_lowercase(), key_hex);
+        assert_eq!(
+            crate::store::peer_id_from_public_key_hex(&found[0].public_key).as_deref(),
+            Some(peer_id.to_string().as_str())
+        );
+
+        // ...and the resolved key is genuinely sendable, not just parseable.
+        assert!(
+            core.prepare_message(
+                found[0].public_key.clone(),
+                "wp1 name send".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .is_ok(),
+            "the key a name resolves to must be an encryptable recipient"
+        );
     }
 }
