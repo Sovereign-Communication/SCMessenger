@@ -1,8 +1,209 @@
 # CTO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
-Last updated: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
-Entry point: `/CTO`. This file is the whole context load.
+Last updated: 2026-10-01T01:30Z (GitHub status refreshed; AWS unverified; Pixel disconnected)
+Entry point: `/CTO`. Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-10-01, GitHub refresh 01:24Z–01:30Z) =====
+
+This checkpoint records only the observations listed here. It grants no merge,
+release, deployment, or architecture authority. Historical sections below remain
+records and do not override this checkpoint.
+
+- At 2026-10-01T00:43Z, `curl.exe --max-time 5 -sS -i http://127.0.0.1:9876/health`
+  -> HTTP 200, `{"status":"healthy"}`; `curl.exe --max-time 5 -sS -i
+  http://127.0.0.1:9876/version` -> version `0.4.0`, git hash `bceacb9`,
+  build time `2026-09-26T20:38:26.767320800+00:00`; `curl.exe --max-time 5
+  -sS -i http://127.0.0.1:9876/api/identity` -> identity ID
+  `985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826`, peer ID
+  `12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw`, nickname
+  `Claude-Windows-Driver`. These are recorded command outputs, not a
+  claim of current API status.
+- At 00:43Z, `adb devices -l` listed Pixel 6a serial
+  `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp` as `device`. At 01:02Z,
+  `adb devices -l` returned no device entries. Current availability is UNVERIFIED.
+- CI artifact for PR #421 run
+  [36654635755](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36654635755), head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`, was verified: APK SHA256
+  `8da295b760e50e44e174b11a1049505ec9b593f54de5ec73ce3db021373a6308`, signer
+  SHA256 `067d312c1470d9b36c39b54943e3d8c434243821c9874c03241e8668801fd672`;
+  CI reported `SCMESSENGER_DEBUG_KEYSTORE_BASE64` unset. `adb install -r` returned
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; the recorded checkpoint says no uninstall,
+  wipe, UI, or onboarding occurred, installed-app full signer is unknown, and ADB
+  later disconnected (recorded `adb install -r` output above).
+- AWS check: `aws ec2 describe-instances ...` -> NOT RUN (`aws` CLI not
+  installed). Cloud-node status is UNVERIFIED; this does not establish that
+  the node is down.
+- GitHub `main` is
+  [`e76e05933d49f5f764539960bf9768e409ea9fa4`](https://github.com/Sovereign-Communication/SCMessenger/commit/e76e05933d49f5f764539960bf9768e409ea9fa4).
+  PRs [#422](https://github.com/Sovereign-Communication/SCMessenger/pull/422)
+  and [#424](https://github.com/Sovereign-Communication/SCMessenger/pull/424)
+  are merged.
+- PR [#416](https://github.com/Sovereign-Communication/SCMessenger/pull/416)
+  is open at head `d4138a07b4ff508e40f16d1f72987244e8b09e19`. Compared with
+  `main`, it is 23 commits ahead and 15 behind, with 23 commits, 31 files,
+  +4263/-15 ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...d4138a07b4ff508e40f16d1f72987244e8b09e19)).
+- PR [#403](https://github.com/Sovereign-Communication/SCMessenger/pull/403)
+  is open at head `1a3cb2744a53ee135ceada23b982a737116644ee`; versus `main`,
+  it is 10 commits ahead and 34 behind, with 10 commits and 8 files. The actual
+  compare includes `scripts/backup_purge.sh`; use the compare contents rather
+  than the PR-body scope ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...1a3cb2744a53ee135ceada23b982a737116644ee)).
+  The latest of its 35 comments is #5893444868 and the freeze remains on the
+  named Freebuff branches ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/403#issuecomment-5893444868)).
+- PR [#421](https://github.com/Sovereign-Communication/SCMessenger/pull/421)
+  is open at head `7a6c271924a4625e24ff80a30cc89ee9adede356`, 3 commits ahead
+  and 12 behind `main`, with 3 commits and 2 files
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...7a6c271924a4625e24ff80a30cc89ee9adede356)).
+  Its exact-head check-runs API returned `total_count=36`, all successful
+  ([check-runs API](https://api.github.com/repos/Sovereign-Communication/SCMessenger/commits/7a6c271924a4625e24ff80a30cc89ee9adede356/check-runs)). The latest and only
+  #421 comment, #5902649210, records Rule-8 `REQUEST_CHANGES`, with high global
+  inbound starvation and medium repeated-handover findings
+  ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/421#issuecomment-5902649210)).
+  That comment is not itself a GitHub review-submission object. Checks pass, but
+  the merge/security gate does not.
+- The #421 cap policy remains unresolved; this checkpoint makes no cap or
+  architecture choice.
+- Cellular test, deployment, release, and three-node-pass status are UNVERIFIED
+  for any time after the observations above. No merge or architecture choice is
+  authorized by these observations.
+
+# ===== END RESUME 2026-10-01 =====
+
+# ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
+
+Cross-repo facts for this seat; nothing in SCMessenger source changed. Every line
+carries its evidence. The SCMessenger execution authority and procedure above are
+unchanged; this block only records upstream Harness state.
+
+- Harness `origin/main` = `412f7e1`, CI 5/5 green (`gh run list --repo Sovereign-Communication/harness --branch main --limit 1`).
+- Harness agent lane migrated from Freebuff to Claude Code (harness PR #66 `6f00d38`):
+  `CLAUDE.md` + tool-neutral `AGENTS.md`, `/isolated-mission`, `/isolated-request`,
+  seats `/cto` `/ceo` `/bod`. The SCMessenger Freebuff transition doc is untouched;
+  whether SCMessenger follows is an operator decision.
+- Harness MCP now connects from Claude Code (harness PR #66 fixed `initialize` protocol
+  negotiation; it previously rejected `2025-11-25`). This supersedes the older note below
+  that the MCP server "needs a client registration": `claude mcp add harness --scope local
+  -e HARNESS_MCP_ALLOWED_ROOTS=<root> -- <python> -m harness.mcp` (observe-only by default).
+- Upstream behaviour changes relevant to `vendor/sovereign-harness` consumers (refresh only via
+  `python scripts/update_local_harness.py`):
+  - harness PR #67 `a9b58ab`: `harness jev-phase` Jev bar now scores six sentiment axes and
+    prints declared improvement buckets; `--all` board. SCMessenger's
+    `scripts/jev_canonical_check.py` gate is unaffected.
+  - harness PR #69 `e47001a`: with a paid key configured, free-tier runs fail over to the
+    cheapest paid rung (ceiling-bounded, ledgered). Ling was removed from the free apply
+    pool (open decision `DF-LING-2`).
+  - harness PR #70 `412f7e1`: `harness ledger verify` now exits 2 on a broken chain (was
+    always 0) — any script gating on it will now fail loudly as documented.
+- Not done here: no vendor refresh, no edit to the shared checkout (it holds another
+  session's uncommitted `vendor/`, `Cargo.*`, HANDOFF WIP on `glm/canonical-outlier-audit`).
+
+# ===== RESUME HERE (2026-09-21, orchestrator session close) =====
+
+## Canonical Freebuff transition (read first after AGENTS.md + FREEBUFF.md)
+
+**`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`** is the sole post-session
+execution handoff until the operator replaces it.
+
+Supporting plans on `origin/main`:
+- `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+- `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+- `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+- `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+- `HANDOFF/freebuff/README.md` (DISPATCHABLE paste set)
+
+## Operator standing rulings (2026-09-20/21)
+
+1. **Working-first** — reliable day-to-day mesh before tag/secret pressure.
+2. **WP order** — identity/routing/inbound/delivery truth then WP5 live proof.
+3. **DONE** — mechanical gates + keyed JEV `jev_canonical_check.py` `is_passing`.
+4. **Harness** — SCMessenger-local `vendor/sovereign-harness` only; update via
+   `python scripts/update_local_harness.py`; do not edit external Harness trees.
+5. **OpenRouter Jev fallback** — `~typesafe/jev-latest` on
+   `https://openrouter.ai/api/alpha/decisions` when TypeSafe is unhealthy;
+   operator must allow OpenRouter provider `typesafe`.
+6. **CI hygiene** — cancel superseded Actions after merges (`BUILD_AND_CI.md`).
+7. **Pixel** — fresh install allowed; UI is operator-driven; agents: install + passive logs.
+8. **Scoring** — no mid-wave scoring; after wave: harness + logs + operator phone session.
+
+## Fleet at session close (re-derive before treating as live)
+
+| Node | Last orchestrator observation |
+|---|---|
+| Windows CLI | `51edac4` main, healthy, peer AWS, binary under `tmp/radio-candidates/51edac4b/` |
+| AWS cloud | `51edac4b` healthy, identity preserved, seed-dial + gossip + custody retention |
+| Pixel | `51edac4b` APK installed (authorized fresh install); ADB connected |
+
+`origin/main` at close: `9d37f9e6` (#345). Staged open work: **PR #347**
+(local harness + OpenRouter JEV fallback) — merge when required CI green.
+
+## Freebuff next steps
+
+1. Merge #347 if open and green (`scripts/pr_scope.sh 347`).
+2. Paste DISPATCHABLE tickets from `HANDOFF/freebuff/README.md`.
+3. Worktrees + PRs; Rule-8 as required; JEV DONE contract.
+4. After Wave-1 + WP5: master plan §4 checklist → operator 0.4.0 tag.
+
+# ===== END RESUME 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-17, evening) — HISTORY -----
+
+
+## Merge train: carrier landed; #295 is the last member in flight
+
+Merged to main on 2026-09-17, each verified green immediately before merge:
+- #288 — V040 multi-transport store-and-forward carrier (absorbs #290/#292/
+  #293/#294/#296/#297) — 34/34 checks green; merge commit d9c576e1.
+- #289 — Android Ed25519 curve-check consolidation — all lanes green.
+- #283 — V1.0.0 readiness audit + Linux-first takeover plan (docs only).
+- #295 (AND-01/02/03) — final CI in flight at handoff time; the Android JVM
+  lane that had been red is green on the fixed head.
+
+main tip at handoff: eb55756957e2d01f558321b374258a3c05750181 (was 1e2fb747).
+
+Rule-8 review evidence on file for today's gated merges:
+- HANDOFF/review/RULE8_PR296_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+- HANDOFF/review/RULE8_PR297_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+- HANDOFF/review/RULE8_PR289_VERDICT_2026-09-17.md (APPROVE-WITH-NOTES)
+The carrier's own gated body remains covered by the 2026-09-14 APPROVE
+(bod-9ee86618).
+
+Repo constraint worth remembering: branch protection requires up-to-date
+branches, so merges serialize — each merge invalidates every other open PR's
+cycle on the same base, and GitHub auto-merge is DISABLED repo-wide
+(`enablePullRequestAutoMerge` blocked), so landings must be polled manually.
+
+## Tag gate: NOT READY — remaining-findings backlog
+
+HANDOFF/V040_REMAINING_FINDINGS_BACKLOG_2026-09-17.md carries per-finding
+verification status measured against live main. Closed today: CLI-01 and
+SEC-01 (verified fixed on main), CRYPTO-01 / TRN-03 / CLI-03 / CORE-02
+(merged PRs), TRN-01 (PR #292), TRN-08 (audited site no longer matches the
+code). Still open: TRN-04 (sender auth + TTL), TRN-07 (global relay budget),
+AND-06 (Kotlin BigInteger), SEC-03 (sled waivers); eight further findings
+need a re-baseline pass because the audit's line refs have drifted.
+
+## Fleet re-audit (read-only, 2026-09-17T19:54Z) — live, NOT same-candidate
+
+HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20260917T195444Z_PREFLIGHT.md
+- Windows CLI: core 597e2c72 / git_hash 7a2c16c3, exe sha256 9b251c27...
+  (68 and 43 commits behind main); PID 18124 on 127.0.0.1:9876.
+- AWS i-0b41aab756eabd514 (18.234.62.247, private 172.31.18.74): image
+  testbotz/scmessenger:sha-6acaa23 equals its runtime hash 6acaa231 (44 behind
+  main); nickname null; /version build_time empty.
+- Pixel 6a `bluejay` (Android 17): app 0.4.0 / versionCode 15; pulled base.apk
+  sha256 4a0972b2... byte-identical to the 2026-09-16 local build.
+- Live evidence today: Pixel -> cloud node delivery in 265 ms, gossipsub
+  received from BOTH other nodes, 29 ledger-canonicalization events.
+- A redeploy of all three nodes is required before any same-candidate
+  certification run; BLE isolation/probe phases were NOT executed.
 
 # ===== RESUME HERE (2026-09-15, evening) =====
 
