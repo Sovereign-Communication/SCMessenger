@@ -8468,22 +8468,22 @@ open class MeshRepository(
         // state within the cellular window.
         if (networkDetector.isCellularNetwork && publicRelayRoutes.isNotEmpty() && !localAcked) {
             val firstRelay = publicRelayRoutes.first()
-            val relayPeer = firstRelay.first
-            val relayAddrs = publicRelayRoutes.filter { it.first == relayPeer }.map { it.second }.distinct()
+            val routePeer = firstRelay.first
+            val relayAddrs = publicRelayRoutes.filter { it.first == routePeer }.map { it.second }.distinct()
             Timber.i(
-                "CELL-ROUTE-AWS-001d: pre-pass dial relay=$relayPeer addrs=${relayAddrs.size} ctx=$attemptContext"
+                "CELL-ROUTE-AWS-001d: pre-pass dial relay=$routePeer addrs=${relayAddrs.size} ctx=$attemptContext"
             )
             logDeliveryAttempt(
                 messageId = traceMessageId,
                 medium = "core",
                 phase = "cellular_pre_pass",
                 outcome = "attempt",
-                detail = "ctx=$attemptContext route=$relayPeer addrs=${relayAddrs.size}"
+                detail = "ctx=$attemptContext route=$routePeer addrs=${relayAddrs.size}"
             )
             try {
-                connectToPeer(relayPeer, relayAddrs)
+                connectToPeer(routePeer, relayAddrs)
                 // 001d: longer connect wait — cellular RTT + CGNAT handshake.
-                val connected = awaitPeerConnection(relayPeer, timeoutMs = 8000L)
+                val connected = awaitPeerConnection(routePeer, timeoutMs = 8000L)
                 if (connected) {
                     // 001d: retry sendMessageStatus up to 3 times with backoff.
                     // "Delivery pending retry" means the swarm accepted the send
@@ -8492,7 +8492,7 @@ open class MeshRepository(
                     var acked = false
                     for (attempt in 1..3) {
                         sendErr = bridge.sendMessageStatus(
-                            relayPeer,
+                            routePeer,
                             encryptedData,
                             recipientIdentityId,
                             intendedDeviceId
@@ -8506,7 +8506,7 @@ open class MeshRepository(
                             medium = "core",
                             phase = "cellular_pre_pass",
                             outcome = if (attempt < 3) "retry" else "failed",
-                            detail = "ctx=$attemptContext route=$relayPeer attempt=$attempt reason=$sendErr"
+                            detail = "ctx=$attemptContext route=$routePeer attempt=$attempt reason=$sendErr"
                         )
                         if (attempt < 3) {
                             kotlinx.coroutines.delay(1500L * attempt)
@@ -8519,17 +8519,17 @@ open class MeshRepository(
                             try {
                                 val rec = historyManager?.get(traceMessageId ?: "")
                                 if (rec?.delivered == true || rec?.status == uniffi.api.MessageStatus.DELIVERED) {
-                                    Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass receipt via $relayPeer")
+                                    Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass receipt via $routePeer")
                                     logDeliveryAttempt(
                                         messageId = traceMessageId,
                                         medium = "core",
                                         phase = "cellular_pre_pass",
                                         outcome = "success",
-                                        detail = "ctx=$attemptContext route=$relayPeer receipt=delivered"
+                                        detail = "ctx=$attemptContext route=$routePeer receipt=delivered"
                                     )
                                     return DeliveryAttemptResult(
                                         acked = true,
-                                        routePeerId = relayPeer,
+                                        routePeerId = routePeer,
                                         coreSwarmAcked = true
                                     )
                                 }
@@ -8538,17 +8538,17 @@ open class MeshRepository(
                         }
                         // Transport ACK but no receipt yet — still treat as acked
                         // so the durable outbox can wait for the receipt window.
-                        Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass transport ACK via $relayPeer (receipt pending)")
+                        Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass transport ACK via $routePeer (receipt pending)")
                         logDeliveryAttempt(
                             messageId = traceMessageId,
                             medium = "core",
                             phase = "cellular_pre_pass",
                             outcome = "success",
-                            detail = "ctx=$attemptContext route=$relayPeer receipt=pending"
+                            detail = "ctx=$attemptContext route=$routePeer receipt=pending"
                         )
                         return DeliveryAttemptResult(
                             acked = true,
-                            routePeerId = relayPeer,
+                            routePeerId = routePeer,
                             coreSwarmAcked = true
                         )
                     }
@@ -8557,7 +8557,7 @@ open class MeshRepository(
                         medium = "core",
                         phase = "cellular_pre_pass",
                         outcome = "failed",
-                        detail = "ctx=$attemptContext route=$relayPeer reason=$sendErr"
+                        detail = "ctx=$attemptContext route=$routePeer reason=$sendErr"
                     )
                 } else {
                     logDeliveryAttempt(
@@ -8565,7 +8565,7 @@ open class MeshRepository(
                         medium = "core",
                         phase = "cellular_pre_pass",
                         outcome = "failed",
-                        detail = "ctx=$attemptContext route=$relayPeer reason=connect_timeout"
+                        detail = "ctx=$attemptContext route=$routePeer reason=connect_timeout"
                     )
                 }
             } catch (ex: Exception) {
