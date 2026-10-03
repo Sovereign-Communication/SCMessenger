@@ -53,6 +53,42 @@ Consequence: every release run in project history
 `32801758551`) failed with one unreadable message, and the recorded
 follow-up actions all pointed at `SCMESSENGER_KEY_ALIAS`.
 
+**CORRECTION (2026-10-03, after the v0.4.1 release run).** The section below
+was written from the local keystore and concluded the alias was correct and
+the password wrong. **CI refutes that.** Release run `37116380941` (tag
+`v0.4.1`) reached the preflight and reported, verbatim:
+
+```
+##[error]SCMESSENGER_KEY_ALIAS does not exist in the decoded keystore.
+         keytool: keytool error: java.lang.Exception: Alias <***> does not exist
+```
+
+So against the keystore that `SCMESSENGER_KEYSTORE_BASE64` actually decodes to,
+the configured alias does not exist. The local file and the CI secret are
+therefore **not the same keystore**, even though the local `.b64` is
+byte-identical to the local `.jks`. Either the secret was re-set from a
+different file, or the local backup is not the uploaded artifact.
+
+**Revised operator priority:** verify the alias against the *decoded secret*
+first, not the local file. To do that without printing secrets, compare
+fingerprints rather than aliases:
+
+```bash
+# what the secret holds
+echo "$SCMESSENGER_KEYSTORE_BASE64" | base64 -d > /tmp/ci.jks
+keytool -list -v -keystore /tmp/ci.jks -storepass "$SCMESSENGER_KEYSTORE_PASSWORD" \
+  | grep -iE "alias name|SHA1"
+# what the local backup holds (should match; if it does not, the secret drifted)
+keytool -list -v -keystore ~/kiee/scmessenger-release.jks -storepass "<local pw>" \
+  | grep -iE "alias name|SHA1"
+```
+
+The passwords are still required and are still operator-held; they were never
+retrievable by an agent lane.
+
+<details>
+<summary>Original (now-superseded) reasoning, kept for the audit trail</summary>
+
 **The alias is not wrong.** Read directly from the JKS plaintext header
 (aliases are unencrypted in JKS v2):
 
@@ -69,7 +105,9 @@ the upload source for `SCMESSENGER_KEYSTORE_BASE64`.
 
 **Therefore the outstanding secret is the password, not the alias.**
 
-## Fault 2 — the device is on a third signing lineage
+</details>
+
+## Fault 2 — the device is on a FOURTH signing lineage
 
 `apksigner verify --print-certs` against each APK:
 
@@ -133,12 +171,13 @@ makes the choice concrete.
 
 ## F-2 — the Pixel cannot corroborate the tagged commit
 
-The device reports `versionName=0.4.0`, `versionCode=15`. It is **not** the
-tagged build: the release job for `58c8970b` never produced a signed APK, and
-the device's build predates the AND-SS-001 fix (`30caacc3`, 2026-10-02) by
-three days. Its mesh log contains no `lifecycleMutex` evidence.
+The device reports `versionName=0.4.0`, `versionCode=15`. It is **not** any
+tagged build: the release job never produced a signed APK for `58c8970b` or
+for `v0.4.1`, and the device's build predates the AND-SS-001 fix (`30caacc3`,
+2026-10-02). Its mesh log contains no `lifecycleMutex` evidence.
 
-The Pixel is a live third log source for topology and health, but it cannot
-corroborate version/commit against Windows and AWS. See
-`HANDOFF/audit/ANDROID_RELEASE_SIGNING_LINEAGE_2026-10-03.md` companion
-`V040_3NODE_ROLLOUT_STATE_2026-10-03.md` for the three-way correlation.
+The Pixel was a live third log source for topology and health on 2026-10-03
+morning, but went off WiFi before the v0.4.1 post-swap pull, so no current
+Pixel evidence exists. It cannot corroborate version/commit against Windows
+and AWS in any case. See `V040_3NODE_ROLLOUT_STATE_2026-10-03.md` for the
+three-way correlation and the current state.
