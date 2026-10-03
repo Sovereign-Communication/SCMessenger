@@ -30,20 +30,36 @@ each is a command, a grep, or a named test.
 **Severity as of revision 2:** F2 CRITICAL, F4 CRITICAL, F3 HIGH, F1 HIGH,
 F5 MEDIUM, F6 MEDIUM, F7 MEDIUM, F8 LOW, F9 LOW (verified negative).
 
+**Amendment, 2026-10-03.** T2 has been rewritten. It was previously presented as
+a wiring job ("wire up `save_contact_bundle`"). Two implementation attempts both
+stopped: there is **no contact-establishment mechanism that could carry a bundle at
+all**, which is one level deeper than the missing bundle exchange the audit
+reported. `InviteToken::verify`/`verify_with_policy` and `verify_bundle` have zero
+production callers; `BootstrapManager::accept_invite` is documented dead;
+`InviteSystem` has zero users; contacts are created only by manual entry or backup
+restore. T2 now records an operator transport decision and an accepted pinning
+risk instead of an actionable wiring step. **T11 is new** — a pre-existing QR
+budget defect found during that work, marked adjacent to T2 rather than part of it.
+F1-F9 themselves are unchanged; this amendment corrects the task list, not the
+audit.
+
 ---
 
 ## Dependency summary
 
 ```
 T0  build unblock  ──┬─> T2  F2 bundle propagation ──┬──> T3  F3 persist PQ state
-   (snapshot branch   │        (CRITICAL)              │
+   (snapshot branch   │        (CRITICAL, DECIDED)     │
     only; no-op from   │                                 └──> T10 CI reachability guard
     main)             └──> T4  F4 encrypt at rest (CRITICAL)
 
-T1  F1 ML-DSA primary identity (HIGH)  <── COUPLED to T2, not strictly blocking
+T1  F1 ML-DSA primary identity (HIGH)  <── COUPLED to T2; hard blocker for
+                                              closing T2's pinning risk
 T5/T6/T7  layer hygiene (MEDIUM)  ──> after T0 only
 T8  F8 fingerprint (LOW)           ──> after T0 only
 T9  F9 no action (verified negative)
+T11 QR budget breach for dual-signed invites (MEDIUM, pre-existing)
+    ──> independent; it constrains T2's transport choice, is not part of it
 ```
 
 ### The one coupling that matters
@@ -117,7 +133,13 @@ from `main`, do not spend a task on it at all.
 
 ## Phase 1 — Live CRITICALs
 
-### T2 — Wire peer key-bundle propagation *(finding F2, CRITICAL)*
+### T2 — Make the hybrid PQ path reachable *(finding F2, CRITICAL — BLOCKED ON AN OPERATOR DECISION)*
+
+> **Rewritten 2026-10-03 after two implementation attempts both stopped.** The
+> revision-1 framing of this task — "wire up `save_contact_bundle`" — was wrong,
+> and acting on it would have produced a protocol guess on a security-critical
+> send path. What follows is what was actually established by tracing, and the
+> task is now explicitly gated rather than actionable.
 
 **Mechanism (report, revision 2 — not revision 1):** the hybrid ML-KEM-768 /
 ML-DSA-65 path is **unreachable from the production send path** because
@@ -127,41 +149,106 @@ selects the hybrid path only when both `our_bundle` and `recipient_bundle` are
 invoked on the send path. *Revision 1 attributed this to `require_pq = false` — that
 was wrong about the mechanism.*
 
-**Trace the task must reproduce:**
-- `iron_core.rs:992` — `our_bundle`, always `Some`.
-- `iron_core.rs:994-998` — `get_contact_bundle`, returns `None`.
-- `store/contacts.rs:760` — reads a separate sled keyspace, `contact_bundle_key`
+**Trace the task must reproduce (verified against `origin/main` @ `19229287`):**
+- `iron_core.rs:1032` — `our_bundle`, always `Some`.
+- `iron_core.rs:1034-1038` — `get_contact_bundle`, returns `None`.
+- `store/contacts.rs:779` — reads a separate sled keyspace, `contact_bundle_key`
   (`store/contacts.rs:85`).
 - `store/contacts.rs:25-38` — `Contact` has **no bundle field**.
-- `store/contacts.rs:746` — `save_contact_bundle`, the only writer, **no production
-  callers**.
+- `store/contacts.rs:765` — `save_contact_bundle`, the only writer, **no production
+  callers**. The one other `contact_bundle_key` reference is
+  `store/contacts.rs:754`, inside `remove()`, which **deletes** the key — it is not
+  a second writer.
 - Lands at `encrypt.rs:489-501` → `encrypt.rs:580` (legacy static ECDH), or
   `encrypt.rs:549` → `session_manager.rs:142` (classical suite-0x01 ratchet).
 
-**Migration (report):** exchange and verify `PublicKeyBundle` on contact add /
-peer discovery — `sign_bundle`, `verify_bundle`, `save_contact_bundle` all already
-exist. Then flip `require_pq` to `true` once bundles are reliably present.
+#### Why this is not a wiring job — the established evidence
 
-**Depends on:** T0. Coupled to T1 (see coupling note).
+The revision-1 migration note claimed the machinery already exists and only needed
+connecting. Two implementation passes showed otherwise. On `main`:
 
-**Acceptance criteria (checkable):**
+1. **There is no contact-establishment mechanism that could carry a bundle.**
+   `InviteToken::verify` and `verify_with_policy` have **zero production callers**;
+   the type appears in production only at `iron_core.rs:2564` (deserializing bytes)
+   and a re-export at `relay/mod.rs:32`.
+2. **`BootstrapManager::accept_invite` / `parse_qr_data` are documented dead.**
+   `relay/bootstrap.rs:134` says so explicitly and warns that if the module is ever
+   revived it must route through `InviteToken`.
+3. **`InviteSystem` has zero users** — a bare re-export, nothing constructs it.
+4. **Contacts are created only by manual entry or backup restore:**
+   `handle_add_contact` in `cli/src/api.rs:1010` and `cli/src/api_axum.rs:321`, the
+   CLI's `add_contact_via_api` (`cli/src/main.rs:1897`), the WASM `"add_contact"`
+   RPC (`core/src/wasm_support/rpc.rs:234`), and `import_identity_backup`
+   (`iron_core.rs:2091`). A person types a peer id and public key.
+5. **`verify_bundle` has zero production callers.** The function that would
+   validate an inbound peer bundle is never called.
+6. **`EnvelopeV2.pq_encaps_key` is not a usable substitute.** It does carry an
+   ML-KEM key, but is consumed only by `handle_incoming_pq_fields`
+   (`crypto/ratchet.rs:1170`) inside an **already-established hybrid session**, and
+   is never written to the contact store. That is circular: you need the bundle to
+   establish the hybrid session that carries the key you would need to build the
+   bundle.
+
+`x25519_public` could be derived from `ed25519_public` via the existing birational
+map. `mlkem_encaps_key` **cannot** — it is 1184 bytes of independent randomness with
+no derivation path, and `hybrid_encapsulate` length-validates it.
+
+**Consequence:** there is no code path by which a node obtains a contact's bundle
+before sending to them. Supplying one requires designing a new protocol surface,
+which is an architecture decision reserved to the operator (AGENTS.md rule 9).
+
+#### Operator decision (recorded 2026-10-03)
+
+The operator selected **bundle announcement over the existing authenticated message
+channel**: the send path gains a way to learn a contact's bundle, and that path
+wires `verify_bundle` and `save_contact_bundle` into production. Bundle
+**key-change detection and pinning are explicitly deferred and remain unsolved** —
+recorded as accepted risk, not as an oversight.
+
+**Accepted risk, stated plainly:** because pinning is deferred, a peer may
+re-advertise a different bundle at will, so anyone able to write to the channel
+can substitute an ML-KEM key. This is the same Ed25519-anchor weakness F1
+describes, now reachable through bundle substitution rather than through a CRQC.
+Pinning is the only thing that closes it, so **T1 is a hard blocker for closing
+this risk**, not merely a parallel concern.
+
+**Still to settle before or during implementation:**
+- Whether a re-advertised bundle for an existing contact is accepted, ignored, or
+  flagged. Until this is chosen, the implementer must pick one and document it.
+- Whether the announcement is sent once, on contact creation, or re-sent when a
+  send finds no bundle.
+
+**Note:** the invite/QR path was considered and rejected as the transport. It has
+no production acceptance flow (evidence above), and a dual-signed token already
+exceeds the QR budget — see **T11**.
+
+**Depends on:** T0, plus the operator decision above. Coupled to T1 (see coupling
+note): if pinning is part of the chosen transport, T1 becomes a hard blocker rather
+than a parallel concern.
+
+**Acceptance criteria (checkable, and achievable only once the transport is chosen):**
+- The chosen transport decision is recorded on file, naming the surface, the
+  authentication, and the pinning/key-change answer (or an explicit accepted-risk
+  note).
 - `grep -rn "save_contact_bundle" core/src cli/src --include=*.rs | grep -v
-  "#\[cfg(test)\]"` returns at least one **non-test** call site reachable from the
-  send path. Today it returns none.
-- A **new** integration test drives the production send path (not the crypto layer
-  directly) and asserts the emitted envelope is `WireEnvelope::V2` with
-  `suite == 0x03` and `pq_kem_ciphertext.is_some()`. Existing PQ tests must **not**
-  be edited to make this pass — they hand-seed bundles and therefore do not test
-  reachability.
-- The existing PQ suites (`integration_pq_verification_suite.rs`,
+  "#\[cfg(test)\]"` returns at least one **non-test** call site on the real
+  production path. Today it returns none.
+- A **new** integration test drives the production send path end to end — through
+  whatever contact-establishment path the chosen transport uses, not the crypto
+  layer directly and not a hand-seeded contact store — and asserts the emitted
+  envelope is `WireEnvelope::V2` with `suite == 0x03` and
+  `pq_kem_ciphertext.is_some()`.
+- Existing PQ tests (`integration_pq_verification_suite.rs`,
   `integration_pq_session.rs`, `test_v2_hybrid_envelope_forgery_is_rejected.rs`)
-  still pass unmodified.
-- `require_pq` at `iron_core.rs:1012` is `true`, **and** a test asserts a peer
-  with no bundle is now refused rather than silently downgraded
-  (`encrypt.rs:489-501`).
+  pass **unmodified**. They hand-seed the contact store, so they prove the
+  primitives work and prove nothing about reachability.
+- `verify_bundle` gains a production caller, and a test asserts a bundle with a
+  tampered signature is refused on the real path.
+- Only once the above hold: `require_pq` (`iron_core.rs:1051`) becomes `true`, and
+  a test asserts a peer with no bundle is refused rather than silently downgraded.
 
-**Watch for:** the report notes the tests "prove the primitives work. They prove
-nothing about reachability." A green PQ suite is **not** evidence T2 is done.
+**Watch for:** a green PQ suite is **not** evidence T2 is done. That is the exact
+failure mode that let this defect survive.
 
 ---
 
@@ -323,6 +410,8 @@ unreachable for the same reason.)
 
 ## Phase 3 — MEDIUM, independent
 
+Includes T11, a pre-existing defect that is adjacent to T2 rather than part of it.
+
 All three depend on T0 only. None blocks another.
 
 ### T5 — Stop reusing the Ed25519 signing key as an X25519 ECDH key *(finding F5, MEDIUM)*
@@ -405,6 +494,56 @@ hazard for any future PQ signature rollout (T1).
 
 ---
 
+### T11 — A dual-signed invite cannot be QR-encoded at all *(pre-existing defect, adjacent to T2 — NOT an audit finding)*
+
+**Severity:** MEDIUM. Pre-existing and independent of T2, but it independently
+rules out the invite/QR route as a bundle transport, and it is invisible to the
+current test suite.
+
+**Mechanism:** `QR_BYTE_BUDGET` is `2953` characters (`relay/invite.rs:64`).
+`to_qr_payload` base64-encodes the bincode token and returns
+`InviteError::PayloadTooLarge` when the result exceeds that budget. A v2
+dual-signed token already carries an ML-DSA-65 public key (1952 B) **and** an
+ML-DSA-65 signature (3309 B) — 5261 B before anything else. Computed against the
+wire shape with a 16-entry seed ledger:
+
+| Token shape | approx. base64 | vs. 2953 budget |
+|---|---|---|
+| v1 Ed25519-only, 16-entry ledger | ~1172 | fits |
+| **v2 dual-signed, 16-entry ledger** | **~8200** | **~2.8x over** |
+| v2 + ML-KEM encaps key (1184 B) + X25519 (32 B) | ~9832 | ~3.3x over |
+
+So a post-quantum-signed invite cannot be put in a QR code today, and adding a
+bundle would make it worse rather than better.
+
+**MEASUREMENT CAVEAT:** these figures are **computed analytically** from the wire
+shapes and estimated string lengths, not measured by executing
+`to_qr_payload`. Confirm with a real measurement before acting on the exact
+numbers; the direction and order of magnitude are not in doubt, the precision is.
+
+**Why it is missed:** the only test covering this budget,
+`test_seed_ledger_full_invite_fits_qr_budget`, builds its token with
+`sign_token(...)` — **Ed25519-only**. No test exercises the v2 dual-signed shape,
+so the budget breach is never observed.
+
+**Acceptance criteria (checkable):**
+- A test builds a **v2 dual-signed** token with a full seed ledger and calls
+  `to_qr_payload()`. The measured result is recorded. This is the missing coverage
+  regardless of how the defect is then fixed.
+- Depending on the recorded measurement: either the dual-signed token is made to
+  fit (compression, a shorter PQ representation, or dropping the ledger on PQ
+  tokens), or dual-signed invites are formally re-scoped to non-QR transports and
+  the QR UI refuses them with a clear error rather than a size failure.
+- `test_seed_ledger_full_invite_fits_qr_budget` is **extended, not replaced**, to
+  cover the v2 shape.
+- An explicit note records that this is why the invite/QR path was rejected as a
+  bundle transport for T2.
+
+**Depends on:** T0. Independent of T2's implementation; it constrains T2's choice
+of transport rather than being part of it.
+
+---
+
 ## Phase 4 — LOW
 
 ### T8 — Stop retaining a truncated hash of an ML-KEM shared secret *(finding F8, LOW)*
@@ -453,11 +592,16 @@ does not "fix" a non-issue.
 
 ## What this document deliberately does not contain
 
-- No new findings. F9 being a negative result and the E0603 break being a
-  prerequisite are both faithful to the report.
+- No new **audit** findings. F9 being a negative result and the E0603 break being a
+  prerequisite are both faithful to the report. **T11 is the one exception**: it is
+  a pre-existing defect discovered during a T2 implementation attempt, recorded as
+  its own task, explicitly marked adjacent to T2 rather than folded into it, and
+  flagged as analytically computed. It is not presented as part of F1-F9.
 - No remediation for the **removed** revision-1 claims (plaintext ratchet sessions
   in sled; `require_pq = false` as a live downgrade). Both were retracted in
   revision 2 and re-adding them would reintroduce two errors the verification pass
   specifically caught.
+- No implementation of T2's transport. The operator has recorded the choice; this
+  document states it, and the accepted risk it carries, without implementing it.
 - No work estimates, owner assignments or dates. The report assigns none, and
   inventing them would misrepresent the source.
