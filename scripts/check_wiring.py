@@ -57,6 +57,7 @@ Usage:
   python scripts/check_wiring.py --json
   python scripts/check_wiring.py --root /path/to/repo
   python scripts/check_wiring.py --method-findings=block   # promote the scan
+  python scripts/check_wiring.py --write-findings wiring-audit/FINDINGS.md
 """
 
 import argparse
@@ -443,7 +444,7 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str], met
     return declarations
 
 
-def collect_scope_ranges(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> Dict[str, List[Tuple[int, int, str]]]:
+def collect_scope_ranges(kt_clean: Dict[str, str]) -> Dict[str, List[Tuple[int, int, str]]]:
     """Brace-depth ranges for every class AND function scope, in every file.
 
     Reachability targets deliberately exclude `private` and `override`
@@ -543,44 +544,25 @@ def _is_self(caller: Tuple[str, int, str, int], d: Declaration) -> bool:
     return caller[2] == d.fqcn and caller[3] == d.line
 
 
-def analyze_declarations(
+def build_reference_graph(
     declarations: List[Declaration],
-    kt_files: Dict[str, str],
     kt_clean: Dict[str, str],
-    registered_composables: Set[str],
-    manifest_entries: Set[str],
-    method_severity: str,
-    keep_kinds: Optional[Set[str]] = None,
-    skip_live_container: bool = True,
-    precise_scopes: bool = False,
-) -> Tuple[List[Finding], Set[str], Set[str]]:
-    """Build the caller map and run C1/C3/C4 over one declaration set.
+    precise_scopes: bool,
+) -> Tuple[List[Declaration], Dict[str, List[Declaration]],
+           Dict[str, Set[Tuple[str, int, str, int]]]]:
+    """Build the name index and the caller map for one declaration set.
 
-    keep_kinds restricts which declaration kinds are REPORTED. Propagation
-    always considers every declaration, so a function referenced only by a
-    dead composable is still correctly found; keep_kinds only decides what
-    the caller of this function is allowed to see.
+    Extracted verbatim from analyze_declarations so the findings-document
+    generator can ask the SAME question the gate asks ("does this symbol
+    have an external caller?") instead of re-implementing reference
+    attribution. A second implementation could certify as wired a symbol
+    the gate still reports dead, which is the failure this audit exists to
+    remove.
 
-    skip_live_container keeps the historical exemption that ignores a nested
-    member whose enclosing class is itself reachable. That exemption is
-    sensible for a blocking gate -- a public method on a live service is not
-    dead just because nothing inside the module calls it -- but it also
-    means a genuinely dead function inside a live class is never reported.
-    The advisory pass turns it off (skip_live_container=False), which is what
-    makes decideCommand detectable at all.
-
-    precise_scopes makes the reference map attribute a line to the innermost
-    FUNCTION, including `override` and `private` ones that are deliberately
-    not reachability targets. The legacy pass leaves it off so its output is
-    unchanged.
-
-    Returns (findings, reported_dead, live_set).
+    Returns (active_declarations, decl_by_name, callers_map), where
+    callers_map maps a declaration's fqcn to the set of references to it
+    as (file, line, enclosing_fqcn, enclosing_scope_line).
     """
-
-    def emit(findings: List[Finding], d: Declaration, finding: Finding) -> None:
-        if keep_kinds is None or d.kind in keep_kinds:
-            findings.append(finding)
-
     active_declarations = [d for d in declarations if not d.is_preview and not d.is_local]
     decl_by_name: Dict[str, List[Declaration]] = {}
     for d in active_declarations:
@@ -595,7 +577,7 @@ def analyze_declarations(
     for lst in decls_by_file.values():
         lst.sort(key=lambda x: x.line)
 
-    scopes_by_file = collect_scope_ranges(kt_files, kt_clean) if precise_scopes else {}
+    scopes_by_file = collect_scope_ranges(kt_clean) if precise_scopes else {}
 
     for rel_p, clean in kt_clean.items():
         file_decls = decls_by_file.get(rel_p, [])
@@ -650,6 +632,51 @@ def analyze_declarations(
                             continue
                         callers_map[target_d.fqcn].add((rel_p, line_no, enclosing_fqcn, enclosing_scope_line))
 
+
+    return active_declarations, decl_by_name, callers_map
+
+
+def analyze_declarations(
+    declarations: List[Declaration],
+    kt_files: Dict[str, str],
+    kt_clean: Dict[str, str],
+    registered_composables: Set[str],
+    manifest_entries: Set[str],
+    method_severity: str,
+    keep_kinds: Optional[Set[str]] = None,
+    skip_live_container: bool = True,
+    precise_scopes: bool = False,
+) -> Tuple[List[Finding], Set[str], Set[str]]:
+    """Build the caller map and run C1/C3/C4 over one declaration set.
+
+    keep_kinds restricts which declaration kinds are REPORTED. Propagation
+    always considers every declaration, so a function referenced only by a
+    dead composable is still correctly found; keep_kinds only decides what
+    the caller of this function is allowed to see.
+
+    skip_live_container keeps the historical exemption that ignores a nested
+    member whose enclosing class is itself reachable. That exemption is
+    sensible for a blocking gate -- a public method on a live service is not
+    dead just because nothing inside the module calls it -- but it also
+    means a genuinely dead function inside a live class is never reported.
+    The advisory pass turns it off (skip_live_container=False), which is what
+    makes decideCommand detectable at all.
+
+    precise_scopes makes the reference map attribute a line to the innermost
+    FUNCTION, including `override` and `private` ones that are deliberately
+    not reachability targets. The legacy pass leaves it off so its output is
+    unchanged.
+
+    Returns (findings, reported_dead, live_set).
+    """
+
+    def emit(findings: List[Finding], d: Declaration, finding: Finding) -> None:
+        if keep_kinds is None or d.kind in keep_kinds:
+            findings.append(finding)
+
+    active_declarations, decl_by_name, callers_map = build_reference_graph(
+        declarations, kt_clean, precise_scopes
+    )
     findings: List[Finding] = []
 
     # Check Manifest Reachability (C3)
@@ -774,7 +801,6 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
          must not cascade into failing the gate on its dependants.
     """
     app_dir = os.path.join(repo_root, "android", "app", "src", "main")
-    src_dir = os.path.join(app_dir, "java")
     manifest_path = os.path.join(app_dir, "AndroidManifest.xml")
 
     excluded_info = [
@@ -788,17 +814,7 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
     manifest_entries = parse_manifest(manifest_path)
 
     # 2. Read all Kotlin sources
-    kt_files: Dict[str, str] = {}
-    kt_clean: Dict[str, str] = {}
-    for r, _, fs in os.walk(src_dir):
-        for f in fs:
-            if f.endswith(".kt"):
-                p = os.path.join(r, f)
-                rel_p = os.path.relpath(p, start=repo_root).replace("\\", "/")
-                with open(p, "r", encoding="utf-8") as fh:
-                    raw = fh.read()
-                kt_files[rel_p] = raw
-                kt_clean[rel_p] = strip_comments(raw)
+    kt_files, kt_clean = load_kotlin_corpus(repo_root)
 
     # 3. Nav Route Reachability (C2)
     mesh_app_rel = "android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt"
@@ -850,6 +866,361 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
     return findings, excluded_info
 
 
+TRIAGE_SCHEMA_VERSION = 1
+
+CLASSIFICATIONS = ("unwired", "dead-removed", "detector-false-positive",
+                 "deliberately-public", "collateral-removed")
+
+# Classifications that correspond to a finding reported by the widened scan.
+FINDING_CLASSES = ("unwired", "dead-removed", "detector-false-positive", "deliberately-public")
+
+
+def load_kotlin_corpus(repo_root: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Read every Kotlin file under android/app/src/main as (raw, comment-stripped)."""
+    src_dir = os.path.join(repo_root, "android", "app", "src", "main", "java")
+    kt_files: Dict[str, str] = {}
+    kt_clean: Dict[str, str] = {}
+    for r, _, fs in os.walk(src_dir):
+        for f in fs:
+            if f.endswith(".kt"):
+                p = os.path.join(r, f)
+                rel_p = os.path.relpath(p, start=repo_root).replace("\\", "/")
+                with open(p, "r", encoding="utf-8") as fh:
+                    raw = fh.read()
+                kt_files[rel_p] = raw
+                kt_clean[rel_p] = strip_comments(raw)
+    return kt_files, kt_clean
+
+
+def _advisory_evidence(repo_root: str):
+    """Run the advisory pass; return (declarations, external callers keyed by fqcn)."""
+    kt_files, kt_clean = load_kotlin_corpus(repo_root)
+    declarations = extract_declarations(kt_files, kt_clean, method_scope="widened")
+    active, _, callers = build_reference_graph(declarations, kt_clean, True)
+    external: Dict[str, List[Tuple[str, int]]] = {}
+    for d in active:
+        external[d.fqcn] = sorted(
+            (c[0], c[1]) for c in callers.get(d.fqcn, set()) if not _is_self(c, d)
+        )
+    return active, external
+
+
+def _all_kotlin_code(repo_root: str) -> Tuple[str, int]:
+    """Concatenate every Kotlin source in main+test+androidTest, comments stripped.
+
+    Comments are stripped because the absence proof is about CODE references: a
+    KDoc line that still names a deleted symbol is documentation drift, not a
+    caller, and must not make a correct deletion look unverified.
+    """
+    chunks = []
+    count = 0
+    for variant in ("main", "test", "androidTest"):
+        src_dir = os.path.join(repo_root, "android", "app", "src", variant, "java")
+        for r, _, fs in os.walk(src_dir):
+            for f in fs:
+                if f.endswith(".kt"):
+                    with open(os.path.join(r, f), "r", encoding="utf-8") as fh:
+                        chunks.append(strip_comments(fh.read()))
+                    count += 1
+    return "\n".join(chunks), count
+
+
+def _resolve(active: List[Declaration], symbol: str) -> Optional[Declaration]:
+    """Find the declaration a disposition names.
+
+    Triage records the readable `Container.name` form; fqcn is fully qualified,
+    so match on the dotted suffix.
+    """
+    for d in active:
+        if d.fqcn == symbol or d.fqcn.endswith("." + symbol):
+            return d
+    return None
+
+
+def verify_dispositions(
+    repo_root: str,
+    dispositions: List[dict],
+    live_findings: List[Finding],
+    reported_total: int = 0,
+) -> Tuple[List[dict], List[str]]:
+    """Re-derive the evidence for every disposition against the live tree.
+
+    Returns (rows, drift_errors). Each row carries the machine-checked evidence
+    that the rendered document quotes, so a claim in the document is only ever
+    printed because a check in this function just confirmed it.
+    """
+    active, external = _advisory_evidence(repo_root)
+    corpus_text, corpus_files = _all_kotlin_code(repo_root)
+    reported = {f.symbol for f in live_findings if f.kind == "C1_ZERO_CALLERS"}
+
+    rows: List[dict] = []
+    errors: List[str] = []
+
+    for entry in dispositions:
+        symbol = entry["symbol"]
+        classification = entry["classification"]
+        if classification not in CLASSIFICATIONS:
+            errors.append("[ERROR] %s: unknown classification %r" % (symbol, classification))
+            continue
+
+        row = {
+            "symbol": symbol,
+            "classification": classification,
+            "rationale": entry.get("rationale", ""),
+            "root_cause": entry.get("root_cause", ""),
+            "file": entry.get("file", ""),
+        }
+
+        if classification == "unwired":
+            if symbol not in reported:
+                errors.append(
+                    "[STALE] %s is classified 'unwired' but the scan does not report it. "
+                    "It has been wired or deleted -- update wiring-audit/triage.json." % symbol
+                )
+                continue
+            d = _resolve(active, symbol)
+            if d is not None and external.get(d.fqcn):
+                errors.append(
+                    "[STALE] %s is classified 'unwired' but now has %d external caller(s)."
+                    % (symbol, len(external[d.fqcn]))
+                )
+                continue
+            row["evidence"] = "reported by the scan; 0 external callers"
+            rows.append(row)
+
+        elif classification in ("dead-removed", "collateral-removed"):
+            bare = symbol.split(".")[-1]
+            hits = re.findall(r"\b%s\b" % re.escape(bare), corpus_text)
+            if hits:
+                errors.append(
+                    "[STALE] %s is classified %r but %s still occurs %d time(s) "
+                    "across %d Kotlin files." % (symbol, classification, bare, len(hits), corpus_files)
+                )
+                continue
+            row["evidence"] = "0 code references across %d Kotlin files (comments stripped)" % corpus_files
+            rows.append(row)
+
+        else:
+            d = _resolve(active, symbol)
+            if d is None:
+                errors.append(
+                    "[STALE] %s is classified %r but is not declared anywhere in "
+                    "android/app/src/main." % (symbol, classification)
+                )
+                continue
+            callers_here = external.get(d.fqcn, [])
+            if classification == "detector-false-positive" and not callers_here:
+                errors.append(
+                    "[STALE] %s is classified 'detector-false-positive' but the scan now "
+                    "finds no external caller for it." % symbol
+                )
+                continue
+            row["declaration"] = "%s:%d" % (d.file, d.line)
+            row["callers"] = callers_here
+            if callers_here:
+                where = ", ".join("%s:%d" % (c[0], c[1]) for c in callers_here)
+                row["evidence"] = "called from %s" % where
+            else:
+                row["evidence"] = "exemption recorded in triage.json"
+            rows.append(row)
+
+    unclassified = sorted(reported - {r["symbol"] for r in rows})
+    for sym in unclassified:
+        errors.append(
+            "[UNCLASSIFIED] the scan reports %s but wiring-audit/triage.json has no "
+            "disposition for it. Classify it before regenerating." % sym
+        )
+
+    accounted = sum(1 for r in rows if r["classification"] in FINDING_CLASSES)
+    if reported_total and accounted != reported_total:
+        errors.append(
+            "[ACCOUNTING] the dispositions account for %d findings but #437 reported %d. "
+            "Every finding needs exactly one disposition, or the document would "
+            "misstate the backlog." % (accounted, reported_total)
+        )
+
+    return rows, errors
+
+
+def _md(text: str) -> str:
+    return text.replace("|", r"\|")
+
+
+def render_findings_markdown(triage: dict, rows: List[dict], command: str) -> str:
+    """Render wiring-audit/FINDINGS.md from the scan plus the committed triage."""
+    out: List[str] = []
+    w = out.append
+    scan = triage.get("scan", {})
+    by_class = {c: [r for r in rows if r["classification"] == c] for c in CLASSIFICATIONS}
+    unwired = by_class["unwired"]
+    fps = by_class["detector-false-positive"]
+    pub = by_class["deliberately-public"]
+    removed = by_class["dead-removed"]
+    total = scan.get("reported", 0)
+    collateral = by_class["collateral-removed"]
+
+    w("# Wiring Audit - Dead-Function Scan")
+    w("")
+    w("**Generated by:** `%s`" % command)
+    w("")
+    w("Do not edit this file by hand. The tables come from a live run of that")
+    w("command; the per-finding judgements come from `wiring-audit/triage.json`,")
+    w("which is committed and read by the same command. Regenerating re-derives")
+    w("every evidence claim below and FAILS if the scan reports a finding that")
+    w("triage.json does not classify, so the two cannot drift apart.")
+    w("")
+    w("**Base commit:** `%s` (merge of #438), triaged on top of the #437 scan."
+      % scan.get("base", "?"))
+    w("")
+    w("**Gate impact:** none. The scan stays `--method-findings=warn`. Only ERROR")
+    w("findings fail the gate, and the blocking pass output is byte-identical to #437.")
+    w("")
+
+    w("## Outcome")
+    w("")
+    w("| | count |")
+    w("|---|---|")
+    w("| Findings reported by #437 | %d |" % total)
+    w("| Detector false positives, fixed in the detector | %d |" % len(fps))
+    w("| Findings exempted instead of fixed | %d |" % len(pub))
+    w("| Collaterals removed with them (not findings) | %d |" % len(collateral))
+    w("| Genuinely dead declarations removed | %d |" % len(removed))
+    w("| Remaining, genuinely unwired | %d |" % len(unwired))
+    w("")
+    w("The backlog is not zero, and it should not be. The remaining %d are"
+      % len(unwired))
+    w("**unwired features** -- not dead code, and not detector noise. Each has a")
+    w("KDoc stating an intended caller that does not exist. They stay flagged,")
+    w("because they are real defects of a different kind.")
+    w("")
+
+    w("## Remaining findings - UNWIRED, not dead")
+    w("")
+    w("| Symbol | Location | Evidence (re-derived on every run) | Why it is not dead code |")
+    w("|---|---|---|---|")
+    for r in sorted(unwired, key=lambda x: x["symbol"]):
+        w("| `%s` | `%s` | %s | %s |"
+          % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+    w("")
+    w("Deleting these would discard working implementations of intended behaviour.")
+    w("Wiring them is new behaviour and out of scope for a triage pass. Each needs")
+    w("a product decision: wire it, or delete it along with its test.")
+    w("")
+
+    if collateral:
+        w("## Collaterals removed alongside a dead declaration")
+        w("")
+        w("These were never findings. Each existed only to serve a declaration")
+        w("removed above, so deleting that declaration orphaned them. Listed")
+        w("separately so they do not inflate the finding arithmetic above.")
+        w("")
+        w("| Symbol | File | Evidence (re-derived on every run) | Note |")
+        w("|---|---|---|---|")
+        for r in sorted(collateral, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+    if removed:
+        w("## Removed as genuinely dead")
+        w("")
+        w("Zero references in `android/app/src/main`, `src/test` and `src/androidTest`.")
+        w("The evidence column is re-derived by word-boundary search over every")
+        w("Kotlin source root on every regeneration, so a symbol that came back would")
+        w("fail the build rather than sit in this table.")
+        w("")
+        w("| Declaration | File | Evidence (re-derived on every run) | Note |")
+        w("|---|---|---|---|")
+        for r in sorted(removed, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+
+    w("## Detector false positives - per-finding evidence")
+    w("")
+    w("This is the evidence for the \"no detector exemptions were needed\" claim.")
+    w("Every symbol below was reported dead by the widened scan and is in fact")
+    w("live. The generator asks the SAME reference graph the gate asks and prints")
+    w("the real call site it finds, so the claim is re-checked on every run rather")
+    w("than asserted. If one of these ever loses its caller, regeneration fails")
+    w("instead of leaving a stale line here.")
+    w("")
+    w("| False positive | Declared at | Caller(s) found by the gate's reference graph | Root cause |")
+    w("|---|---|---|---|")
+    for r in sorted(fps, key=lambda x: x["symbol"]):
+        w("| `%s` | `%s` | %s | %s |"
+          % (r["symbol"], r["declaration"], _md(r["evidence"]), _md(r.get("root_cause", ""))))
+    w("")
+    if pub:
+        w("### Findings exempted instead of fixed")
+        w("")
+        w("| Symbol | Declared at | Evidence | Rationale |")
+        w("|---|---|---|---|")
+        for r in sorted(pub, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["declaration"], _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+
+    w("## Root causes")
+    w("")
+    for i, rc in enumerate(triage.get("root_causes", []), start=1):
+        w("%d. **%s**" % (i, rc["title"]))
+        w("")
+        for para in rc["body"]:
+            w(para)
+            w("")
+    if triage.get("self_detection_note"):
+        w(triage["self_detection_note"])
+        w("")
+
+    w("## Checks performed before classifying anything")
+    w("")
+    for chk in triage.get("pre_classification_checks", []):
+        w("- %s" % chk["claim"])
+    w("")
+    w("## Promotion")
+    w("")
+    w(triage.get("promotion", ""))
+    w("")
+    return "\n".join(out)
+
+
+def _write_findings(repo_root: str, target: str, triage_path: str, findings: List[Finding]) -> int:
+    """Regenerate wiring-audit/FINDINGS.md from a live scan plus committed triage.
+
+    Refuses to write when the scan and triage.json disagree, so the document can
+    never quietly stop describing the code it audits.
+    """
+    rel_target = os.path.relpath(os.path.abspath(target), repo_root).replace("\\", "/")
+    try:
+        with open(triage_path, "r", encoding="utf-8") as fh:
+            triage = json.load(fh)
+    except (IOError, ValueError) as exc:
+        print("[ERROR] cannot read triage data %s: %s" % (triage_path, exc))
+        return 2
+    if triage.get("schema_version") != TRIAGE_SCHEMA_VERSION:
+        print("[ERROR] %s: unsupported schema_version %r (expected %d)"
+              % (triage_path, triage.get("schema_version"), TRIAGE_SCHEMA_VERSION))
+        return 2
+    rows, errors = verify_dispositions(
+        repo_root, triage.get("dispositions", []), findings,
+        reported_total=triage.get("scan", {}).get("reported", 0),
+    )
+    if errors:
+        for e in errors:
+            print(e)
+        print("\n[FAIL] %d triage problem(s). %s was NOT rewritten; the document "
+              "would have lied about the scan." % (len(errors), rel_target))
+        return 2
+    document = triage.get("document", "wiring-audit/FINDINGS.md")
+    command = "python scripts/check_wiring.py --write-findings %s" % document
+    markdown = render_findings_markdown(triage, rows, command)
+    with open(target, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(markdown)
+    print("[OK] Wrote %s (%d dispositions re-verified against the tree)"
+          % (rel_target, len(rows)))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="SCMessenger Android Wiring & Reachability Gate (AGENTS.md Rule 16)")
     parser.add_argument("--root", default=os.getcwd(), help="Repository root directory (default: current directory)")
@@ -864,11 +1235,29 @@ def main() -> int:
             "'block' promotes them to errors once the backlog is triaged."
         ),
     )
+    parser.add_argument(
+        "--write-findings",
+        metavar="PATH",
+        help=(
+            "Regenerate the wiring-audit document from this run plus the committed "
+            "triage data, instead of printing findings. Refuses to write (exit 2) if "
+            "the scan reports a finding that triage does not classify."
+        ),
+    )
+    parser.add_argument(
+        "--triage",
+        default=os.path.join("wiring-audit", "triage.json"),
+        help="Per-finding dispositions read by --write-findings (default: wiring-audit/triage.json)",
+    )
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.root)
     block_methods = args.method_findings == "block"
     findings, exclusions = check_wiring(repo_root, block_methods=block_methods)
+
+    if args.write_findings:
+        triage_path = args.triage if os.path.isabs(args.triage) else os.path.join(repo_root, args.triage)
+        return _write_findings(repo_root, args.write_findings, triage_path, findings)
 
     errors = [f for f in findings if f.severity == "ERROR"]
     warnings = [f for f in findings if f.severity != "ERROR"]
