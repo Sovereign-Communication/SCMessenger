@@ -1,0 +1,104 @@
+{
+  "status": "planned",
+  "goal": "Read-only git/gh audit: git fetch --prune origin; git worktree list; for each worktree ref report HEAD sha, ahead/behind vs origin/main, diff shortstat; then gh pr list open with rollups; then gh run list --branch main --limit 8. No file edits.\n\n[STRUCTURAL GUIDELINE]: This goal requires iterative control flow, conditional branching, or multi-step execution. Represent those dependencies explicitly in the executable DAG.",
+  "total_nodes": 1,
+  "batches": [
+    [
+      "task_1"
+    ]
+  ],
+  "nodes": [
+    {
+      "node_id": "task_1",
+      "instruction": "Read-only git/gh audit: git fetch --prune origin; git worktree list; for each worktree ref report HEAD sha, ahead/behind vs origin/main, diff shortstat; then gh pr list open with rollups; then gh run list --branch main --limit 8. No file edits.\n\n[STRUCTURAL GUIDELINE]: This goal requires iterative control flow, conditional branching, or multi-step execution. Represent those dependencies explicitly in the executable DAG.",
+      "target_files": [
+        "docs/reports/analysis.md"
+      ],
+      "dependencies": [],
+      "local_gate": null,
+      "complexity_tier": 0,
+      "recommended_model": "google/gemma-4-31b-it:free",
+      "cost_ceiling": 0.0,
+      "backend": null,
+      "classification": {
+        "tier": 0,
+        "score": 0.3,
+        "reasons": [
+          "standard implementation keywords (+0.10): dag",
+          "single target file scope",
+          "jev route 'free-distill' noted (tier stays 0)"
+        ],
+        "estimated_cost_tier": "free"
+      },
+      "route": {
+        "ladder": [
+          "google/gemma-4-31b-it:free",
+          "google/gemma-4-26b-a4b-it:free",
+          "openrouter/free"
+        ],
+        "cost_ceiling": 0.0
+      }
+    }
+  ],
+  "total_cost_ceiling": 0.0,
+  "dag": {
+    "nodes": [
+      {
+        "node_id": "task_1",
+        "instruction": "Read-only git/gh audit: git fetch --prune origin; git worktree list; for each worktree ref report HEAD sha, ahead/behind vs origin/main, diff shortstat; then gh pr list open with rollups; then gh run list --branch main --limit 8. No file edits.\n\n[STRUCTURAL GUIDELINE]: This goal requires iterative control flow, conditional branching, or multi-step execution. Represent those dependencies explicitly in the executable DAG.",
+        "target_files": [
+          "docs/reports/analysis.md"
+        ],
+        "dependencies": [],
+        "local_gate": null,
+        "complexity_tier": 0,
+        "backend": null
+      }
+    ]
+  },
+  "decomposition": "heuristic",
+  "triage": {
+    "verdict": "fail",
+    "confidence": 0.18,
+    "supported": 0.97,
+    "cost": 2.0328e-06,
+    "input_tokens": 484,
+    "output_tokens": 62,
+    "is_fallback": false,
+    "model": "jev-1.13.0",
+    "site": "route",
+    "discarded": false,
+    "route": "free-distill",
+    "route_is_fallback": false,
+    "requires_iteration": true
+  },
+  "structural": {
+    "verdict": "pass",
+    "confidence": 0.99,
+    "supported": 0.98,
+    "cost": 1.9025999999999998e-06,
+    "input_tokens": 453,
+    "output_tokens": 39,
+    "is_fallback": false,
+    "model": "jev-1.13.0",
+    "site": "cli",
+    "discarded": false
+  },
+  "confirmation": {
+    "verdict": "skipped",
+    "model": null,
+    "rounds": 0,
+    "reason": "plan-only preview degraded to heuristic decomposition via --allow-heuristic-preview; waist confirmation over an LLM decomposition never happened, so it is skipped rather than confirming an unreviewed plan.",
+    "cost": 0.0
+  },
+  "composed_worst_case": {
+    "composed_worst_case": 0.0,
+    "node_ceiling": 0.0,
+    "decompose": 0.0,
+    "waist": 0.0,
+    "consensus": 0.0,
+    "remaining": 0.0499960646,
+    "plan_ceiling": 0.05,
+    "exceeds_remaining": false
+  }
+}
