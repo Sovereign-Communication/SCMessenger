@@ -1,5 +1,15 @@
 # V040 checkpoint - drop-test RCA: five defects ranked, one smoking gun
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Stage: `DROPPHASE_RCA` (analysis; no new code)
 Timestamp: 2026-09-09T09:35:00Z
 Phase window analyzed: 09:05:47Z WiFi drop -> 09:25:29Z baseline recovery

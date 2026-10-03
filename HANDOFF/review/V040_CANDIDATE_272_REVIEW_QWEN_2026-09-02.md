@@ -1,4 +1,15 @@
 # V040 Candidate PR #272 Adversarial Review
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Scope: independent static review of tmp/rev272.diff (a759e0c7); no author audit consulted.
 
 Attacks tried / result

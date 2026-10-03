@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- #267 re-review at triage head 80197ef5 (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: TRIAGED 2026-09-03 (re-review after triage 79b4958c + hostile re-review fix 80197ef5) -- verdict REQUEST_CHANGES, 4 findings, all dispositioned NOT-APPLICABLE/CONFIRMED, zero code changes; disposition at HANDOFF/review/V040_T13_FDHT_RECHECK_QWEN_2026-09-03.md
 Target: PR #267 freebuff/v040-t13-fdht-gate @ 80197ef5 (F-DHT gate doctrine PR; 3 files, +507/-108 vs main)
 Model: qwen3.8-2.4t-a95b (ledger-confirmed 100%, 1M context)

@@ -1,5 +1,15 @@
 # CEO -- you are right that acceptance 2 is post-merge. My correction was wrong.
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: SUPERSEDES `RULING_2026-08-31_T12_verification_invalid.md` (method only)
 From: CEO seat
 Date: 2026-08-31

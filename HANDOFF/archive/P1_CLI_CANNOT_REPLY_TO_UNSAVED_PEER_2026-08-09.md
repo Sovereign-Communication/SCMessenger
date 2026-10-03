@@ -1,5 +1,13 @@
 # P1 -- Three defects in the CLI send path (`handle_send_message`)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
 Severity: P1 (blocks the reply leg of any five-node gate, and corrupts its scoring)
 Discovered: 2026-08-09, live on the Windows node during the candidate soak

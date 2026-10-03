@@ -1,5 +1,15 @@
 # Farm-sim test-runner assumes a REST API that doesn't exist
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Scoped, NOT started. Found live 2026-07-14 running the AWS farm-sim
 (docker-compose-extended.yml, 7-node/3-network topology) through
 `docker/test-scripts/run-integration-tests.sh`.

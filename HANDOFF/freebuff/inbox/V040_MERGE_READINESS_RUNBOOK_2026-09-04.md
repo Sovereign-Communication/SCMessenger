@@ -1,5 +1,15 @@
 # V040 Merge-readiness runbook -- #272 to main at the final head e97c3f82
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04 (~11:40Z)
 Purpose: one paste-ready runbook so that when the AWS leg lands, the stable
 3-node evidence capture and the #272 merge are a single pass. The commands

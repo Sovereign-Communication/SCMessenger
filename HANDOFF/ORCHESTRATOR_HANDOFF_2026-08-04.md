@@ -1,5 +1,13 @@
 # ORCHESTRATOR HANDOFF — 2026-08-04 5-Node Run 2 Preparation
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date**: 2026-08-04
 **Status**: ACTIVE — Next orchestrator take over from here
 **Baseline**: `origin/main` at `ba362cc5` (post PR #133 merge)

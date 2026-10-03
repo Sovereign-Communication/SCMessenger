@@ -1,5 +1,13 @@
 # TASK: Investigate/fix hardcoded WiFi Aware PMK derivation input
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO, not yet investigated beyond the initial spot-check that found
 it. Farm-relevant (WiFi Aware is a farm-proximity transport, even though
 currently ranked below the P0 mDNS/QUIC-TCP/BLE trio).

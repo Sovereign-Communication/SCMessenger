@@ -1,5 +1,13 @@
 # Unified Backlog — 2026-06-08 Sweep
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-08 01:33 PT
 **Author:** Claude Code (Overseer) — picking up `HANDOFF/IN_PROGRESS/IN_PROGRESS_handoff_unblock_test_build_verify_2026-06-08.md`
 **Authority:** Lucas directive 2026-06-08 ("I want it all fixed") + Hermes Telegram orchestrator handoff

@@ -1,5 +1,15 @@
 # Phase 0b Adversarial Review -- message-request gate (qwenpaid dispatch)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-08-04/05. Lane: qwenpaid / qwen3.8-max-preview (90% promo).
 Dispatch: scripts/delegate_task.py --provider qwenpaid --mode full, task file
 tmp/phase0b_msgreq_gate_review.prompt.md, response

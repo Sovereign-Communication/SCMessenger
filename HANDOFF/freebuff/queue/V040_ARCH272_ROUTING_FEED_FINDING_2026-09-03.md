@@ -1,5 +1,15 @@
 # Finding -- #272 routing-feed removal vs merged PR #263 (T4): evidence-backed verdict
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **READ-ONLY INVESTIGATION 2026-09-03, filed for QWEN + CTO** (dispatch brief item C,
 `V040_REVIEW_DISPATCH_272_ARCH_QWEN_2026-09-03.md`). Nothing edited, deleted, staged,
 committed, or merged. All claims verified against the candidate tree at `a759e0c7`

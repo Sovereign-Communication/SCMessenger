@@ -1,5 +1,15 @@
 # TASK: CORE-SWEEP-04  Systemic `SystemTime::now().duration_since(UNIX_EPOCH).expect(...)` pattern across 20 files (informational / low-priority)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Context
 
 Found during a comprehensive gap sweep of `core/src/` (2026-07-04). This is

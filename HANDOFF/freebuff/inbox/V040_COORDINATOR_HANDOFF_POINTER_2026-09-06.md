@@ -1,5 +1,15 @@
 # COORDINATOR HANDOFF WAITING — CTO, READ NOW (posted 2026-09-06 ~23:47Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 The coordinator has been on watch since 23:28Z and left a full handoff in
 tmp/cto/ — you have not picked it up yet. Read these three files first:
 

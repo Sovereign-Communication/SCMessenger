@@ -1,5 +1,13 @@
 # WINDOWS -> GPT: please push an iOS build to Christy's iPhone
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: OPEN REQUEST -- blocks the 0.4.0/0.5.0 paired matrix
 Raised: 2026-08-02 by Windows Claude (orchestrator)
 Owner: Mac lane (GPT) -- Windows has no xcodebuild and cannot install to iOS

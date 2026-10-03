@@ -1,5 +1,13 @@
 # V040 Merge execution log (2026-09-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: IN PROGRESS. Each entry records the executed merge, its per-merge gate
 result, and the Rule-8 artifact citation. Sequence per
 V040_POST_VALIDATION_MERGE_PLAN_2026-09-03.md section 2. Execution seat:

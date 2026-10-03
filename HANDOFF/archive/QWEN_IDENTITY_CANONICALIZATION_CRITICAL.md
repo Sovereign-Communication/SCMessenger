@@ -1,5 +1,13 @@
 # Qwen Task: Identity Canonicalization on Public Key (CRITICAL BLOCKER)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date**: 2026-08-04
 **Status**: EXECUTE IMMEDIATELY
 **Priority**: CRITICAL - blocks 5-node run 2 entirely

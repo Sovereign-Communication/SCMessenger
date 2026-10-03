@@ -1,3 +1,13 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 > **RESOLVED 2026-09-10 -- moved to done/ per the 2026-08-29 closure ruling, verified in source this session.**
 > Evidence (this session, main@45ab59f9): `core/src/transport/multiport.rs:75-99`
 > `generate_listen_addresses()` now emits exactly one transport per port

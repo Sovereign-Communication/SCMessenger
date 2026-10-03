@@ -1,5 +1,13 @@
 # V0.4.0 Lane Unification Merge Train -- 2026-09-23
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- single sequenced plan for the working 0.4.0
 Owner lane: Freebuff (this doc) -- merge authority: Windows orchestrator/operator
 Dogfood context: AWS always-on + OpenClaw nodes dogfooding via Sovereign-Harness

@@ -1,5 +1,15 @@
 # V040 PR #282 — Rule-8 Adversarial Security Review APPROVE
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Date:** 2026-09-12
 **PR:** #282 (`fix/harness-bod-and-android-stability`)
 **Head Commit:** `b65bc4d7`

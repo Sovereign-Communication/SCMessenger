@@ -1,5 +1,13 @@
 # v0.4.0 Orchestration Complete — Next Actions for Lucas
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** [OK] All 5 Qwen tasks implemented and applied to working tree  
 **Date:** 2026-07-22  
 **What's Done:** P0a, P0b, P1, P2, P3, P4 (code applied; waiting for gate verification)

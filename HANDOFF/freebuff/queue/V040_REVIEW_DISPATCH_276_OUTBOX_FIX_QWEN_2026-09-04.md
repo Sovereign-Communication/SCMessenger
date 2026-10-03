@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH — Rule-8 adversarial review: PR #276 @ 22e23c60 (freebuff/v040-outbox-transport-fix, qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: **GATE CLOSED 2026-09-06 — R14 VERDICT: APPROVE (plain) at PR head 6359f661.** Rounds R1-R14: REQUEST_CHANGES x13 (R1-R8, R10-R13 per raw artifacts; R2 onward reviewer = qwen3.8-max-0902 — identity change recorded), then plain APPROVE. No fix commit landed after R14, so no CI re-run is owed; CI on 6359f661 was still running at gate close (macOS = the open risk, no prior green on this PR).
 Verdict: **HANDOFF/review/V040_OUTBOX_FIX_REVIEW_QWEN_2026-09-05.md (R9-R14 + provenance)** · R1: HANDOFF/review/V040_OUTBOX_FIX_REVIEW_QWEN_2026-09-04.md
 [2026-09-04 header below kept for the R1 record; intermediate rounds live in tmp/rev276_r{2..13}_*]

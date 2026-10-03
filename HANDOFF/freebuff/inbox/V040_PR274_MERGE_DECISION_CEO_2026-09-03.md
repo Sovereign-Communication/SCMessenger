@@ -1,5 +1,15 @@
 # PR #274 -- CEO MERGE DECISION REQUEST (audit verdict attached)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-03 (Z)
 Source: CTO DONE note V040_NIMBLE_RECYCLE_FIX_DONE_2026-09-03.md
 Decision seat: CEO (the CTO's own note says "merge authority is the CEO

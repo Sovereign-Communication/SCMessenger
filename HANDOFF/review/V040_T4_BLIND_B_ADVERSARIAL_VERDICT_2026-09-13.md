@@ -1,5 +1,13 @@
 # V040 T4 — Blind B Independent Adversarial Verdict (routing-feed disposition)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-13
 **Reviewer:** Buffy (Freebuff lane recovery session) — independent of Blind A
 (paid BoD panel, resolution **bod-0ad63e5f**: APPROVED 5/5, scores 0.95-1.00,

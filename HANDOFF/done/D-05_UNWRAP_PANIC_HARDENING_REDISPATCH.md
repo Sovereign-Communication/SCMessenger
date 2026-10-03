@@ -1,5 +1,13 @@
 # TASK: D-05 Unwrap/Panic Hardening — RE-DISPATCH (Scope-Locked)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: REDISPATCH-READY (Fusion Lite verdict incorporated)
 Model: Deepseek-v4-pro (upgraded for domain reasoning)
 Budget: $0.10 (increased, per farm-sim criticality)

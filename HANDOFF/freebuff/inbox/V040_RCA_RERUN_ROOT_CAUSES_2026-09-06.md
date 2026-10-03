@@ -1,5 +1,13 @@
 # V040 RCA RERUN -- ROOT CAUSES PINNED (2026-09-06 ~04:50Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Task: V040_CEO_APPROVAL_PUSH_276_TO_FULL_3NODE_GREEN_2026-09-04.md
 Type: PROGRESS (RCA complete; three defects pinned; fix plan staged -- awaiting go)
 

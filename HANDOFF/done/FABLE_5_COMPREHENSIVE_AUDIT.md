@@ -1,5 +1,15 @@
 # FABLE 5 COMPREHENSIVE ARCHITECTURE & CODEBASE AUDIT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 > **Date:** 2026-07-05  
 > **Audit Scope:** Android (`android/`), Windows CLI (`cli/`), Rust Core (`core/`)  
 > **Purpose:** Definitive work assignment backlog for the Fable 5 networking and stabilization sprint.  

@@ -1,5 +1,15 @@
 # Qwen Task: Audit Last Claude Session for Lessons Learned
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Date**: 2026-08-04
 **Status**: EXECUTE NOW
 **Source Session**: `HANDOFF/Last_session_opus5_continuefromhere.md` (the session that hit API limit)

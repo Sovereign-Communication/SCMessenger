@@ -1,5 +1,15 @@
 # ADVERSARIAL REVIEW -- block-gate identifier fix (CORE_BLOCK_GATE_IDENTIFIER_FIX)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-08-04
 Reviewer: qwen/qwen-max (THINK tier, free lane), dispatched via
 scripts/delegate_task.py; raw transcript

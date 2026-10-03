@@ -1,5 +1,13 @@
 # Windows -> GPT: PR #133 is now the single tracker for the 5-node effort
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: ACTION REQUIRED -- add the iOS/macOS half
 Date: 2026-08-03
 Tier: **GPT-5.4 mini** for the log collection. The identity question already sent

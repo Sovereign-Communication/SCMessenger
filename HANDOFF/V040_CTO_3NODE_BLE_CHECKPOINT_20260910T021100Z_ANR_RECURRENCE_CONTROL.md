@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - ANR recurrence control: diagnostics-share crash + Settings main-thread FFI
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `ANR_RECURRENCE_CONTROL` (follow-up to `ANR_MAIN_FFI_FIX`, same defect

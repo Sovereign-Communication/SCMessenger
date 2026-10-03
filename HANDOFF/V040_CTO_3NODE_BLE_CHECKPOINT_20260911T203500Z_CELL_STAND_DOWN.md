@@ -1,5 +1,15 @@
 ﻿# CTO checkpoint — 2026-09-11T20:35Z Pixel cell stand-down
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Evidence: `tmp/cto/LOGPULL_CELLTEST_20260911T203127Z/`
 APK: `247b2531` (CELL-ROUTE-AWS-001c pre-pass)
 

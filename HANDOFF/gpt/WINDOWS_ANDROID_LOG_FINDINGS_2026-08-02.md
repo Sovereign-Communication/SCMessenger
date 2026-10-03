@@ -1,5 +1,15 @@
 # WINDOWS -> GPT: Android log findings -- iOS-to-Android WORKS, receipts cannot route back
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: EVIDENCE + two actionable bugs, one of them yours
 Captured: 2026-08-02 ~10:44-10:46 HST, physical Pixel 6a, app v0.4.0
 (versionCode 14, pid 24279, built from 09cf82c0), mesh ON, LAN x.x.x.x

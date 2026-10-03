@@ -8,16 +8,39 @@ import subprocess
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from orchestration_contract import load_manifest, valid_transition
+from orchestration_completion_gate import CompletionGateError, run_completion_gate
 from orchestration_worktree import create, plan
 from orchestrator_guard import evaluate
 from orchestrate_strict import (
-    advance_review, capture_worker_diff, complete_integration, has_independent_review_evidence,
-    initialize_state, is_in_scope, load_state, record_review_evidence, register_review_assignment, recover_interrupted_dispatch,
+    COMPLETION_JUDGE_FILES, advance_review, capture_worker_diff, complete_integration, has_independent_review_evidence,
+    initialize_state, is_in_scope, judge_integrity_violations, load_state, record_review_evidence,
+    register_review_assignment, recover_interrupted_dispatch,
     required_review_roles, state_for_task, write_state,
 )
+from jev_canonical_check import CANON_QUESTIONS
 from parse_orchestration_footer import parse_footer
+
+
+def honest_jev_payload(**overrides):
+    """The result file jev_canonical_check.py writes for a genuine keyed pass over the canonical pack.
+
+    The pack is purely `noul`, so harness/jev.py (`_parse_jev_response`) reports confidence 0.0 --
+    only Choice/Score answers carry an action confidence -- and `supported` is the smallest noul
+    probability. Each answer has the shape `_parse_answer` returns. Fixtures shaped any other way
+    (for example confidence 0.91 with no action answer) describe a result no Harness emits.
+    """
+    payload = {
+        "schema_version": "1.0.0", "wp": "WP-TEST", "is_passing": True, "is_fallback": False,
+        "fallback_used": False, "keyed": True, "endpoint": "typesafe", "model": "deterministic-jev",
+        "confidence": 0.0, "supported": 0.93,
+        "answers": {question: {"type": "noul", "noul": 0.93} for question in CANON_QUESTIONS},
+        "reasons": [], "cost": 0.0, "input_tokens": 100, "output_tokens": 10,
+    }
+    payload.update(overrides)
+    return payload
 
 
 class OrchestrationV2Tests(unittest.TestCase):
@@ -257,6 +280,371 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             state = {
                 "task_id": task_id, "protocol_version": self.manifest["protocol_version"],
                 "state_schema_version": self.manifest["state_schema_version"], "history": [],
+                "task": {"id": task_id, "role": "IMPLEMENTER", "files": ["worker.txt"], "verify_gate": "python3 -c \"from pathlib import Path; Path('mechanical.marker').write_text('ok', encoding='utf-8')\""},
+                "assigned_provider": "test", "assigned_model": "test", "base_sha": worker["base_sha"],
+                "changed_files": ["worker.txt"], "worktree": worker,
+                "worker_result": {"result": "DONE", "task": task_id, "degraded": False}, "evidence": [],
+            }
+            write_state(self.manifest, state_root, task_id, state, "INTAKE")
+            write_state(self.manifest, state_root, task_id, state, "CLASSIFIED")
+            write_state(self.manifest, state_root, task_id, state, "PACKET_READY")
+            write_state(self.manifest, state_root, task_id, state, "DISPATCHED")
+            write_state(self.manifest, state_root, task_id, state, "WORKER_DONE")
+            state["worker_diff"] = capture_worker_diff(state_root, task_id, worker_root, worker["base_sha"])
+            write_state(self.manifest, state_root, task_id, state, "VERIFY")
+            write_state(self.manifest, state_root, task_id, state, "REVIEW")
+            write_state(self.manifest, state_root, task_id, state, "INTEGRATE")
+            gate_calls = []
+
+            def fake_gate(gate_state, gate_state_dir, gate_root, **kwargs):
+                self.assertEqual((gate_root / "worker.txt").read_text(encoding="utf-8"), "worker change\n")
+                self.assertTrue((gate_root / "mechanical.marker").is_file())
+                self.assertEqual(kwargs["mechanical_gate"]["returncode"], 0)
+                gate_calls.append(kwargs["mechanical_gate"])
+                return {"status": "PASSED", "task_id": gate_state["task_id"]}
+
+            with patch("orchestrate_strict.run_completion_gate", side_effect=fake_gate):
+                completed = complete_integration(self.manifest, state_root, task_id, root)
+            self.assertEqual(len(gate_calls), 1)
+            self.assertEqual(completed["completion_gate"]["status"], "PASSED")
+            self.assertEqual(completed["state"], "COMPLETE")
+            self.assertEqual((root / "worker.txt").read_text(encoding="utf-8"), "worker change\n")
+            self.assertEqual(completed["integrated_worker_diff"]["files"], ["worker.txt"])
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(root / "tmp/orchestration/worktrees/V2-INTEGRATE")], cwd=root, check=False)
+            self.remove_repo(root)
+
+    def test_completion_gate_passes_with_keyed_evidence_bound_to_patch(self):
+        root = self.make_repo("completion-pass")
+        state_root = root / "state"
+        task_id = "V2-JEV-PASS"
+        state = {
+            "task_id": task_id,
+            "base_sha": "a" * 40,
+            "task": {
+                "id": task_id,
+                "wp": "WP-TEST",
+                "description": "deterministic completion gate",
+                "files": ["worker.txt"],
+                "acceptance": ["mechanical evidence"],
+            },
+            "changed_files": ["worker.txt"],
+            "worker_diff": {"base_sha": "a" * 40, "sha256": "b" * 64},
+        }
+        calls = []
+
+        def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+            calls.append(list(command))
+            stdout_path.write_text("[OK] deterministic fixture\n", encoding="utf-8")
+            stderr_path.write_text("", encoding="utf-8")
+            if any("jev_canonical_check.py" in str(item) for item in command):
+                result_path = Path(command[command.index("--result-file") + 1])
+                result_path.write_text(json.dumps(honest_jev_payload()), encoding="utf-8")
+            return {"returncode": 0, "timed_out": False}
+
+        try:
+            evidence = run_completion_gate(
+                state, state_root, root,
+                process_runner=fake_runner,
+                mechanical_gate={"command": "true", "returncode": 0},
+            )
+            self.assertEqual(evidence["status"], "PASSED")
+            self.assertIsInstance(evidence["jev"]["validated"]["supported"], float)
+            self.assertAlmostEqual(evidence["jev"]["validated"]["supported"], 0.93)
+            self.assertEqual(evidence["jev"]["validated"]["confidence"], 0.0,
+                             "a purely-noul pack reports confidence 0.0 by design")
+            self.assertEqual(evidence["identity"], {
+                "task_id": task_id,
+                "base_sha": "a" * 40,
+                "patch_sha256": "b" * 64,
+                "files": ["worker.txt"],
+            })
+            self.assertTrue(Path(evidence["path"]).is_file())
+            self.assertTrue(Path(evidence["jev"]["result"]["path"]).is_file())
+            self.assertTrue(any(any("harness_gate.py" in str(item) for item in command) for command in calls))
+            jev_call = next(command for command in calls if any("jev_canonical_check.py" in str(item) for item in command))
+            self.assertIn("--no-openrouter", jev_call)
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_rejects_failure_fallback_and_missing_evidence(self):
+        # Each case changes exactly ONE thing about an otherwise genuine pass and names the message the
+        # gate must give for it, so deleting any single check turns its own case red instead of another
+        # check catching the same result by accident. `honest-control` proves the fixture is a pass.
+        root = self.make_repo("completion-reject")
+        expected = {
+            "honest-control": None,
+            "harness-failed": "Harness completion gate failed",
+            "missing-harness-output": "Harness completion evidence is missing",
+            "empty-harness-output": "Harness completion gate produced no output",
+            "timeout": "JEV completion gate timed out",
+            "missing-result": "JEV completion evidence is missing",
+            "empty-jev-output": "JEV completion gate produced no output",
+            "malformed": "JEV result evidence is malformed",
+            "unverified": "JEV returned UNVERIFIED-JEV",
+            "fallback": "JEV fallback is not admissible",
+            "missing-key": "JEV result is not keyed",
+            "wrong-endpoint": "requires the keyed TypeSafe endpoint",
+            "not-passing": "not a canonical pass",
+            "wrong-wp": "does not match the controller task",
+            "empty-model": "JEV result model is missing",
+        }
+        mutants = {
+            "fallback": {"is_fallback": True, "fallback_used": True},
+            "missing-key": {"keyed": False},
+            "wrong-endpoint": {"endpoint": "openrouter"},
+            "not-passing": {"is_passing": False},
+            "wrong-wp": {"wp": "WP-OTHER"},
+            "empty-model": {"model": ""},
+        }
+        try:
+            for index, (case, message) in enumerate(expected.items()):
+                state = self.completion_state(f"V2-JEV-{index}")
+                calls = []
+
+                def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds, case=case, calls=calls):
+                    calls.append(list(command))
+                    is_harness = any("harness_gate.py" in str(item) for item in command)
+                    if not (is_harness and case == "missing-harness-output"):
+                        silent = ((is_harness and case == "empty-harness-output")
+                                  or (not is_harness and case == "empty-jev-output"))
+                        stdout_path.write_text("" if silent else "[INFO] deterministic fixture\n", encoding="utf-8")
+                        stderr_path.write_text("", encoding="utf-8")
+                    if is_harness:
+                        return {"returncode": 1 if case == "harness-failed" else 0, "timed_out": False}
+                    if case == "timeout":
+                        return {"returncode": 124, "timed_out": True}
+                    if case == "missing-result":
+                        return {"returncode": 0, "timed_out": False}
+                    result_path = Path(command[command.index("--result-file") + 1])
+                    if case == "malformed":
+                        result_path.write_text("not-json", encoding="utf-8")
+                    else:
+                        result_path.write_text(json.dumps(honest_jev_payload(**mutants.get(case, {}))), encoding="utf-8")
+                        if case == "unverified":
+                            stdout_path.write_text("UNVERIFIED-JEV\n", encoding="utf-8")
+                    return {"returncode": 0, "timed_out": False}
+
+                if message is None:
+                    evidence = run_completion_gate(
+                        state, root / f"s{index}", root, process_runner=fake_runner,
+                        mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertEqual(evidence["status"], "PASSED", case)
+                    continue
+                with self.assertRaises(CompletionGateError, msg=case) as raised:
+                    run_completion_gate(
+                        state, root / f"s{index}", root, process_runner=fake_runner,
+                        mechanical_gate={"command": "true", "returncode": 0})
+                self.assertIn(message, str(raised.exception), case)
+                self.assertEqual(raised.exception.evidence["status"], "FAILED", case)
+                self.assertEqual(raised.exception.evidence["identity"]["patch_sha256"], "b" * 64)
+                if case == "harness-failed":
+                    self.assertEqual(len(calls), 1)
+        finally:
+            self.remove_repo(root)
+
+    @staticmethod
+    def completion_state(task_id):
+        return {
+            "task_id": task_id,
+            "base_sha": "a" * 40,
+            "task": {"id": task_id, "wp": "WP-TEST", "files": ["worker.txt"]},
+            "changed_files": ["worker.txt"],
+            "worker_diff": {"base_sha": "a" * 40, "sha256": "b" * 64},
+        }
+
+    def test_completion_gate_requires_a_genuine_successful_mechanical_gate(self):
+        root = self.make_repo("mechanical")
+        calls = []
+
+        def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+            calls.append(list(command))
+            return {"returncode": 0, "timed_out": False}
+
+        try:
+            for index, bad in enumerate((
+                None, {}, {"command": "true"}, {"command": "true", "returncode": 7},
+                {"command": "true", "returncode": False}, {"command": "true", "returncode": "0"},
+                {"command": "", "returncode": 0}, "ok",
+            )):
+                with self.assertRaises(CompletionGateError, msg=repr(bad)):
+                    run_completion_gate(
+                        self.completion_state(f"V2-MECH-{index}"), root / f"s{index}", root,
+                        process_runner=fake_runner, mechanical_gate=bad,
+                    )
+            self.assertEqual(calls, [], "no judge may run without a successful mechanical gate")
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_does_not_accept_boolean_or_string_return_codes(self):
+        # False == 0 in Python, so `returncode != 0` alone would wave a boolean through as success.
+        root = self.make_repo("returncode-types")
+        try:
+            for index, bad_code in enumerate((False, "0", None, 0.0)):
+                calls = []
+
+                def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+                    calls.append(list(command))
+                    stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+                    stderr_path.write_text("", encoding="utf-8")
+                    return {"returncode": bad_code, "timed_out": False}
+
+                with self.assertRaises(CompletionGateError, msg=repr(bad_code)) as raised:
+                    run_completion_gate(
+                        self.completion_state(f"V2-RC-{index}"), root / f"s{index}", root,
+                        process_runner=fake_runner, mechanical_gate={"command": "true", "returncode": 0},
+                    )
+                self.assertEqual(raised.exception.evidence["status"], "FAILED")
+                self.assertEqual(len(calls), 1, "the JEV judge must not run after a bad Harness return code")
+        finally:
+            self.remove_repo(root)
+
+    @staticmethod
+    def jev_runner(payload):
+        """A process runner that plays the Harness smoke step and the JEV helper, writing `payload` as the result."""
+        def fake_runner(command, cwd, stdout_path, stderr_path, timeout_seconds):
+            stdout_path.write_text("[INFO] deterministic fixture\n", encoding="utf-8")
+            stderr_path.write_text("", encoding="utf-8")
+            if any("jev_canonical_check.py" in str(item) for item in command):
+                Path(command[command.index("--result-file") + 1]).write_text(json.dumps(payload), encoding="utf-8")
+            return {"returncode": 0, "timed_out": False}
+        return fake_runner
+
+    def assert_gate_verdicts(self, cases, label):
+        """Run each (name, payload, message) through the gate: message None must PASS, else it must fail with it."""
+        root = self.make_repo(label)
+        try:
+            for index, (name, payload, message) in enumerate(cases):
+                state = self.completion_state(f"V2-{label.upper()}-{index}")
+                if message is None:
+                    evidence = run_completion_gate(
+                        state, root / f"s{index}", root, process_runner=self.jev_runner(payload),
+                        mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertEqual(evidence["status"], "PASSED", name)
+                    self.assertIn("NOT an independent verification", evidence["attests"])
+                else:
+                    with self.assertRaises(CompletionGateError, msg=name) as raised:
+                        run_completion_gate(
+                            state, root / f"s{index}", root, process_runner=self.jev_runner(payload),
+                            mechanical_gate={"command": "true", "returncode": 0})
+                    self.assertIn(message, str(raised.exception), name)
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_applies_the_harness_predicate_to_real_shaped_results(self):
+        # harness/jev.py: a purely-noul pack (the canonical one) reports confidence 0.0, because only
+        # Choice/Score answers carry an action confidence; the threshold applies to `supported`, the
+        # smallest noul probability. The gate recomputes both from the answers instead of trusting the
+        # helper's own numbers. A floor on `confidence` would reject every genuine pass.
+        names = list(CANON_QUESTIONS)
+
+        def noul(value):
+            return {"type": "noul", "noul": value}
+
+        def answers(value):
+            return {name: noul(value) for name in names}
+
+        def first_answer(value):
+            return {**answers(0.93), names[0]: value}
+
+        weak = first_answer(noul(0.50))
+        self.assert_gate_verdicts((
+            ("genuine pass, confidence 0.0 by design", honest_jev_payload(), None),
+            ("smallest probability exactly at the minimum",
+             honest_jev_payload(supported=0.70, answers=answers(0.70)), None),
+            ("probabilities given as integers", honest_jev_payload(supported=1, answers=answers(1)), None),
+            ("just below the minimum",
+             honest_jev_payload(supported=0.6999, answers=answers(0.6999)), "below the canonical minimum"),
+            ("one weak answer, honestly reported",
+             honest_jev_payload(supported=0.50, answers=weak), "below the canonical minimum"),
+            ("supported forged above a weak answer",
+             honest_jev_payload(supported=0.93, answers=weak), "do not match its own answers"),
+            ("supported zero but flagged passing", honest_jev_payload(supported=0.0), "do not match its own answers"),
+            ("confidence claimed with no action answer",
+             honest_jev_payload(confidence=0.91), "do not match its own answers"),
+            ("no answers", honest_jev_payload(answers={}), "do not match the canonical questions"),
+            ("one question unanswered",
+             honest_jev_payload(answers={name: noul(0.93) for name in names[:-1]}),
+             "do not match the canonical questions"),
+            ("an unexpected extra answer",
+             honest_jev_payload(answers={**answers(0.93), "extra": noul(0.99)}),
+             "do not match the canonical questions"),
+            ("answer of the wrong type",
+             honest_jev_payload(answers=first_answer({"type": "score", "score": 1.0, "confidence": 0.9})),
+             "is not a noul answer"),
+            ("probability as a string", honest_jev_payload(answers=first_answer(noul("0.93"))),
+             "probability is missing"),
+            ("probability as a boolean", honest_jev_payload(answers=first_answer(noul(True))),
+             "probability is missing"),
+            ("probability not a number", honest_jev_payload(answers=first_answer(noul(float("nan")))),
+             "probability is missing"),
+            ("probability above one", honest_jev_payload(answers=first_answer(noul(1.5))),
+             "probability is missing"),
+            ("supported absent", honest_jev_payload(supported=None), "supported fraction is missing"),
+            ("supported as a string", honest_jev_payload(supported="0.93"), "supported fraction is missing"),
+            ("supported as a boolean", honest_jev_payload(supported=True), "supported fraction is missing"),
+            ("supported above one", honest_jev_payload(supported=1.5), "supported fraction is missing"),
+            ("confidence as a boolean", honest_jev_payload(confidence=False), "confidence is missing"),
+        ), "predicate")
+
+    def test_completion_gate_requires_action_confidence_when_the_pack_has_a_choice_or_score_question(self):
+        # Confidence 0.0 means "no Choice/Score question was asked". Once one is asked, its confidence
+        # is a real signal and must clear the floor; 0.0 is then a failing value like any other.
+        pack = {"ok": {"type": "noul"}, "route": {"type": "choice"}}
+
+        def payload(answer_confidence, reported_confidence):
+            return honest_jev_payload(
+                confidence=reported_confidence, supported=0.95,
+                answers={
+                    "ok": {"type": "noul", "noul": 0.95},
+                    "route": {"type": "choice", "choice": "diff",
+                              "probabilities": {"diff": 0.9, "frontier": 0.1}, "confidence": answer_confidence},
+                })
+
+        with patch.dict(CANON_QUESTIONS, pack, clear=True):
+            self.assert_gate_verdicts((
+                ("action confidence above the minimum", payload(0.90, 0.90), None),
+                ("action confidence below the minimum", payload(0.50, 0.50), "below the canonical minimum"),
+                ("action confidence of zero is not 'absent' once a choice was asked",
+                 payload(0.0, 0.0), "below the canonical minimum"),
+                ("reported confidence higher than the answer's", payload(0.50, 0.90), "do not match its own answers"),
+                ("reported confidence zero over a confident answer", payload(0.90, 0.0), "do not match its own answers"),
+            ), "action-confidence")
+
+    def test_completion_judges_must_match_the_base_commit(self):
+        root = self.make_repo("judges")
+        try:
+            for rel in COMPLETION_JUDGE_FILES:
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("judge\n", encoding="utf-8")
+            subprocess.run(["git", "add", *COMPLETION_JUDGE_FILES], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "judges"], cwd=root, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                                  text=True, check=True).stdout.strip()
+            self.assertEqual(judge_integrity_violations(root, base), [])
+            (root / "scripts/harness_gate.py").write_text("tampered in the working tree\n", encoding="utf-8")
+            self.assertEqual(judge_integrity_violations(root, base), ["scripts/harness_gate.py"])
+            (root / "orchestration/manifest.yaml").write_text("tampered and staged (what git apply --index does)\n", encoding="utf-8")
+            subprocess.run(["git", "add", "orchestration/manifest.yaml"], cwd=root, check=True)
+            self.assertEqual(sorted(judge_integrity_violations(root, base)),
+                             ["orchestration/manifest.yaml", "scripts/harness_gate.py"])
+            self.assertEqual(len(judge_integrity_violations(root, "0" * 40)), 1,
+                             "an unknown base must fail closed, not read as clean")
+        finally:
+            self.remove_repo(root)
+
+    def test_completion_gate_failure_reverses_patch_and_never_completes(self):
+        root = self.make_repo("completion-failure")
+        state_root = root / "state"
+        task_id = "V2-JEV-FAIL"
+        try:
+            worker = create(task_id, root=root)
+            worker_root = Path(worker["path"])
+            (worker_root / "worker.txt").write_text("worker change\n", encoding="utf-8")
+            state = {
+                "task_id": task_id, "protocol_version": self.manifest["protocol_version"],
+                "state_schema_version": self.manifest["state_schema_version"], "history": [],
                 "task": {"id": task_id, "role": "IMPLEMENTER", "files": ["worker.txt"], "verify_gate": "true"},
                 "assigned_provider": "test", "assigned_model": "test", "base_sha": worker["base_sha"],
                 "changed_files": ["worker.txt"], "worktree": worker,
@@ -271,12 +659,63 @@ NOTES: [\"fixture verifies durable assignment binding\"]
             write_state(self.manifest, state_root, task_id, state, "VERIFY")
             write_state(self.manifest, state_root, task_id, state, "REVIEW")
             write_state(self.manifest, state_root, task_id, state, "INTEGRATE")
-            completed = complete_integration(self.manifest, state_root, task_id, root)
-            self.assertEqual(completed["state"], "COMPLETE")
-            self.assertEqual((root / "worker.txt").read_text(encoding="utf-8"), "worker change\n")
-            self.assertEqual(completed["integrated_worker_diff"]["files"], ["worker.txt"])
+            failure = {
+                "status": "FAILED",
+                "identity": {"task_id": task_id, "base_sha": worker["base_sha"], "patch_sha256": state["worker_diff"]["sha256"]},
+                "failure": "Harness completion gate failed",
+            }
+            with patch("orchestrate_strict.run_completion_gate", side_effect=CompletionGateError("Harness completion gate failed", failure)):
+                result = complete_integration(self.manifest, state_root, task_id, root)
+            self.assertEqual(result["state"], "RETRY")
+            self.assertEqual(result["integration_state"], "COMPLETION_GATE_FAILED")
+            self.assertEqual(result["completion_gate"]["status"], "FAILED")
+            self.assertEqual((root / "worker.txt").read_text(encoding="utf-8"), "base\n")
         finally:
-            subprocess.run(["git", "worktree", "remove", "--force", str(root / "tmp/orchestration/worktrees/V2-INTEGRATE")], cwd=root, check=False)
+            subprocess.run(["git", "worktree", "remove", "--force", str(root / "tmp/orchestration/worktrees/V2-JEV-FAIL")], cwd=root, check=False)
+            self.remove_repo(root)
+
+    def test_a_patch_that_rewrites_a_completion_judge_is_refused_before_any_gate_runs(self):
+        # judge_integrity_violations is unit-tested above; this proves complete_integration
+        # actually calls it. If that call were removed, the stubbed gate below would pass and
+        # the task would reach COMPLETE, so this test would fail.
+        root = self.make_repo("judge-rewrite")
+        state_root = root / "state"
+        task_id = "V2-JUDGE-REWRITE"
+        judge = "scripts/harness_gate.py"
+        try:
+            (root / "scripts").mkdir()
+            (root / judge).write_text("judge\n", encoding="utf-8")
+            subprocess.run(["git", "add", judge], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "judge at base"], cwd=root, check=True)
+            worker = create(task_id, root=root)
+            worker_root = Path(worker["path"])
+            (worker_root / judge).write_text("the worker rewrote the judge\n", encoding="utf-8")
+            state = {
+                "task_id": task_id, "protocol_version": self.manifest["protocol_version"],
+                "state_schema_version": self.manifest["state_schema_version"], "history": [],
+                "task": {"id": task_id, "role": "IMPLEMENTER", "files": [judge], "verify_gate": "true"},
+                "assigned_provider": "test", "assigned_model": "test", "base_sha": worker["base_sha"],
+                "changed_files": [judge], "worktree": worker,
+                "worker_result": {"result": "DONE", "task": task_id, "degraded": False}, "evidence": [],
+            }
+            write_state(self.manifest, state_root, task_id, state, "INTAKE")
+            write_state(self.manifest, state_root, task_id, state, "CLASSIFIED")
+            write_state(self.manifest, state_root, task_id, state, "PACKET_READY")
+            write_state(self.manifest, state_root, task_id, state, "DISPATCHED")
+            write_state(self.manifest, state_root, task_id, state, "WORKER_DONE")
+            state["worker_diff"] = capture_worker_diff(state_root, task_id, worker_root, worker["base_sha"])
+            write_state(self.manifest, state_root, task_id, state, "VERIFY")
+            write_state(self.manifest, state_root, task_id, state, "REVIEW")
+            write_state(self.manifest, state_root, task_id, state, "INTEGRATE")
+            with patch("orchestrate_strict.run_completion_gate", return_value={"status": "PASSED"}) as gate:
+                result = complete_integration(self.manifest, state_root, task_id, root)
+            gate.assert_not_called()
+            self.assertEqual(result["state"], "RETRY")
+            self.assertEqual(result["integration_state"], "COMPLETION_GATE_FAILED")
+            self.assertIn(judge, result["completion_gate"]["failure"])
+            self.assertEqual((root / judge).read_text(encoding="utf-8"), "judge\n")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(root / f"tmp/orchestration/worktrees/{task_id}")], cwd=root, check=False)
             self.remove_repo(root)
 
     def test_dial_gates_are_persisted_and_require_their_declared_reviews(self):
@@ -390,7 +829,7 @@ print(worker['path'])
 
     def test_writer_worktree_plan_is_isolated(self):
         item = plan("V2-ISOLATION")
-        self.assertIn("tmp/orchestration/worktrees/V2-ISOLATION", item["path"])
+        self.assertIn("tmp/orchestration/worktrees/V2-ISOLATION", item["path"].replace("\\", "/"))
         self.assertTrue(item["base_sha"])
 
 

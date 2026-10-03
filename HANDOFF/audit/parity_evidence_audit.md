@@ -3,6 +3,16 @@ Last updated: 2026-08-03
 
 # Feature Parity Evidence Audit
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Summary
 
 Source: `docs/FEATURE_PARITY.md` (dated 2026-07-24, 237 lines)

@@ -1,5 +1,13 @@
 # RCA: Android-to-Windows WiFi transport regression (2026-09-17 22:16Z - 2026-09-18 06:42Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: RESOLVED (service restored 06:42:29Z); root cause identified; fix NOT yet implemented.
 Severity at peak: Android could not reach the Windows node by any direct WiFi path for
 ~8.5 hours; 278 consecutive dial failures on the Pixel; node-side denies ~50-70/hour.

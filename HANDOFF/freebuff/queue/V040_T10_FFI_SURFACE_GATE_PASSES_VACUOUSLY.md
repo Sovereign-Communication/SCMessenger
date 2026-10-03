@@ -1,5 +1,13 @@
 # V040-T10 -- The FFI surface gate passes when it checks nothing
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: RESOLVED ON MAIN -- core defect already fixed (verified 2026-09-01); see resolution note at bottom
 Priority: P1 -- a CI gate that cannot fail when it matters most
 Lane: Freebuff / DeepSeek V4 Flash

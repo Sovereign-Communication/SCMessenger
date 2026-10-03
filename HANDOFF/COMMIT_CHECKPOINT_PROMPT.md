@@ -1,5 +1,13 @@
 # Commit Checkpoint to PRs - SCMessenger repos (results-driven)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: PASTE INTO A FRESH SESSION launched in the parent folder that holds the
 clones (for example a `Github` directory), not inside one repository.
 Outcome it must reach: no unsaved work left in any SCMessenger checkout, and

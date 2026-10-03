@@ -1,5 +1,13 @@
 # V040 CTO checkpoint - 2026-09-11 cell test after hang fix + dirty-tree sweep
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Cell / delivery (Pixel pid 3986, hang-fixed APK A74594C6)
 
 Evidence: `MiMoSCMessengerFresh/tmp/cto/CELLTEST_PULL_20260911T225102Z/pixel_logcat_retry.txt`

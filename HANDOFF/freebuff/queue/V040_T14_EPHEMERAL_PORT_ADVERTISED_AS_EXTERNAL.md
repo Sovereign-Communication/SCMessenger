@@ -1,5 +1,15 @@
 # V040-T14 -- The node advertises an ephemeral NAT source port as its external address
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: MERGED -- the fix landed as PR #270 (merged 2026-09-03). Status corrected
 2026-09-19 from "PR FILED -- #270 open" by the queue-reconcile pass; the ticket
 body below is unchanged.

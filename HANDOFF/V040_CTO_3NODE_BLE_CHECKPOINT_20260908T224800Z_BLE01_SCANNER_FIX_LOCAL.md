@@ -1,5 +1,13 @@
 # V040 CTO three-node BLE checkpoint — BLE01_SCANNER_FIX_LOCAL
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Metadata
 
 - Stage: `BLE01_SCANNER_FIX_LOCAL` (code-fix stage executed LOCALLY on operator ruling "no dispatch - do all work locally", 2026-09-08)

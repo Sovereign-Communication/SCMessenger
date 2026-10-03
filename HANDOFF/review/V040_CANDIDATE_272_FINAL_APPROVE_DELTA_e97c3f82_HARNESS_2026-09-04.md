@@ -1,5 +1,15 @@
 # V040 #272 FINAL-APPROVE DELTA RE-PIN (harness) -- e97c3f82
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04 (~10:00Z)
 PR: #272 (architecture candidate, branch cto/v040-candidate-2026-09-02)
 Reviewed head: e97c3f8247b29dd344467e05137b24f0f110a10a (TRUE FINAL TREE; PR head == merge-ref c5d6a4ed, trees identical 94d9d7c0...)

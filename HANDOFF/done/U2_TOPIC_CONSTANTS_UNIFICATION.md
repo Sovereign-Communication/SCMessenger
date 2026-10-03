@@ -1,5 +1,13 @@
 # TASK: U2 — Topic name constants unification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Tier:** [HAIKU] — mechanical, exact spec provided  
 **Delegation:** `/scmqwen` → FLASH model  
 **Priority:** F0 gate (code cleanliness, low risk)  

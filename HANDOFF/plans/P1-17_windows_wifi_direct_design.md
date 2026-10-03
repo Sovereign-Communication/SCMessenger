@@ -1,5 +1,13 @@
 # P1-17 — Windows-side WiFi Direct: Feasibility + Role Decision (design note)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Task:** P1-17 [OPUS+ spec -> SONNET] from `HANDOFF/V1_0_0_EXECUTION_PLAN.md` Section 2 (Stage D).
 **Author:** Claude (native Cowork session), on operator direction (Lucas).
 **Date:** 2026-07-05.

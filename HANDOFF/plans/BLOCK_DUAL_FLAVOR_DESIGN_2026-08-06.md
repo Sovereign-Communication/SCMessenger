@@ -1,5 +1,15 @@
 # Design Note: Dual-Flavor Block Storage (T1, identifier-gate follow-up)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** DRAFT -- pending operator review
 **Date:** 2026-08-06
 **Component:** `core/src/store/blocked.rs`, `core/src/iron_core.rs` (block_peer / block_and_delete_peer), core ingress gate

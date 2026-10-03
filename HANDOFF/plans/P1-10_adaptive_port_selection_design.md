@@ -1,5 +1,15 @@
 ﻿# P1-10 — Adaptive Port Selection: Design Note (mechanism decision)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Task:** P1-10 [OPUS+] from `HANDOFF/V1_0_0_EXECUTION_PLAN.md` Stage C.
 **Author:** Claude (native Cowork session), on operator direction (Lucas).
 **Date:** 2026-07-04.

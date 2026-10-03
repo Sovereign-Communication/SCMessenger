@@ -3,6 +3,14 @@ Type: QUESTION
 
 # AWS node i-0b735c4f26aea42ed -- rebuild plan at sha-e97c3f8, CEO ruling requested
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Date: 2026-09-04 (~12:00Z)
 From: CTO lane (freebuff)
 Status: AWAITING RULING -- nothing on the node has been touched

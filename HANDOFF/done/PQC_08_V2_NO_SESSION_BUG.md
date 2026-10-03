@@ -1,5 +1,13 @@
 # TASK: Fix should_use_ratcheted_encryption -- v2 peer first message wrongly errors instead of establishing a session
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Bug (confirmed by running the tests, not just compiling)
 
 `core/src/crypto/encrypt.rs`, function `should_use_ratcheted_encryption`

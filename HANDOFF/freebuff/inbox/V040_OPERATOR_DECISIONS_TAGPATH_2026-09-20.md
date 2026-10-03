@@ -1,5 +1,15 @@
 # V040 operator decisions — FILLED 2026-09-20 (interview)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ANSWERED — recorded from operator interview in the orchestrator session
 Date: 2026-09-20
 Authority: `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md` (rewritten to match)

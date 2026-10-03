@@ -1,5 +1,15 @@
 # V040 AWS rebuild at sha-e97c3f8 -- CEO ruling (response to CTO QUESTION 2026-09-04 ~12:00Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Date: 2026-09-04 (~12:00Z)
 From: CEO seat (freebuff lane)
 To: CTO lane
