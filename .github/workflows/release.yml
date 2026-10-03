@@ -217,35 +217,20 @@ jobs:
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
 
-      # Fail fast on a signing-config mismatch. Today an incorrect
-      # SCMESSENGER_KEY_ALIAS (e.g. a PKCS12 case-sensitivity difference vs
-      # the documented JKS) only surfaces ~24 minutes into packageRelease as
-      # a KeytoolException. This checks the decoded keystore for the exact
-      # alias before any Gradle run. Never prints the alias or password.
+      # Fail fast on a signing-config mismatch, before any Gradle run: an
+      # incorrect SCMESSENGER_KEY_ALIAS (e.g. PKCS12 case-sensitivity vs the
+      # documented JKS) otherwise surfaces ~24 min into packageRelease as a
+      # KeytoolException. Never prints the alias or password.
       #
-      # WHY THIS STEP REPORTS keytool'S OWN MESSAGE (2026-10-03)
-      # -------------------------------------------------------
-      # This step used to end `>/dev/null 2>&1` and then assert a fixed
-      # cause: "SCMESSENGER_KEY_ALIAS is not present in the decoded
-      # keystore". That assertion is wrong, not merely terse. keytool
-      # reports a wrong STORE PASSWORD and a wrong ALIAS with the SAME
-      # non-zero exit, so the old text misattributed the cause -- and
-      # suppressed the only output that could tell them apart. Every
-      # release run in history therefore failed with one unreadable
-      # message that named a cause nobody could confirm.
+      # Classifies keytool's own stderr rather than asserting a guessed cause:
+      # a wrong STORE PASSWORD and a wrong ALIAS give the SAME non-zero exit,
+      # so a fixed assertion misattributes the fault and discards the output
+      # that tells them apart. Signatures matched: "Keystore was tampered
+      # with, or password was incorrect" (password), "does not exist" (alias),
+      # EOFException (truncated), "exists, but is empty" (empty file).
       #
-      # Reproduced locally to get the exact signatures this now matches:
-      #   wrong store password -> java.io.IOException: Keystore was
-      #                           tampered with, or password was incorrect
-      #   wrong alias          -> java.lang.Exception: Alias <X> does not exist
-      #   truncated keystore   -> java.io.EOFException
-      #   empty file           -> Keystore file exists, but is empty
-      #
-      # The check is NOT weakened: the job still fails, still exits 1, and
-      # now fails on the same conditions as before. Only the diagnosis
-      # changes. keytool's stderr is surfaced through the step log and
-      # re-emitted as an annotation; the alias and passwords themselves are
-      # never printed.
+      # Unchanged: still fails, still exits 1, same conditions. History:
+      # HANDOFF/audit/ANDROID_SIGNING_LINEAGE_2026-10-03.md
       - name: Verify SCMESSENGER_KEY_ALIAS present in keystore
         if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:
