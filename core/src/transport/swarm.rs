@@ -10554,10 +10554,13 @@ mod tests {
             other.to_string().contains("custom gate"),
             "an unknown deny cause must print verbatim, got: {other}"
         );
-        let limits = DenyCause::ConnectionLimits(4);
+        // The per-peer cap is the limit that denied in the handover RCA (#417);
+        // derive it from the constant so the test tracks the real value.
+        let cap = crate::transport::behaviour::MAX_ESTABLISHED_PER_PEER;
+        let limits = DenyCause::ConnectionLimits(cap);
         let s = limits.to_string();
         assert!(
-            s.contains("connection_limits") && s.contains("4"),
+            s.contains("connection_limits") && s.contains(&format!("limit {cap} reached")),
             "the limit that denied must be named: {s}"
         );
     }
