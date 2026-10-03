@@ -198,7 +198,7 @@ class DashboardViewModel @Inject constructor(
                     com.scmessenger.android.service.TransportType.INTERNET -> "Internet"
                     com.scmessenger.android.service.TransportType.TCP_MDNS -> "TCP/LAN"
                 }
-                // UNIFICATION_V2: All nodes are relays — isRelay no longer distinguishes.
+                // UNIFICATION_V2: every node relays; isInfraNode marks infrastructure peers only (A-2).
                 PeerInfo(
                     peerId = info.peerId,
                     nickname = info.nickname,
@@ -210,7 +210,7 @@ class DashboardViewModel @Inject constructor(
                     transports = (info.transports + primaryTransport).toList().sorted(),
                     isOnline = isRecent(info.lastSeen),
                     isFull = info.isFull,
-                    isRelay = false
+                    isInfraNode = false
                 )
             }.toMutableMap().also { map ->
                 // FIX: enrich discovered peers with contact's authoritative localNickname (user-defined, primary)
@@ -313,7 +313,7 @@ class DashboardViewModel @Inject constructor(
                             else -> existingLastSeen
                         },
                         isOnline = isRecent(entry.lastSeen) || existing.isOnline,
-                        isRelay = false,
+                        isInfraNode = false,
                         transports = (existing.transports +
                             MeshRepository.parseTransportsFromMultiaddrs(listOf(entry.multiaddr)))
                             .distinct()
@@ -370,12 +370,12 @@ class DashboardViewModel @Inject constructor(
                             .toList().sorted(),
                         isOnline = isRecent(entry.lastSeen),
                         isFull = false,
-                        isRelay = false
+                        isInfraNode = false
                     )
                 }
             }
 
-            // UNIFICATION_V2: All nodes are relays — synthesize hop entries as regular mesh peers (no isRelay distinction).
+            // UNIFICATION_V2: every node relays -- synthesize hop entries as regular mesh peers.
             // UNIFICATION COALESCE: A relay/seed hop is a TRANSPORT alias (via-shared-node) of an identity, NOT a distinct
             // node. Canonicalize each hopId (libp2p 12D3KooW) to public_key_hex so it MERGES into the existing unified node
             // (Windows 12D3KooWJoW9 -> 30d0fa, etc.) instead of creating a raw 12D3KooW duplicate that splits the peer list
@@ -413,7 +413,7 @@ class DashboardViewModel @Inject constructor(
                         },
                         isOnline = (hopLastSeen != null && isRecent(hopLastSeen)) || existing.isOnline,
                         isFull = existing.isFull,
-                        isRelay = false,
+                        isInfraNode = false,
                         transports = (existing.transports + hopTransports).distinct().sorted()
                     )
                     peerMap[hopCanonical] = merged
@@ -437,7 +437,7 @@ class DashboardViewModel @Inject constructor(
                         transports = hopTransports.toList().sorted(),
                         isOnline = hopLastSeen != null && isRecent(hopLastSeen),
                         isFull = false,
-                        isRelay = false
+                        isInfraNode = false
                     )
                 }
             }
@@ -632,7 +632,7 @@ class DashboardViewModel @Inject constructor(
                         existing.transport
                     },
                     isFull = existing.isFull || info.isFull,
-                    isRelay = existing.isRelay || info.isRelay,
+                    isInfraNode = existing.isInfraNode || info.isInfraNode,
                     lastSeen = maxOf(existing.lastSeen, info.lastSeen),
                     transports = existing.transports + info.transports
                 )
@@ -907,7 +907,7 @@ data class PeerInfo(
     val transports: List<String> = emptyList(),
     val isOnline: Boolean,
     val isFull: Boolean,
-    val isRelay: Boolean = false
+    val isInfraNode: Boolean = false
 )
 
 /**

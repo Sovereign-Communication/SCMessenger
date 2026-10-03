@@ -176,6 +176,13 @@ definition that will be wrong in two places.
   breaking only for readers.
 - **Effort:** S.
 - **Status:** `DECIDED-BY-DOCTRINE` for the vocabulary; the `isRelay` deletion is `PROPOSED`.
+- **Operator decision, 2026-10-01:** *all nodes relay* is core repository philosophy, so no
+  code-level artefact may question whether a node relays. `isRelay` was **renamed
+  `isInfraNode`** (75 occurrences, 5 files). The field never asked whether a node relays: it
+  recorded that a peer is infrastructure — a bootstrap/infra agent or a circuit middle-hop —
+  and A-2's canonical role noun is `node`. The rename is behaviour-identical. The **deletion**
+  proposed by F-13 is unchanged and still needs its own decision: `isInfraNode` is still read by
+  `MeshRepository.collectKnownRelayPeerIds` (Kotlin) and the iOS `dynamicRelays` filter.
 
 ---
 
