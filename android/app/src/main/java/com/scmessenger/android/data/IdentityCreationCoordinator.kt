@@ -86,9 +86,6 @@ class IdentityCreationCoordinator @Inject constructor(
         }
     }
 
-    fun isBackupAvailable(): Boolean {
-        return meshRepository.isIdentityInitialized()
-    }
 
     suspend fun createIdentity(nickname: String, explicitSalt: ByteArray? = null): Boolean {
         val trimmed = nickname.trim()
