@@ -2180,15 +2180,16 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
  "http",
  "http-body",
+ "httparse",
  "hyper",
  "libc",
  "pin-project-lite",
@@ -4629,7 +4630,7 @@ dependencies = [
 
 [[package]]
 name = "scmessenger-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -4665,7 +4666,7 @@ dependencies = [
 
 [[package]]
 name = "scmessenger-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4724,7 +4725,7 @@ dependencies = [
 
 [[package]]
 name = "scmessenger-desktop-bridge"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "camino",
  "dirs",
@@ -4741,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "scmessenger-mobile"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "scmessenger-core",
  "uniffi",
@@ -4749,7 +4750,7 @@ dependencies = [
 
 [[package]]
 name = "scmessenger-wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5292,7 +5293,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
