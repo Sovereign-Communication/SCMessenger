@@ -183,14 +183,139 @@ class TestWiringGate(unittest.TestCase):
             self.assertIn("ChildDialog", c4_symbols)
 
     def test_real_repo_clean_wiring(self):
-        """Verify that running against the repository finds zero wiring defects on this branch."""
+        """Verify the BLOCKING pass finds zero wiring defects on this branch.
+
+        The widened dead-function scan also returns findings, but only ever at
+        WARN severity until its backlog is triaged, so it must not be counted
+        here. See wiring-audit/FINDINGS.md.
+        """
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         findings, _ = check_wiring(repo_root)
+        errors = [f for f in findings if f.severity == "ERROR"]
         self.assertEqual(
-            len(findings),
+            len(errors),
             0,
-            f"Expected 0 wiring findings on branch fix/android-restore-wiring, got {len(findings)}: {[f.symbol for f in findings]}"
+            f"Expected 0 blocking wiring findings, got {len(errors)}: {[f.symbol for f in errors]}"
         )
+
+    def test_widened_scan_flags_dead_function_in_live_class(self):
+        """The decideCommand shape: a companion function on a live, manifest-declared
+        Service that nothing calls.
+
+        This is the exact blind spot that let #432 land a fix whose tests proved
+        nothing about the running app: the function was nested in a reachable
+        class, so the live-container exemption skipped it even once the scan
+        collected functions outside /utils/.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_dir = os.path.join(tmpdir, "android", "app", "src", "main")
+            java_dir = os.path.join(main_dir, "java", "com", "test")
+            os.makedirs(java_dir, exist_ok=True)
+
+            manifest_content = """<?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application android:name=".TestApp">
+                    <service android:name=".LiveService" />
+                </application>
+            </manifest>
+            """
+            with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as fh:
+                fh.write(manifest_content)
+
+            service_code = """package com.test
+            import android.app.Service
+            class LiveService : Service() {
+                companion object {
+                    internal fun decideCommand(action: String?): String {
+                        return action ?: "start"
+                    }
+                }
+            }
+            """
+            with open(os.path.join(java_dir, "LiveService.kt"), "w", encoding="utf-8") as fh:
+                fh.write(service_code)
+
+            findings, _ = check_wiring(tmpdir)
+            dead = [f for f in findings if "decideCommand" in f.symbol]
+            self.assertEqual(len(dead), 1, f"expected decideCommand to be reported once: {findings}")
+            self.assertEqual(dead[0].kind, "C1_ZERO_CALLERS")
+            # Advisory only: it must not fail the gate while the backlog is untriaged.
+            self.assertEqual(dead[0].severity, "WARN")
+
+    def test_test_sources_are_not_treated_as_callers(self):
+        """A function referenced only from src/test is still unreferenced in production.
+
+        Test code is deliberately outside the reference corpus, so exercising a
+        function from a unit test must not make it look wired into the app.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_dir = os.path.join(tmpdir, "android", "app", "src", "main")
+            java_dir = os.path.join(main_dir, "java", "com", "test")
+            test_java_dir = os.path.join(tmpdir, "android", "app", "src", "test", "java", "com", "test")
+            os.makedirs(java_dir, exist_ok=True)
+            os.makedirs(test_java_dir, exist_ok=True)
+
+            manifest_content = """<?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application android:name=".TestApp">
+                    <activity android:name=".MainActivity" />
+                </application>
+            </manifest>
+            """
+            with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as fh:
+                fh.write(manifest_content)
+
+            with open(os.path.join(java_dir, "MainActivity.kt"), "w", encoding="utf-8") as fh:
+                fh.write("package com.test\nimport android.app.Activity\nclass MainActivity : Activity()\n")
+            with open(os.path.join(java_dir, "Helper.kt"), "w", encoding="utf-8") as fh:
+                fh.write("package com.test\nfun testOnlyHelper(): Int = 1\n")
+            with open(os.path.join(test_java_dir, "HelperTest.kt"), "w", encoding="utf-8") as fh:
+                fh.write("package com.test\nclass HelperTest { fun go() { testOnlyHelper() } }\n")
+
+            findings, _ = check_wiring(tmpdir)
+            dead = [f for f in findings if "testOnlyHelper" in f.symbol]
+            self.assertEqual(len(dead), 1, "a test-only caller must not count as production wiring")
+
+    def test_dead_function_does_not_cascade_into_blocking_failures(self):
+        """A dead function may be reported, but its dependants must stay advisory.
+
+        Without this isolation a single advisory finding would fail the gate on
+        everything downstream of it, which is how a WARN-first scan turns into
+        a red build.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_dir = os.path.join(tmpdir, "android", "app", "src", "main")
+            java_dir = os.path.join(main_dir, "java", "com", "test")
+            os.makedirs(java_dir, exist_ok=True)
+
+            manifest_content = """<?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application android:name=".TestApp">
+                    <activity android:name=".MainActivity" />
+                </application>
+            </manifest>
+            """
+            with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as fh:
+                fh.write(manifest_content)
+
+            code = """package com.test
+            import androidx.compose.runtime.Composable
+            fun deadEntry() {
+                ChildDialog()
+            }
+            @Composable
+            fun ChildDialog() {}
+            """
+            with open(os.path.join(java_dir, "DeadFeature.kt"), "w", encoding="utf-8") as fh:
+                fh.write(code)
+
+            findings, _ = check_wiring(tmpdir)
+            errors = [f for f in findings if f.severity == "ERROR"]
+            self.assertEqual(errors, [], f"dead function must not fail the gate: {errors}")
+            self.assertTrue(
+                any("deadEntry" in f.symbol for f in findings),
+                "the dead function itself must still be reported",
+            )
 
 
 if __name__ == "__main__":
