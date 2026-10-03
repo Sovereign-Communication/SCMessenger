@@ -182,6 +182,88 @@ class TestWiringGate(unittest.TestCase):
             self.assertIn("DeadCaller", c1_symbols)
             self.assertIn("ChildDialog", c4_symbols)
 
+    def test_call_from_inside_an_override_is_not_a_self_reference(self):
+        """A function called only from an `override` body is not unreferenced.
+
+        `override` declarations are deliberately not reachability targets, so
+        they used to be invisible as SCOPES too. A reference inside one was
+        then attributed to whatever declaration preceded it and discarded as
+        a self-reference. That is how MeshSyncWorkerEntryPoint.getMeshRepository
+        came to be reported as dead while MeshSyncWorker.doWork called it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_dir = os.path.join(tmpdir, "android", "app", "src", "main")
+            java_dir = os.path.join(main_dir, "java", "com", "test")
+            os.makedirs(java_dir, exist_ok=True)
+            with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as fh:
+                fh.write(
+                    '<?xml version="1.0" encoding="utf-8"?>\n'
+                    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                    '  <application android:name=".TestApp">\n'
+                    '    <service android:name=".LiveService" />\n'
+                    "  </application>\n</manifest>\n"
+                )
+            code = """package com.test
+            import android.app.Service
+            class LiveService : Service() {
+                fun helper(): String = "x"
+                override fun onCreate() {
+                    use(helper())
+                }
+            }
+            """
+            with open(os.path.join(java_dir, "LiveService.kt"), "w", encoding="utf-8") as fh:
+                fh.write(code)
+
+            findings, _ = check_wiring(tmpdir)
+            reported = {f.symbol for f in findings}
+            self.assertNotIn(
+                "LiveService.helper",
+                reported,
+                f"helper is called from an override body: {sorted(reported)}",
+            )
+
+    def test_anonymous_object_delegation_is_not_treated_as_recursive(self):
+        """`this@Outer.m()` from an anonymous object's override is a real caller.
+
+        The anonymous override computes the same qualified name as the outer
+        method it delegates to, so a name-only self-reference test would
+        discard the call and report a live method as dead.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_dir = os.path.join(tmpdir, "android", "app", "src", "main")
+            java_dir = os.path.join(main_dir, "java", "com", "test")
+            os.makedirs(java_dir, exist_ok=True)
+            with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as fh:
+                fh.write(
+                    '<?xml version="1.0" encoding="utf-8"?>\n'
+                    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                    '  <application android:name=".TestApp">\n'
+                    '    <service android:name=".LiveService" />\n'
+                    "  </application>\n</manifest>\n"
+                )
+            code = """package com.test
+            import android.app.Service
+            class LiveService : Service() {
+                fun onEvent(code: Int) {}
+                private val cb = object : Runnable {
+                    override fun run() {
+                        this@LiveService.onEvent(1)
+                    }
+                }
+            }
+            """
+            with open(os.path.join(java_dir, "LiveService.kt"), "w", encoding="utf-8") as fh:
+                fh.write(code)
+
+            findings, _ = check_wiring(tmpdir)
+            reported = {f.symbol for f in findings}
+            self.assertNotIn(
+                "LiveService.onEvent",
+                reported,
+                f"onEvent is called from an anonymous object override: {sorted(reported)}",
+            )
+
     def test_real_repo_clean_wiring(self):
         """Verify the BLOCKING pass finds zero wiring defects on this branch.
 
