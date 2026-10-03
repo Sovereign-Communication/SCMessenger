@@ -1591,45 +1591,6 @@ open class MeshRepository(
     // MESH SERVICE LIFECYCLE
     // ========================================================================
 
-    // ANR FIX: Add network connectivity test to diagnose ledger relay failures
-    fun testLedgerRelayConnectivity(): Boolean {
-        return try {
-            // Test connectivity to addresses from ledger instead of static bootstrap
-            val ledgerAddresses = ledgerManager?.getPreferredRelays(3u) ?: emptyList()
-            if (ledgerAddresses.isEmpty()) {
-                Timber.w("Network connectivity test: No preferred relays in ledger")
-                return false
-            }
-
-            ledgerAddresses.any { relay ->
-                try {
-                    // Extract IP and port from multiaddr
-                    val multiaddr = relay.multiaddr ?: return@any false
-                    val parts = multiaddr.split("/")
-                    val ipIndex = parts.indexOf("ip4")
-                    val tcpIndex = parts.indexOf("tcp")
-                    if (ipIndex < 0 || tcpIndex < 0 || ipIndex + 1 >= parts.size || tcpIndex + 1 >= parts.size) {
-                        return@any false
-                    }
-
-                    val ip = parts[ipIndex + 1]
-                    val port = parts[tcpIndex + 1].toIntOrNull() ?: return@any false
-
-                    val socket = java.net.Socket()
-                    socket.connect(java.net.InetSocketAddress(ip, port), 3000)
-                    socket.close()
-                    Timber.d("Network connectivity test: $ip:$port reachable (ledger relay)")
-                    true
-                } catch (e: Exception) {
-                    Timber.w("Network connectivity test: ${relay.multiaddr} unreachable - ${e.message}")
-                    false
-                }
-            }
-        } catch (e: Exception) {
-            Timber.w("Network connectivity test failed: ${e.message}")
-            false
-        }
-    }
 
     /**
      * Start the mesh service with the given configuration.
@@ -5108,54 +5069,19 @@ open class MeshRepository(
     // CRYPTO UTILITIES
     // ========================================================================
 
-    fun signData(data: ByteArray): uniffi.api.SignatureResult? {
-        ensureServiceInitializedFireAndForget()
-        return try {
-            ironCore?.signData(data)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to sign data")
-            null
-        }
-    }
 
-    fun verifySignature(data: ByteArray, signature: ByteArray, publicKeyHex: String): Boolean {
-        ensureServiceInitializedFireAndForget()
-        return try {
-            ironCore?.verifySignature(data, signature, publicKeyHex) ?: false
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to verify signature")
-            false
-        }
-    }
 
     // ========================================================================
     // WS13 DEVICE MANAGEMENT
     // ========================================================================
 
-    fun getDeviceId(): String? {
-        return ironCore?.getDeviceId()
-    }
 
-    fun getSeniorityTimestamp(): ULong? {
-        return ironCore?.getSeniorityTimestamp()
-    }
 
-    fun getRegistrationState(identityId: String): uniffi.api.RegistrationStateInfo? {
-        return ironCore?.getRegistrationState(identityId)
-    }
 
     // ========================================================================
     // LOGGING
     // ========================================================================
 
-    fun exportLogs(): String? {
-        return try {
-            ironCore?.exportLogs()
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to export logs")
-            null
-        }
-    }
 
     // ========================================================================
     // QUEUE COUNTS
@@ -6062,7 +5988,7 @@ open class MeshRepository(
      *
      * v0.4.0: there are no dedicated relays -- every node is a full relay -- and
      * no hardcoded node address. The candidate comes from the ledger, matching
-     * the pattern in getPreferredRelay()/testLedgerRelayConnectivity(). A fresh
+     * the pattern in getPreferredRelay(). A fresh
      * install has an empty ledger and legitimately has no candidate here until
      * it learns a peer via invite/QR or LAN discovery (mDNS/BLE); that is the
      * intended cold-start behavior, not a bug, so we just log and return.
@@ -6626,9 +6552,6 @@ open class MeshRepository(
     // LEDGER
     // ========================================================================
 
-    fun recordConnection(multiaddr: String, peerId: String) {
-        ledgerManager?.recordConnection(multiaddr, peerId)
-    }
 
     fun recordConnectionFailure(multiaddr: String, detail: String? = null) {
         // D3c fix: the ledger failure counter is a near-permanent statistic
@@ -7299,9 +7222,6 @@ open class MeshRepository(
         return ledgerManager?.allKnownTopics() ?: emptyList()
     }
 
-    fun getLedgerSummary(): String {
-        return ledgerManager?.summary() ?: "Ledger not available"
-    }
 
     fun getConnectionPathState(): uniffi.api.ConnectionPathState {
         return try {
@@ -7321,17 +7241,8 @@ open class MeshRepository(
         }
     }
 
-    fun getServiceStateName(): String {
-        return meshService?.getState()?.name ?: "STOPPED"
-    }
 
-    fun getDiscoveredPeerCount(): Int {
-        return _discoveredPeers.value.size
-    }
 
-    fun getPendingOutboxCount(): Int {
-        return loadPendingOutbox().size
-    }
 
     fun getPendingDeliverySnapshot(messageId: String): PendingDeliveryInfo? {
         if (messageId.isBlank()) return null
@@ -7356,11 +7267,6 @@ open class MeshRepository(
             ?.terminalFailureCode
     }
 
-    fun getMissingRuntimePermissions(): List<String> {
-        return Permissions.required.filter { permission ->
-            ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
-        }
-    }
 
     /**
      * ANR FIX (P0_ANDROID_017): Export diagnostics asynchronously to avoid Main thread I/O.
@@ -7810,15 +7716,6 @@ open class MeshRepository(
         }
     }
 
-    fun unsubscribeTopic(topic: String) {
-        repoScope.launch {
-            try {
-                swarmBridge?.unsubscribeTopic(topic)
-            } catch (e: Exception) {
-                Timber.w("unsubscribeTopic failed for $topic: ${e.message}")
-            }
-        }
-    }
 
     fun publishTopic(topic: String, data: ByteArray) {
         repoScope.launch {

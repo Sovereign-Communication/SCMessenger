@@ -443,14 +443,116 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str], met
     return declarations
 
 
+def collect_scope_ranges(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> Dict[str, List[Tuple[int, int, str]]]:
+    """Brace-depth ranges for every class AND function scope, in every file.
+
+    Reachability targets deliberately exclude `private` and `override`
+    declarations: nothing outside the class should call those, and being
+    called is not what makes them reachable. Excluding them from the
+    declaration set also made them invisible as SCOPES, which is a bug, not
+    a policy:
+
+      - MeshSyncWorkerEntryPoint.getMeshRepository was reported unreferenced
+        although MeshSyncWorker.doWork calls it, because the `override fun`
+        was not a tracked declaration, so the call was attributed to the
+        interface member above it and discarded as a self-reference.
+
+    Line proximity alone cannot model nesting. SmartTransportRouter has a
+    `data class TransportAttempt` declared INSIDE the function
+    `attemptDelivery`, so "nearest preceding declaration" picks the inner
+    class over the function that actually contains the line. Ranges are
+    therefore recorded with a start and an end, and a line is attributed to
+    the smallest range that contains it.
+
+    Returns {file: [(start_line, end_line, scope_fqcn), ...]}.
+    """
+    ranges: Dict[str, List[Tuple[int, int, str]]] = {}
+    for rel_p, clean in kt_clean.items():
+        pkg_match = re.search(r'package\s+([A-Za-z0-9_.]+)', clean)
+        pkg = pkg_match.group(1) if pkg_match else ""
+        lines = clean.splitlines()
+        found: List[Tuple[int, int, str]] = []
+        # (simple name, depth just past this scope's opening brace, start line, fqcn)
+        stack: List[Tuple[str, int, int, str]] = []
+        # A declaration whose opening brace is on a later line. `class MeshRepository
+        # @Inject constructor(` has none on its own line, and dropping it from the
+        # scope stack would strip the class name off every fqcn inside it, which
+        # breaks self-reference detection and silently marks live code dead.
+        pending: Optional[Tuple[str, int]] = None
+        depth = 0
+
+        def push(name: str, start_line: int, brace_depth: int) -> None:
+            owner = ".".join(s[0] for s in stack if s[0])
+            suffix = f"{owner}.{name}" if owner else name
+            fqcn = f"{pkg}.{suffix}" if pkg else suffix
+            stack.append((name, brace_depth, start_line, fqcn))
+
+        for idx, line in enumerate(lines):
+            line_no = idx + 1
+            opens = line.count("{")
+            m_class = re.search(
+                r'\b(class|object|interface)\s+([A-Za-z0-9_]+)(?:\s*<[^>]+>)?\s*(?:\([^)]*\))?\s*(?::\s*[^{]+)?',
+                line,
+            )
+            is_type = bool(
+                m_class
+                and "enum class" not in line
+                and "sealed class" not in line
+                and "sealed interface" not in line
+            )
+            is_companion = bool(re.search(r'\bcompanion\s+object\b', line))
+            m_fun = re.search(r'\bfun\s+(?:<[^>]+>\s+)?([A-Za-z0-9_]+)\s*\(', line)
+
+            declared: Optional[str] = None
+            if is_type and m_class:
+                declared = m_class.group(2)
+            elif is_companion:
+                declared = stack[-1][0] if stack else ""
+            elif m_fun:
+                declared = m_fun.group(1)
+
+            if declared is not None:
+                if opens > 0:
+                    push(declared, line_no, depth + opens)
+                elif pending is None:
+                    pending = (declared, line_no)
+            elif opens > 0 and pending is not None:
+                push(pending[0], pending[1], depth + opens)
+                pending = None
+
+            depth += opens - line.count("}")
+            while stack and depth < stack[-1][1]:
+                _, _, start, fqcn = stack.pop()
+                found.append((start, line_no, fqcn))
+
+        for _, _, start, fqcn in stack:
+            found.append((start, len(lines), fqcn))
+        ranges[rel_p] = found
+    return ranges
+
+
+def _is_self(caller: Tuple[str, int, str, int], d: Declaration) -> bool:
+    """True when this reference sits inside the referenced declaration itself.
+
+    A call is only a self-reference when the enclosing scope IS that
+    declaration's own body. When no function scope applies (enclosing scope
+    line 0) this falls back to comparing names, which is the historical rule.
+    """
+    if caller[3] == 0:
+        return caller[2] == d.fqcn
+    return caller[2] == d.fqcn and caller[3] == d.line
+
+
 def analyze_declarations(
     declarations: List[Declaration],
+    kt_files: Dict[str, str],
     kt_clean: Dict[str, str],
     registered_composables: Set[str],
     manifest_entries: Set[str],
     method_severity: str,
     keep_kinds: Optional[Set[str]] = None,
     skip_live_container: bool = True,
+    precise_scopes: bool = False,
 ) -> Tuple[List[Finding], Set[str], Set[str]]:
     """Build the caller map and run C1/C3/C4 over one declaration set.
 
@@ -467,6 +569,11 @@ def analyze_declarations(
     The advisory pass turns it off (skip_live_container=False), which is what
     makes decideCommand detectable at all.
 
+    precise_scopes makes the reference map attribute a line to the innermost
+    FUNCTION, including `override` and `private` ones that are deliberately
+    not reachability targets. The legacy pass leaves it off so its output is
+    unchanged.
+
     Returns (findings, reported_dead, live_set).
     """
 
@@ -479,7 +586,7 @@ def analyze_declarations(
     for d in active_declarations:
         decl_by_name.setdefault(d.name, []).append(d)
 
-    callers_map: Dict[str, Set[Tuple[str, int, str]]] = {d.fqcn: set() for d in active_declarations}
+    callers_map: Dict[str, Set[Tuple[str, int, str, int]]] = {d.fqcn: set() for d in active_declarations}
 
     # Map references across all source files
     decls_by_file: Dict[str, List[Declaration]] = {}
@@ -488,8 +595,11 @@ def analyze_declarations(
     for lst in decls_by_file.values():
         lst.sort(key=lambda x: x.line)
 
+    scopes_by_file = collect_scope_ranges(kt_files, kt_clean) if precise_scopes else {}
+
     for rel_p, clean in kt_clean.items():
         file_decls = decls_by_file.get(rel_p, [])
+        file_scopes = scopes_by_file.get(rel_p, [])
 
         for line_idx, line_str in enumerate(clean.splitlines()):
             line_no = line_idx + 1
@@ -504,13 +614,41 @@ def analyze_declarations(
                     break
             enclosing_fqcn = enclosing.fqcn if enclosing else f"__FILE__{rel_p}"
 
+            # A function scope that starts later than the innermost tracked
+            # declaration wins: without this, a reference inside an `override`
+            # or `private` body is attributed to whatever declaration precedes
+            # it, and is then discarded as a self-reference.
+            #
+            # With precise_scopes the attribution uses brace-depth RANGES, so
+            # nesting is modelled rather than approximated by line proximity:
+            # a class declared inside a function no longer masks the function
+            # that contains the line.
+            #
+            # The scope's START line is recorded alongside its name so a
+            # declaration is only treated as referring to itself when the
+            # reference really is inside its own body. Comparing names alone
+            # is wrong: an anonymous `object : Callback { override fun
+            # onStartSuccess() }` computes the same qualified name as the
+            # outer method it delegates to.
+            enclosing_scope_line = 0
+            if precise_scopes:
+                best = None
+                for start_line, end_line, scope_fqcn in file_scopes:
+                    if start_line <= line_no <= end_line:
+                        span = end_line - start_line
+                        if best is None or span < best[0]:
+                            best = (span, start_line, scope_fqcn)
+                if best is not None:
+                    enclosing_scope_line = best[1]
+                    enclosing_fqcn = best[2]
+
             tokens = set(re.findall(r'\b[A-Za-z0-9_]+\b', line_str))
             for tok in tokens:
                 if tok in decl_by_name:
                     for target_d in decl_by_name[tok]:
                         if target_d.file == rel_p and target_d.line == line_no:
                             continue
-                        callers_map[target_d.fqcn].add((rel_p, line_no, enclosing_fqcn))
+                        callers_map[target_d.fqcn].add((rel_p, line_no, enclosing_fqcn, enclosing_scope_line))
 
     findings: List[Finding] = []
 
@@ -544,7 +682,7 @@ def analyze_declarations(
 
     forward_map: Dict[str, Set[str]] = {}
     for callee_fqcn, callers in callers_map.items():
-        for _, _, caller_fqcn in callers:
+        for _, _, caller_fqcn, _ in callers:
             forward_map.setdefault(caller_fqcn, set()).add(callee_fqcn)
 
     queue = list(live_set)
@@ -570,7 +708,7 @@ def analyze_declarations(
                 continue
 
         if d.fqcn not in live_set:
-            external_callers = [c for c in callers_map[d.fqcn] if c[2] != d.fqcn]
+            external_callers = [c for c in callers_map[d.fqcn] if not _is_self(c, d)]
             if len(external_callers) == 0:
                 reported_dead.add(d.fqcn)
                 sym_name = d.name if d.kind != "Method" else (f"{d.container}.{d.name}" if d.container else d.name)
@@ -596,7 +734,7 @@ def analyze_declarations(
                 if d.fqcn.rsplit('.', 1)[0] in live_set:
                     continue
 
-            external_callers = [c for c in callers_map[d.fqcn] if c[2] != d.fqcn]
+            external_callers = [c for c in callers_map[d.fqcn] if not _is_self(c, d)]
             if len(external_callers) > 0:
                 if all(c[2] in reported_dead for c in external_callers):
                     reported_dead.add(d.fqcn)
@@ -678,6 +816,7 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
     legacy_declarations = extract_declarations(kt_files, kt_clean, method_scope="legacy")
     legacy_findings, _, _ = analyze_declarations(
         legacy_declarations,
+        kt_files,
         kt_clean,
         registered_composables,
         manifest_entries,
@@ -691,6 +830,7 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
     widened_declarations = extract_declarations(kt_files, kt_clean, method_scope="widened")
     method_findings, _, _ = analyze_declarations(
         widened_declarations,
+        kt_files,
         kt_clean,
         registered_composables,
         manifest_entries,
@@ -700,6 +840,10 @@ def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Find
         # decideCommand, so the advisory pass does not honour the
         # live-container exemption.
         skip_live_container=False,
+        # And it attributes references to the innermost function, including
+        # override/private ones, so a call from inside an override body is not
+        # mistaken for a self-reference.
+        precise_scopes=True,
     )
     findings.extend(method_findings)
 
