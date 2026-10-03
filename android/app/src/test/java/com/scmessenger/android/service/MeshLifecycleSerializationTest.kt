@@ -164,6 +164,64 @@ class MeshLifecycleSerializationTest {
         )
     }
 
+    /**
+     * Delegation proof, not a serialization proof.
+     *
+     * `decideCommand` is now the only writer of `userStoppedForSession` on the
+     * live path -- `stopMeshServiceLocked` deliberately no longer writes it --
+     * so a latch that flips as a result of a real `onStartCommand` can only
+     * have been flipped by `decideCommand`. That is what distinguishes the
+     * decision being REACHED IN PRODUCTION from the decision merely being
+     * covered by the pure unit tests.
+     *
+     * The second half asserts the gate, not the write: a PAUSE arriving after
+     * the user stop must be refused, so no second lifecycle body may enter the
+     * repository. That is the actual field regression the latch exists to
+     * prevent (a stopped mesh being resurrected by an automatic command).
+     *
+     * ACTION_STOP and ACTION_PAUSE are used because neither attempts
+     * synchronous foreground promotion, which keeps the test on the JVM tier
+     * (no Robolectric; it was removed 2026-07-27).
+     */
+    @Test
+    fun onStartCommand_delegatesToDecideCommand() {
+        val bodies = AtomicInteger(0)
+        every { repository.getServiceStateSync() } answers {
+            bodies.incrementAndGet()
+            ServiceState.RUNNING
+        }
+        every { repository.stopMeshService() } returns Unit
+
+        assertEquals(
+            "the stop latch should start clear for this test",
+            false,
+            MeshForegroundService.userStoppedForSession,
+        )
+
+        service.onStartCommand(intentFor(MeshForegroundService.ACTION_STOP), 0, 1)
+
+        assertTrue(
+            "onStartCommand(ACTION_STOP) did not reach decideCommand: it is the " +
+                "only writer of the user-stop latch on the live path",
+            MeshForegroundService.userStoppedForSession,
+        )
+        assertTrue(
+            "the admitted Stop never ran, so the rest of this test proves nothing",
+            awaitAtLeast(bodies, 1),
+        )
+
+        service.onStartCommand(intentFor(MeshForegroundService.ACTION_PAUSE), 0, 2)
+
+        // Let any wrongly-admitted body finish before asserting the count.
+        Thread.sleep(400)
+        assertEquals(
+            "a PAUSE after a user stop opened a second lifecycle body: the stop " +
+                "gate in decideCommand was not applied on the live path",
+            1,
+            bodies.get(),
+        )
+    }
+
     private fun trackEntry(inBody: AtomicInteger, maxConcurrentBodies: AtomicInteger) {
         val occupancy = inBody.incrementAndGet()
         maxConcurrentBodies.accumulateAndGet(occupancy) { current, next -> maxOf(current, next) }

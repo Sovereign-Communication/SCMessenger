@@ -183,8 +183,8 @@ class MeshForegroundService : Service() {
         // particular, STOP must set the session latch here, not after a
         // repository state read; MeshRepository's deferred initializer reads
         // this latch from another coroutine.
-        val requestId = registerLifecycleCommand(action)
-        if (requestId == null) {
+        val command = registerLifecycleCommand(action)
+        if (command == null) {
             Timber.w("Ignoring %s request while service is not running", action ?: "null action")
             if (userStoppedForSession && stopSelfResult(startId)) {
                 Timber.d("Service stopped after NoOp while user stop in effect (startId=%d)", startId)
@@ -197,16 +197,21 @@ class MeshForegroundService : Service() {
                 // A later command may have been registered while this one was
                 // waiting for the lifecycle lock. Do not let the stale command
                 // undo the newer user's choice.
-                if (!isCurrentLifecycleCommand(requestId)) {
-                    clearStopRequestIfCurrent(requestId)
+                if (!isCurrentLifecycleCommand(command.requestId)) {
+                    clearStopRequestIfCurrent(command.requestId)
                     return@withLock
                 }
 
-                when (action) {
-                    ACTION_STOP -> stopMeshServiceLocked(requestId, startId)
-                    ACTION_PAUSE -> pauseMeshServiceLocked(requestId)
-                    ACTION_RESUME -> resumeMeshServiceLocked(requestId, startId)
-                    else -> startMeshServiceLocked(startId)
+                // Dispatch on the decision decideCommand already made, not on
+                // the raw action: the decision is the single state machine.
+                when (command.decision) {
+                    StartDecision.Stop -> stopMeshServiceLocked(command.requestId, startId)
+                    StartDecision.Pause -> pauseMeshServiceLocked(command.requestId)
+                    StartDecision.Resume -> resumeMeshServiceLocked(command.requestId, startId)
+                    StartDecision.Start -> startMeshServiceLocked(startId)
+                    // Unreachable: NoOp is the only decision that registers no
+                    // command, so it never reaches dispatch.
+                    StartDecision.NoOp -> clearStopRequestIfCurrent(command.requestId)
                 }
             }
         }
@@ -215,44 +220,60 @@ class MeshForegroundService : Service() {
     }
 
     /**
-     * Register a command synchronously and return its ordering token.
-     *
-     * STOP/START are intentionally state-changing at this boundary. ENSURE,
-     * null sticky delivery, PAUSE, and RESUME are ignored while the user-stop
-     * latch is set; an ignored command must not supersede the STOP that owns
-     * the teardown.
+     * A command that [decideCommand] admitted, paired with the ordering token
+     * that says whether it is still the newest one.
      */
-    private fun registerLifecycleCommand(action: String?): Long? = synchronized(lifecycleCommandLock) {
-        when (action) {
-            ACTION_STOP -> {
-                // A duplicate STOP for the same current request is coalesced.
-                // If another command intervened, this is a new STOP and must
-                // be allowed to run after that command.
-                if (stopRequestInFlight != null && stopRequestInFlight == lifecycleCommandId) {
-                    Timber.w("Mesh service stop already requested; coalescing duplicate STOP")
-                    return@synchronized null
-                }
-                userStoppedForSession = true
-                val requestId = ++lifecycleCommandId
+    private data class RegisteredCommand(val decision: StartDecision, val requestId: Long)
+
+    /**
+     * Ask [decideCommand] whether this command is admissible, then stamp it
+     * with an ordering token.
+     *
+     * This function owns ORDERING only. The user-stop latch belongs to
+     * [decideCommand], which is the single place it is written on the live
+     * path -- previously this method reimplemented the latch rules inline and
+     * a second copy in the companion object went uncalled by production.
+     *
+     * The state arguments describe only what this thread can observe without
+     * a repository read, and they matter for exactly one decision: whether a
+     * PAUSE or RESUME is dropped as NoOp. Both bodies re-derive that same
+     * predicate from real state inside the lifecycle mutex
+     * ([pauseMeshServiceLocked], [resumeMeshServiceLocked]), so they are told
+     * the mesh is running in order to defer rather than pre-judge; every other
+     * decision ignores them. Registration must not block on the repository,
+     * because STOP has to set the latch before any coroutine work starts.
+     */
+    private fun registerLifecycleCommand(action: String?): RegisteredCommand? =
+        synchronized(lifecycleCommandLock) {
+            // A duplicate STOP for the same current request is coalesced before
+            // the decision, so a tap flood still produces one teardown. If
+            // another command intervened, this is a new STOP and must be
+            // allowed to run after that command. Coalescing a delivery never
+            // drops a Stop decision -- decideCommand honors every STOP
+            // (R4-M1) -- it only avoids queueing a second teardown.
+            if (action == ACTION_STOP &&
+                stopRequestInFlight != null &&
+                stopRequestInFlight == lifecycleCommandId
+            ) {
+                Timber.w("Mesh service stop already requested; coalescing duplicate STOP")
+                return@synchronized null
+            }
+
+            val decision = decideCommand(
+                action = action,
+                serviceRunning = true,
+                repositoryRunning = true,
+            )
+            if (decision == StartDecision.NoOp) {
+                return@synchronized null
+            }
+
+            val requestId = ++lifecycleCommandId
+            if (decision == StartDecision.Stop) {
                 stopRequestInFlight = requestId
-                requestId
             }
-            ACTION_START -> {
-                userStoppedForSession = false
-                ++lifecycleCommandId
-            }
-            ACTION_ENSURE, null, ACTION_PAUSE, ACTION_RESUME -> {
-                if (userStoppedForSession) {
-                    null
-                } else {
-                    ++lifecycleCommandId
-                }
-            }
-            else -> {
-                if (userStoppedForSession) null else ++lifecycleCommandId
-            }
+            RegisteredCommand(decision, requestId)
         }
-    }
 
     private fun isCurrentLifecycleCommand(requestId: Long): Boolean =
         synchronized(lifecycleCommandLock) { lifecycleCommandId == requestId }
@@ -517,7 +538,11 @@ class MeshForegroundService : Service() {
             }
 
             isRunning = false
-            userStoppedForSession = true
+            // The user-stop latch is deliberately NOT set here. decideCommand
+            // set it synchronously when this STOP was registered, and this
+            // coroutine may run long after a newer ACTION_START cleared it --
+            // re-asserting it during teardown would strand a mesh the user
+            // explicitly asked to start.
             connectedPeers.clear()
             messagesRelayed.set(0)
             anrWatchdog.stop()
@@ -873,16 +898,35 @@ class MeshForegroundService : Service() {
         private const val NOTIFICATION_ID = NotificationHelper.NOTIFICATION_ID_FOREGROUND_SERVICE
 
         /**
+         * Guards every read-modify-write of [userStoppedForSession] and every
+         * write to it via its setter. Reads are unsynchronized on purpose:
+         * MeshRepository and MainActivity poll the latch from their own
+         * threads and only need a consistent snapshot, which @Volatile gives.
+         *
+         * Declared before the flag so the lock exists by the time anything can
+         * assign it.
+         */
+        private val userStopLock = Any()
+
+        /**
          * R3-F1: a user-initiated Stop (notification action or the service
          * view model) must survive activity onResume — the activity's
          * ensure-latch must not resurrect a mesh the user deliberately
-         * stopped. Set on ACTION_STOP handling, cleared only by an explicit
-         * ACTION_START (or fresh cold start where the flag is false).
+         * stopped. Set by [decideCommand] for ACTION_STOP, cleared only by an
+         * explicit ACTION_START (or fresh cold start where the flag is false).
          * Process-lifetime by design: a killed process loses the latch and
          * the next cold start legitimately re-autostarts the mesh.
+         *
+         * The flag is process-wide, so its lock is too. It used to be guarded
+         * by the per-instance lifecycleCommandLock while being read from
+         * MeshRepository and MainActivity with no lock at all. Every write
+         * now goes through [userStopLock], so the flag has one owner.
          */
         @Volatile
         internal var userStoppedForSession: Boolean = false
+            set(value) {
+                synchronized(userStopLock) { field = value }
+            }
 
         /**
          * R4-L1: observable record of the most recent ensure/start attempt
@@ -905,11 +949,20 @@ class MeshForegroundService : Service() {
             NoOp
         }
 
+        /**
+         * The single place a lifecycle command is turned into a decision, and
+         * the single owner of [userStoppedForSession] on the live path.
+         * [registerLifecycleCommand] asks this first and only adds ordering on
+         * top; nothing else decides.
+         *
+         * The whole body runs under [userStopLock] so the latch test and the
+         * latch write cannot be split by a concurrent command.
+         */
         internal fun decideCommand(
             action: String?,
             serviceRunning: Boolean,
             repositoryRunning: Boolean
-        ): StartDecision {
+        ): StartDecision = synchronized(userStopLock) {
             // R4-M1: STOP is always honored -- a repeated or late stop must be
             // able to complete teardown even if the latch is already set.
             // STOP-RACE-001: latch MUST be set SYNCHRONOUSLY here, before any
@@ -919,37 +972,37 @@ class MeshForegroundService : Service() {
             // async stopMeshService() body.
             if (action == ACTION_STOP) {
                 userStoppedForSession = true
-                return StartDecision.Stop
-            }
-            // R3-F1 / R4-M2: after a user stop, only an explicit ACTION_START
-            // (user-initiated from the service view model) may restart the
-            // mesh and clear the latch. ACTION_ENSURE (automatic ensure from
-            // the activity) must never resurrect a stopped mesh and cannot
-            // clear the latch, so a STOP that races ahead of a queued ENSURE
-            // still wins.
-            if (userStoppedForSession && action != ACTION_START) {
+                StartDecision.Stop
+            } else if (userStoppedForSession && action != ACTION_START) {
+                // R3-F1 / R4-M2: after a user stop, only an explicit
+                // ACTION_START (user-initiated from the service view model)
+                // may restart the mesh and clear the latch. ACTION_ENSURE
+                // (automatic ensure from the activity) must never resurrect a
+                // stopped mesh and cannot clear the latch, so a STOP that
+                // races ahead of a queued ENSURE still wins.
                 Timber.d("decideCommand: user stop in effect; ignoring action=%s", action ?: "null")
-                return StartDecision.NoOp
-            }
-            if (action == ACTION_START) {
-                userStoppedForSession = false
-            }
-            return when (action) {
-                null -> StartDecision.Start
-                ACTION_START -> StartDecision.Start
-                ACTION_ENSURE -> StartDecision.Start
-                ACTION_STOP -> StartDecision.Stop
-                ACTION_PAUSE -> if (serviceRunning || repositoryRunning) {
-                    StartDecision.Pause
-                } else {
-                    StartDecision.NoOp
+                StartDecision.NoOp
+            } else {
+                if (action == ACTION_START) {
+                    userStoppedForSession = false
                 }
-                ACTION_RESUME -> if (serviceRunning && repositoryRunning) {
-                    StartDecision.Resume
-                } else {
-                    StartDecision.Start
+                when (action) {
+                    null -> StartDecision.Start
+                    ACTION_START -> StartDecision.Start
+                    ACTION_ENSURE -> StartDecision.Start
+                    ACTION_PAUSE -> if (serviceRunning || repositoryRunning) {
+                        StartDecision.Pause
+                    } else {
+                        StartDecision.NoOp
+                    }
+                    ACTION_RESUME -> if (serviceRunning && repositoryRunning) {
+                        StartDecision.Resume
+                    } else {
+                        StartDecision.Start
+                    }
+                    // ACTION_STOP is handled above, before the latch gate.
+                    else -> StartDecision.Start
                 }
-                else -> StartDecision.Start
             }
         }
     }
