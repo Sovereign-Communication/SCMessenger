@@ -14,6 +14,136 @@ Severity key:
 
 ---
 
+## Disposition register — reconciled against the enforcing gate (2026-10-03)
+
+**This section exists because an audit nobody re-reads is a snapshot, and a gate nobody
+reconciles is a second opinion.** Until now this file and the gate told different stories:
+the gate was derived from `GLOSSARY.md` and enforced terms this file never mentions, while
+this file listed findings as open that had in fact been fixed. Both were true at once.
+
+Every finding below carries a disposition and a reason. The gate is
+`scripts/check_naming.py` reading `naming_policy.json` (policy_version 2026-10-01).
+
+**Disposition vocabulary**
+
+| Disposition | Meaning |
+|---|---|
+| **SATISFIED** | A landed change closed it. Verified in the merged tree, not asserted. |
+| **CONTRADICTED** | The audit and the gate recommend opposite things for the same name. Needs an owner decision; not silently resolved. |
+| **ENFORCED-WARN** | A gate rule covers it, but at `warn` tier, so it reports and never blocks. Deliberate: the concept is still `PROPOSED` and unratified. |
+| **ENFORCED-BLOCK** | A gate rule covers it and blocks. |
+| **OPEN-UNENFORCED** | Still a real finding. No gate rule covers it. Deliberately unenforced until ratified. |
+| **RETIRED** | Superseded by another finding; kept for traceability. |
+
+### 1. The one finding the gate actually closes
+
+| Finding | Disposition | Reason |
+|---|---|---|
+| **F-13** `isRelay: Boolean = false` | **SATISFIED** | PR #428 (merged `15d25389`) renamed the field to `isInfraNode` under glossary rule A-2. Verified: `isRelay` as a *property* no longer exists in `android/` or `iOS/` (0 hits; 55 `isInfraNode`). The 10 surviving `isRelay` hits are two **different symbols** — the `isRelayHop()` helper and Swift's local `isRelayEnabled` — not missed call sites. |
+
+This is the only finding this gate closes today. It is worth being plain about that: a
+gate with one satisfied finding is a gate that has barely started.
+
+### 2. Where the gate and this report actively disagree
+
+| Finding | Disposition | Reason |
+|---|---|---|
+| **F-02** `MessageRecord` exists twice | **CONTRADICTED** | F-02 offers as a fallback remedy: rename the pair honestly to `StoredMessage` / `MessageDto`. Rule **A-3 denies both of those exact terms** at block tier, so the gate would block the audit's own recommended rename. Not resolved here, because resolving it means editing ratified policy (`MessageEntity`/`MessageDto` are `FROZEN`), and the policy's own design rule requires that to be a visible two-key change with the audit entry named — not a quiet edit made inside a reconciliation pass. **Owner decision required.** |
+
+The tension is narrower than it first looks: GLOSSARY A-3 does **not** ratify
+`StoredMessage` or `MessageDto` as canonical — it inventories them and nominates
+`MessageRecord` (132 occurrences, 23 files). F-02's *primary* remedy is to merge the two
+structs; the rename is only the fallback. So A-3 is defensible; the fallback text in F-02
+is what needs rewording.
+
+### 3. Findings a gate rule covers, at warn tier
+
+| Finding | Disposition | Reason |
+|---|---|---|
+| **F-01** `current_timestamp()` means seconds in 7 places and milliseconds in 2 | **ENFORCED-WARN** | Rule **C-1** denies `lastSeen`. Status `PROPOSED`, tier `warn` — reports, never blocks. Deliberate: the audit has not ratified the rename. |
+| **F-25** `last_seen` cross-layer divergence | **RETIRED** | Absorbed into F-01 by the audit itself. Unchanged here. |
+
+### 4. Findings with no gate coverage — still open, deliberately unenforced
+
+These remain real. No rule covers them because ratifying a rule is a two-key policy
+change, and doing thirty of them inside a reconciliation pass would turn the gate into a
+restatement of this file rather than a small, reviewable contract.
+
+**RC-1 — the FFI/bridge layer restates core types instead of deriving them**
+F-03 `ContactManager` defined twice over the same sled tree under two key schemes,
+F-22 `HistoryManager`/`HistoryStats`/`MessageDirection` each defined twice,
+F-16 `DiscoveryMode` means "privacy gradient" in one place and "transport mechanism" in
+another. F-02 is handled in section 2.
+
+**RC-2 — files that are not compiled keep the duplicate-name counts inflated**
+F-19 `core/src/wasm_support/{mesh,storage,transport}.rs` are not compiled,
+F-20 `TransportError` defined four times, F-21 `MeshError` defined twice,
+F-32 `cli/src/api_axum.rs` is not compiled and restates nine real types,
+F-33 three `wasm/src/` files are unreachable from their own crate root.
+
+**RC-3 — a surface has a second, already-diverged copy of itself**
+F-06 `cli/src/cli.rs` is a second `scm` grammar,
+F-15 `SwarmTaskLivenessGuard` is copy-pasted verbatim into one 11,190-line file.
+
+**RC-4 — a type name has no owning layer, so each layer defines its own**
+F-07 `PeerId` names two things, F-08 `TransportType` defined seven times across three
+languages with disjoint variants, F-04 `RetryPolicy` defined twice and both copies claim
+sole ownership, F-18 `ConnectionState` means four different things,
+F-29 `serviceInfo` names three types, one a raw `ByteArray`.
+
+**REMAINDER**
+F-09 `Contact.peer_id` is a union of three identifier kinds in a bare `String`,
+F-05 `SwarmEvent2` is the only `SwarmEvent` and the `2` hides at the re-export,
+F-17 `blocked_identity_*` constructors named after arguments not result,
+F-14 `ContactManagerFix.swift` typealias makes `ContactManager` mean two things,
+F-27 iOS `typealias ContactManager = ContactManagerFixed` shadows a generated class,
+F-12 `UiOutbound::Legacy|JsonRpc` erases its own types,
+F-10 `calculate_next_attempt` returns a timestamp and `isAtMaxDelay` is camelCase in a
+snake_case crate,
+F-28 `RegistrationStateInfo` suffix restates a field that is itself a `String`,
+F-31 `GroupInfo` suffix padding on five plain fields.
+
+**RC-5 — a concept has several names and no recorded canonical choice**
+F-26 "the other party" is called peer, contact, node or relay, sometimes in one
+expression, F-23 read verbs `get`/`fetch`/`load`/`retrieve`/`poll` with no rule,
+F-30 one concept named `IdentityInfo`/`identityInfo`/`identityData`,
+F-11 the `scm` Control API carries two route families with two verb vocabularies,
+F-24 abbreviations `cfg`/`config`/`settings`, `msg`/`message`, `addr`/`address`.
+
+### 5. The reverse gap — things the gate enforces that this report never covered
+
+The gate is not a subset of this report. These terms are enforced (or warned) and had
+**no finding here at all**. That is the more dangerous direction: an enforcement nobody
+can trace back to a finding is an enforcement nobody can review.
+
+| Rule | Tier | Terms | Report coverage |
+|---|---|---|---|
+| **A-2** | block | `isRelay` (now satisfied, see section 1), `relayPeer`, `relayNode`, `relayServer`, `relayAgent` | `relayPeer`/`relayNode`/`relayServer`/`relayAgent` appear in **no** finding. Only `isRelay` (F-13) did. |
+| **A-3** | block | `MessageEntity` | Appears in **no** finding. F-02 covers `MessageRecord`, not this. |
+| **A-5** | block | `peer_uuid`, `peerUuid`, `peerUuidString` | Appear in **no** finding. F-07 and F-09 concern `PeerId` and `Contact.peer_id` conceptually but never name these spellings. |
+| **B-2** | warn | `delete_*` | Appears in **no** finding. |
+| **GAP-peer-id-casing** | warn | `peerID`, `PeerID` | Appears in **no** finding. The rule is honestly named `GAP-` and status `AUDIT-GAP`: it was added because the audit never measured these spellings. |
+
+**How this gap was closed.** Rather than invent findings to match the gate, each
+unenumerated rule now carries its rationale here, so every enforced term traces to a
+decision. The five rows above are the complete set; a term added to `naming_policy.json`
+without a row here is a gap by this section's own definition.
+
+### 6. Keeping this live
+
+- The gate reads `naming_policy.json`; this file and `GLOSSARY.md` do **not** feed it
+  automatically. Reconciling them is a human act, and sections 1-5 are the record of the
+  last one.
+- A finding marked **SATISFIED** here must cite the merged commit and the command that
+  verified it. "Should be fixed" is not a disposition.
+- A finding marked **CONTRADICTED** stays open until an owner rules; it is never closed
+  by editing the text around it.
+- Rule tier is the enforcement statement: `block` fails CI, `warn` prints `[WARNING]`
+  and never blocks. Only `FROZEN`, `ACCEPTED-AS-IS` and `DECIDED-BY-DOCTRINE` may be
+  promoted to `block`; a `PROPOSED` rule cannot be quietly promoted.
+
+---
+
 ## Contents — findings grouped by root cause
 
 The findings are ordered by the **cause** that produces them, not by the brief's
@@ -96,6 +226,11 @@ decision, that decision is owned by `GLOSSARY.md` and the finding points at it.
 ---
 
 ## F-02 — `MessageRecord` exists twice with different fields, and one of them contradicts itself
+
+> **STATUS: CONTRADICTED (2026-10-03).** The fallback remedy in this finding names
+> `StoredMessage` / `MessageDto`, both of which rule A-3 denies at block tier — the gate
+> would block the audit's own recommended rename. Left open for an owner decision rather
+> than silently reworded. See the disposition register, section 2.
 
 **Severity: HIGH** · **Blast radius: 125 occurrences, 3 declarations (2 Rust + 1 UDL), FFI-bound**
 
@@ -1155,6 +1290,11 @@ I could not determine reachability within this audit's read-only budget.
 ---
 
 ## F-13 — `isRelay: Boolean = false` — a field whose concept was deleted and whose name survived
+
+> **STATUS: SATISFIED (2026-10-03).** Closed by PR #428, merged as `15d25389`: the field
+> is now `isInfraNode`, per glossary rule A-2. The code quoted below is what the field
+> used to be and is kept for traceability only — it no longer exists. See the disposition
+> register, section 1.
 
 **Severity: MEDIUM** · **Blast radius: 75 occurrences; sits on the most-imported Android type**
 
