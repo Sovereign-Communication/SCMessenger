@@ -3,6 +3,9 @@
 // Newer uniffi emits `static`; remove this allow after the uniffi upgrade.
 #![allow(clippy::large_const_arrays)]
 
+#[cfg(test)]
+mod test_support;
+
 pub mod abuse;
 pub mod blocked_bridge;
 pub mod contacts_bridge;
