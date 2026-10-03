@@ -60,7 +60,7 @@ jobs:
       - name: Detect docs-only change
         id: docs_only
         uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           components: rustfmt, clippy
@@ -121,7 +121,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - uses: Swatinem/rust-cache@v2
         if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
@@ -158,7 +158,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -179,7 +179,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -211,7 +211,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
