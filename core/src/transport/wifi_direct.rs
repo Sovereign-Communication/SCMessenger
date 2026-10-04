@@ -70,6 +70,16 @@ pub fn compute_group_owner_intent(is_charging: bool, battery_pct: u8) -> i32 {
     }
 }
 
+// `#[async_trait]` 0.1.91 emits `#[must_use]` on each desugared method whose
+// return type is already `#[must_use]`, so clippy's `double_must_use` fires once
+// per async method -- 7 here, 6 in WifiDirectPlatformBridge. The attribute is
+// generated: there is no `#[must_use]` in this file to remove, and clippy's
+// own `help: remove must_use` points at the macro, not at anything we wrote.
+// Scoped to this trait on purpose. A crate-level allow would also silence
+// genuine `double_must_use` findings on hand-written code, and pinning the
+// toolchain to hide it would disable every future lint at once.
+// Ref: the Lint / Rust Linting CI jobs, 13 errors, both traits.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WifiDirectPlatformBridge: Send + Sync {
     async fn is_available(&self) -> Result<bool, WifiDirectError>;

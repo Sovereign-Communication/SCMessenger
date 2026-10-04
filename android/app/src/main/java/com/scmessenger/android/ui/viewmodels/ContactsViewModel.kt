@@ -289,9 +289,9 @@ class ContactsViewModel @Inject constructor(
                 when (event) {
                     is PeerEvent.IdentityDiscovered -> {
                         // Never surface bootstrap relay/headless nodes in the Contacts nearby list.
-                        val isRelay = meshRepository.isBootstrapRelayPeer(event.peerId) ||
+                        val isInfraNode = meshRepository.isBootstrapRelayPeer(event.peerId) ||
                             (event.libp2pPeerId?.let { meshRepository.isBootstrapRelayPeer(it) } ?: false)
-                        if (isRelay) return@collect
+                        if (isInfraNode) return@collect
 
                         cancelPendingNearbyRemoval(event.peerId)
                         cancelPendingNearbyRemoval(event.libp2pPeerId)

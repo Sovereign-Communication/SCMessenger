@@ -1,12 +1,15 @@
 [workspace]
 members = ["core", "cli", "wasm", "mobile", "desktop_bridge"]
-# wasm excluded from default members: requires wasm32 target
-# Build with: cargo build -p scmessenger-wasm --target wasm32-unknown-unknown
-exclude = ["wasm"]
 resolver = "2"
+# wasm is a workspace member (it inherits version/edition/license and 13
+# workspace dependencies from this manifest). It targets wasm32, so build it with:
+# cargo build -p scmessenger-wasm --target wasm32-unknown-unknown
+# It must NOT also be listed in `exclude`: `exclude` does not override `members`,
+# but a members-only entry whose directory is absent makes every cargo command
+# fail to load the workspace, which is what stopped Dependabot's cargo updater.
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "Unlicense"
 

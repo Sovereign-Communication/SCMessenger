@@ -329,6 +329,7 @@ impl scmessenger_core::CoreDelegate for TestReceiptDelegate {
 fn test_receipt_roundtrip_flips_state() {
     let alice = make_node();
     let bob = make_node();
+    let eve = make_node();
 
     // Register delegate on Alice
     let receipts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -354,14 +355,33 @@ fn test_receipt_roundtrip_flips_state() {
         .receive_message(prepared.envelope_data)
         .expect("receive_message must succeed");
 
-    // 3. Bob prepares an encrypted receipt envelope for Alice
+    // Eve cannot acknowledge Bob's message either before or after transport
+    // ACK; Bob's authenticated receipt remains valid after the ACK.
+    let alice_key = pubkey(&alice);
+    let bob_key = pubkey(&bob);
+    for (phase, acknowledge_first, still_queued) in
+        [("queued", false, true), ("post-ACK", true, false)]
+    {
+        if acknowledge_first {
+            assert!(alice.mark_message_sent(prepared.message_id.clone()));
+        }
+        let eve_receipt = eve
+            .prepare_receipt(alice_key.clone(), received_msg.id.clone())
+            .expect("Eve must prepare a receipt");
+        alice
+            .receive_message(eve_receipt)
+            .expect("Alice must decrypt Eve's receipt");
+        assert_eq!(
+            alice.outbox_contains_for_recipient(&bob_key, &prepared.message_id),
+            still_queued,
+            "Eve's {phase} receipt must not alter Bob's retry state"
+        );
+        assert!(receipts.lock().unwrap().is_empty());
+    }
+
     let receipt_envelope = bob
-        .prepare_receipt(pubkey(&alice), received_msg.id.clone())
+        .prepare_receipt(alice_key, received_msg.id.clone())
         .expect("prepare_receipt must succeed");
-    assert!(
-        alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
-        "the original message must be pending before its delivery receipt arrives"
-    );
 
     // 4. Alice receives Bob's receipt envelope
     let received_receipt = alice
@@ -439,8 +459,8 @@ fn test_receipt_roundtrip_flips_state() {
         "Receipt status must be Delivered"
     );
     assert!(
-        !alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
-        "a Delivered receipt must clear the matching sender outbox entry"
+        !alice.outbox_contains_for_recipient(&bob_key, &prepared.message_id),
+        "a Delivered receipt must leave no sender retry state"
     );
 }
 
