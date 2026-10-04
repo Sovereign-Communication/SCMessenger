@@ -258,14 +258,18 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
     
     // AndroidX Core
-    // Resolved on integrate/train-20261004: take the newer of each coordinate.
-    // core-ktx 1.19.0 is #108's; lifecycle 2.11.0 was already integrated and
-    // #108's 2.6.2 would have regressed it.
-    implementation 'androidx.core:core-ktx:1.19.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.11.0'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0'
-    implementation 'androidx.lifecycle:lifecycle-service:2.11.0'
+    // Pinned to origin/main's values on integrate/train-20261004. These six
+    // coordinates were raised by three dependabot commits in the train
+    // (b1e14a0d5 core-ktx, 3eee87077 lifecycle x4, 37d29f1ab hilt-navigation-compose),
+    // none of which is on main. Every one of them requires compileSdk 37 and
+    // AGP 9.1.0; this project is compileSdk 35 / AGP 8.13.2, so Gradle's
+    // checkDebugAarMetadata rejected all 12 resulting issues and the Android
+    // build could not configure. Same failure mode as b06e63c5c (Rust bumps).
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2'
+    implementation 'androidx.lifecycle:lifecycle-service:2.6.2'
     implementation 'androidx.activity:activity-compose:1.8.0'
     implementation 'androidx.work:work-runtime-ktx:2.8.1'
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -286,7 +290,7 @@ dependencies {
     implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
     implementation 'com.google.android.gms:play-services-base:18.2.0'
     ksp "com.google.dagger:hilt-android-compiler:$hilt_version"
-    implementation 'androidx.hilt:hilt-navigation-compose:1.4.0'
+    implementation 'androidx.hilt:hilt-navigation-compose:1.1.0'
     
     // DataStore for preferences
     implementation 'androidx.datastore:datastore-preferences:1.0.0'
