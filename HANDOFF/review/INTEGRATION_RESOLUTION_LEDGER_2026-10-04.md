@@ -204,6 +204,43 @@ the required `Repository Hygiene Checks` context with a `--self-test` step provi
 loader still raises, mirroring `check_toolchain_pin.py --self-test`. A gate that has
 quietly stopped failing looks exactly like a gate with nothing to check.
 
+## Resolution 12: `is_route_pending_fresh` hint width (the blocker that failed 17 checks)
+
+`core/src/routing/engine.rs:203` passed `[u8; 8]` to a method declared at
+`core/src/routing/global.rs:239` as taking `&[u8; 4]`. That single mismatch cascaded into
+17 failing checks, because every job that compiles Rust was reporting the same two errors:
+
+```
+error[E0308]: mismatched types          engine.rs:203
+error[E0277]: [u8; 8]: Borrow<[u8; 4]> is not satisfied   global.rs:240
+```
+
+**This was not a design fork.** Five independent facts agree, with no counter-evidence:
+
+1. The map it queries is keyed 8-wide: `pending_requests: HashMap<[u8; 8], RouteRequest>`
+   (`global.rs:76`).
+2. Its own body does `self.pending_requests.get(hint)` (`global.rs:240`), which cannot
+   typecheck against a 4-byte hint -- so the declared width contradicts the function it is in.
+3. The sibling one line above takes the same value 8-wide:
+   `is_route_pending(&self, hint: &[u8; 8])` (`global.rs:233`).
+4. The test helper that feeds it returns `[u8; 8]`: `fn make_hint(id: u8) -> [u8; 8]`
+   (`global.rs:384`).
+5. `&[u8; 4]` was the **only** occurrence of `u8; 4]` anywhere in `core/src/routing/`.
+
+`git log -S` shows the definition and the call site arrived in the *same* commit,
+`c8e1ce7f6` ("resolve all 10 untriaged perimeter underscore-param violations"), so this was
+never two PRs disagreeing -- it is a typo in one commit that only surfaces once the two
+halves are in the same tree.
+
+Resolution: `&[u8; 4]` -> `&[u8; 8]` in the declaration. One line, no behaviour change; the
+function now matches the map it reads, its sibling, its tests, and its caller.
+
+**Rule-8 note.** `core/src/routing/` is merge-blocked, so this is flagged for a non-author
+reviewer rather than waved through. It is recorded here as a mechanical signature correction
+decided by the type of the data structure being queried, not as a routing-policy decision:
+the freshness window, the map, and every call site were already fixed, and nothing about
+route semantics changed.
+
 ## Deliberately not in this branch
 
 | PR | reason |

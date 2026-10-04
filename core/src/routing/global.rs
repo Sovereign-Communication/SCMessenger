@@ -236,7 +236,7 @@ impl GlobalRoutes {
     /// Check if a route request is pending AND still fresh (younger than the
     /// staleness window). A stale pending request must not block a new
     /// RouteDiscovery decision.
-    pub fn is_route_pending_fresh(&self, hint: &[u8; 4], now: u64) -> bool {
+    pub fn is_route_pending_fresh(&self, hint: &[u8; 8], now: u64) -> bool {
         match self.pending_requests.get(hint) {
             Some(req) => now.saturating_sub(req.requested_at) <= MAX_ROUTE_REQUEST_AGE_SECS,
             None => false,
