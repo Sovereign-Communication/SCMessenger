@@ -310,7 +310,10 @@ dependencies {
     // Real org.json for JVM unit tests: the android.jar stubs no-op under
     // returnDefaultValues, which silently empties any JSON round-trip.
     testImplementation 'org.json:json:20240303'
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    // Resolved on integrate/train-20261004: newest of each coordinate.
+    // coroutines-test 1.11.0 is #210's; mockk 1.14.11 was already integrated and
+    // #210's 1.13.10 would have regressed it.
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0'
     testImplementation 'io.mockk:mockk:1.14.11'
     testImplementation 'io.mockk:mockk-agent-jvm:1.14.11'
     androidTestImplementation 'io.mockk:mockk-android:1.14.11'
