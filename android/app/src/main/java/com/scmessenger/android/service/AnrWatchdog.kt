@@ -34,9 +34,6 @@ class AnrWatchdog(
     private val onAnrDetected: ((blockedMs: Long, consecutiveCount: Int) -> Unit)? = null
 ) {
 
-    interface OnAnrDetected {
-        fun onAnr(blockedMs: Long, consecutiveCount: Int)
-    }
     private val handler = Handler(Looper.getMainLooper())
     private val isRunning = AtomicBoolean(false)
 
@@ -259,8 +256,6 @@ class AnrWatchdog(
             Timber.i("ANR watchdog stopped (total ANR events=%d)", totalAnrEvents.get())
         }
     }
-
-    fun getTotalAnrEvents(): Int = totalAnrEvents.get()
 
     fun isMainThreadResponsive(): Boolean = consecutiveBlocks.get() == 0
 }

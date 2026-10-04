@@ -211,9 +211,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun clearIdentityError() {
-        identityCreationCoordinator.clearError()
-    }
 
     fun refreshStorageStatus() {
         viewModelScope.launch(Dispatchers.IO) {
