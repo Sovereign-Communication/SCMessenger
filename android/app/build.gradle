@@ -308,9 +308,9 @@ dependencies {
     // returnDefaultValues, which silently empties any JSON round-trip.
     testImplementation 'org.json:json:20240303'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
-    testImplementation 'io.mockk:mockk:1.13.10'
-    testImplementation 'io.mockk:mockk-agent-jvm:1.13.10'
-    androidTestImplementation 'io.mockk:mockk-android:1.13.10'
+    testImplementation 'io.mockk:mockk:1.14.11'
+    testImplementation 'io.mockk:mockk-agent-jvm:1.14.11'
+    androidTestImplementation 'io.mockk:mockk-android:1.14.11'
     testImplementation 'androidx.arch.core:core-testing:2.2.0'
     // org.robolectric removed 2026-07-27: declared but never used. No test under
     // app/src/test references it (no @RunWith(RobolectricTestRunner), no @Config).
