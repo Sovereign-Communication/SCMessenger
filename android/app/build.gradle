@@ -314,13 +314,19 @@ dependencies {
     // Real org.json for JVM unit tests: the android.jar stubs no-op under
     // returnDefaultValues, which silently empties any JSON round-trip.
     testImplementation 'org.json:json:20240303'
-    // Resolved on integrate/train-20261004: newest of each coordinate.
-    // coroutines-test 1.11.0 is #210's; mockk 1.14.11 was already integrated and
-    // #210's 1.13.10 would have regressed it.
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0'
-    testImplementation 'io.mockk:mockk:1.14.11'
-    testImplementation 'io.mockk:mockk-agent-jvm:1.14.11'
-    androidTestImplementation 'io.mockk:mockk-android:1.14.11'
+    // Pinned to origin/main's values on integrate/train-20261004. Two dependabot
+    // bumps in the train raised these (51f41d87b coroutines-test -> 1.11.0,
+    // d51154a84 mockk -> 1.14.11); neither is on main. coroutines-test 1.11.0
+    // is compiled with Kotlin 2.2 metadata, but this project pins
+    // kotlin_version = 1.9.20 (android/build.gradle:6), so KSP rejected all six
+    // .kotlin_module descriptors with "binary version of its metadata is 2.2.0,
+    // expected version is 1.9.0" and :app:kspDebugUnitTestKotlin failed.
+    // Third instance of the b06e63c5c / 74b21eb07 pattern: a version bump that
+    // no required context caught because the Android jobs are not merge gates.
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    testImplementation 'io.mockk:mockk:1.13.10'
+    testImplementation 'io.mockk:mockk-agent-jvm:1.13.10'
+    androidTestImplementation 'io.mockk:mockk-android:1.13.10'
     testImplementation 'androidx.arch.core:core-testing:2.2.0'
     // org.robolectric removed 2026-07-27: declared but never used. No test under
     // app/src/test references it (no @RunWith(RobolectricTestRunner), no @Config).
