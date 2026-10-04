@@ -82,7 +82,6 @@ jobs:
         run: cargo ndk -t ${{ matrix.abi }} build -p scmessenger-core --release
       - name: Upload artifacts
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: android-${{ matrix.abi }}
@@ -112,14 +111,12 @@ jobs:
         run: cargo build --target aarch64-apple-ios-sim -p scmessenger-core --release
       - name: Upload aarch64-apple-ios
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64
           path: target/aarch64-apple-ios/release/libscmessenger_core.a
       - name: Upload aarch64-apple-ios-sim
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64-sim
@@ -146,7 +143,6 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown -p scmessenger-wasm --release
       - name: Upload artifacts
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: wasm
@@ -180,7 +176,6 @@ jobs:
         run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
       - name: Upload Kotlin bindings
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: bindings-kotlin
@@ -217,7 +212,6 @@ jobs:
         run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
       - name: Upload Swift bindings
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v4
         uses: actions/upload-artifact@v7
         with:
           name: bindings-swift

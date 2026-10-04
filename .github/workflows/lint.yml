@@ -172,7 +172,6 @@ jobs:
       
       - name: Cache npm dependencies
         if: steps.check-package.outputs.exists == 'true' && steps.docs_only.outputs.is_docs_only != 'true'
-        if: steps.check-package.outputs.exists == 'true'
         uses: actions/cache@v6
         with:
           path: wasm/node_modules
