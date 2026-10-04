@@ -148,6 +148,70 @@ binding constraint for cargo is **RAM, not core count**.
 - Never run two build-tool invocations concurrently. Multiple agent sessions
   share this repo, and Gradle can spawn cargo-ndk upstream.
 
+## Rust toolchain pin (standing, from 2026-10-02)
+
+**The Rust toolchain is pinned to an exact version: `1.99.0`.** Do not relax it
+to `stable`, `beta`, `nightly`, or a date-based channel.
+
+### Why, in the only terms that matter
+
+Between 2026-09-30 and 2026-10-02 the required `Lint` context went red on 13
+`clippy::double_must_use` errors with **no source commit**. The CI log says why:
+
+```
+stable-x86_64-unknown-linux-gnu updated - rustc 1.99.0 (b940084d7 2026-09-28)
+    (from rustc 1.98.1 (48a229cea 2026-09-01))
+```
+
+`dtolnay/rust-toolchain@stable` does not observe the channel, it **updates** the
+runner's preinstalled toolchain to whatever stable is that day. Stable moved on
+2026-10-01; clippy 1.99.0 added `double_must_use`; CI runs
+`cargo clippy --workspace --all-features -- -D warnings`. PR #429 was blocked on
+a defect absent from its diff, in two files it never touched.
+
+The thirteen errors were the cheap part. The expensive part was that the
+repository's red/green state stopped being a function of its own source: nothing
+to bisect, nobody to ask, and a required context carrying a verdict about code
+that was not under review.
+
+`1.99.0` is chosen because it is the version this repository is **verified**
+green on (CI run `37061994387` at `f235d49d`), not because it is newest.
+
+### Two sources of truth, cross-checked
+
+The version is declared in `rust-toolchain.toml` **and** in 27 places across ten
+workflow files (25 `dtolnay/rust-toolchain@<ref>` refs, 2 `toolchain:` inputs,
+including the `actions-rs/toolchain@v1` site in `desktop.yml`). `release.yml`
+is among them, which is what makes this a release-correctness issue and not only
+a CI one: an unpinned release workflow can build a tag with a different compiler
+than the one CI validated.
+
+Bumping one and not the other is not a partial fix, it is a trap.
+`scripts/check_toolchain_pin.py` runs in the required `Repository Hygiene Checks`
+context and fails when any site disagrees, when `rust-toolchain.toml` is not an
+exact version, or when it can evaluate nothing at all.
+
+### How to bump
+
+One commit, both surfaces, then read the CI run:
+
+```bash
+# 1. rust-toolchain.toml
+#    channel = "1.99.0"  ->  channel = "<new>"
+# 2. every workflow declaration
+grep -rn "rust-toolchain@\|toolchain: " .github/workflows/
+# 3. confirm they agree (must exit 0 before you commit)
+python scripts/check_toolchain_pin.py --repo-root .
+```
+
+A bump is a normal PR. Land it, read the run, fix whatever the new lint set
+reports. That is a reviewed change, which is the entire point.
+
+### What this check deliberately does NOT do
+
+It does not require the pin to be the newest stable. Chasing "newest" here would
+reintroduce exactly the ambient upgrade the pin exists to prevent.
+
 ## Build Verification (Mandatory)
 
 Scoped to what changed, before finalizing any run (prefer the `build-verify`
