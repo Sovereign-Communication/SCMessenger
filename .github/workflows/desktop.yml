@@ -37,7 +37,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: 1.99.0
           override: true
 
       - name: Build desktop-bridge with gen-bindings feature

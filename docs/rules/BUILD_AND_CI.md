@@ -1,9 +1,7 @@
 # Build & CI Rules
 
 Status: Active
-Last updated: 2026-09-20 (extracted from `.claude/rules/build.md` for Tier 1
-on-demand loading; Windows parallelism section added; CI queue hygiene added
-per operator directive 2026-09-20)
+Last updated: 2026-09-24 (Harness immutable-tag admission and bounded canary policy)
 
 Loaded on demand. The always-on summary lives in `CLAUDE.md`; this file holds
 the detail. Prefer the `build-verify` skill over running these commands by hand.
@@ -70,7 +68,55 @@ Standing practice for SCMessenger completion work:
    (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
 4. **Clarification:** if confidence <99% on a claim/design, run harness verify
    or a typed JEV question pack — do not invent a new root-cause plan.
-5. Full design: `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`.
+5. Full design: `HANDOFF/V040_JEV_HARMESS_INTEGRATION_2026-09-21.md`.
+
+### Harness admission and update gate (2026-09-24)
+
+The production Harness source of truth is the immutable release tag `v0.4.1`
+and its peeled commit, not a moving branch and not a local checkout. The
+verified baseline is:
+
+- Harness `v0.4.1` -> `ad4a30052955e1f574c90f426edfc7a274e16ebf`.
+- Harness `origin/main` -> `6d5a2f818d3029b10635566a8131c6e8be234371`,
+  untagged and 55 commits beyond `v0.4.1`; it is a bounded canary source only.
+- The local Harness checkout is 30 commits behind `origin/main` and dirty;
+  it is diagnostic context, never production evidence.
+
+Admission is fail-closed. A candidate is admitted only after an exact remote
+ref is resolved, the source is clean, the package and public/private SCMessenger
+imports are checked, the Harness CLI/report contract is checked, and the
+upstream CI run for the exact SHA is green. `origin/main` may be tested in a
+separate `tmp/` staging path for 0.5.0 compatibility, but a moving branch must
+never be used directly by a release gate. If the branch advances, the old
+canary is invalid and a new exact SHA must be admitted.
+
+SCMessenger owns the consumer wrapper, admission manifest, and rollback
+procedure. The Harness maintainer owns upstream tags, API compatibility, and
+Harness CI. The SCMessenger orchestrator owns the 0.4.0 freeze and merge
+sequence; platform owners own Android, CLI, cloud, and native behavior. No
+external Harness worktree is edited by SCMessenger.
+
+The local update flow below is the required target behavior. The current
+floating updater is not yet compliant and must not be treated as admission
+until the modes and exact-SHA checks are implemented.
+
+1. `bootstrap`: create a clean consumer copy from the admitted tag in
+   `tmp/harness-admission/<tag>-<sha>`; never use the system temp directory.
+2. `admit-tag`: fetch the tag, verify the peeled commit, run the hermetic
+   contract probe, and record the exact SHA before promotion.
+3. `canary-main`: resolve one `origin/main` SHA, run the same probe in a
+   separate staging path, and label the result `CANARY`, never production.
+4. `rollback`: restore the previous admitted tag/SHA and its manifest; leave a
+   failed candidate in place for evidence rather than overwriting the active
+   consumer copy.
+
+A dirty vendor copy, unknown version, missing imported symbol, wrong remote,
+wrong SHA, report-schema mismatch, or unavailable required key is a refusal,
+not a warning. Structural JEV fallback is never a canonical pass. The existing
+consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
+`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) must all
+resolve the same admitted source; direct installed-package fallback is not
+allowed.
 
 ## Windows parallelism (measured on this box)
 
@@ -101,6 +147,70 @@ binding constraint for cargo is **RAM, not core count**.
   is far cheaper.
 - Never run two build-tool invocations concurrently. Multiple agent sessions
   share this repo, and Gradle can spawn cargo-ndk upstream.
+
+## Rust toolchain pin (standing, from 2026-10-02)
+
+**The Rust toolchain is pinned to an exact version: `1.99.0`.** Do not relax it
+to `stable`, `beta`, `nightly`, or a date-based channel.
+
+### Why, in the only terms that matter
+
+Between 2026-09-30 and 2026-10-02 the required `Lint` context went red on 13
+`clippy::double_must_use` errors with **no source commit**. The CI log says why:
+
+```
+stable-x86_64-unknown-linux-gnu updated - rustc 1.99.0 (b940084d7 2026-09-28)
+    (from rustc 1.98.1 (48a229cea 2026-09-01))
+```
+
+`dtolnay/rust-toolchain@stable` does not observe the channel, it **updates** the
+runner's preinstalled toolchain to whatever stable is that day. Stable moved on
+2026-10-01; clippy 1.99.0 added `double_must_use`; CI runs
+`cargo clippy --workspace --all-features -- -D warnings`. PR #429 was blocked on
+a defect absent from its diff, in two files it never touched.
+
+The thirteen errors were the cheap part. The expensive part was that the
+repository's red/green state stopped being a function of its own source: nothing
+to bisect, nobody to ask, and a required context carrying a verdict about code
+that was not under review.
+
+`1.99.0` is chosen because it is the version this repository is **verified**
+green on (CI run `37061994387` at `f235d49d`), not because it is newest.
+
+### Two sources of truth, cross-checked
+
+The version is declared in `rust-toolchain.toml` **and** in 27 places across ten
+workflow files (25 `dtolnay/rust-toolchain@<ref>` refs, 2 `toolchain:` inputs,
+including the `actions-rs/toolchain@v1` site in `desktop.yml`). `release.yml`
+is among them, which is what makes this a release-correctness issue and not only
+a CI one: an unpinned release workflow can build a tag with a different compiler
+than the one CI validated.
+
+Bumping one and not the other is not a partial fix, it is a trap.
+`scripts/check_toolchain_pin.py` runs in the required `Repository Hygiene Checks`
+context and fails when any site disagrees, when `rust-toolchain.toml` is not an
+exact version, or when it can evaluate nothing at all.
+
+### How to bump
+
+One commit, both surfaces, then read the CI run:
+
+```bash
+# 1. rust-toolchain.toml
+#    channel = "1.99.0"  ->  channel = "<new>"
+# 2. every workflow declaration
+grep -rn "rust-toolchain@\|toolchain: " .github/workflows/
+# 3. confirm they agree (must exit 0 before you commit)
+python scripts/check_toolchain_pin.py --repo-root .
+```
+
+A bump is a normal PR. Land it, read the run, fix whatever the new lint set
+reports. That is a reviewed change, which is the entire point.
+
+### What this check deliberately does NOT do
+
+It does not require the pin to be the newest stable. Chasing "newest" here would
+reintroduce exactly the ambient upgrade the pin exists to prevent.
 
 ## Build Verification (Mandatory)
 

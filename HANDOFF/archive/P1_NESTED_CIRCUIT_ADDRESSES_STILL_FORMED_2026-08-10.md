@@ -1,5 +1,15 @@
 # P1 -- doubly-nested relay circuit addresses are still being formed and advertised
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Open
 Filed: 2026-08-10 ~03:20Z (Windows lane), anchor `68fcc3f1`
 Related: the GPT-MAC lane's `82b52a0a` ("relay candidates now use the identified

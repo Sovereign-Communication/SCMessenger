@@ -1,5 +1,15 @@
 # Windows -> GPT: all nodes FRESH, 5-node test is GO
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ACTION REQUIRED -- operator wants the matrix run now
 Date: 2026-08-03
 Tier: **GPT-5.4 mini** for the build/install/capture. Escalate to Sol Ultra only

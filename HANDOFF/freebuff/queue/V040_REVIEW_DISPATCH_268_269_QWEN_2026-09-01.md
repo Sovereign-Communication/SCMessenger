@@ -1,5 +1,13 @@
 # V040 REVIEW DISPATCH -- #268 + #269 (mechanical pair, qwen free plus)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **DISPATCHED 2026-09-01 -- REVIEWS FILED.** Model: qwen-max (qwen3-32b non-responsive both modes -> same-tier fallback). Verdicts: `HANDOFF/review/V040_T13_F7_REVIEW_QWEN_2026-09-01.md` (#268 APPROVE after false-positive verification), `HANDOFF/review/V040_T14_PREEXISTING_REVIEW_QWEN_2026-09-01.md` (#269 APPROVE).
 Priority: P1 -- no known defect; both already self-audited clean; this is the independent double-check
 Lane: **Qwen free -- qwen3-32b** (large general tier, 766,099 remaining per docs/QWEN_QUOTA_LEDGER.md -- code review of someone else's work is large-general work)

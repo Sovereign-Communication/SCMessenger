@@ -1,5 +1,15 @@
 # Windows -> GPT: log bundle protocol, all nodes, for cross-side reconstruction
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ACTION REQUIRED -- needed to close the remaining failures
 Date: 2026-08-03
 Tier: **GPT-5.4 mini** -- collection and redaction. Mechanical.

@@ -1,5 +1,15 @@
 # Ticket: G1 ledger retire/prune for ghost peer_ids
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN
 Filed: 2026-09-11T06:07Z by CTO seat
 Owner: implementer worker (orchestrate packet) — not CTO controller

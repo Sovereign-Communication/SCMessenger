@@ -1,5 +1,15 @@
 # V040-T13 F-DHT Gate Rework -- ADVERSARIAL REVIEW (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Reviewer: **qwen3.8-max-0902** (DashScope free, non-author -- independent pass)
 Target: PR #267 `freebuff/v040-t13-fdht-gate` (ledger_entry.rs, swarm.rs, cli/ledger.rs)
 Dispatched: 2026-09-01 by the Freebuff lane via scripts + tmp/qwen_review_dispatch.py

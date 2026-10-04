@@ -17,6 +17,80 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  handoff-scope:
+    name: Handoff ownership scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate changed handoffs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -z "$base" ]; then
+            echo "handoff-scope: no comparison commit; refusing to skip the gate" >&2
+            exit 2
+          fi
+          python scripts/validate_handoff_scope.py --repo-root . --changed-from "$base"
+      - name: Classify the gate itself
+        # The classification decides which documents are enforced at all, so a
+        # silent regression here is invisible from the outside: a gate that
+        # stops checking things looks exactly like a gate with nothing to
+        # check. This runs on every PR and every push, needs no repository
+        # state, and fails if the classifier drifts.
+        shell: bash
+        run: python scripts/validate_handoff_scope.py --repo-root . --self-test
+
+  naming-policy:
+    name: Naming policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Enforce naming policy on added lines
+        # The ratchet: only lines this change ADDS are judged, so the gate is
+        # green on day one and gets harder to loosen, and the pre-existing
+        # violations the audit counted stay the audit's backlog rather than
+        # becoming a reason to skip the gate.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -z "$base" ]; then
+            echo "naming-policy: no comparison commit; refusing to skip the gate" >&2
+            exit 2
+          fi
+          python scripts/check_naming.py --repo-root . --changed-from "$base"
+      - name: Prove the gate can still fail
+        # A gate that stops denying anything looks exactly like a gate with
+        # nothing to deny. These cases run on every PR and every push, need
+        # no repository state, and fail if the matcher or the policy
+        # validation drifts -- including if someone edits the policy into a
+        # shape where an unratified proposal can block a merge.
+        shell: bash
+        run: python scripts/check_naming.py --repo-root . --self-test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -25,7 +99,7 @@ jobs:
       - name: Detect docs-only change
         id: docs_only
         uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           components: rustfmt, clippy
@@ -45,6 +119,25 @@ jobs:
         if: steps.docs_only.outputs.is_docs_only != 'true'
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
+
+  orchestration:
+    name: Orchestration control plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Runs on every pull request and every push, on the default merge checkout.
+      # The manual exact-SHA variant of this gate is a SEPARATE workflow
+      # (orchestration-dispatch.yml): this file hosts required status contexts and
+      # must not gain a workflow_dispatch trigger.
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate orchestration contract
+        run: python scripts/orchestration_contract.py
+      - name: Run deterministic orchestration tests
+        run: python scripts/test_orchestration_v2.py
 
   test:
     name: Test (${{ matrix.os }})
@@ -67,7 +160,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - uses: Swatinem/rust-cache@v2
         if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
@@ -104,7 +197,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -125,7 +218,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -157,7 +250,7 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'

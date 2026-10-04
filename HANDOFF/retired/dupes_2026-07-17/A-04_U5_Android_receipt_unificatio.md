@@ -1,5 +1,13 @@
 # Task A-04
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Description
 U5: Android receipt unification -- single receipt pipeline FFI->Repository->UI; remove duplicate/legacy receipt listeners
 

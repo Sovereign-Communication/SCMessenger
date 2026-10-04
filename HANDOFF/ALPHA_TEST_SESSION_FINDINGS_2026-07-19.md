@@ -1,5 +1,13 @@
 # Alpha Test Session Findings — 2026-07-19 (Lucas/Josh connectivity attempt)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Session ended without achieving a real end-to-end P2P connection.
 Emulators torn down (both Lucas-local and Josh-remote QEMU processes stopped).
 Relay and the Josh EC2 instance itself were left running (not terminated) so

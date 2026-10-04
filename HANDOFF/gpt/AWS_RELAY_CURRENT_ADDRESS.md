@@ -1,5 +1,13 @@
 # AWS Always-On Node -- CURRENT relay address
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 POLICY (operator directive 2026-08-04): IPs in this repo are ephemeral.
 This file is the ONE place the orchestrator updates immediately after every
 AWS node rebuild. Read it fresh at use time; never copy an IP from any

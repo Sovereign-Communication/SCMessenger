@@ -1,5 +1,15 @@
 # TASK: Unification audit findings (client-vs-core duplication sweep)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: TODO, mixed confidence. Found 2026-07-12 while investigating the
 delivery-receipt bug (`CRITICAL_ANDROID_FALSE_DELIVERY_FAILURE_NO_RECEIPT_ACK.md`).
 Dispatched a broader sweep for other instances of the same "client

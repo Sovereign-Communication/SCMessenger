@@ -1,5 +1,15 @@
 # V0.4.0 working-first path — operator interview 2026-09-20
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active — **supersedes the tag-pressure reading** of
 `HANDOFF/V040_TAG_PATH_UNIFIED_2026-09-20.md` for sequencing and priority.
 Where that file still says "path to tag" as the primary driver, THIS document

@@ -1,5 +1,13 @@
 # 3-node log analysis — 2026-09-20 (CTO pass)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Mode: read-only. Not a full D4/D6/D7 tag scoring run (operator: score after
 wave + phone session). Master plan: `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`.
 
@@ -79,3 +87,83 @@ this binary).
 | Freebuff Wave-1 | Tickets DISPATCHABLE on main — operator paste |
 
 Harness: `sovereign-harness` 0.3.3 in sync with origin/main.
+
+## Cross-node log analysis — rollout to `bceacb94`, 2026-09-26
+
+Companion to the `bceacb94` section of `HANDOFF/V040_3NODE_RCA_2026-09-09.md`.
+Same candidate SHA, same evidence directory `tmp/rollout-20260926-bceacb94/`.
+
+**Scope honesty: this is a TWO-node analysis, not a three-node one.** The Pixel
+leg did not run because **no device was attached** — `adb devices -l` lists no
+devices after an adb server restart, and no Pixel/Android/ADB device is
+enumerable over USB. No APK was installed and no handset logs were pulled, so
+**the Pixel's behavioural proof awaits the hardware and the user.** The only
+Pixel signal in this record is indirect and passive: it remains a live connected
+peer of AWS (`12D3KooWDgLQ8jn8…` in the AWS peer list), observed from the other
+two nodes without touching the device.
+
+| Node | Version this pass | Evidence source |
+|---|---|---|
+| Windows CLI | `0.4.0 (bceacb9:main:1790455088)` | process/PID, binary sha256, `scm.log.2026-09-26-21` |
+| AWS cloud node | `0.4.0 (bceacb9455fbf8aaaac2164059c4b7d8afcc226b:main:)` | `/version`, `/health`, `/api/identity`, `/api/diagnostics`, `docker logs scm-node` |
+| Pixel 6a | not installed for this SHA | none — device absent |
+
+### Windows node
+
+- Alive and meshed for the whole window: PID 7140, binary sha256 `3a1ac11f…`
+  (the CI artifact for this SHA), binary path and command line byte-identical to
+  the pre-change node.
+- Custody registration never lapsed: `[CUSTODY] Registered local identity with
+  peer 12D3KooWGvCWJNo… (relay-ready)` on a 60 s cadence, count climbing 44 -> 46
+  across the sampling window.
+- `Relay custody audit log count: 4815` held flat; retention sweep ran clean
+  (`0 of 40 record(s) expired, 0 bytes reclaimed`).
+- `[OK] Relay circuit reservation ACCEPTED via 12D3KooWGvCWJNo…`, i.e. inbound
+  relayed connections available despite `AutoNAT: behind NAT`.
+- **0 `ERROR`, panic, or backtrace lines after the deploy** (window from
+  21:47:48Z).
+
+### AWS cloud node
+
+- `healthy` at every sample; `RestartCount=0`, exit 0; mount
+  `/opt/scm-relay-data:/data` rw=true; host uid `10001:10001` mode 755; container
+  uid `10001(scm)`.
+- `connection_path_state: DirectPreferred`, custody audit 3099, outbox 0, undelivered
+  160 — all constant across 7 samples over 171 s.
+- History survived the image change exactly (received 9703, sent 187, undelivered
+  160 at T0 and identical at T1), the strongest single indicator that the
+  persistent mount is still doing its job after the swap.
+
+### Delivery, both directions
+
+| Direction | Marker | Message id | Result |
+|---|---|---|---|
+| AWS -> Windows | `AWS2WIN-20260926T215328Z-BCEACB94` | `1474f2b5-7743-4246-b6f1-aacfc4632102` | `delivered: true`; Windows `inbox_receive` sender `37eb7561…`; ACK returned |
+| Windows -> AWS | `WIN2AWS-20260926T215348Z-BCEACB94` | see `received_count` 9703 -> 9705 | `[OK] Message delivered … (267ms)`, `ROUTE_DECISION attempt=1 pass`; ACK returned |
+
+Both nodes returned to `outbox_count=0` afterwards.
+
+### Warnings, cross-referenced against tickets
+
+| Warning | Ticket | Disposition |
+|---|---|---|
+| `[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts` (recurring; peer `12D3KooWKrnxkGW…`) | `HANDOFF/todo/D2_SEED_DIAL_REDIAL_MISSING_SEED_PEER.md` (**not on `main`** -- filed on `fix/361-review-blockers` (PR #372, unmerged)) — quotes this exact line as its defect evidence | pre-existing, unchanged by this rollout |
+| `ble_mesh: Windows GATT server / advertising error HRESULT(0x00000000)` | no dedicated ticket | **pre-existing, not a regression**: the outgoing `1bc78c8` binary emitted the byte-identical line at its own startup, with `terminal_result="no_adapter"` |
+| `SEED-DIAL sweep 1: 104 candidate(s), peers=0` | D2 family | benign; custody registered regardless |
+| `AutoNAT: behind NAT` | `HANDOFF/todo/D9_LIBP2P_EITHER_HANDLER_PANIC.md` (**not on `main`** -- filed on `fix/361-review-blockers` (PR #372, unmerged)); named there only in a libp2p behaviour list, not as a treatment of this warning | expected on a desktop; covered by the accepted circuit |
+| `[CONN-CAP] closing redundant per-peer path` | `HANDOFF/todo/D7_CONN_CAP_REDUNDANT_PATH_CLOSE.md` (filed 2026-09-26); the Wave-1 note at lines 61 and 72 of this file covers the `max sub-streams` family but never named this line | working as designed |
+| stale `13.217.204.112:8080` for the Pixel, `failure_count: 6` | `HANDOFF/todo/D11_STALE_LEDGER_PEER_ADDRESS.md` (filed 2026-09-26) | new observation this pass: an unreachable address retained alongside the Pixel's live ones |
+
+### Why "no regression" here is operational, not diff-based
+
+The previous Windows revision `1bc78c8` **does not resolve in this repository**:
+`git cat-file -t 1bc78c8` reports "Not a valid object name" and no local ref
+contains it. The outgoing and incoming trees therefore could not be diffed.
+No-regression is established instead by live evidence — preserved identity on
+both nodes, an authenticated mesh, bidirectional delivery with ACKs, receipt and
+outbox cleanup, and constant-state sampling — not by reading a code diff.
+
+Note also that the shared checkout on `glm/canonical-outlier-audit` @ `3f41005d`
+is 148 commits behind `main` and does not contain the 2026-09-24 re-evaluation
+sections that exist in its own working tree. This record was written against
+`main`; that earlier unlanded content was left untouched.

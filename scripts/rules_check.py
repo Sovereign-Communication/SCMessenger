@@ -15,6 +15,12 @@ Checks (mirrors AGENTS.md hard rules 1, 3, 4):
   3. No .py files in the repo root (scripts/ only).
   4. No lowercase ios/ top-level path (CI enforces uppercase iOS/).
   5. No private-key blocks (----BEGIN ... PRIVATE KEY----).
+  6. Every staged handoff document passes the repository-local ownership gate;
+     the gate reads the Git index so unstaged worktree edits cannot hide a
+     mixed handoff from the commit.
+  7. No line this commit ADDS introduces a denied spelling from
+     naming_policy.json (see naming_failures() below; the full gate and its
+     self-test live in scripts/check_naming.py and also run in CI).
 
 Exit 0 = clean, exit 1 = violations printed as [FAIL] lines.
 Exempt: docs/historical/, tmp/, binary files (decode failures are skipped).
@@ -22,6 +28,39 @@ Exempt: docs/historical/, tmp/, binary files (decode failures are skipped).
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+try:
+    from scripts.validate_handoff_scope import (
+        POLICY,
+        is_handoff_path,
+        validate_index_documents,
+        validate_paths,
+    )
+except ModuleNotFoundError:
+    from validate_handoff_scope import (  # type: ignore
+        POLICY,
+        is_handoff_path,
+        validate_index_documents,
+        validate_paths,
+    )
+
+try:
+    from scripts.check_naming import (
+        PolicyError as NamingPolicyError,
+        added_lines as naming_added_lines,
+        findings_for_lines as naming_findings_for_lines,
+        in_scope as naming_in_scope,
+        load_policy as load_naming_policy,
+    )
+except ModuleNotFoundError:
+    from check_naming import (  # type: ignore
+        PolicyError as NamingPolicyError,
+        added_lines as naming_added_lines,
+        findings_for_lines as naming_findings_for_lines,
+        in_scope as naming_in_scope,
+        load_policy as load_naming_policy,
+    )
 
 PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 ARTIFACT_SUFFIXES = (".log", ".pid", ".logcat")
@@ -124,6 +163,57 @@ def check(path: str, skip_content: bool = False) -> list:
     return fails
 
 
+def handoff_scope_failures(files: list, staged: bool) -> list:
+    """Check only handoff documents, using staged bytes during commit."""
+    handoffs = [path for path in files if is_handoff_path(path)]
+    if not handoffs:
+        return []
+    root = Path(__file__).resolve().parents[1]
+    if staged:
+        return validate_index_documents(handoffs, POLICY, root)
+    return validate_paths(handoffs, POLICY, root, use_index=False)
+
+
+def naming_failures() -> list:
+    """Enforce naming_policy.json on the lines this commit ADDS.
+
+    Staged mode only, and that restriction is deliberate rather than
+    incidental. An explicit file list carries no diff to take a ratchet
+    against, so the only alternative is a whole-file scan -- which would fail
+    today on the backlog the naming audit counted (57, 38 and 165 occurrences
+    of three denied terms) and nobody has cleaned up yet. A gate that is red
+    on its first commit is a gate that gets bypassed, so the ratchet is kept
+    and CI runs the same gate over the branch diff, where it has the context
+    it needs.
+
+    Two files are exempt from the scan, and only two, because they structurally
+    cannot avoid naming denied terms: this gate's own self-test cases ARE the
+    proof that it fires, and the measurement script counts those exact terms.
+    This file is not one of them, because nothing here requires it to name
+    them -- and the first version of this docstring did, and was caught.
+
+    Fails CLOSED: an unreadable or invalid policy is a [FAIL], never a skip.
+    A naming gate that quietly stops naming is worse than no gate, because
+    every commit after it reports clean.
+    """
+    root = Path(__file__).resolve().parents[1]
+    try:
+        policy = load_naming_policy(root)
+        added = naming_added_lines(
+            root, ["--cached", "--diff-filter=ACMR", "--"]
+        )
+    except NamingPolicyError as exc:
+        return [f"[FAIL] naming policy: BLOCKED: {exc}"]
+    fails = []
+    for rel_path, lines in sorted(added.items()):
+        if not naming_in_scope(rel_path, policy):
+            continue
+        for severity, _, _, message in naming_findings_for_lines(rel_path, lines, policy):
+            if severity == "FAIL":
+                fails.append(f"[FAIL] {message}")
+    return fails
+
+
 def main() -> int:
     args = sys.argv[1:]
     staged_mode = args == ["--staged"]
@@ -135,6 +225,9 @@ def main() -> int:
     all_fails = []
     for f in files:
         all_fails.extend(check(f, skip_content=f in ws_only))
+    all_fails.extend(handoff_scope_failures(files, staged_mode))
+    if staged_mode:
+        all_fails.extend(naming_failures())
     if all_fails:
         print("rules_check: FAILED -- commit blocked (see AGENTS.md / CLAUDE.md)", file=sys.stderr)
         for line in all_fails:

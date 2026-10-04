@@ -38,29 +38,12 @@ class WifiAwareTransport(
 ) {
 
     companion object {
-        const val TLV_TYPE_PORT: Byte = 0x01
         private const val SERVICE_NAME = "scmessenger"
         private const val AWARE_PORT = 8765
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val LOOPBACK_ADDRESS = "127.0.0.1"
 
-        fun encodePortTlv(port: Int): ByteArray {
-            return byteArrayOf(TLV_TYPE_PORT, 2, ((port shr 8) and 0xff).toByte(), (port and 0xff).toByte())
-        }
 
-        fun decodePortTlv(serviceInfo: ByteArray): Int? {
-            var i = 0
-            while (i + 1 < serviceInfo.size) {
-                val tlvType = serviceInfo[i]
-                val tlvLen = serviceInfo[i + 1].toInt() and 0xff
-                if (i + 2 + tlvLen > serviceInfo.size) break
-                if (tlvType == TLV_TYPE_PORT && tlvLen == 2) {
-                    return ((serviceInfo[i + 2].toInt() and 0xff) shl 8) or (serviceInfo[i + 3].toInt() and 0xff)
-                }
-                i += 2 + tlvLen
-            }
-            return null
-        }
     }
 
     private val wifiAwareManager: WifiAwareManager? =

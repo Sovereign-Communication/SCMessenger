@@ -1,5 +1,15 @@
 # Ledger Sharing -- Android Node Missing Fleet Nodes iOS Sees
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN -- root cause ranked by audit; awaiting operator decision on
 disclosure policy (security trade-off, AGENTS.md rule 9)
 Audit: HANDOFF/review/LEDGER_VISIBILITY_AUDIT_QWENPAID_2026-08-05.md

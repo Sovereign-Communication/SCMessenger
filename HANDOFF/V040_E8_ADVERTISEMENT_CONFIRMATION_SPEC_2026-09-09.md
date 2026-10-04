@@ -1,5 +1,15 @@
 # E8 — advertisement-confirmation evidence spec (W5 closure)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Written by the CTO seat, 2026-09-09T03:05Z, per
 `HANDOFF/V040_CTO_NEXTRUN_PACKAGE_2026-09-09.md` entry gate E8. This file is
 normative for every future checkpoint that claims a node is BLE-READY. It

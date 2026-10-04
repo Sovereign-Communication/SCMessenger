@@ -1,9 +1,58 @@
 # CEO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
-Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CEO command added)
+Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
-**Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-09-30, Codex takeover audit) =====
+
+The September 29 Codex handoff is a record, not authorization. Its section 0
+wins over older sections. Audit each claimed PR, CI, review, fleet, and release
+status against fresh evidence before accepting a CTO verdict. The September 21
+Freebuff and earlier resume points below are historical snapshots.
+
+- At checkout creation, the isolated takeover worktree was at
+  `10f5642ea94cb6398f72ee60d3703aed26e9428d` (#420); the orchestrator
+  then verified live `main` at that SHA. This is a historical takeover-start
+  snapshot. The September 29 handoff records the operator's v0.4.0/v0.5.0
+  unification and section 6
+  merge train; preserve its order and recheck the remote before each action.
+- PR #422 merged into `main` at 2026-09-30T01:17:49Z; the resulting `main`
+  commit is `064deb2d72cef8b293e182927ffa5119b6f2ae6f`.
+- PR #421's user-requested cap-16 head is
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`. At approximately
+  2026-09-30T01:21Z it remained OPEN, with no reviews and new CI queued or
+  in progress. The physical cell test and independent Rule-8/A2 review of
+  that exact head remain pending; do not accept a merge or DONE without
+  fresh exact-head scope, check, and review evidence.
+- The operator's September 29 direction is CI-only verification; no local
+  builds. No release, live three-node parity, or BLE PASS follows from this
+  state update. Re-derive Windows, AWS cloud node, and Pixel state and inspect
+  the recorded phone evidence before any operational conclusion.
+- Claude has stood down according to the September 29 handoff. The primary
+  checkout has unowned WIP; audit and takeover work must preserve it.
+
+# ===== END RESUME 2026-09-30 =====
+
+## Harness-side audit note (2026-09-22, append-only)
+
+- An Antigravity session on the Harness repo (conversation a4439ee2) was audited from its
+  decoded trajectory: every git/PR operation stayed inside the Harness worktree family; no
+  SCMessenger files were touched (Harness CEO_STATE, 2026-09-22 15:30 HST).
+- Harness PRs #66–#70 merged with CI green; Harness `main` `412f7e1` green. Direct STATUS pushes
+  that had left Harness `main` red are now forbidden there (Harness AGENTS.md rule 7).
+- Items to watch when SCMessenger refreshes `vendor/sovereign-harness`: paid failover under
+  free tier (harness #69), `ledger verify` exit code (harness #70), Jev bar output shape (harness #67).
+- Audit status for SCMessenger claims: UNCHANGED — this note adds no SCMessenger verdicts.
 
 ## Role
 

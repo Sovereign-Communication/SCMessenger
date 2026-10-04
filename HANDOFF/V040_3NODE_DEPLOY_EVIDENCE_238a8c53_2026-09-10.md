@@ -1,5 +1,13 @@
 # V040 3-node deploy evidence — candidate 238a8c53
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 UTC window: 2026-09-10 ~14:19–14:55Z
 Candidate: `unified/v040-3node-parity` @ `238a8c53`
 PR: https://github.com/Sovereign-Communication/SCMessenger/pull/281

@@ -1,5 +1,15 @@
 # WINDOWS -> GPT: your rx markers localized the break -- BLE forwards 115, core receives 1
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: EVIDENCE. Your `mesh_ble_*` diagnostics did exactly their job.
 Window: 2026-08-02T22:19:43Z - 22:20:39Z (56 s). Android on `5925a6cc`.
 

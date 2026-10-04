@@ -1,5 +1,13 @@
 # TASK: Verify Ledger Exchange is Working Properly
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR TESTING
 Owner: Opus (testing on instance)
 Severity: CRITICAL - Ledger sharing is the core peer discovery mechanism

@@ -1,5 +1,13 @@
 # PR #139 GPT-MAC runtime status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 RESULT: BLOCKED
 
 HEAD: `1cdbbae6ae0934bd5acab95bb866108a2d05c54e` (live GitHub PR #139 head,

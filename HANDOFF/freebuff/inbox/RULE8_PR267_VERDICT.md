@@ -1,5 +1,15 @@
 # Rule-8 Adversarial Review -- PR #267 (V040-T13 F-DHT / F1 / F2)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 - **Reviewer role:** independent Rule-8 reviewer. Did not author the change, did
   not author the ruling that specifies it.
 - **Tree reviewed:** `origin/freebuff/v040-t13-fdht-gate` @ `44eeb1cd`

@@ -1,5 +1,15 @@
 # V040-T4 -- D6 is unprovable: the routing engine is never told a connection happened
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN -- premise contradicted on main (checked 2026-09-19); see the
 premise check at the bottom. The D6 exit-criterion sign-off is the operator's,
 not this lane's, so the status is left OPEN rather than declared done.

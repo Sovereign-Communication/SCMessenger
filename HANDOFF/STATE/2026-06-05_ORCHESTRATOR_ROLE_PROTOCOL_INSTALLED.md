@@ -1,5 +1,13 @@
 # Post-mortem — Overseer Role Protocol Installed
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-06-05
 **Author:** doc-author (subagent dispatched by Lucas)
 **Ticket:** `[META]_ORCHESTRATOR_ROLE_PROTOCOL_v1`

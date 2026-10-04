@@ -1,5 +1,15 @@
 # CO-B-002 / CO-G-001 / CO-G-002 / CO-G-003 — docs dispositions (2026-09-20)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN — orchestrator package (this branch)
 Source: CANONICAL_OUTLIER_AUDIT_2026-09-19 (main via #336)
 

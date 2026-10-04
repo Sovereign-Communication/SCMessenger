@@ -1,5 +1,13 @@
 # Orchestration Token Strategy: The Delegation Dial
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- consolidates and supersedes ORCHESTRATOR_TOKEN_AUDIT_AND_REDESIGN.md,
 ORCHESTRATION_TOKEN_REDUCTION_PLAN.md, and ORCHESTRATION_IMPLEMENTATION_GUIDE.md
 (all three kept for history, banners added, do not use them for reference).

@@ -1,5 +1,15 @@
 # PR Merge / Unify Plan -- 2026-08-04
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status 2026-08-05: Step 1 DONE -- PR #136 merged green at 68ef6256; the
 post-merge main CI failure (Docker Integration Suite: release-signing gate
 false-positive on gradle test tasks) fixed by b8500a42 + 50d20011. Step 2

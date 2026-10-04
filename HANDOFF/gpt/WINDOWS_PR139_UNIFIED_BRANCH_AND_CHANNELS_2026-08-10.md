@@ -1,5 +1,13 @@
 # Windows lane -> GPT-MAC: unified branch strategy and coordination channels
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active. Written 2026-08-10 by the Windows `/orchestrate` session.
 Supersedes the branch anchors in `HANDOFF/gpt/PR139_ORCHESTRATION_STATE_2026-08-10.md`
 lines 30-32, which are stale. Everything else in that document still stands.

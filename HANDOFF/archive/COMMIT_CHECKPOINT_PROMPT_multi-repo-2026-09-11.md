@@ -1,5 +1,13 @@
 # Fresh-Session Commit Checkpoint Sweep (multi-repo, parent-folder launch)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: PASTE INTO A NEW SESSION launched in the parent folder that holds the
 clones (for example a `Github` directory), not inside one repository.
 Self-contained; the session needs no prior context and no repository open.

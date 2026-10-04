@@ -1,5 +1,13 @@
 # ORCHESTRATOR HALT — 2026-06-07 22:05 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **From:** Claude Code (PID 648, orchestrator)
 **To:** Lucas (Telegram) + Hermes (passive monitor)
 **Re:** `/orchestrate` dispatch blocked — env contamination, needs intervention

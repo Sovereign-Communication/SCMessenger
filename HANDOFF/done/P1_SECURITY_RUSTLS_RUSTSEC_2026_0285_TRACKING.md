@@ -1,6 +1,14 @@
 # P1 - Track and remediate rustls RUSTSEC-2026-0285 (waived in deny.toml, untracked)
 
-Status: Open
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+Status: Closed -- waiver removed, guard re-armed (2026-09-25)
 Priority: P1 (MUST be resolved before the first PUBLIC release; not a v0.4.0
 tag blocker -- see scope note)
 Filed: 2026-09-14 by the Freebuff BoD lane, passive audit of PR #288
@@ -61,11 +69,48 @@ post-dates the libp2p pin.
    the CVSS, and the mitigation posture in the release body, and re-scope
    this ticket with an operator ruling.
 
+## Resolution (2026-09-25) -- remediation path step 1, no-op removal
+
+The waiver outlived its reason. The advisory is patched in rustls >= 0.23.45
+and the lockfile already resolves the patched version, so step 1 of the
+remediation path applies verbatim ("the waiver can be REMOVED outright and this
+ticket closed as no-op") and steps 2-3 (lockfile bump) were not needed.
+
+Evidence (all commands run in the merge-train worktree on this branch):
+
+```text
+$ grep -A 1 '^name = "rustls"' Cargo.lock
+name = "rustls"
+version = "0.23.45"
+$ grep -c 'name = "rustls"' Cargo.lock
+1
+$ grep -c 'RUSTSEC-2026-0285' deny.toml     # after the edit
+0
+```
+
+- `Cargo.lock` carries exactly ONE rustls entry, 0.23.45, which is the patched
+  release named by the advisory (patched: >= 0.23.45). No second, unpatched
+  rustls is reachable through any `[patch.crates-io]` entry: main's
+  `Cargo.toml` has no `[patch]` section (the D9 libp2p-swarm vendor patch lives
+  on the #372 branch, which does not pin or vendor rustls).
+- The advisory check runs in CI in two places, and both are the verifiers for
+  this change: `.github/workflows/ci.yml` (Lint job, `cargo install cargo-deny
+  --version 0.20.2 --locked` then `cargo deny check`) and
+  `.github/workflows/security.yml` (`cargo deny check advisories`). Green runs
+  on this branch's head are recorded in the PR.
+- `cargo deny check` was NOT run on this host: `python scripts/disk_budget.py`
+  blocks local cargo builds, and CI is the only builder. The Lint job on the
+  branch head is the verification, per the plan.
+
 ## Acceptance criteria
 
-- [ ] deny.toml no longer ignores RUSTSEC-2026-0285, OR the ticket carries a
+- [x] deny.toml no longer ignores RUSTSEC-2026-0285, OR the ticket carries a
       recorded operator ruling for why it must.
-- [ ] `rg 'RUSTSEC-2026-0285' deny.toml` is empty and `cargo deny check`
-      passes, with resolved rustls >= 0.23.45 evidenced in Cargo.lock.
-- [ ] Full gate suite green on the Windows host after the bump.
-- [ ] This file moved to HANDOFF/done/ with evidence headers.
+- [x] `grep 'RUSTSEC-2026-0285' deny.toml` is empty, and `cargo deny check`
+      passes with resolved rustls >= 0.23.45 evidenced in Cargo.lock (the
+      `cargo deny check` verdict is the CI Lint job on the branch head; the
+      Cargo.lock evidence is above).
+- [ ] Full gate suite green on the Windows host after the bump. NOT APPLICABLE
+      and NOT CLAIMED: no bump was made, and this host cannot run cargo (disk
+      guard). The equivalent gate is the full CI matrix on the branch head.
+- [x] This file moved to HANDOFF/done/ with evidence headers.

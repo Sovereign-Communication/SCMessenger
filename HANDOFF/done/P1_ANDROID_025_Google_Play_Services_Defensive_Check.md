@@ -1,5 +1,15 @@
 # P1_ANDROID_025: Google Play Services Defensive Check for QR Scanning
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Objective
 
 Add a defensive check for Google Play Services availability before using ML Kit's barcode scanner. On devices without GMS (Huawei, custom ROMs), the app currently crashes with a `GoogleApiAvailability` exception when the user taps "Scan QR Code".

@@ -1,5 +1,13 @@
 # 3-node parity deploy runbook — unified candidate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Candidate SHA: `3ccf0ec2b2091b556e68caa44c3e97797094cdf2`
 Branch: `unified/v040-3node-parity`
 

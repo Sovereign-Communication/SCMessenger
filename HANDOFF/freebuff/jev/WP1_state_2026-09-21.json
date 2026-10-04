@@ -1,0 +1,35 @@
+{
+  "wp": "WP1",
+  "ticket": "HANDOFF/freebuff/queue/V050_WP1_IDENTITY_UNIFICATION_2026-09-21.md",
+  "instruction": "WP1 identity unification residuals: (WP1.1) a PeerId or a hash must never become an encryption recipient -- contact recovery must bind the DERIVED public key or refuse the encrypt path; (WP1.2) one write helper for contact identity, so no production call site writes a peer id into a contact's public_key; (WP1.3) every send surface resolves hex and legacy base58 through ONE helper to a single canonical identity; (WP1.4) CRYPTO-01 regression test that a spoofed payload sender_id can never become the delegate's authenticated sender. Tests and greps first; production edits only where a gap is proven on current main.",
+  "files_touched": [
+    "core/src/iron_core.rs (WP1.1 send-path hash-confusion guard made reachable + the wp1_ regression battery; +370/-6)",
+    "HANDOFF/freebuff/inbox/WP1_FINDINGS_CLI_DEAD_TESTS_AND_HASH_GUARD_2026-09-21.md (findings note)"
+  ],
+  "acceptance": [
+    "WP1.1: recovery with an unknown peer yields the DERIVED key or the contact cannot be used to encrypt; a PeerId-shaped or hash-shaped recipient is refused, with a real-key control send so the refusal cannot pass vacuously",
+    "WP1.1 + restart: real emergency_recover() path binds the derived key (never the peer id) and survives a restart over the same storage",
+    "WP1.3: canonical hex and legacy base58 resolve to one PeerId; a nickname resolves to the contact's hex key; that key is asserted genuinely encryptable",
+    "WP1.4: the delegate receives the AUTHENTICATED envelope public key plus the canonical identity derived from it, never the plaintext payload sender_id",
+    "WP1.2 grep: no production call site stores a peer id as a contact public key"
+  ],
+  "evidence": {
+    "diff_stat": "$ git diff --stat origin/main...HEAD\n core/src/iron_core.rs | 376 ++++++++++++++++++++++++++++-\n HANDOFF/freebuff/inbox/WP1_FINDINGS_CLI_DEAD_TESTS_AND_HASH_GUARD_2026-09-21.md | 99 ++++++\n 2 files changed, 469 insertions(+), 6 deletions(-)",
+    "tests": "$ cargo test -p scmessenger-core --lib wp1_ --no-fail-fast --offline\nrunning 4 tests\ntest iron_core::tests::wp1_non_key_recipients_are_not_encryptable ... ok\ntest iron_core::tests::wp1_send_identifiers_resolve_to_one_peer_id ... ok\ntest iron_core::tests::wp1_delegate_receives_authenticated_sender_binding ... ok\ntest iron_core::tests::wp1_recovery_binds_derived_key_and_survives_restart ... ok\ntest result: ok. 4 passed; 0 failed; CORE_TEST_EXIT=0",
+    "full_crate": "$ cargo test -p scmessenger-core --lib -> 1491 passed; 0 failed; 5 ignored (commit 6b5b08f3 message, re-verified by CI on this PR head)",
+    "ci": "PR #352 at head 6b5b08f3: every required context SUCCESS (Lint, Rust Linting, Test ubuntu/windows/macos, Repository Hygiene, FFI Surface Contract, Android Wiring Gate, Android Debug APK, Android JVM Unit Tests, Bindings Kotlin/Swift, WASM, iOS Build, iOS Build & Simulator Test, macOS Native Tests, CodeQL, Windows CLI Artifact); zero failing checks; mergeable=MERGEABLE",
+    "grep_wp12": "$ git grep -n \"Contact::new(peer_id, peer_id)\\|Contact::new(peer_id_hex, peer_id_hex)\" origin/main -- core cli android wasm mobile\n(no output -- zero matches)",
+    "gap_closed": "Commit 6b5b08f3 makes the send path's hash-confusion guard reachable: prepare_message_internal's fast path previously accepted any value ContactManager::get() resolved, and get() falls back to the identity_id -> public_key index, so a stored contact's HASH satisfied \"known by public key\" and the guard never ran for its own input. The fast path now requires a public-key match (case-insensitive). The identity_id index is untouched for other consumers; a contact still sends by public key; the test now asserts the refusal by outcome plus a real-key control.",
+    "mechanical": "$ cargo fmt --all -- --check exit 0; $ python scripts/rules_check.py exit 0",
+    "rule8": "core/src/iron_core.rs is outside core/src/{crypto,transport,routing,privacy}; the Rule-8 path gate is not triggered by location. The change is send-path adjacent (it decides which recipient value reaches the X25519 encryptor), so a reviewer should confirm the guard semantics; WP1.4's WASM own-topic half was NOT implemented because the symbol lives in core/src/transport/swarm.rs, a Rule-8 gated path, and remains an open row."
+  },
+  "canon_rows": {
+    "canon_identity": "upheld: public-key hex stays the contact addressing key and the write format; this WP removes the paths where a peer id or a hash could be handed to the encryptor as if it were a key. No second contact-address flavor is introduced; base58 is accepted on input and resolved to hex, never stored as the addressing key.",
+    "canon_routing_feed": "untouched by this WP: no routing entry point is added or changed; the single IronCore::routing_peer_seen entry is unaffected.",
+    "instruction_matches": "WP1.1, WP1.3, WP1.4 and the WP1.2 grep are met with the four named tests and the zero-match grep above; the extra hash-confusion guard fix is an in-scope proven gap in the same send path. WP1.4's WASM own-topic half is NOT met and is recorded as an open Rule-8-gated row rather than claimed."
+  },
+  "not_claimed": [
+    "The WASM own-topic regression test is not implemented (Rule-8 gated file, needs a non-author APPROVE).",
+    "Twelve #[test] functions in cli/src/main.rs never compile or run (cargo metadata reports the bin as test=False); filed, not fixed."
+  ]
+}

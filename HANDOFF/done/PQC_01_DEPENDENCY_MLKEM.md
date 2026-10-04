@@ -1,5 +1,13 @@
 # TASK: PQC-01  Add ML-KEM-768 dependency and smoke-test module
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: nothing. Wave 0. Min tier: Haiku.
 
 ## Chosen Version and Justification

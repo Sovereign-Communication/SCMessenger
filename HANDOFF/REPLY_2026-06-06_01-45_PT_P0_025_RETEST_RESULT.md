@@ -1,5 +1,13 @@
 # P0_025 Live Retest Result — 2026-06-06
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Verdict
 **PASS** — full bidirectional mDNS discovery between Android (Pixel 6a) and Windows CLI confirmed. P0_ANDROID_025 listener-collision crash is FIXED and verified in production-equivalent conditions.
 

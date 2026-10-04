@@ -1,5 +1,15 @@
 # TASK: F1 — Ledger Convergence Test Fix (Multiaddr Dial Issue)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: READY FOR QWEN DELEGATION
 Owner: Qwen (technical fix)
 Scope: F0 delivery-truth (critical for A3 landing)

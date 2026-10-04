@@ -1,5 +1,15 @@
 # V040 REVIEW DISPATCH -- #272 re-review at triage head fc0f5ae0 (qwen free lane)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: DISPATCHED 2026-09-02 (re-review after triage commit fc0f5ae0)
 Target: PR #272 cto/v040-candidate-2026-09-02 @ fc0f5ae0 (original 7-file pass + fix commit: 3 files +140/-10)
 Model: qwen3.8-2.4t-a95b (ledger-confirmed 100%, 1M context; first review of this PR used the same model and returned REQUEST_CHANGES with 6 findings, 2 HIGH)

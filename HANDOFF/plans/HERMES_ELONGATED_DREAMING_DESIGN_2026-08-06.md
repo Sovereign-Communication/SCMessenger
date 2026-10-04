@@ -1,5 +1,15 @@
 # Plan: Hermes Memory System — "Elongated Dreaming" for Distilled Lessons Learned
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 > **Status:** Proposed
 > **Date:** 2026-08-06
 > **Author:** Hermes (acting orchestrator)

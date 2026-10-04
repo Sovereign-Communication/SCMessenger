@@ -1,5 +1,13 @@
 # B1 DNS-name-first hardening (FARM AD-2, IP-flip mandate) - attempt 1 held
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: IMPLEMENTED + reviewed, NOT committed. Working tree reverted clean;
 attempt preserved as a patch for a second cycle. `[AUDIT-GATE]` (transport/).
 

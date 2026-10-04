@@ -1,5 +1,15 @@
 # SEC-03 storage migration — branch brief (safe-ahead)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: OPEN — authorized parallel exploration only (operator ruling 2026-09-20 option b)
 Priority: Prepped; not Wave 1 paste
 Lane: Native/orchestrator design first; Freebuff may implement **after** a chosen engine + plan on file

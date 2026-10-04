@@ -1,5 +1,13 @@
 # 040-S3 RELEASE MECHANICS (workflow prep agent, verified file:line)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 All evidence gathered. Here is the report.
 
 ---

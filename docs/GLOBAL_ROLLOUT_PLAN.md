@@ -2,6 +2,15 @@
 
 Last updated: **2026-02-23**
 
+> **Doctrine correction (2026-09-21, canonical outlier audit CO-E-002).**
+> Decision 8 below ("third-party relays/bootstrap nodes are both valid")
+> predates the ledger-sharing pivot and contradicts `AGENTS.md`: there is no
+> dedicated relay-server tier (every node relays), and bootstrap address lists
+> are deprecated in favour of **ledger-sharing-first discovery** (V050-B1/B2).
+> Read decision 8 as: infrastructure is community-operated and any node may
+> serve discovery and store-and-forward custody, with no privileged tier.
+> Authoritative statements: `docs/BOOTSTRAP.md`, `docs/BOOTSTRAP_GOVERNANCE.md`.
+
 This plan defines a full-repository documentation pass and release rollout strategy for one unified Android+iOS+Web product.
 
 ## 1) Locked Product Decisions
@@ -18,7 +27,7 @@ These decisions are now canonical unless explicitly superseded:
 5. Privacy controls: **parity-first** across Android, iOS, and Web for all privacy toggles.
 6. Web/WASM status: currently thinner than mobile and must be promoted to parity before global GA.
 7. Rollout model: **global organic growth**, no region-targeted gate sequencing.
-8. Infrastructure model: **community-operated** (self-hosted and third-party relays/bootstrap nodes are both valid).
+8. Infrastructure model: **community-operated** (self-hosted and third-party nodes are both valid; there is no privileged relay-server tier -- see the doctrine correction above).
 9. Alpha language scope: **English-only**, with i18n scaffold kept as backlog.
 10. First-run UX: **mandatory consent gate** describing security/privacy boundaries.
 11. Storage: **policy-bounded retention** (no unbounded local growth).

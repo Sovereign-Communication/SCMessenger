@@ -1,5 +1,15 @@
 # GPT HANDOFF -- minimum input needed to start the seeding review
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: READY FOR ORCHESTRATOR ACTION
 Created: 2026-07-28
 Requester: GPT-5.6 Sol Codex desktop session on the operator's MacBook

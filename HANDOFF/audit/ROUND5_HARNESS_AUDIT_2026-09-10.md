@@ -1,5 +1,13 @@
 ﻿# SCMessenger Round-5 Harness Audit + Handoff Addendum
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-10
 **Harness baseline:** main @ PR #4 + PR #5 + PR #6 merged (`95bfee8`)
 **Method:** `harness verify --claims-file --source-file --converge` on the 19

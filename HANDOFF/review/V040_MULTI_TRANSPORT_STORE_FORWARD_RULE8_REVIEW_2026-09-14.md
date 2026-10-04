@@ -1,5 +1,13 @@
 # Rule 8 Adversarial Security Review: Multi-Transport Store-and-Forward Cooperative Mesh
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-09-14
 **Review Type:** Rule 8 Adversarial Review (Pre-merge Perimeter Gate)
 **Target Branch:** `feat/v040-multi-transport-store-forward` -> `main`

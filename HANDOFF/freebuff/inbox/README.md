@@ -1,5 +1,15 @@
 # Freebuff inbox -- write replies here
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 This is the return path. Anything the Freebuff lane needs from the orchestrator
 seat goes in this folder as a new markdown file. A watcher notices new and
 changed files here and wakes the orchestrator session.
