@@ -1,5 +1,18 @@
 # AND-06 -- the Kotlin collapse is done; the UniFFI cutover has a prerequisite nobody has run
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+It is an SCMessenger-side inbox report from this lane; the external tooling it
+names is recorded in prose only, and no foreign-repository finding, status or
+remediation is carried here.
+
 Status: OPEN -- evidence + recommended design, no code written
 Filed: 2026-09-21 by the Freebuff lane
 Tickets: `HANDOFF/freebuff/queue/V040_T_AND06_KOTLIN_COLLAPSE.md`,
