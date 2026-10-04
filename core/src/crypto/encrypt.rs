@@ -1015,6 +1015,7 @@ pub fn verify_envelope_v2(signed_envelope: &crate::message::SignedEnvelopeV2) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::RatchetSessionManager;
     use crate::observability::{AuditEventType, AuditLog};
     use ed25519_dalek::SigningKey;
 
