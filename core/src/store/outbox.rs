@@ -860,8 +860,7 @@ impl Outbox {
                 let mut keys_to_remove = Vec::new();
 
                 for key in &keys {
-                    let prefix_str =
-                        format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), key);
+                    let prefix_str = format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), key);
                     if let Ok(results) = db.scan_prefix(prefix_str.as_bytes()) {
                         for (key, value) in results {
                             if let Ok(msg) = deserialize_queued_message(&value) {
@@ -1088,8 +1087,7 @@ impl Outbox {
                     }
                 };
 
-                let prefix_str =
-                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), queue_key);
+                let prefix_str = format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), queue_key);
                 let mut messages = Vec::new();
                 let mut keys_to_remove = Vec::new();
 
