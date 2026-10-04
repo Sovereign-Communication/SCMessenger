@@ -27,13 +27,6 @@ ENV PATH=$JAVA_HOME/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:$PATH"
 
-# Add Android targets for Rust
-RUN rustup target add \
-    aarch64-linux-android \
-    armv7-linux-androideabi \
-    i686-linux-android \
-    x86_64-linux-android
-
 # Install cargo-ndk for Android builds
 RUN cargo install cargo-ndk
 
@@ -83,6 +76,33 @@ WORKDIR /workspace
 # Copy workspace files
 COPY . .
 
+# Add the Android Rust targets -- AFTER the COPY, and from /workspace.
+#
+# rustup honours rust-toolchain.toml from the directory that contains it, so
+# the toolchain this image actually compiles with is the repository's PINNED
+# one (1.99.0), not the `stable` that the rustup installer above set as
+# default. Adding the targets before this COPY put them in `stable`, where
+# nothing ever looks: Gradle runs `cargo ndk --target aarch64-linux-android`
+# from /workspace, under the pinned toolchain, which had no Android std.
+# That is how the image built successfully and the job still failed:
+#   error[E0463]: can't find crate for `core`
+#     = note: the `aarch64-linux-android` target may not be installed
+# The compiler's advice (`rustup target add aarch64-linux-android`) is
+# misleading here: run before the COPY it appears to succeed and changes
+# nothing.
+#
+# Doing it after the COPY means rustup resolves whatever the pin says, so a
+# future channel bump cannot silently reintroduce this. This regressed in
+# 87932c08 (the toolchain pin); the image had not been correct since.
+RUN rustup target add \
+    aarch64-linux-android \
+    armv7-linux-androideabi \
+    i686-linux-android \
+    x86_64-linux-android
+
+# Fail the BUILD, not a 90-minute test run, if the pinned toolchain cannot
+# provide these targets.
+RUN rustup target list --installed | grep -q aarch64-linux-android
 # Set environment for Android builds
 ENV RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 
