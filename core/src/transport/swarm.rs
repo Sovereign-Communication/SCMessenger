@@ -3735,6 +3735,50 @@ fn is_ghost_peer_topic(
     }
 }
 
+/// WP3: the ONE auto-subscribe decision for a peer topic another node just
+/// subscribed to.
+///
+/// Both gossip loops -- the native one and the wasm32 one -- used to spell this
+/// policy out inline, so the same rule existed twice and only the native copy
+/// could be reached by a test. A `#[cfg(target_arch = "wasm32")]` body is not
+/// compiled into a native `cargo test`, so the wasm path's decision was
+/// unverifiable from a native run: it could drop our own identity topic and no
+/// native test would notice, which is the exact shape of the
+/// receipts-never-arrive defect this own-topic exemption was written for.
+///
+/// Folding the policy into one function does not by itself prove the wasm loop
+/// calls it -- that is a call-site question, checked by grep against both loops
+/// and by the wasm CI lane compiling the call -- but it does put the decision
+/// itself under test on every target.
+#[derive(Debug, PartialEq, Eq)]
+enum TopicSubscribeDecision {
+    /// GHOST-IDENTITY-001: a retired-identity peer topic must not be amplified.
+    SkipGhost,
+    /// Nothing to do; the topic is already in the subscription set.
+    SkipAlreadySubscribed,
+    /// Subscribe and record it in the subscription set.
+    Subscribe,
+}
+
+/// Decide what to do with a topic another node just subscribed to.
+///
+/// Takes `already_subscribed` as a value rather than the set itself, so the
+/// decision is a pure function of its arguments and can be asserted directly.
+fn topic_subscribe_decision(
+    topic_str: &str,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    own_peer_key_hex: Option<&str>,
+    already_subscribed: bool,
+) -> TopicSubscribeDecision {
+    if is_ghost_peer_topic(topic_str, core_handle, own_peer_key_hex) {
+        return TopicSubscribeDecision::SkipGhost;
+    }
+    if already_subscribed {
+        return TopicSubscribeDecision::SkipAlreadySubscribed;
+    }
+    TopicSubscribeDecision::Subscribe
+}
+
 /// Build and start the libp2p swarm, returning a handle for communication.
 ///
 /// This spawns a tokio task that runs the swarm event loop.
@@ -6035,22 +6079,29 @@ pub async fn start_swarm_with_config(
                                 // GHOST-IDENTITY-001: NEVER auto-negotiate retired-identity peer
                                 // topics (`/scmessenger/peer/<old-pk>/v1`) — that is the amplifier
                                 // that made PK:577fd171 reappear mesh-wide after Pixel reinstall.
-                                if is_ghost_peer_topic(
+                                // WP3: the policy lives in `topic_subscribe_decision`, shared with
+                                // the wasm loop, so the two cannot drift.
+                                match topic_subscribe_decision(
                                     &topic_str,
                                     &core_handle,
                                     own_peer_key_hex.as_deref(),
+                                    subscribed_topics.contains(&topic_str),
                                 ) {
-                                    tracing::info!(
-                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
-                                        topic_str
-                                    );
-                                } else if !subscribed_topics.contains(&topic_str) {
-                                    tracing::info!("Auto-subscribing to discovered topic: {}", topic_str);
-                                    let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
-                                    if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&ident_topic) {
-                                        tracing::warn!("Failed to auto-subscribe to {}: {}", topic_str, e);
-                                    } else {
-                                        subscribed_topics.insert(topic_str.clone());
+                                    TopicSubscribeDecision::SkipGhost => {
+                                        tracing::info!(
+                                            "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic: {}",
+                                            topic_str
+                                        );
+                                    }
+                                    TopicSubscribeDecision::SkipAlreadySubscribed => {}
+                                    TopicSubscribeDecision::Subscribe => {
+                                        tracing::info!("Auto-subscribing to discovered topic: {}", topic_str);
+                                        let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
+                                        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&ident_topic) {
+                                            tracing::warn!("Failed to auto-subscribe to {}: {}", topic_str, e);
+                                        } else {
+                                            subscribed_topics.insert(topic_str.clone());
+                                        }
                                     }
                                 }
 
@@ -9704,19 +9755,26 @@ pub async fn start_swarm_with_config(
                                 gossipsub::Event::Subscribed { peer_id, topic }
                             )) => {
                                 let topic_str = topic.to_string();
-                                if is_ghost_peer_topic(
+                                // WP3: the same decision function the native loop uses, so
+                                // the own-topic exemption cannot drift between the two.
+                                match topic_subscribe_decision(
                                     &topic_str,
                                     &core_handle,
                                     own_peer_key_hex.as_deref(),
+                                    subscribed_topics.contains(&topic_str),
                                 ) {
-                                    tracing::info!(
-                                        "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic on wasm: {}",
-                                        topic_str
-                                    );
-                                } else if !subscribed_topics.contains(&topic_str) {
-                                    let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
-                                    if swarm.behaviour_mut().gossipsub.subscribe(&ident_topic).is_ok() {
-                                        subscribed_topics.insert(topic_str.clone());
+                                    TopicSubscribeDecision::SkipGhost => {
+                                        tracing::info!(
+                                            "GHOST-IDENTITY-001 skip auto-subscribe ghost peer topic on wasm: {}",
+                                            topic_str
+                                        );
+                                    }
+                                    TopicSubscribeDecision::SkipAlreadySubscribed => {}
+                                    TopicSubscribeDecision::Subscribe => {
+                                        let ident_topic = libp2p::gossipsub::IdentTopic::new(topic_str.clone());
+                                        if swarm.behaviour_mut().gossipsub.subscribe(&ident_topic).is_ok() {
+                                            subscribed_topics.insert(topic_str.clone());
+                                        }
                                     }
                                 }
                                 let _ = event_tx.send(SwarmEvent2::TopicDiscovered {
@@ -12186,6 +12244,105 @@ mod relay_per_peer_budget_tests {
             ),
             RelayAdmission::PerPeerBudgetExhausted,
             "the per-peer share beats the inflight cap"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // WP3: inbound completeness -- own topic, ghost guard, one shared decision
+    // -----------------------------------------------------------------------
+
+    /// The own-identity topic shape: `/scmessenger/peer/<64 hex>/v1`.
+    fn peer_topic(peer_key: &str) -> String {
+        format!("/scmessenger/peer/{}/v1", peer_key)
+    }
+
+    #[test]
+    fn wp3_own_topic_is_never_a_ghost_even_without_a_ledger() {
+        // The receipts-never-arrive defect: a node does not dial itself, so the
+        // ledger can never prove its own key, and every node classified its own
+        // topic as a ghost, refused to subscribe, and dropped every message
+        // addressed to it. The exemption must hold with NO core handle at all --
+        // the strongest form, where there is no ledger to consult and the answer
+        // must still be "not a ghost".
+        let own = "a".repeat(64);
+        let topic = peer_topic(&own);
+        assert!(
+            !super::is_ghost_peer_topic(&topic, &None, Some(own.as_str())),
+            "our own identity topic must not be classified as a ghost"
+        );
+        // This is also the removal-regression for the wasm loop. Both loops now
+        // decide through `topic_subscribe_decision`; delete the own-topic
+        // exemption and this assertion goes red on every target.
+        assert_eq!(
+            super::topic_subscribe_decision(&topic, &None, Some(own.as_str()), false),
+            super::TopicSubscribeDecision::Subscribe,
+            "our own identity topic must be auto-subscribed, never skipped"
+        );
+    }
+
+    #[test]
+    fn wp3_own_topic_exemption_ignores_hex_case() {
+        let own_upper = "ABCDEF0123456789".repeat(4);
+        let topic = peer_topic(&own_upper.to_lowercase());
+        assert!(
+            !super::is_ghost_peer_topic(&topic, &None, Some(own_upper.as_str())),
+            "own topic must match regardless of hex case"
+        );
+        assert_eq!(
+            super::topic_subscribe_decision(&topic, &None, Some(own_upper.as_str()), false),
+            super::TopicSubscribeDecision::Subscribe
+        );
+    }
+
+    #[test]
+    fn wp3_self_certifying_peer_id_topic_is_not_a_ghost() {
+        // Only the 64-hex identity-confusion shape is a ghost candidate;
+        // libp2p PeerIds are self-certifying and must auto-negotiate.
+        let topic = "/scmessenger/peer/12D3KooWD6vZQrUqkYQLpM9EGKUyNWGZQK3i5DHYkTQYq6bC1NjJbP1X/v1";
+        assert!(!super::is_ghost_peer_topic(topic, &None, None));
+        assert_eq!(
+            super::topic_subscribe_decision(topic, &None, None, false),
+            super::TopicSubscribeDecision::Subscribe
+        );
+    }
+
+    #[test]
+    fn wp3_mesh_wide_topics_are_never_ghosts() {
+        for topic in ["sc-mesh", "sc-lobby", "/scmessenger/group/abc/v1"] {
+            assert!(
+                !super::is_ghost_peer_topic(topic, &None, None),
+                "{topic} must auto-negotiate"
+            );
+            assert_eq!(
+                super::topic_subscribe_decision(topic, &None, None, false),
+                super::TopicSubscribeDecision::Subscribe,
+                "{topic} must be subscribed to"
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn wp3_unproven_hex_peer_topic_fails_closed_on_native() {
+        // No ledger to consult: an unproven 64-hex peer topic is a ghost on
+        // native -- the GHOST-IDENTITY-001 amplifier guard.
+        let other = "b".repeat(64);
+        let topic = peer_topic(&other);
+        assert!(super::is_ghost_peer_topic(&topic, &None, None));
+        assert_eq!(
+            super::topic_subscribe_decision(&topic, &None, None, false),
+            super::TopicSubscribeDecision::SkipGhost,
+            "an unproven hex peer topic must not be auto-subscribed on native"
+        );
+    }
+
+    #[test]
+    fn wp3_already_subscribed_topic_is_not_re_subscribed() {
+        let own = "c".repeat(64);
+        let topic = peer_topic(&own);
+        assert_eq!(
+            super::topic_subscribe_decision(&topic, &None, Some(own.as_str()), true),
+            super::TopicSubscribeDecision::SkipAlreadySubscribed
         );
     }
 }
