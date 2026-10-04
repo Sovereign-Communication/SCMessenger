@@ -42,10 +42,19 @@ pub struct SendMessageRequest {
     pub message: String,
 }
 
+/// POST /api/send response envelope. Contract (docs/API_CONTRACT.md, option B):
+/// `success` means the server durably accepted responsibility for the message,
+/// NOT that it was delivered. `status` is "accepted" (delivery confirmed) or
+/// "retrying" (durably persisted, queued for retry). `error` is only ever
+/// populated alongside `success: false`; non-fatal notes on a successful
+/// response go in `warning`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageResponse {
     pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -301,6 +310,12 @@ pub async fn send_message_via_api(recipient: &str, message: &str) -> Result<()> 
     let response: SendMessageResponse = serde_json::from_slice(&body_bytes)?;
 
     if response.success {
+        // Option B: success means the server accepted responsibility, not
+        // that the message was delivered. A warning (e.g. queued for retry)
+        // is informational, not a failure.
+        if let Some(warning) = response.warning {
+            eprintln!("[WARNING] {}", warning);
+        }
         Ok(())
     } else {
         anyhow::bail!(
@@ -900,7 +915,7 @@ async fn handle_send_message(
     // the peer is nearby + swarm), so it goes first; the raw BLE write below is
     // only a last-resort fallback when the swarm dispatch itself fails.
     let ble_fallback_data = prepared.envelope_data.clone();
-    let (http_status, status, error) = match ctx
+    let (http_status, status, warning) = match ctx
         .swarm_handle
         .send_message(
             recipient.peer_id,
@@ -931,12 +946,29 @@ async fn handle_send_message(
                 Err(e) if ctx.swarm_handle.is_event_loop_alive() => (
                     StatusCode::ACCEPTED,
                     "retrying".to_string(),
+                    // Option B: success means the server durably accepted
+                    // responsibility. The message is persisted (history store
+                    // + outbox) and queued for retry, so success stays true;
+                    // the dispatch detail is a warning, never an error.
                     Some(format!("Initial dispatch failed; retrying: {}", e)),
                 ),
                 Err(e) => {
-                    return Err((
+                    // Event loop is down: nothing will retry this message.
+                    // Option B reserves success:false for rejected/unaccepted
+                    // requests, returned in the JSON envelope (not a bare
+                    // string) so all three paths share one shape.
+                    return Ok((
                         StatusCode::SERVICE_UNAVAILABLE,
-                        format!("Message was not accepted by BLE or Swarm: {}", e),
+                        AxumJson(SendMessageResponse {
+                            success: false,
+                            error: Some(format!(
+                                "Message was not accepted by BLE or Swarm: {}",
+                                e
+                            )),
+                            warning: None,
+                            message_id: Some(prepared.message_id),
+                            status: Some("rejected".to_string()),
+                        }),
                     ));
                 }
             }
@@ -946,12 +978,13 @@ async fn handle_send_message(
     Ok((
         http_status,
         AxumJson(SendMessageResponse {
-            // "accepted" means the transport confirmed delivery; "retrying"
-            // means dispatch failed and the message is only queued for retry.
-            // Reporting success:true alongside an error made the two
-            // indistinguishable to API clients.
-            success: status == "accepted",
-            error,
+            // Resolved on integrate/train-20261004 in favour of option B (#398).
+            // See the comment block above: success means the server durably
+            // accepted responsibility, and a queued-for-retry dispatch is a
+            // warning, never an error.
+            success: true,
+            error: None,
+            warning,
             message_id: Some(prepared.message_id),
             status: Some(status),
         }),
@@ -1692,7 +1725,7 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_api_recipient, ApiRecipient};
+    use super::{resolve_api_recipient, ApiRecipient, SendMessageResponse};
     use scmessenger_core::identity::keys::KeyPair;
     use scmessenger_core::store::Contact;
 
@@ -1775,5 +1808,63 @@ mod tests {
             .expect("stale contact must not poison PeerId resolution");
         assert_eq!(resolved.public_key, recipient.public_key);
         assert_eq!(resolved.peer_id, recipient.peer_id);
+    }
+
+    /// Option-B contract: a queued-for-retry response carries success:true
+    /// with the dispatch detail in `warning`, and MUST NOT contain an
+    /// `error` field (the #379 contradiction).
+    #[test]
+    fn api_send_retrying_envelope_has_warning_not_error() {
+        let resp = SendMessageResponse {
+            success: true,
+            error: None,
+            warning: Some("Initial dispatch failed; retrying: peer unreachable".to_string()),
+            message_id: Some("msg-1".to_string()),
+            status: Some("retrying".to_string()),
+        };
+        let json = serde_json::to_string(&resp).expect("envelope must serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("must be JSON");
+        assert_eq!(v["success"], true);
+        assert_eq!(v["status"], "retrying");
+        assert!(v.get("warning").is_some(), "retry detail must be in warning");
+        assert!(
+            v.get("error").is_none(),
+            "error field must be absent on success:true, got: {}",
+            json
+        );
+    }
+
+    /// Option-B contract: rejected/unaccepted requests carry success:false
+    /// with the reason in `error`, and no `warning` field.
+    #[test]
+    fn api_send_rejected_envelope_has_error_not_warning() {
+        let resp = SendMessageResponse {
+            success: false,
+            error: Some("Message was not accepted by BLE or Swarm".to_string()),
+            warning: None,
+            message_id: None,
+            status: Some("rejected".to_string()),
+        };
+        let json = serde_json::to_string(&resp).expect("envelope must serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("must be JSON");
+        assert_eq!(v["success"], false);
+        assert!(v.get("error").is_some(), "rejection reason must be in error");
+        assert!(
+            v.get("warning").is_none(),
+            "warning field must be absent on success:false, got: {}",
+            json
+        );
+    }
+
+    /// Backward compatibility: envelopes produced before the `warning`
+    /// field existed (with `"error": null`) must still deserialize.
+    #[test]
+    fn api_send_envelope_deserializes_legacy_shape() {
+        let legacy = r#"{"success":true,"error":null,"message_id":"m","status":"accepted"}"#;
+        let resp: SendMessageResponse =
+            serde_json::from_str(legacy).expect("legacy envelope must deserialize");
+        assert!(resp.success);
+        assert_eq!(resp.warning, None);
+        assert_eq!(resp.error, None);
     }
 }
