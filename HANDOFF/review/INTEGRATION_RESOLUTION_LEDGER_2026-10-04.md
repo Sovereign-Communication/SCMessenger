@@ -227,19 +227,35 @@ error[E0277]: [u8; 8]: Borrow<[u8; 4]> is not satisfied   global.rs:240
    (`global.rs:384`).
 5. `&[u8; 4]` was the **only** occurrence of `u8; 4]` anywhere in `core/src/routing/`.
 
-`git log -S` shows the definition and the call site arrived in the *same* commit,
-`c8e1ce7f6` ("resolve all 10 untriaged perimeter underscore-param violations"), so this was
-never two PRs disagreeing -- it is a typo in one commit that only surfaces once the two
-halves are in the same tree.
+**The cause is a merge-order hazard, not a typo.** An earlier draft of this entry called it a
+typo; `git log -S` and `git show <c>:file` disprove that, so the corrected history is:
+
+| commit | date | on `origin/main`? | what it does to the hint |
+|---|---|---|---|
+| `c8e1ce7f6` "resolve all 10 untriaged perimeter underscore-param violations" | 2026-08-28 | **no** | adds `is_route_pending_fresh(&[u8; 4])` **and** its `engine.rs` caller |
+| `d395e0304` "widen routing hint to 8 bytes with stable peer ordering (T13/B)" (#268) | 2026-09-03 | **yes** | widens `pending_requests`, `is_route_pending`, `make_hint` from `[u8; 4]` to `[u8; 8]` across 14 files |
+| `d7d4bb3be` (this train) | 2026-10-03 | -- | declaration corrected to `&[u8; 8]` |
+
+At `c8e1ce7f6` the 4-byte width was *correct*: `git show c8e1ce7f6~1:core/src/routing/global.rs`
+has `pending_requests: HashMap<[u8; 4], RouteRequest>` and `fn make_hint(id: u8) -> [u8; 4]`.
+That commit was internally consistent and compiled. The widening then landed on `main` six days
+later, and `d395e0304` did **not** touch `is_route_pending_fresh` -- not an oversight, because
+the function did not exist in its tree (`git show origin/main:core/src/routing/global.rs` has no
+such symbol). The break happened when the train replayed the older, pre-widening commit onto a
+base that had already moved to 8 bytes, and the merge took the stale 4-byte line as context.
 
 Resolution: `&[u8; 4]` -> `&[u8; 8]` in the declaration. One line, no behaviour change; the
-function now matches the map it reads, its sibling, its tests, and its caller.
+function now matches the map it reads, its sibling, its tests, its caller, and `origin/main`.
+The direction is the same one the widening commit chose everywhere else, which is the tie-break:
+8 bytes has 100% of the existing evidence behind it.
 
 **Rule-8 note.** `core/src/routing/` is merge-blocked, so this is flagged for a non-author
 reviewer rather than waved through. It is recorded here as a mechanical signature correction
 decided by the type of the data structure being queried, not as a routing-policy decision:
 the freshness window, the map, and every call site were already fixed, and nothing about
-route semantics changed.
+route semantics changed. The reviewer should note that the regression is a reordering
+artifact -- `main` is green today only because `c8e1ce7f6` is not on it -- so any future
+replay of that commit reintroduces the same break unless the declaration is fixed first.
 
 ## Deliberately not in this branch
 
