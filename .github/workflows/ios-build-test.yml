@@ -136,7 +136,7 @@ jobs:
 
       # --- Rust Toolchain ---
       - name: Install Rust toolchain with iOS targets
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
@@ -404,7 +404,7 @@ jobs:
 
       # --- Rust Toolchain ---
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
 
       # Same reasoning as build-ios: prunes before saving, and saves even when
       # the job fails so a timed-out run still leaves a usable cache behind.

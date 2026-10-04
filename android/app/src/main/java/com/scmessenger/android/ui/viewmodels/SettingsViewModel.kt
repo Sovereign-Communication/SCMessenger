@@ -620,24 +620,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Reset mesh settings to factory defaults.
-     */
-    fun resetSettingsToDefault() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _isLoading.value = true
-                val defaults = meshRepository.getDefaultSettings()
-                debouncedUpdateSettings(defaults)
-                Timber.i("Mesh settings reset to defaults")
-            } catch (e: Exception) {
-                _error.value = "Failed to reset settings: ${e.message}"
-                Timber.e(e, "Failed to reset mesh settings")
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
 
 
 

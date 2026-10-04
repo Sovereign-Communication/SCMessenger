@@ -81,21 +81,6 @@ class TopicManager(
         }
     }
 
-    /**
-     * Unsubscribe from a topic.
-     */
-    fun unsubscribe(topic: String) {
-        try {
-            meshRepository.unsubscribeTopic(topic)
-            val current = _subscribedTopics.value.toMutableSet()
-            current.remove(topic)
-            _subscribedTopics.value = current
-
-            Timber.i("Unsubscribed from topic: $topic")
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to unsubscribe from topic: $topic")
-        }
-    }
 
     /**
      * Refresh known topics from SwarmHandle and LedgerManager.
