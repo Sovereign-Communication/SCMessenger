@@ -857,13 +857,36 @@ pub fn decrypt_with_ratchet_fallback(
                             peer_short,
                             init_err
                         );
-                        // #394: re-establishment is unavailable, so the stale
-                        // session can never recover; drop it instead of
-                        // retrying it indefinitely. The next message
-                        // renegotiates via the fresh-init path.
-                        manager.remove_session(&peer_id);
+                        // #394 follow-up: DO NOT drop the session here.
+                        //
+                        // Re-establishment bails BEFORE it writes a new
+                        // session (see `create_receiver_session_hybrid`: it
+                        // requires bootstrap material, and the map insert
+                        // happens only after the suite derivation succeeds).
+                        // The existing session is therefore untouched and may
+                        // be perfectly healthy.
+                        //
+                        // A message with no bootstrap fields is not evidence of
+                        // a stale session. After the first successful decrypt
+                        // the receiver sets `peer_confirmed` and the sender
+                        // stops attaching bootstrap, so EVERY later message --
+                        // and every duplicate delivery, which is routine with
+                        // multipath and store-and-forward -- arrives without
+                        // it. Dropping here let a replayed signed envelope
+                        // (any relay or custody node can hold one) tear down a
+                        // healthy session, and because no subsequent message
+                        // carries bootstrap either, every later message from
+                        // that contact then failed too.
+                        //
+                        // Keeping the session is safe: a genuinely divergent
+                        // sender re-sends bootstrap material, and the
+                        // re-establishment path above still runs and still
+                        // recovers. See also the sibling `Err(retry_err)`
+                        // arm, where the rebuild DID replace the session and
+                        // dropping it therefore loses nothing.
                         tracing::warn!(
-                            "V2 stale session dropped for peer {}..; next message will renegotiate",
+                            "V2 session kept for peer {}.. after unavailable re-establishment; \
+                             a bootstrap-carrying message will re-establish it",
                             peer_short
                         );
                     }
@@ -1123,11 +1146,20 @@ mod tests {
     }
 
     #[test]
-    fn test_decrypt_fallback_drops_stale_session_on_unrecoverable_failure() {
-        // #394: when session re-establishment is unavailable, a decrypt
-        // failure must DROP the stale session from the manager instead of
-        // keeping it (and re-persisting it) for indefinite retry. The next
-        // inbound message then renegotiates via the fresh-init path.
+    fn test_decrypt_fallback_keeps_session_when_reestablishment_unavailable() {
+        // #394 follow-up: when session re-establishment is UNAVAILABLE (no
+        // bootstrap material), the existing session is untouched -- the
+        // rebuild bails before it writes -- so it may still be healthy and
+        // MUST be kept. A message without bootstrap fields is not evidence of
+        // a stale session: after the first successful decrypt the sender stops
+        // attaching bootstrap, so every later message, and every duplicate
+        // delivery, arrives without it. Dropping here let a replayed signed
+        // envelope tear down a healthy session and blackhole the contact.
+        //
+        // The sibling case where the rebuild DID replace the session (the
+        // `Err(retry_err)` arm) is a different situation and still drops; that
+        // loss is bounded because the rebuilt session already replaced the old
+        // one.
         let alice_key = generate_keypair();
         let bob_key = generate_keypair();
         let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
@@ -1207,12 +1239,130 @@ mod tests {
         )
         .expect_err("corrupt message with no re-establishment material must fail");
 
-        // The stale session was dropped, not kept for indefinite retry.
+        // The session survives: re-establishment bailed before writing, so
+        // nothing replaced it and it is not known to be stale.
         assert!(
-            !bob_sessions.has_session(&peer_id),
-            "stale session must be dropped after unrecoverable decrypt failure"
+            bob_sessions.has_session(&peer_id),
+            "session must be KEPT when no rebuild replaced it; dropping here \
+             lets a duplicate delivery blackhole a healthy contact"
         );
-        assert_eq!(bob_sessions.session_count(), 0);
+        assert_eq!(bob_sessions.session_count(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_delivery_keeps_session_and_nextressage_decrypts() {
+        // The attack this guards: a relay or store-and-forward custodian
+        // replays a signed envelope it already delivered. The replay fails
+        // decrypt (its key is consumed), carries no bootstrap, and re-
+        // establishment is unavailable -- yet the session was healthy.
+        //
+        // If the drop regressed, the contact is blackholed: the *next*
+        // genuine message also fails, because nothing carries bootstrap any
+        // more. This test asserts the message after the replay still works.
+        let alice_key = generate_keypair();
+        let bob_key = generate_keypair();
+        let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
+        let bob_x25519_secret = ed25519_to_x25519_secret(&bob_key);
+        let bob_mlkem = crate::crypto::pq::generate();
+
+        let alice_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: alice_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&alice_x25519_secret).to_bytes(),
+            mlkem_encaps_key: crate::crypto::pq::generate().public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+        let bob_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: bob_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&bob_x25519_secret).to_bytes(),
+            mlkem_encaps_key: bob_mlkem.public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+
+        let mut bob_sessions = RatchetSessionManager::new();
+        let mut alice_sessions = RatchetSessionManager::new();
+
+        let encrypt_next = |alice_sessions: &mut RatchetSessionManager| {
+            let session = alice_sessions
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"live traffic").unwrap()
+        };
+
+        // Message 1: delivered normally, establishes the session.
+        let wire1 = encrypt_next(&mut alice_sessions);
+        let pt1 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire1,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt1, b"live traffic");
+
+        let peer_id = hex::encode(blake3::hash(&alice_key.verifying_key().to_bytes()).as_bytes());
+
+        // Message 2: delivered normally.
+        let wire2 = encrypt_next(&mut alice_sessions);
+        let pt2 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire2,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt2, b"live traffic");
+
+        // The attacker (or a buggy relay) replays message 2 verbatim. The key
+        // is consumed, so decrypt fails, and no bootstrap is present.
+        decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire2,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .expect_err("a replayed message must not decrypt a second time");
+
+        assert!(
+            bob_sessions.has_session(&peer_id),
+            "a replay must not tear down the session"
+        );
+
+        // Message 3: the contact must still be reachable after the replay.
+        let wire3 = encrypt_next(&mut alice_sessions);
+        let pt3 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &wire3,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .expect("traffic after a replayed duplicate must still decrypt");
+        assert_eq!(pt3, b"live traffic");
     }
 
     #[test]
