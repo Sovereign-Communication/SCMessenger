@@ -32,10 +32,17 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 
 ---
 
-## 3. Verified Live Baseline (State as of 2026-08-15)
+## 3. Verified Live Baseline (State as of 2026-08-15 -- HISTORICAL SNAPSHOT, the instance it describes was replaced ~2026-09-13)
 
 - **AWS Instance ID:** `i-006b14491d421bd0d` (us-east-1, `t3.micro`, tag `scm-always-on-node`, state: `running`)
-- **Current Dynamic Public IP:** `54.226.67.101` (Note: Dynamic IP -- verify before connecting)
+- **Current Dynamic Public IP:** **DO NOT HARDCODE.** Resolve it at use time with
+  `scripts/aws_node_ip.sh` (single source of truth; it reads `$SCM_AWS_HOST`, else
+  queries the EC2 API by the `scm-always-on-node` tag, and never falls back to a
+  hardcoded address). The value `54.226.67.101` recorded in this baseline on
+  2026-08-15 is **DEAD** -- that instance was replaced ~2026-09-13 (issue I-02,
+  fixed by PR #259). The baseline below is a 2026-08-15 snapshot: treat its
+  instance ID, image digest, git SHA and identity as historical too, and re-read
+  the live values before using any of them.
 - **Running Image Digest:** `testbotz/scmessenger@sha256:a58645e886409e057edb7557141e02b64cf0e9fd9f28ecab773b099a6e760583`
 - **Running Git SHA:** `9f54b1078ad512c895b68029c9e79a1870d7f286` (`gpt/pr139-receipt-filter-20260811`)
 - **Node Identity ID:** `0b33200936f41deb55e674e1d798b5c2aac7494a8a95ea34cd59c3b013c226ad`

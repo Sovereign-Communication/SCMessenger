@@ -7,6 +7,7 @@ purpose: SCMessenger-only findings and remediation handoff
 foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
+Repository: scmessenger
 
 Status: Active
 Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
@@ -48,6 +49,18 @@ or release snapshots as current status.
   its ownership and remote durability are established.
 
 # ===== END RESUME 2026-09-30 =====
+
+> **READ BEFORE USING ANY AWS ADDRESS IN THIS FILE (SHIP_PLAN G5).**
+> This is an append-only log, so its dated entries are preserved exactly as
+> written. Four of them cite `54.226.67.101` -- that instance was **replaced
+> around 2026-09-13** and the address is dead (issue I-02, fixed by PR #259).
+> Those entries describe what was observed then, not a reachable node now.
+>
+> Resolve the live address at use time with `scripts/aws_node_ip.sh` (single
+> source of truth: `$SCM_AWS_HOST`, else the EC2 API by the `scm-always-on-node`
+> tag; it never falls back to a hardcoded value). `HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md`
+> carries the most recent recorded snapshot. Do not copy an address out of this
+> log.
 
 # ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
 
