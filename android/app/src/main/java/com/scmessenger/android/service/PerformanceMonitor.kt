@@ -201,11 +201,7 @@ data class AnrEvent(
     val context: String,
     val androidVersion: Int,
     val device: String
-) {
-    fun toJson(): String {
-        return """{"eventId":"$eventId","timestamp":$timestamp,"durationMs":$durationMs,"context":"$context","androidVersion":$androidVersion,"device":"$device"}"""
-    }
-}
+)
 
 /**
  * UI Timing Event data class.

@@ -17,6 +17,12 @@ name: Auto Tag Release
 
 on:
   workflow_dispatch:
+    inputs:
+      dispatch_release:
+        description: Start the Multi-Platform Release Pipeline for the new tag
+        required: false
+        type: boolean
+        default: true
   # push:
   #   branches: [main]
   #   paths:
@@ -24,6 +30,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   auto-tag:
@@ -53,13 +60,60 @@ jobs:
           fi
 
       - name: Create and push release tag
+        id: create_tag
         if: steps.check_tag.outputs.exists == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
-          echo "Tagged and pushed v${{ steps.version.outputs.version }} -- release.yml will pick this up automatically."
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "Tagged and pushed v${{ steps.version.outputs.version }}."
+
+      # WHY THIS STEP EXISTS
+      # --------------------
+      # The tag push above CANNOT start release.yml, and never could. A push made
+      # with GITHUB_TOKEN does not trigger workflow runs -- that is GitHub's
+      # recursion guard, and it applies to the `push: tags: [v*]` trigger in
+      # release.yml. The two workflows looked connected and were not.
+      #
+      # This was not theoretical. Every historical release.yml run on this
+      # repository failed, and the v0.4.0 release on 2026-10-03 had to be built
+      # by hand via release.yml's `artifacts_only` dispatch input, because the
+      # automatic path was known-broken and nobody could say why:
+      #
+      #   34996353889 workflow_dispatch  failure
+      #   34932614680 workflow_dispatch  failure
+      #   34789843685 workflow_dispatch  failure
+      #   32817839477 push v0.4.0-rc.1   failure
+      #   32801758551 push v0.4.0-rc.1   failure
+      #
+      # Note the last two: even a HAND-PUSHED tag failed, because those runs
+      # predate this diagnosis, not because a human push works. Proved for
+      # v0.4.0 on 2026-10-03: after auto-tag pushed the tag, the release
+      # workflow reported total_count = 0 runs for that tag's SHA.
+      #
+      # The fix is to stop relying on the push as a trigger and DISPATCH the
+      # release workflow explicitly. workflow_dispatch is not a push event, so
+      # the recursion guard does not apply.
+      #
+      # NO LOOP IS POSSIBLE, and the guard is the `created=true` condition:
+      #   - this step runs only when the tag did NOT already exist, so a
+      #     re-run of auto-tag is a no-op and cannot re-dispatch;
+      #   - release.yml does not create or push tags, so it cannot re-enter
+      #     this workflow;
+      #   - auto-tag is workflow_dispatch-only (its push trigger is commented
+      #     out), so nothing triggers it automatically either.
+      # `dispatch_release: false` lets an operator cut a tag deliberately
+      # without starting a build.
+      - name: Start the release pipeline for the new tag
+        if: steps.create_tag.outputs.created == 'true' && inputs.dispatch_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          gh workflow run release.yml --ref "$TAG"
+          echo "Dispatched release.yml for $TAG."
 
       - name: Skip (tag already exists)
         if: steps.check_tag.outputs.exists == 'true'

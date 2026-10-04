@@ -34,7 +34,10 @@ runs:
           git fetch --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 || true
         fi
 
-        CHANGED="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || true)"
+        # --no-renames: a rename must list its OLD path too. Rename detection reports only
+        # the new path, so core/src/crypto/keys.rs -> docs/keys.md would read as docs-only
+        # and short-circuit the required Lint, Rust Linting and Test checks.
+        CHANGED="$(git diff --name-only --no-renames "$BASE_SHA" HEAD 2>/dev/null || true)"
         if [ -z "$CHANGED" ]; then
           # Diff unavailable (shallow edge cases). Fail open: run everything.
           echo "is_docs_only=false" >> "$GITHUB_OUTPUT"

@@ -7,8 +7,11 @@ validate the exact bytes destined for SCMessenger without importing another
 repository or installing a dependency.
 
 The gate rejects missing, altered, duplicated, or fenced scope metadata and any
-Harness alias in the rest of the document. It also provides --staged (which
-reads the Git index, not the mutable worktree) and --changed-from (CI) modes.
+document that DECLARES foreign-repository ownership, scope, lane or repository
+(lane separation). Mentions of another product in prose, code, comments or
+commands are allowed (operator directive 2026-09-27: block foreign work
+product, not vocabulary). It also provides --staged (which reads the Git
+index, not the mutable worktree) and --changed-from (CI) modes.
 """
 
 from __future__ import annotations
@@ -28,15 +31,17 @@ DISPLAY_NAME = "SCMessenger"
 OWNER = "Sovereign-Communication/SCMessenger"
 PURPOSE = "SCMessenger-only findings and remediation handoff"
 OWNER_ALIASES = ("scmessenger", "sc messenger")
-# Operator ruling 2026-09-25: blocklist the foreign product's exact proper
-# names; the bare word "harness" is an ordinary English/generic term in this
-# repository (the local JEV tool checkout, the KEYED JEV gate, the Curation
-# surface) and blocklisting it made the gate fail on SCMessenger's own
-# documents. Verified before landing: with the bare word removed, every
-# in-flight SCMessenger handoff passes; with it present, three handoffs that
-# shipped in #368 and the JEV repo insight report fail on a path to a local
-# tool checkout.
-FOREIGN_ALIASES = ("harness cli", "harness-mcp")
+# Operator rulings 2026-09-25 and 2026-09-27. The 09-25 ruling blocklisted the
+# foreign product's exact proper names and dropped the bare word "harness"
+# (an ordinary English/generic term here: the local JEV tool checkout, the
+# KEYED JEV gate, the Curation surface). The 09-27 ruling goes the rest of
+# the way: the gate polices lane separation, not vocabulary. Mentions of any
+# foreign product name in prose, code, comments or commands are ALLOWED; a
+# document is blocked only when it DECLARES foreign ownership, scope, lane or
+# repository in a structured metadata line -- that is foreign work product,
+# and it is rerouted to its own repository. This alias list feeds only the
+# declaration detector, so the bare product name belongs in it again.
+FOREIGN_ALIASES = ("harness", "harness cli", "harness-mcp")
 BEGIN = "<!-- HANDOFF-SCOPE-BEGIN -->"
 END = "<!-- HANDOFF-SCOPE-END -->"
 BOUNDARY = "No foreign-repository findings, evidence, status, or remediation are included."
@@ -60,8 +65,9 @@ HANDOFF_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 #     silently empty one;
 #   * no dead entries -- a waiver naming a path that is not a tracked handoff
 #     document is a failure, so a typo cannot look like a working waiver;
-#   * no stale entries -- a waiver whose document no longer trips the alias
-#     detector is a failure, so an exemption cannot outlive its reason.
+#   * no stale entries -- a waiver whose document no longer trips the
+#     work-product detector is a failure, so an exemption cannot outlive its
+#     reason.
 # ---------------------------------------------------------------------------
 WAIVER_FILE = "handoff_scope_waivers.json"
 WAIVER_SCHEMA = 1
@@ -167,20 +173,20 @@ def audit_waiver(
 ) -> Tuple[Optional[str], List[str]]:
     """Is this waiver still doing work? Pure, so it is testable without a repo.
 
-    Returns (problem_or_None, aliases_found). The anti-rot rule lives here:
-    a waiver exists to excuse a document that trips the foreign-alias
-    detector, so a document that no longer trips it has outgrown its
-    exemption and the waiver is a hole with no reason behind it.
+    Returns (problem_or_None, declared_aliases). The anti-rot rule lives
+    here: a waiver exists to excuse a document the work-product detector
+    blocks, so a document that no longer declares foreign work product has
+    outgrown its exemption and the waiver is a hole with no reason behind it.
     """
-    hits = _find_aliases(text, policy.foreign_aliases)
-    if not hits:
+    alias = _foreign_work_product(text, policy)
+    if alias is None:
         return (
-            f"waiver {rel}: document no longer trips {list(policy.foreign_aliases)}, "
+            f"waiver {rel}: document no longer declares foreign work product, "
             "so the waiver is obsolete; remove it and give the document a real "
             "scope block",
             [],
         )
-    return None, sorted(set(hits))
+    return None, [alias]
 
 
 def load_waivers(root: Path, policy: Policy = POLICY) -> dict:
@@ -219,7 +225,7 @@ def load_waivers(root: Path, policy: Policy = POLICY) -> dict:
         if problem is not None:
             problems.append(problem)
             continue
-        print(f"[WAIVED] {rel}: {waiver.note()} (aliases: {', '.join(hits)})")
+        print(f"[WAIVED] {rel}: {waiver.note()} (declares: {', '.join(hits)})")
     if problems:
         raise RuntimeError("; ".join(problems))
     return waivers
@@ -280,6 +286,26 @@ def _find_aliases(text: str, aliases: Iterable[str]) -> List[str]:
 def _find_alias(text: str, aliases: Iterable[str]) -> Optional[str]:
     found = _find_aliases(text, aliases)
     return found[0] if found else None
+
+
+_DECLARATION_LINE = re.compile(
+    r"(?mi)^[ \t]*(?:scope|owner|purpose|lane|repository|repo)[ \t]*:[ \t]*(.*)$"
+)
+
+
+def _foreign_work_product(text: str, policy: Policy = POLICY) -> Optional[str]:
+    """Lane-separation detector (operator directive 2026-09-27).
+
+    Mentions of a foreign product in prose, code, comments or commands are
+    allowed. Return the alias only when the document DECLARES foreign
+    ownership, scope, lane or repository in a structured metadata line --
+    that document is foreign work product and belongs in its own repository.
+    """
+    for value in _DECLARATION_LINE.findall(text):
+        alias = _find_alias(value, policy.foreign_aliases)
+        if alias is not None:
+            return alias
+    return None
 
 
 def scope_block(policy: Policy = POLICY) -> str:
@@ -390,9 +416,12 @@ def validate_text(
             errors.append(f"scope metadata {key!r} must be {value!r}")
 
     outside = text[: match.start()] + text[match.end() :]
-    for alias in _find_aliases(outside, policy.foreign_aliases):
+    foreign = _foreign_work_product(outside, policy)
+    if foreign is not None:
         errors.append(
-            f"foreign repository alias {alias!r} appears outside the scope block"
+            f"foreign work product: this handoff declares {foreign!r} ownership, "
+            f"scope, lane or repository -- reroute it and land it in the "
+            f"{foreign} repository, not here"
         )
     if not _find_alias(outside, policy.owner_aliases):
         errors.append("handoff body does not identify its owning repository")
@@ -567,12 +596,51 @@ def validate_paths(
 
 _WIN_SEP = chr(92)  # a single backslash, for Windows-style paths
 
-# A document that legitimately records another product's tooling cannot carry
-# `foreign_material: NONE`; stamping it would be a false attestation. This is
-# the exact shape the waiver exists for.
+# A document that DECLARES another product's ownership is that product's work
+# product; it belongs in that product's repository (operator ruling
+# 2026-09-27). A waiver is the only owner-signed way to keep one here. Mere
+# mentions of another product are NOT this shape -- they are allowed.
 _DIRTY_BODY = (
     "SCMessenger dogfood notes.\n\n"
-    "The run was driven through Harness-MCP and cross-checked with the Harness CLI.\n"
+    "<!-- HANDOFF-SCOPE-BEGIN -->\n"
+    "scope: SCMessenger\n"
+    "owner: Sovereign-Communication/SCMessenger\n"
+    "purpose: SCMessenger-only findings and remediation handoff\n"
+    "foreign_material: NONE\n"
+    "boundary: No foreign-repository findings, evidence, status, or remediation are included.\n"
+    "<!-- HANDOFF-SCOPE-END -->\n"
+    "Repository: scmessenger\n"
+    "owner: Sovereign-Communication/Harness\n"
+)
+# Mentions of a foreign product are allowed (operator ruling 2026-09-27):
+# prose, code, comments and command lines may name another product without
+# tripping the gate.
+_MENTION_BODY = (
+    "SCMessenger dogfood notes.\n\n"
+    "<!-- HANDOFF-SCOPE-BEGIN -->\n"
+    "scope: SCMessenger\n"
+    "owner: Sovereign-Communication/SCMessenger\n"
+    "purpose: SCMessenger-only findings and remediation handoff\n"
+    "foreign_material: NONE\n"
+    "boundary: No foreign-repository findings, evidence, status, or remediation are included.\n"
+    "<!-- HANDOFF-SCOPE-END -->\n"
+    "The run was driven through harness-mcp and the Harness CLI, and\n"
+    "scored by `harness jev-phase --local-only`.\n"
+    "Repository: scmessenger\n"
+)
+# Evasion shapes are still caught in DECLARATIONS: separator-split and
+# zero-width spellings normalize to the same alias.
+_SPLIT_DIRTY_BODY = (
+    "SCMessenger dogfood notes.\n\n"
+    "<!-- HANDOFF-SCOPE-BEGIN -->\n"
+    "scope: SCMessenger\n"
+    "owner: Sovereign-Communication/SCMessenger\n"
+    "purpose: SCMessenger-only findings and remediation handoff\n"
+    "foreign_material: NONE\n"
+    "boundary: No foreign-repository findings, evidence, status, or remediation are included.\n"
+    "<!-- HANDOFF-SCOPE-END -->\n"
+    "Repository: scmessenger\n"
+    "owner: Har\u200bness\n"
 )
 # The same document, honestly stamped, is what a compliant handoff looks like.
 _CLEAN_BODY = (
@@ -590,7 +658,7 @@ _CLEAN_BODY = (
 _GOOD = {
     "path": "HANDOFF/review/SOME_DOC_2026-09-26.md",
     "owner": "Sovereign-Communication/SCMessenger operator",
-    "reason": "records Harness-MCP output that cannot honestly be declared absent",
+    "reason": "is foreign work product retained here under operator exception",
     "ticket": "#372",
     "date": "2026-09-26",
 }
@@ -632,14 +700,14 @@ def _e2e_plumbing() -> bool:
             return False
         (root / "handoff" / "selftest").mkdir(parents=True)
         (root / "handoff" / "selftest" / "DIRTY.md").write_text(
-            "SCMessenger notes." + chr(10) + chr(10) + "Driven through Harness-MCP." + chr(10),
+            "SCMessenger notes." + chr(10) + chr(10) + "owner: Sovereign-Communication/Harness" + chr(10),
             encoding="utf-8",
         )
         (root / "handoff" / "selftest" / "UNSTAMPED.md").write_text(
             "SCMessenger notes with no scope block." + chr(10), encoding="utf-8"
         )
         (root / "handoff" / "selftest" / "STILL_DIRTY.md").write_text(
-            "SCMessenger notes." + chr(10) + chr(10) + "Also Harness-MCP." + chr(10),
+            "SCMessenger notes." + chr(10) + chr(10) + "scope: Harness" + chr(10),
             encoding="utf-8",
         )
         (root / WAIVER_FILE).write_text(
@@ -650,7 +718,7 @@ def _e2e_plumbing() -> bool:
                         {
                             "path": "handoff/selftest/DIRTY.md",
                             "owner": "operator",
-                            "reason": "records Harness-MCP",
+                            "reason": "is foreign work product kept here by exception",
                             "ticket": "#372",
                             "date": "2026-09-26",
                         }
@@ -750,8 +818,24 @@ WAIVER_CASES = (
     ),
     # --- the two directions that matter ----------------------------------
     (
-        "a foreign-alias document with NO waiver is still rejected",
-        lambda: bool(validate_text(_DIRTY_BODY)),
+        "a foreign-work-product document with NO waiver is still rejected and rerouted",
+        lambda: any(
+            "foreign work product" in error and "reroute" in error
+            for error in validate_text(_DIRTY_BODY)
+        ),
+        True,
+    ),
+    (
+        "mentions of a foreign product in prose and commands are allowed",
+        lambda: validate_text(_MENTION_BODY) == [],
+        True,
+    ),
+    (
+        "a foreign declaration split by a zero-width character is still caught",
+        lambda: any(
+            "foreign work product" in error
+            for error in validate_text(_SPLIT_DIRTY_BODY)
+        ),
         True,
     ),
     (
@@ -796,12 +880,12 @@ WAIVER_CASES = (
     ),
     # --- anti-rot ---------------------------------------------------------
     (
-        "a waiver for a document that still trips the alias is current",
+        "a waiver for a document that still declares foreign work product is current",
         lambda: audit_waiver("x.md", Waiver(**_GOOD), _DIRTY_BODY)[0] is None,
         True,
     ),
     (
-        "a waiver whose document no longer trips the alias is obsolete",
+        "a waiver whose document no longer declares foreign work product is obsolete",
         lambda: "obsolete" in (audit_waiver("x.md", Waiver(**_GOOD), _CLEAN_BODY)[0] or ""),
         True,
     ),

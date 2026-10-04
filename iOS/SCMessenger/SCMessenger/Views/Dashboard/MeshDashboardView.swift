@@ -24,7 +24,7 @@ struct DashboardPeer: Identifiable, Equatable {
     var blePeerId: String?
     var transport: Transport
     var isOnline: Bool
-    var isRelay: Bool
+    var isInfraNode: Bool
     var isFull: Bool
     var lastSeen: Date
 
@@ -136,7 +136,7 @@ struct MeshDashboardView: View {
         let now = Date()
 
         for contact in contacts {
-            let isRelay = repository.isKnownRelay(contact.peerId)
+            let isInfraNode = repository.isKnownRelay(contact.peerId)
             let routePeerId = parseRoutingLibp2pPeerId(from: contact.notes)
 
             var existing = merged[contact.peerId]
@@ -167,13 +167,13 @@ struct MeshDashboardView: View {
                 blePeerId: existing?.blePeerId,
                 transport: existing?.transport ?? .unknown,
                 isOnline: isRecent(contact.lastSeen) || isRecentlyOnline(existing),
-                isRelay: isRelay,
+                isInfraNode: isInfraNode,
                 isFull: classifyPeerAsFull(
                     peerId: contact.peerId,
                     publicKey: contact.publicKey,
                     nickname: contact.nickname,
                     localNickname: contact.localNickname,
-                    isRelay: isRelay
+                    isInfraNode: isInfraNode
                 ),
                 lastSeen: existing?.lastSeen ?? dateFromEpoch(contact.lastSeen) ?? now
             )
@@ -227,13 +227,13 @@ struct MeshDashboardView: View {
                 blePeerId: existing?.blePeerId,
                 transport: transportFromMultiaddr(entry.multiaddr),
                 isOnline: isRecent(entry.lastSeen) || isRecentlyOnline(existing),
-                isRelay: relay,
+                isInfraNode: relay,
                 isFull: classifyPeerAsFull(
                     peerId: canonicalPeerId,
                     publicKey: matchedContact?.publicKey ?? entryPublicKey ?? existing?.publicKey,
                     nickname: matchedContact?.nickname ?? entryNickname ?? existing?.nickname,
                     localNickname: matchedContact?.localNickname ?? existing?.localNickname,
-                    isRelay: relay
+                    isInfraNode: relay
                 ),
                 lastSeen: lastSeenDate
             )
@@ -327,13 +327,13 @@ struct MeshDashboardView: View {
             blePeerId: normalizedBlePeer ?? existing?.blePeerId,
             transport: transport,
             isOnline: isOnline,
-            isRelay: relay,
+            isInfraNode: relay,
             isFull: classifyPeerAsFull(
                 peerId: existing?.peerId ?? normalizedCanonical,
                 publicKey: resolvedPublicKey ?? existing?.publicKey,
                 nickname: resolvedNickname ?? existing?.nickname,
                 localNickname: resolvedLocNick,
-                isRelay: relay
+                isInfraNode: relay
             ),
             lastSeen: Date()
         )
@@ -398,7 +398,7 @@ struct MeshDashboardView: View {
         publicKey: String?,
         nickname: String?,
         localNickname: String?,
-        isRelay _: Bool
+        isInfraNode _: Bool
     ) -> Bool {
         if let key = publicKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return true }
         let hasNickname = !(nickname?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -458,7 +458,7 @@ struct MeshDashboardView: View {
                 existing.lastSeen = max(existing.lastSeen, peer.lastSeen)
                 existing.transport = (existing.transport == .tcpMdns || peer.transport == .tcpMdns) ? .tcpMdns :
                     (existing.transport == .internet || peer.transport == .internet) ? .internet : existing.transport
-                existing.isRelay = existing.isRelay || peer.isRelay
+                existing.isInfraNode = existing.isInfraNode || peer.isInfraNode
                 existing.isFull = existing.isFull || peer.isFull
                 if existing.publicKey == nil { existing.publicKey = peer.publicKey }
                 if existing.nickname == nil { existing.nickname = peer.nickname }
