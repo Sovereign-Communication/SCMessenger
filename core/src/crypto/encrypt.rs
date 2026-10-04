@@ -1183,7 +1183,7 @@ mod tests {
         .unwrap();
         assert_eq!(pt1, b"hello");
 
-        let peer_id = hex::encode(blake3::hash(alice_key.verifying_key().to_bytes()).as_bytes());
+        let peer_id = hex::encode(blake3::hash(&alice_key.verifying_key().to_bytes()).as_bytes());
         assert!(bob_sessions.has_session(&peer_id));
 
         // Corrupt the ciphertext so decrypt fails, and withhold the

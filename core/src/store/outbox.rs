@@ -1613,7 +1613,7 @@ mod tests {
         // One message under the canonical spelling (where `enqueue` writes).
         outbox.enqueue(make_msg("msg-canonical", HEX_PEER)).unwrap();
         // One message stranded under the legacy base58 spelling.
-        if let OutboxBackend::Memory { queues, total } = &mut outbox.backend {
+        if let OutboxBackend::Memory { queues, total, .. } = &mut outbox.backend {
             queues.insert(
                 BASE58_PEER.to_string(),
                 VecDeque::from(vec![make_msg("msg-legacy", BASE58_PEER)]),
@@ -1639,7 +1639,7 @@ mod tests {
     fn drain_for_peer_drains_all_spellings_in_one_pass() {
         let mut outbox = Outbox::new();
         outbox.enqueue(make_msg("msg-canonical", HEX_PEER)).unwrap();
-        if let OutboxBackend::Memory { queues, total } = &mut outbox.backend {
+        if let OutboxBackend::Memory { queues, total, .. } = &mut outbox.backend {
             queues.insert(
                 BASE58_PEER.to_string(),
                 VecDeque::from(vec![make_msg("msg-legacy", BASE58_PEER)]),
