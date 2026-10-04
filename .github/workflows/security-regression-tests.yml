@@ -80,7 +80,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned on integrate/train-20261004. This arrived unpinned from #228,
+      # and an unpinned `stable` is exactly the drift the repo pin exists to
+      # prevent: scripts/check_toolchain_pin.py fails closed on it, and left
+      # alone it would turn this repo red on an unrelated diff one day.
+      - uses: dtolnay/rust-toolchain@1.99.0
 
       - uses: Swatinem/rust-cache@v2
         with:
