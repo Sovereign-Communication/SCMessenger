@@ -1,5 +1,15 @@
 # Orchestrator Dispatch Plan -- 2026-08-01
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Status:** Active
 **Integration branch:** `orchestrator/integration-pass-2026-08-01`
 **Objective:** Converge open in-progress and high-priority todo tasks into a single integration branch that passes all build/test/CI gates, supporting v0.4.0 completion and v0.5.0 parity.

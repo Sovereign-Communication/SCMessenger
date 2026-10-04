@@ -184,3 +184,97 @@ GitHub Release and upload it to Play Console yourself each time. This
 keeps Play Store publishing credentials (a service account JSON with
 publish rights) out of GitHub Secrets entirely, and keeps a manual human
 gate before anything reaches real users via the Play Store.
+
+
+## Pinned Debug Signing for CI Artifacts (Separate From Release)
+
+The debug APKs the CI lanes upload (the `Mobile` workflow's
+`android-debug-apk`, and the debug APK `build-android` produces alongside the
+release one) need to be installable over a previous install. `adb install -r`
+only replaces an app whose existing signature matches, and until this setup is
+done every GitHub runner auto-generates its own `~/.android/debug.keystore`.
+
+Observed on 2026-09-19: three builds from three runs carried three different
+certificates, none matching the one installed on the operator's phone, so no CI
+APK could ever update it -- every install attempt failed with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Both lanes now call
+`.github/actions/sign-debug-apk`, which re-signs the built APK with a pinned
+keystore and fails closed if the resulting certificate is not the pinned one.
+
+A debug keystore is deliberately NOT committed: repo hygiene rejects tracked
+`.keystore`/`.jks`/`.p12` files (and `*_base64.txt`), and `rules_check.py`
+forbids those extensions, so the secret is the only supported path.
+
+### 1. Choose the identity
+
+A keystore dedicated to CI, using the Android debug convention (alias
+`androiddebugkey`, password `android`) so the action's defaults apply:
+
+```bash
+keytool -genkeypair -alias androiddebugkey -keyalg RSA -keysize 2048 \
+  -validity 10000 -storetype PKCS12 -keystore ci-debug.keystore \
+  -storepass android -keypass android \
+  -dname "CN=Android Debug,O=Android,C=US" -noprompt
+```
+
+To make CI and local `assembleDebug` builds share ONE identity, pin an existing
+host debug keystore (`~/.android/debug.keystore`) instead -- it already uses
+that alias and password, so the same command works with its path. Whichever key
+is pinned becomes the device's long-term identity for debug installs; losing it
+costs one more uninstall/reinstall cycle.
+
+### 2. Set the one secret
+
+```bash
+base64 -w0 ci-debug.keystore > ci-debug.b64     # macOS/Linux
+# Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("ci-debug.keystore")) > ci-debug.b64
+gh secret set SCMESSENGER_DEBUG_KEYSTORE_BASE64 < ci-debug.b64
+rm ci-debug.b64
+```
+
+Keep `ci-debug.keystore` itself as a backup outside the working tree: the pinned
+identity cannot be recovered from the secret alone if it is lost.
+
+### 3. Verify in one CI run
+
+The signing step prints the certificate it applied, and the run summary records
+it:
+
+```
+[OK] android/app/build/outputs/apk/debug/app-debug.apk is signed by the pinned debug identity (SHA-256 <digest>)
+```
+
+Compare that digest against the keystore locally:
+
+```bash
+keytool -exportcert -rfc -alias androiddebugkey -keystore ci-debug.keystore \
+  -storepass android | openssl x509 -noout -fingerprint -sha256
+```
+
+A second run must print the SAME digest; that equality is exactly what makes the
+new artifact installable over the previous one. If the step errors instead, the
+artifact was not published with the pinned key -- the error names both digests
+(the pinned one and the one the APK actually carries).
+
+With the secret unset, both lanes keep building and print a warning plus the
+unpinned digest instead of failing: a missing secret degrades the artifact
+rather than red-lighting the lane for everyone. The debug APK then works only
+for a fresh install on a device with no existing install to replace.
+
+### 4. Installing on a device that already has the app
+
+Once one pinned build is installed, later CI APKs update in place with
+`adb install -r <apk>`. The transition itself needs one uninstall if the device
+currently holds an install signed by a different key, and a debug uninstall
+deletes app data (message history, contacts, custody state) and regenerates the
+node identity. Read the app's data out first if it matters
+(`adb exec-out run-as <applicationId> tar cf - files | tar xf -`), then accept
+that the node identity changes.
+
+### What this does not change
+
+Release signing is untouched: `SCMESSENGER_KEYSTORE_BASE64` and its three
+companion secrets still drive `build-android`'s signed release artifacts, and
+release signing still fails closed on a version tag without them. The debug
+re-sign never runs on the release APK, and `release.yml` still refuses an APK
+signed with a debug certificate.

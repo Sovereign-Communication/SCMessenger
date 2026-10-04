@@ -1,5 +1,13 @@
 # TASK: PQC-06 — Hybrid ratchet session establishment (suite 0x02)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Read `PQC_00_MASTER_PLAN.md` first. Depends on: PQC-02, PQC-03, PQC-04, PQC-05. Wave 2. Min tier: Sonnet. ADVERSARIAL REVIEW MANDATORY.
 
 ## Scope

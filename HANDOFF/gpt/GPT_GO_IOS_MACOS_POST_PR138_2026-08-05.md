@@ -1,5 +1,13 @@
 # GPT: GO -- iOS + macOS install/update (post PR-136/137/138)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-08-05
 **Priority:** HIGH -- fleet rollout gate for the v0.4.0 five-node test
 **From:** Orchestrator (Windows/Qwen)

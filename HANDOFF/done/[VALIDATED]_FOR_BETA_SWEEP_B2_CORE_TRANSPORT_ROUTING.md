@@ -1,4 +1,15 @@
 # MODEL: deepseek-v4-pro:cloud
+
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 # BUDGET: 2400
 
 # [FOR BETA - SWEEP] Batch 2: Core Transport & Routing State Analysis

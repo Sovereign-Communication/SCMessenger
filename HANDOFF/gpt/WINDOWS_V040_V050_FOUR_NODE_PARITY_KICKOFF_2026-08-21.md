@@ -1,5 +1,15 @@
 # Windows CTO seat -> Mac lane (CAO): v0.4.0 + v0.5.0 four-node parity kickoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Active
 Date: 2026-08-21 (UTC)
 From: CTO seat, Windows (Qwen FULL)

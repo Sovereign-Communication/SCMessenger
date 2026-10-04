@@ -1,5 +1,13 @@
 # P0 -- Android abandons accepted undelivered messages (PF-1 / PF-12)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- DISPOSITIONED 2026-08-24: ACCEPTED FOR rc.1, remains v0.5.0-blocking (see disposition below)
 Severity: P0 (pre-freeze blocker; violates the durable-delivery philosophy)
 Filed: 2026-08-10

@@ -7,6 +7,14 @@
 
 # P0 -- Android deep link parses connection addresses but deliberately never dials them
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open -- root cause identified in code, needs operator decision
 Filed: 2026-08-18 (CTO lane)
 Severity: P0 (blocks out-of-band mobile rendezvous and D4 Android <-> AWS node off-LAN communication)

@@ -1,5 +1,15 @@
 # U3 Retry policy in core
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Task Description
 Build a shared retry mechanism in core.
 The CLI hand-rolls its own retry/backoff around `cli/src/main.rs:2869` (`cmd_send_offline`). 

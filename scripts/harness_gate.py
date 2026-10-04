@@ -23,10 +23,15 @@ import sys
 import time
 from pathlib import Path
 
-HARNESS_ROOT = Path(r"C:\Users\SCM\Documents\GitHub\Harness")
+HARNESS_ROOT = Path(os.environ.get("HARNESS_REPO") or (Path(__file__).resolve().parents[1] / "vendor" / "sovereign-harness"))
+if not (HARNESS_ROOT / "harness" / "jev.py").is_file():
+    # Fall back to in-repo Harness/handoff-only tree only if vendor missing
+    _alt = Path(__file__).resolve().parents[1] / "Harness"
+    if (_alt / "harness" / "jev.py").is_file():
+        HARNESS_ROOT = _alt
 REPO = Path(__file__).resolve().parents[1]
 # Out-of-tree by default so we never drop harness debris in the live product tree.
-DEFAULT_OUT_ROOT = HARNESS_ROOT / "audits" / "scmessenger" / "_runs" / "seat-gates"
+DEFAULT_OUT_ROOT = REPO / "tmp" / "harness-runs" / "seat-gates"
 PAID_MAX_DEFAULT = 0.10  # operator ceiling per escalation/use
 
 

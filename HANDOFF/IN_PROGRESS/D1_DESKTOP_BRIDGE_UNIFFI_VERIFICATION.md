@@ -1,5 +1,13 @@
 # TASK: D1 — KMP Desktop Bridge UniFFI Verification
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: READY FOR QWEN DELEGATION
 Owner: Qwen (verification + build)
 Scope: WS-D KMP desktop client (prerequisite for D2 Compose architecture)

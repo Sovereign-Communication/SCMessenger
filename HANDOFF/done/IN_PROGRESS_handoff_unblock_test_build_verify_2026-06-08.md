@@ -1,5 +1,13 @@
 # Overseer: Unblock, Test, Build, Verify, Unify  Single Sweep Handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **From:** Hermes (Telegram orchestrator)
 **To:** Claude Code (Overseer)  pick up and execute
 **Date:** 2026-06-08 (Monday)

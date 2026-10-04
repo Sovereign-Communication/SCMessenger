@@ -7,8 +7,15 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-07-25
-Applies to: v0.3.5 (alpha, working toward v1.0.0)
+Last updated: 2026-09-19 (version claim corrected; content otherwise 2026-07-25)
+Applies to: v0.4.0 (alpha, working toward v1.0.0)
+> [CORRECTED 2026-09-19] This line read "Applies to: v0.3.5 (alpha, working
+> toward v1.0.0)" and had not changed since 2026-07-25, which contradicted
+> both this file's own banner above and the active queue. Proved with:
+> `grep -nE '^version' Cargo.toml` -> `9:version = "0.4.0"`, and
+> `git tag --list 'v0.4*'` -> `v0.4.0-rc.1` only. So the working line is
+> v0.4.0 and v0.4.0 is cut as a release candidate but **not shipped**;
+> "on v0.4.0" and "v0.4.0 is shipped" are different claims.
 
 This is the documentation entrypoint. Start here.
 

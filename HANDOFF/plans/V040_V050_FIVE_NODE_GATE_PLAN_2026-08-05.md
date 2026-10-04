@@ -1,5 +1,13 @@
 # v0.4.0 / v0.5.0 Completion Plan -- Five-Node Fleet Gate
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active -- operator-requested planning doc (2026-08-05)
 Authority stack (unchanged, do not relitigate):
   Sequencing:  HANDOFF/V1_0_0_EXECUTION_PLAN.md (Section 0A)

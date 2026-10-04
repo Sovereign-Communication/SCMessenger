@@ -1,5 +1,13 @@
 # SCMessenger Comprehensive Parity & Completion Plan
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 This document serves as the **exhaustive, definitive roadmap** to complete all remaining work across the SCMessenger ecosystem, ensuring **Android** and **Windows (CLI/Core)** achieve full parity as independent, feature-complete decentralized nodes. 
 
 This plan compiles the 350 remaining tasks from the `WIRING_TASK_INDEX`, the `CLI_PARITY_PLAN`, the `scmessenger_rust_audit_optimization_plan`, and the documented Android build/stability blocks.

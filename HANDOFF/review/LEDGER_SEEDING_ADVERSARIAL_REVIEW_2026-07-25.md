@@ -1,5 +1,15 @@
 # Adversarial review -- ledger seeding / gossip / seed dial (commit 02321e4d)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: BLOCK (re-review 2026-07-25 20:5x) -- 3 HIGH open, 2 introduced by the remediation itself
 Date: 2026-07-25
 Last updated: 2026-07-25 (remediation pass)

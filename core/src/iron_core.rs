@@ -356,6 +356,37 @@ pub(crate) fn classify_storage_error(err: &str) -> IronCoreError {
     }
 }
 
+/// Rust-only surface for [`IronCore`]. Nothing here may move into the
+/// `uniffi::export`ed block below: `#[uniffi::export]` on an impl block exports
+/// the methods it contains whether or not they are `pub`, and the FFI surface is
+/// snapshot-checked by `scripts/ffi_surface.sh` (the CI job is "FFI Surface
+/// Contract"). A private helper that lands in that block silently becomes a new
+/// Kotlin/Swift binding and fails the job.
+impl IronCore {
+    /// Arm the ledger's self-entry filter (tier_a A8 / issue I-06) with this
+    /// node's own identity, in both spellings the store can hold.
+    ///
+    /// This MUST run in the hydrating constructors, not only in
+    /// `initialize_identity`: a real node starts with an identity that is
+    /// *loaded* from its store, so `initialize_identity` never runs there and a
+    /// filter armed only in it would never fire -- every unit test of the filter
+    /// would still pass while both always-on nodes stayed red. Callers hold no
+    /// identity lock; `initialize_identity` therefore arms the ledger directly
+    /// with the lock it already holds rather than calling this.
+    fn arm_ledger_self_filter(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let identity = self.identity.read();
+            if let Some(keys) = identity.keys() {
+                self.ledger_manager.set_own_identity(
+                    &keys.public_key_hex(),
+                    keys.to_libp2p_peer_id().ok().as_deref(),
+                );
+            }
+        }
+    }
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), uniffi::export)]
 impl IronCore {
     /// Create an in-memory IronCore with no persistent storage.
@@ -368,7 +399,9 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::new();
+        // Persistent so receipt authorization survives a restart: a queue that
+        // comes back without its authorization would strand the sender's retry state.
+        let outbox = Outbox::persistent(backend.clone());
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -389,7 +422,7 @@ impl IronCore {
         let transport_memory =
             crate::store::transport_memory::TransportMemoryStore::new(backend.clone());
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(IdentityManager::new())),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -439,7 +472,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -517,7 +552,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -563,7 +598,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent storage and a log directory.
@@ -604,7 +641,9 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::new();
+        // Persistent so receipt authorization survives a restart: a queue that
+        // comes back without its authorization would strand the sender's retry state.
+        let outbox = Outbox::persistent(backend.clone());
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -648,7 +687,7 @@ impl IronCore {
         // Merge hydrate error into storage_degraded if storage was otherwise healthy
         let effective_storage_err = storage_err.or(identity_hydrate_err);
 
-        Self {
+        let core = Self {
             identity: Arc::new(RwLock::new(identity)),
             outbox: Arc::new(RwLock::new(outbox)),
             inbox: Arc::new(RwLock::new(inbox)),
@@ -694,7 +733,9 @@ impl IronCore {
             privacy_config: Arc::new(RwLock::new(crate::privacy::PrivacyConfig::default())),
             policy_engine: Arc::new(RwLock::new(crate::drift::PolicyEngine::new())),
             transport_memory: Arc::new(RwLock::new(transport_memory)),
-        }
+        };
+        core.arm_ledger_self_filter();
+        core
     }
 
     /// Create IronCore with persistent sled-backed storage at `path`.
@@ -814,6 +855,21 @@ impl IronCore {
 
         // Initialize drift engine now that we have a public key
         if let Some(keys) = identity.keys() {
+            // tier_a A8 (issue I-06): the ledger must know whose identity is
+            // "self" before any peer is recorded, or it stores our own key and
+            // listen addresses as a peer and then dials itself, spending the
+            // same per-peer connection budget real peers need. Both stored
+            // spellings are supplied because the ledger holds hex (current
+            // writes) as well as libp2p PeerIds (pre-hex-migration rows).
+            //
+            // Armed here with the guard this scope already holds (the helper
+            // takes a read lock, which would deadlock against it).
+            #[cfg(not(target_arch = "wasm32"))]
+            self.ledger_manager.set_own_identity(
+                &keys.public_key_hex(),
+                keys.to_libp2p_peer_id().ok().as_deref(),
+            );
+
             let pk_bytes = keys.signing_key.verifying_key().to_bytes();
             {
                 let mut engine = self.drift_engine.write();
@@ -894,7 +950,6 @@ impl IronCore {
     ) -> Result<crate::PreparedMessage, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
-
         let recipient_bytes = hex::decode(recipient_id).map_err(|_| IronCoreError::InvalidInput)?;
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
@@ -1045,14 +1100,27 @@ impl IronCore {
 
         let decision = self.make_routing_decision(hint, msg_id_bytes, 128, now);
 
-        let mut handoff_to_drift = false;
-        if let Some(dec) = decision {
-            if matches!(dec.primary, crate::routing::NextHop::StoreAndCarry) {
-                handoff_to_drift = true;
-            }
-        }
+        let handoff_to_drift = decision.is_some_and(|decision| {
+            matches!(decision.primary, crate::routing::NextHop::StoreAndCarry)
+        });
 
         if handoff_to_drift {
+            // Bind the message to its recipient BEFORE custody changes hands. A
+            // peer that only ever receives the envelope could otherwise return an
+            // application receipt for a message we no longer hold retry state
+            // for; the binding is what makes a receipt actionable.
+            self.outbox
+                .write()
+                .authorize_recipient(&message_id, recipient_id)
+                .map_err(|error| {
+                    tracing::error!(
+                        event = "receipt_authorization_store_failed",
+                        message_id = %message_id,
+                        error = %error,
+                        "Aborting custody handoff because receipt authorization could not be retained"
+                    );
+                    IronCoreError::StorageError
+                })?;
             let stored_env = crate::drift::store::StoredEnvelope {
                 envelope_data: envelope_data.clone(),
                 message_id: drift_env.message_id,
@@ -1073,28 +1141,60 @@ impl IronCore {
                 .transport_manager
                 .read()
                 .is_peer_connected(recipient_pk);
-            if !connected {
-                let _ = self.outbox.write().enqueue(QueuedMessage {
-                    version: 1,
-                    message_id: message_id.clone(),
-                    recipient_id: recipient_id.to_string(),
-                    envelope_data: envelope_data.clone(),
-                    queued_at: web_time::SystemTime::now()
-                        .duration_since(web_time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
-                    attempts: 0,
-                    next_retry_at: None,
-                    in_custody: false,
-                    custody_established_at: 0,
-                    state: crate::store::outbox::MessageState::Enqueued,
-                });
+            if connected {
+                // Sent directly, so no retry entry will exist for the transport
+                // to clear, but the receipt still has to be attributable.
+                self.outbox
+                    .write()
+                    .authorize_recipient(&message_id, recipient_id)
+                    .map_err(|error| {
+                        tracing::error!(
+                            event = "receipt_authorization_store_failed",
+                            message_id = %message_id,
+                            error = %error,
+                            "Aborting direct send because recipient authorization could not be retained"
+                        );
+                        IronCoreError::StorageError
+                    })?;
+            } else {
+                self.outbox
+                    .write()
+                    .enqueue(QueuedMessage {
+                        version: 1,
+                        message_id: message_id.clone(),
+                        recipient_id: recipient_id.to_string(),
+                        envelope_data: envelope_data.clone(),
+                        // Seconds, not milliseconds: `remove_expired` compares
+                        // this against a seconds clock, so a millisecond stamp
+                        // made every entry look infinitely old and let the sweep
+                        // delete live retry state (and its authorization).
+                        queued_at: web_time::SystemTime::now()
+                            .duration_since(web_time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        attempts: 0,
+                        next_retry_at: None,
+                        in_custody: false,
+                        custody_established_at: 0,
+                        state: crate::store::outbox::MessageState::Enqueued,
+                    })
+                    .map_err(|error| {
+                        tracing::error!(
+                            event = "outbox_enqueue_failed",
+                            message_id = %message_id,
+                            error = %error,
+                            "Aborting send because retry state could not be retained"
+                        );
+                        IronCoreError::StorageError
+                    })?;
             }
         }
 
+        let identity_id = identity.identity_id();
+        drop(identity);
         self.audit_log.write().append(
             AuditEventType::MessageSent,
-            identity.identity_id(),
+            identity_id,
             Some(recipient_id.to_string()),
             None,
         );
@@ -3652,7 +3752,7 @@ impl IronCore {
             })?
         };
 
-        let message = decode_message(&plaintext).map_err(|e| {
+        let mut message = decode_message(&plaintext).map_err(|e| {
             tracing::warn!("Failed to decode message: {:?}", e);
             IronCoreError::Internal
         })?;
@@ -3761,43 +3861,65 @@ impl IronCore {
             }
         };
 
-        // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
+        // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass.
+        // Positive receipts also require an exact queued recipient match before callbacks.
         if message.message_type == crate::MessageType::Receipt {
-            if let Ok(receipt) = crate::message::types::decode_receipt(&message.payload) {
-                if let Some(delegate) = self.delegate.read().as_ref() {
-                    let status_str = match receipt.status {
-                        crate::DeliveryStatus::Sent => "Sent".to_string(),
-                        crate::DeliveryStatus::Delivered => "Delivered".to_string(),
-                        _ => "Delivered".to_string(),
-                    };
-                    delegate.on_receipt_received(receipt.message_id.clone(), status_str);
-                }
-
-                // A Delivered (or legacy Read) receipt is the application-level
-                // confirmation that releases the sender's retry state. The
-                // delegate callback updates platform history, but it does not
-                // remove the matching outbox/drift entry. Without this call,
-                // the retry loop keeps re-enqueuing an envelope the recipient
-                // already stored, creating duplicates during a long soak.
-                if matches!(
-                    &receipt.status,
-                    crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read
-                ) {
-                    let cleared = self.mark_message_sent(receipt.message_id.clone());
-                    tracing::info!(
-                        event = "receipt_outbox_cleared",
-                        message_id = %receipt.message_id,
-                        removed = cleared,
-                        "Processed application delivery receipt"
+            // The receipt's own claimed sender_id is attacker-controlled plaintext.
+            // Re-bind it to the AUTHENTICATED envelope key so nothing downstream
+            // can be steered by a forged sender_id.
+            message.sender_id = sender_public_key_hex.clone();
+            match crate::message::types::decode_receipt(&message.payload) {
+                Ok(receipt) => {
+                    let positive_receipt = matches!(
+                        &receipt.status,
+                        crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read
                     );
+                    // Positive receipts consume authorization; other statuses only notify.
+                    let authorized = if positive_receipt {
+                        let cleared = self
+                            .outbox
+                            .write()
+                            .remove_for_recipient_key(&receipt.message_id, &sender_pubkey);
+                        if cleared {
+                            if let Ok(message_id) = uuid::Uuid::parse_str(&receipt.message_id) {
+                                self.drift_store.write().remove(message_id.as_bytes());
+                            }
+                        }
+                        cleared
+                    } else {
+                        self.outbox
+                            .read()
+                            .contains_for_recipient_key(&receipt.message_id, &sender_pubkey)
+                    };
+
+                    if authorized {
+                        let status = match receipt.status {
+                            crate::DeliveryStatus::Sent => "Sent",
+                            crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read => {
+                                "Delivered"
+                            }
+                            crate::DeliveryStatus::Failed => "Failed",
+                        };
+                        if let Some(delegate) = self.delegate.read().as_ref() {
+                            delegate.on_receipt_received(receipt.message_id.clone(), status.into());
+                        }
+                    }
+
+                    if positive_receipt {
+                        tracing::info!(
+                            event = "receipt_outbox_cleared",
+                            message_id = %receipt.message_id,
+                            removed = authorized,
+                            "Processed application delivery receipt from the authenticated recipient"
+                        );
+                    }
                 }
-            } else if let Err(e) = crate::message::types::decode_receipt(&message.payload) {
-                tracing::error!(
+                Err(error) => tracing::error!(
                     event = "receipt_parse_failed",
                     sender_id = %message.sender_id,
-                    error = %e,
+                    error = %error,
                     "Failed to parse receipt payload from sender: malformed JSON"
-                );
+                ),
             }
             // Receipts are protocol metadata, not user content. Return the
             // decoded message so callers can handle the receipt branch without
@@ -3879,8 +4001,26 @@ impl IronCore {
     pub fn get_identity_keys(&self) -> Option<crate::identity::IdentityKeys> {
         self.identity.read().keys().cloned()
     }
+    /// Drain queued messages for `peer_id`.
+    ///
+    /// Key resolution (base58 PeerId vs canonical 64-hex public key) happens
+    /// inside `Outbox::drain_for_peer` via `resolve_queue_key` /
+    /// `canonical_peer_key` (PR #322). A second drain with the extracted hex
+    /// form is kept as a belt-and-suspenders path for callers that bypass
+    /// canonicalization (CO-B-001); if the outbox already resolved the key the
+    /// second drain is a no-op.
     pub fn flush_outbox_for_peer(&self, peer_id: &str) -> Vec<QueuedMessage> {
-        self.outbox.write().drain_for_peer(peer_id)
+        let mut messages = self.outbox.write().drain_for_peer(peer_id);
+        if let Ok(pid) = peer_id.parse::<libp2p::PeerId>() {
+            if let Ok(pk) = crate::transport::extract_ed25519_public_key_from_peer_id(&pid) {
+                let hex_pk: String = pk.iter().map(|b| format!("{:02x}", b)).collect();
+                if hex_pk != peer_id {
+                    let mut canonical = self.outbox.write().drain_for_peer(&hex_pk);
+                    messages.append(&mut canonical);
+                }
+            }
+        }
+        messages
     }
     pub fn contacts_store_manager(&self) -> CoreContactManager {
         self.contact_manager.read().clone()
@@ -5012,6 +5152,67 @@ mod tests {
         );
     }
 
+    /// tier_a A8 (issue I-06): the ledger's self-entry filter must be armed by
+    /// the HYDRATING constructor, not only by `initialize_identity`. A deployed
+    /// node loads an existing identity, so `initialize_identity` never runs
+    /// there -- a filter armed only in it is dead code on every real node while
+    /// every unit test of the filter itself still passes.
+    #[test]
+    fn reopened_core_arms_ledger_self_filter_without_initialize_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+
+        // First run: mint and persist an identity.
+        let created = IronCore::with_storage(path.clone());
+        created.grant_consent();
+        created
+            .initialize_identity()
+            .expect("identity must initialise on healthy storage");
+        let me_hex = created.public_key_hex().expect("identity has a public key");
+        drop(created);
+
+        // Second run: the identity is HYDRATED. Nothing calls
+        // initialize_identity on this instance.
+        let reopened = IronCore::with_storage(path);
+        assert!(
+            !reopened.is_storage_degraded(),
+            "reopened storage must be healthy, not degraded: {:?}",
+            reopened.storage_error()
+        );
+        assert_eq!(
+            reopened.public_key_hex().as_deref(),
+            Some(me_hex.as_str()),
+            "the second core must have hydrated the first core's identity"
+        );
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "a fresh ledger starts empty"
+        );
+
+        // The regression under test: this is our OWN identity, so it must be
+        // refused even though initialize_identity never ran here.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.7/tcp/9001".to_string(), me_hex.clone());
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            0,
+            "the hydrated core must refuse to record itself as a peer"
+        );
+
+        // Control: a foreign peer still records, so the assertion above cannot
+        // pass by refusing every write.
+        reopened
+            .ledger_manager
+            .record_connection("/ip4/10.0.0.8/tcp/9002".to_string(), "ab".repeat(32));
+        assert_eq!(
+            reopened.ledger_manager.entry_count(),
+            1,
+            "a foreign peer must still be recorded"
+        );
+    }
+
     #[test]
     fn lifecycle_concurrent_start_stop_keeps_running_and_drift_consistent() {
         let core = Arc::new(IronCore::new());
@@ -5188,6 +5389,268 @@ mod tests {
         // outbox until an application receipt clears it.
         assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    // -----------------------------------------------------------------------
+    // WP1 -- identity unification
+    // -----------------------------------------------------------------------
+
+    /// WP1.1: a placeholder contact -- one whose key could not be derived, so
+    /// `public_key` is empty -- must not be an encrypt target.
+    ///
+    /// This branch once added an explicit empty-recipient guard here to make
+    /// that a stated policy rather than a side effect. The guard was removed as
+    /// dead weight: every input it caught already returned the same error.
+    /// `""` decodes to 0 bytes and the 32-byte width check rejects it; a
+    /// whitespace-only value decodes as invalid hex. Both are
+    /// `InvalidInput`, so no caller could tell the two apart. The behaviour is
+    /// real, so it stays pinned -- by the width check, which is where it
+    /// actually comes from.
+    #[test]
+    fn placeholder_contact_is_not_an_encrypt_target() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let outcome = core.prepare_message(
+            String::new(),
+            "must not encrypt".to_string(),
+            crate::MessageType::Text,
+            None,
+        );
+        let Err(err) = outcome else {
+            panic!("a contact with no verified key must be refused");
+        };
+        assert!(matches!(err, IronCoreError::InvalidInput));
+    }
+
+    /// WP1.2: the identity_id / public_key confusion is NOT decidable in the
+    /// contact store -- a blake3 hash is 64 hex chars and passes curve
+    /// decompression about half the time. It IS decidable here, where the key is
+    /// actually used, and this is the boundary WP1 relies on.
+    ///
+    /// Encrypting to a hash produces ciphertext nobody can open, so a contact
+    /// whose stored key is its own identity_id must be refused with the loud,
+    /// specific error rather than silently accepted.
+    #[test]
+    fn identity_hash_not_usable_as_recipient() {
+        let sender = IronCore::new();
+        sender.grant_consent();
+        sender.initialize_identity().unwrap();
+
+        // A contact whose key is a REAL key, so the store holds a genuine row.
+        // Same seed this used to build inline, so the derived digest -- and so
+        // what the assertions below observe -- is byte-for-byte unchanged.
+        let (peer_id, key_hex) = crate::test_support::self_certifying_keypair(b"wp1-hash-rec");
+        sender
+            .contact_manager
+            .read()
+            .add(crate::store::Contact::new(peer_id, key_hex.clone()))
+            .unwrap();
+
+        // ...but the CALLER passes the contact's blake3 identity_id instead of
+        // its public key. That is the exact confusion the store cannot catch.
+        let identity_id = crate::identity::keys::identity_id_from_public_key_hex(&key_hex)
+            .expect("identity id from key");
+        let outcome = sender.prepare_message(
+            identity_id.clone(),
+            "must be refused".to_string(),
+            crate::MessageType::Text,
+            None,
+        );
+        let Err(err) = outcome else {
+            panic!("a blake3 identity_id must not be accepted as an encryption key");
+        };
+        // The store keeps an identity_id -> public_key index, and `add()`
+        // populates it, so a lookup by identity_id RESOLVES to the contact and
+        // the explicit hash-vs-pubkey scan below the fast path is skipped. The
+        // refusal therefore comes from the encryption step, not from that
+        // guard. Assert only that it fails closed, not which guard fired --
+        // pinning the mechanism here would break the moment the fast path is
+        // reworked, without changing the security property.
+        assert!(
+            !matches!(err, IronCoreError::NotInitialized),
+            "expected a rejection, got {err:?}"
+        );
+
+        // The genuine key is accepted, so the rejection discriminates.
+        assert!(sender
+            .prepare_message(
+                key_hex,
+                "real key".to_string(),
+                crate::MessageType::Text,
+                None
+            )
+            .is_ok());
+    }
+
+    /// WP1.1 + WP1.4: refusing an unverifiable recipient must not be so broad
+    /// that it swallows a real send. A self-certifying recipient still
+    /// encrypts, and the envelope round-trips through its own key.
+    #[test]
+    fn verified_recipient_still_encrypts() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+
+        let prepared = core
+            .prepare_message(
+                recipient.clone(),
+                "still works".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .expect("a verified recipient must still encrypt");
+        assert!(!prepared.envelope_data.is_empty());
+    }
+
+    /// WP1.4 CRYPTO-01 regression: a message whose PAYLOAD claims a third
+    /// party's `sender_id`, delivered inside an envelope the REAL sender
+    /// signed, must be filed under the AUTHENTICATED key -- not the claimed one.
+    ///
+    /// The attack. Ingress reads two different fields. `sender_pubkey` comes
+    /// from the signed envelope and is proof of key possession. The plaintext
+    /// `Message.sender_id` is chosen by whoever built the payload and is
+    /// covered by no signature -- `encrypt_message` binds the sender key as
+    /// AAD, and AAD authenticates the envelope, not the meaning of a field
+    /// inside the ciphertext. A peer that signs honestly but writes a third
+    /// party's identity into that field would, if ingress trusted it, land the
+    /// message in the victim's conversation under someone else's name, inherit
+    /// the victim's block decision for that name, and file it in that party's
+    /// history.
+    ///
+    /// What makes this test non-vacuous is the CONTROL assertion below.
+    /// `received.sender_id` IS the third party's key, which proves the lie
+    /// survived decryption and really is present in the message the victim
+    /// processed. Only then does the stored-row assertion mean anything: a
+    /// test that sent an HONEST message cannot distinguish a correct
+    /// implementation from one that reads the payload field, because in that
+    /// case the two fields agree and both implementations file the same row.
+    #[test]
+    fn crypto01_spoofed_payload_sender_id_cannot_decide_attribution() {
+        let sender = IronCore::new();
+        sender.grant_consent();
+        sender.initialize_identity().unwrap();
+        let recipient = IronCore::new();
+        recipient.grant_consent();
+        recipient.initialize_identity().unwrap();
+        let third = IronCore::new();
+        third.grant_consent();
+        third.initialize_identity().unwrap();
+
+        let recipient_key = recipient
+            .get_identity_info()
+            .public_key_hex
+            .expect("recipient key");
+        let sender_key = sender
+            .get_identity_info()
+            .public_key_hex
+            .expect("sender key");
+        let third_key = third.get_identity_info().public_key_hex.expect("third key");
+        let sender_identity = crate::identity::keys::identity_id_from_public_key_hex(&sender_key)
+            .expect("sender identity");
+        let third_identity = crate::identity::keys::identity_id_from_public_key_hex(&third_key)
+            .expect("third identity");
+        assert_ne!(
+            sender_identity, third_identity,
+            "the claimed party and the real sender must be distinct, or the spoof is untestable"
+        );
+
+        // ---- The forgery: a payload that claims `third` is the sender. ----
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let forged = crate::Message {
+            id: message_id.clone(),
+            sender_id: third_key.clone(), // THE LIE
+            recipient_id: recipient_key.clone(),
+            message_type: crate::MessageType::Text,
+            payload: b"spoof probe".to_vec(),
+            timestamp: crate::util::unix_time_secs(),
+        };
+        let plaintext = crate::message::encode_message(&forged).expect("encode forged payload");
+
+        // ---- Encrypted and signed by the REAL sender, so envelope
+        // verification at ingress must SUCCEED. The question this test asks
+        // is not "is it rejected" but "which identity files it". ----
+        let recipient_pk: [u8; 32] = hex::decode(&recipient_key)
+            .expect("recipient key hex")
+            .try_into()
+            .expect("32 bytes");
+        let envelope_data = {
+            let identity = sender.identity.read();
+            let keys = identity.keys().expect("sender identity keys");
+            // identity-first lock order, as production does.
+            let mut sessions = sender.ratchet_sessions.write();
+            let wire = crate::crypto::encrypt::encrypt_with_ratchet_fallback(
+                &keys.signing_key,
+                None, // no recipient bundle -> legacy static ECDH, as for a V1 peer
+                &recipient_pk,
+                &plaintext,
+                Some(&mut *sessions),
+                &recipient_key, // session lookup key; no session exists yet
+                None,           // our_bundle
+                Some(&keys.x25519_encryption_secret),
+                false, // require_pq
+                None,  // audit_log
+            )
+            .expect("the real sender must be able to encrypt to the recipient");
+
+            let drift_env = match wire {
+                crate::message::WireEnvelope::V1(env) => {
+                    crate::drift::DriftEnvelope::from_legacy_envelope(
+                        env,
+                        message_id.clone(),
+                        recipient_pk,
+                        &keys.signing_key,
+                    )
+                }
+                crate::message::WireEnvelope::V2(env2) => {
+                    crate::drift::DriftEnvelope::from_v2_envelope(
+                        env2,
+                        message_id.clone(),
+                        recipient_pk,
+                        &keys.signing_key,
+                    )
+                }
+            }
+            .expect("wrap in a signed drift envelope");
+            drift_env.to_bytes().expect("serialize envelope")
+        };
+
+        // ---- The victim processes it. Verification must pass: the sender
+        // really did sign it. ----
+        let received = recipient
+            .receive_message(envelope_data)
+            .expect("an honestly-signed message must be accepted, spoofed payload or not");
+
+        // CONTROL: the lie really is in the message the victim decrypted. If
+        // this fails, the payload field is being normalized somewhere upstream
+        // and the assertion below has stopped testing payload trust at all.
+        assert_eq!(
+            received.sender_id, third_key,
+            "CONTROL FAILED: the payload's claimed sender must survive into the \
+             delivered message, otherwise this test no longer exercises payload trust"
+        );
+        assert_ne!(received.sender_id, sender_key);
+
+        // THE PROPERTY: storage attribution comes from the authenticated key.
+        let stored = recipient
+            .history_store_manager()
+            .recent(None, 50)
+            .expect("history readable");
+        let row = stored
+            .iter()
+            .find(|m| m.content.contains("spoof probe"))
+            .expect("the message must be stored");
+        assert_eq!(
+            row.peer_id, sender_identity,
+            "the stored record must be filed under the AUTHENTICATED sender, not \
+             under the identity the payload claimed"
+        );
+        assert_ne!(
+            row.peer_id, third_identity,
+            "a payload-supplied sender_id must never decide storage attribution"
+        );
     }
 
     #[test]
@@ -5494,6 +5957,64 @@ mod tests {
             "a recovered connection must re-drain the entry the race deferred (R9-F3)"
         );
         assert!(core.mark_message_sent(prepared_r9.message_id));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn flush_outbox_for_peer_drains_base58_flush_against_hex_queue_key() {
+        use crate::store::outbox::{MessageState, QueuedMessage};
+
+        const BASE58_PEER: &str = "12D3KooWD776DQdWh6iHV8Qcnpj9jvTXhpJAgSsFPbMCaRtQpFmn";
+        const HEX_PEER: &str = "30dce2bb779b4f1419f6d7d9e91b3ae201aed9e3b181aef674a9496f340a0645";
+
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+
+        let msg = QueuedMessage {
+            version: 1,
+            message_id: "cob001-msg".to_string(),
+            recipient_id: HEX_PEER.to_string(),
+            envelope_data: vec![9, 9, 9],
+            queued_at: 1,
+            attempts: 0,
+            next_retry_at: None,
+            in_custody: false,
+            custody_established_at: 0,
+            state: MessageState::Enqueued,
+        };
+        core.outbox.write().enqueue(msg).unwrap();
+        assert_eq!(core.outbox_count(), 1);
+
+        // Flush spelling used by wasm PeerDiscovered (base58), queue keyed as hex.
+        let drained = core.flush_outbox_for_peer(BASE58_PEER);
+        assert_eq!(
+            drained.len(),
+            1,
+            "base58 flush must drain a hex-keyed outbox entry (CO-B-001)"
+        );
+        assert_eq!(drained[0].message_id, "cob001-msg");
+        assert_eq!(core.outbox_count(), 0);
+
+        // Hex flush still works for hex-keyed entries.
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                message_id: "cob001-msg2".to_string(),
+                recipient_id: HEX_PEER.to_string(),
+                envelope_data: vec![1],
+                version: 1,
+                queued_at: 2,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: MessageState::Enqueued,
+            })
+            .unwrap();
+        let drained_hex = core.flush_outbox_for_peer(HEX_PEER);
+        assert_eq!(drained_hex.len(), 1);
+        assert_eq!(core.outbox_count(), 0);
     }
 
     #[test]

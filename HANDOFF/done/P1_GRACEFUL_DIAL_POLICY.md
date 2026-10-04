@@ -1,5 +1,15 @@
 # P1: Graceful Dial Policy (Items 3+4) — Per-Peer Backoff + Relay Preference
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Ticket Status:** Open (dispatch to Qwen CODER)
 **Tier:** [SONNET][AUDIT-GATE]
 **Scope:** v0.4.0 blocker

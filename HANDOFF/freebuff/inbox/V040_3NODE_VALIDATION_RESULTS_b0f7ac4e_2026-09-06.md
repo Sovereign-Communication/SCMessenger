@@ -1,5 +1,15 @@
 # V040 b0f7ac4e 3-NODE VALIDATION -- LIVE TEST RESULTS (2026-09-06 ~04:10Z)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Task: V040_CEO_APPROVAL_PUSH_276_TO_FULL_3NODE_GREEN_2026-09-04.md (step: full 3-node validation at final head)
 Type: PROGRESS (major gate PASS + two new FAIL/UNVERIFIED findings from live radio test)
 

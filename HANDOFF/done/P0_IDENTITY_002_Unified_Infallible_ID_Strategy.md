@@ -1,5 +1,13 @@
 # Unified Infallible Identity Strategy v1.0
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-04-23
 **Status:** PLAN  awaiting your approval before implementation
 **Scope:** Android, iOS, CLI, Core (all variants)

@@ -1,10 +1,10 @@
 # SCMessenger Document Status Index
 
 Status: Active
-Last updated: 2026-07-25 (planning unity pass; precedence + chain corrected)
+Last updated: 2026-09-19 (correction pass: stale archive paths and a nonexistent section reference fixed; see Section 8c)
 
 NOTE: rows in Sections 2-5 that reference files now under
-`docs/historical/` are Historical regardless of what the row says -- Section 9
+`docs/historical/` are Historical regardless of what the row says -- Section 8a
 lists the moves. The active canonical chain for execution decisions is:
 `DOCUMENTATION.md` -> `HANDOFF/todo/_QUEUE.md` (header corrections) ->
 `HANDOFF/plans/MILESTONE_RELEASE_PLAN.md` -> `HANDOFF/V1_0_0_EXECUTION_PLAN.md`
@@ -38,7 +38,7 @@ Purpose: classify documentation by lifecycle state so execution decisions use au
 | `AGENTS.md`                                           | Active | Codex run policy, including mandatory doc sync and edited-target build verification |
 | `docs/DOCUMENT_STATUS_INDEX.md`                       | Active | Lifecycle map (this file)                                      |
 | `docs/QWEN_QUOTA_LEDGER.md`                           | Active | Verified DashScope Qwen models and quota ledger                |
-| `docs/WORK_DISPATCH_GUIDE.md`                         | Active | Playbook of exact manual commands for all dispatch methods    |
+| `docs/historical/WORK_DISPATCH_GUIDE.md`                         | Historical | Playbook of exact manual commands for all dispatch methods    |
 | `docs/REPO_CONTEXT.md`                                | Active | Cross-component architecture and operating context             |
 | `docs/CURRENT_STATE.md`                               | Active | Verified current runtime/build state + ID management           |
 | `docs/ID_MANAGEMENT_ANALYSIS.md`                     | Active | Comprehensive ID system analysis and verification              |
@@ -49,7 +49,7 @@ Purpose: classify documentation by lifecycle state so execution decisions use au
 | `HANDOFF/V1_0_0_EXECUTION_PLAN.md`                    | Active | v1.0.0 two-phase DAG; Section 0A = current amendments          |
 | `HANDOFF/plans/FARM_FINAL_PLAN.md`                    | Active | Farm validator topology and gap ledger                         |
 | `docs/ORCHESTRATION.md`                               | Active | Orchestration protocol (`/orchestrate`)                        |
-| `docs/WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md`          | Historical | Moved to `docs/historical/` (2026-07-11); see Section 8a   |
+| `docs/historical/WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md`          | Historical | Moved to `docs/historical/` (2026-07-11); see Section 8a   |
 | `docs/MILESTONE_PLAN_V0.2.0_ALPHA.md`                 | Active | v0.2.0 era milestone (context; superseded for v1 sequencing) |
 | `docs/V0.2.0_PHASE_EXECUTION_PROMPTS.md`              | Active | Execution prompts per phase                                    |
 | `docs/V0.2.0_RESIDUAL_RISK_REGISTER.md`               | Active | Residual-risk source of truth                                  |
@@ -90,9 +90,9 @@ there, since that directory auto-loads into every spawn.
 | Document                                                     | Status     | Purpose                                                                 |
 | ------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------- |
 | `HANDOFF/plans/V040_ORCHESTRATION_PLAN.md`                   | Superseded | 2026-07-19 Josh alpha table; use `_QUEUE.md` + MILESTONE_RELEASE_PLAN   |
-| `docs/REPO_GITHUB_REALIGNMENT_FIRST_PASS_2026-03-07.md`      | Active     | Planning-only GitHub/repo operating-model audit and execution blueprint |
+| `docs/historical/REPO_GITHUB_REALIGNMENT_FIRST_PASS_2026-03-07.md`      | Historical | Planning-only GitHub/repo operating-model audit and execution blueprint |
 | `docs/global_viability_audit.md`                             | Active | Supporting viability audit; context for execution, not canonical truth  |
-| `docs/implementation_cheatsheet_3.4.2026.md`                 | Active | Supporting implementation reference derived from audit findings         |
+| `docs/historical/implementation_cheatsheet_3.4.2026.md`                 | Historical | Supporting implementation reference derived from audit findings         |
 | `docs/DEEP_ARCHITECTURAL_REASONING_DHT_OPTIMIZATION.md`      | Active | Deep architectural analysis for DHT peer discovery latency optimization |
 | `docs/SPRINT_PLAN_OPTIMIZATION_BUNDLE.md`                    | Active | Sprint plan for optimization bundle (contact lookup, transport, sync, discovery, pagination) |
 
@@ -104,11 +104,11 @@ there, since that directory auto-loads into every spawn.
 | ----------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------- |
 | `docs/V0.2.1_SINGLE_ACTIVE_DEVICE_TIGHT_PAIR_PLAN.md` | Active  | WS13 workstream COMPLETE (WS13.6 landed 2026-05-18); keep as the device-model/reference source for WS14 |
 | `docs/V0.2.1_RESIDUAL_RISK_REGISTER.md`               | Active  | Residual-risk source of truth for active WS13/WS14 execution                             |
-| `docs/V0.2.1_ALPHA_ROLLOUT_PLAN.md`                   | Active  | Pre-rollout checklist, build/deploy instructions, and alpha test protocol for Android/iOS |
-| `docs/ALPHA_BURNDOWN_V0.2.1.md`                       | Active  | Comprehensive CI/test/stub/incomplete/dead-code audit for v0.2.1 alpha release sign-off  |
-| `docs/WS14_AUTOMATION_HANDOFF.md`                     | Active  | Repo-owned branch/phase ledger for the WS14 hourly automation stream                     |
-| `docs/WS14_HOURLY_AUTOMATION_PROMPT.md`               | Active  | Canonical WS14 hourly execution prompt and operating defaults                            |
-| `docs/V0.2.1_NOTIFICATIONS_DM_PLAN.md`                | Planned | WS14 workstream for v0.2.1 DM + DM Request notifications (iOS/Android/WASM, hybrid mode) |
+| `docs/historical/V0.2.1_ALPHA_ROLLOUT_PLAN.md`                   | Historical | Pre-rollout checklist, build/deploy instructions, and alpha test protocol for Android/iOS |
+| `docs/historical/ALPHA_BURNDOWN_V0.2.1.md`                       | Historical | Comprehensive CI/test/stub/incomplete/dead-code audit for v0.2.1 alpha release sign-off  |
+| `docs/historical/WS14_AUTOMATION_HANDOFF.md`                     | Historical | Repo-owned branch/phase ledger for the WS14 hourly automation stream                     |
+| `docs/historical/WS14_HOURLY_AUTOMATION_PROMPT.md`               | Historical | Canonical WS14 hourly execution prompt and operating defaults                            |
+| `docs/historical/V0.2.1_NOTIFICATIONS_DM_PLAN.md`                | Historical | WS14 workstream for v0.2.1 DM + DM Request notifications (iOS/Android/WASM, hybrid mode) |
 
 ---
 
@@ -236,3 +236,52 @@ Gemini runbook for the `lanes` backend, subordinate to docs/ORCHESTRATION.md), `
 
 53. **WASM WebSocket Connectivity Fix** (2026-04-11) updates reflected in active docs (`docs/CURRENT_STATE.md`, `REMAINING_WORK_TRACKING.md`, `docs/DOCUMENT_STATUS_INDEX.md`), including core WebSocket transport enablement, dedicated bridge port 9002 listener, JS-side fail-safe dial check, and initialization flow optimization.
 54. **WASM thin client / daemon JSON-RPC** (2026-04-11) updates reflected in active docs (`docs/CURRENT_STATE.md`, `REMAINING_WORK_TRACKING.md`, `docs/DOCUMENT_STATUS_INDEX.md`, `DOCUMENTATION.md`), including loopback-only CLI UI bind, `/ws` Origin allow-list, `core/wasm_support/rpc` contract, `UiOutbound` multiplexing, `scripts/install.sh` / `install.ps1`, `wasm/daemon_bridge` helpers, and `btleplug` adapter probe + BLE capability flag on desktop OSes.
+
+## 8c) 2026-09-19 canonical index correction pass (T11)
+
+Proved with `grep -nE '^##+ ' docs/DOCUMENT_STATUS_INDEX.md` that this document
+has sections 1-8 only -- **there is no Section 9**, so the header note's
+"Section 9 lists the moves" pointed at nothing. The archive moves are Section
+8a. Corrections made in place, originals retained here:
+
+1. Header note: "Section 9 lists the moves" -> "Section 8a lists the moves".
+2. Nine rows in Sections 2, 3 and 4 named files that do not exist while this
+   same document's Section 8a recorded them as moved to `docs/historical/`
+   (2026-07-11). Each row now names its real path and carries `Historical`:
+   `docs/historical/WORK_DISPATCH_GUIDE.md`,
+   `docs/historical/WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md`,
+   `docs/historical/REPO_GITHUB_REALIGNMENT_FIRST_PASS_2026-03-07.md`,
+   `docs/historical/implementation_cheatsheet_3.4.2026.md`,
+   `docs/historical/V0.2.1_ALPHA_ROLLOUT_PLAN.md`,
+   `docs/historical/ALPHA_BURNDOWN_V0.2.1.md`,
+   `docs/historical/WS14_AUTOMATION_HANDOFF.md`,
+   `docs/historical/WS14_HOURLY_AUTOMATION_PROMPT.md`,
+   `docs/historical/V0.2.1_NOTIFICATIONS_DM_PLAN.md`.
+   The WS12.29 row already said "Moved to `docs/historical/`" but its path
+   column still read `docs/`, which does not resolve -- so the row was honest
+   in prose and wrong in path.
+
+Method: every path-like reference in this file was enumerated from the
+backticked tokens and tested against a clean checkout of `b529011b`; 17 did not
+resolve. Nine are the moved documents above. The remaining eight are not path
+claims: prose shorthand (`_QUEUE.md`, `MILESTONE_RELEASE_PLAN.md`,
+`V040_ORCHESTRATION_PLAN.md`) and globs or bare filenames
+(`.claude/rules/*.md`, `.github/ISSUE_TEMPLATE/*.yml`,
+`.github/workflows/*.yml`, `StorageManager.kt`, `install.ps1`).
+
+Nothing in Sections 5, 6 or 7 was changed: Section 5's Mixed rows all resolve,
+Section 6 defines the Historical class rather than naming files, and Section 7
+is the precedence rule set. `docs/FEATURE_PARITY.md` was not touched -- its
+self-labelled staleness is the correct handling and copying that pattern, not
+re-auditing the matrix, is what this task asked for.
+
+NOT rewritten, on purpose: five `docs/...` references remain in this file that
+do not resolve today -- `docs/WS14_AUTOMATION_HANDOFF.md`,
+`docs/WS14_HOURLY_AUTOMATION_PROMPT.md`, `docs/WS12.29_KNOWN_ISSUES_BURNDOWN_PLAN.md`,
+`docs/REPO_GITHUB_REALIGNMENT_FIRST_PASS_2026-03-07.md` and
+`docs/V0.2.1_NOTIFICATIONS_DM_PLAN.md`. All five sit inside Sections 8 and 8a,
+which are dated logs of what a given sync pass touched at that time, not status
+claims about where a file lives now. Section 8a of this same file records the
+move in each case. Rewriting a dated log to match the present is how a document
+stops being evidence, so the log stays as written and this note carries the
+reconciliation.

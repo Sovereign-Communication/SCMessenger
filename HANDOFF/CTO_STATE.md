@@ -1,11 +1,132 @@
 # CTO state — live handoff
 
-Status: Active
-Last updated: 2026-09-17T20:05Z (MERGE TRAIN: #288 carrier + #289 + #283 merged to main after per-PR green verification; #295 in final CI; v0.4.0 tag STILL NOT READY per remaining-findings backlog; 3-node fleet re-audited read-only and found NOT same-candidate)
-Previous: 2026-09-15T17:55Z (MINOR: tag-readiness evidence SEALED — tip CI 7/7 workflows green on 1aaf6d34; rehearsal 34996353889 final: 6/7 build jobs green, single failure is the SCMESSENGER_KEY_ALIAS signing-secret VALUE mismatch = operator-owned action item, not infra/code; NO tag taken)
-Entry point: `/CTO`. This file is the whole context load.
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
 
-# ===== RESUME HERE (2026-09-17, evening) =====
+Status: Active
+Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
+Entry point: `/CTO`. Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-09-30, Codex takeover) =====
+
+The Codex handoff is a record, not authorization. Section 0 takes precedence over
+older statements in that handoff. The previous Freebuff transition and the
+historical resume points below remain as records; do not use their PR, fleet,
+or release snapshots as current status.
+
+- At checkout creation, the isolated takeover worktree was at
+  `10f5642ea94cb6398f72ee60d3703aed26e9428d` (merge of #420); the
+  orchestrator then verified live `main` at that SHA. This is a historical
+  takeover-start snapshot. Recheck the remote immediately before any
+  outward-facing action.
+- The September 29 handoff records the operator's v0.4.0/v0.5.0 unification
+  and merge train. Follow its section 0 and section 6 order, one PR at a
+  time, while preserving the existing plan's gates and operator decisions.
+  Re-read the exact PR head, scope, checks, reviews, and merge state before
+  each action; the handoff's earlier table is historical.
+- The handoff records #421 as the 64-connection stopgap. The orchestrator's
+  cap-16 update to #421 is at head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`. At approximately
+  2026-09-30T01:21Z, #421 remained OPEN with no reviews; its new CI run was
+  queued or in progress. The physical cell test and independent Rule-8/A2
+  review of the exact head remain pending. PR #422 merged into `main` at
+  2026-09-30T01:17:49Z; the resulting `main` commit is
+  `064deb2d72cef8b293e182927ffa5119b6f2ae6f`.
+- The September 29 operator instruction is CI-only verification: no local
+  builds. Complete CI and the recorded review gates before claiming any car
+  done. No new v0.4.0/v0.5.0 release or three-node/BLE PASS is established
+  by this update. Re-derive Windows, AWS cloud node, and Pixel state before
+  making a live claim or deploying.
+- The handoff records that Claude stood down and that the primary checkout
+  contains unowned WIP. Preserve that work. The Codex takeover proceeds in
+  an isolated worktree. Do not delete or commit primary-checkout WIP until
+  its ownership and remote durability are established.
+
+# ===== END RESUME 2026-09-30 =====
+
+# ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
+
+Cross-repo facts for this seat; nothing in SCMessenger source changed. Every line
+carries its evidence. The SCMessenger execution authority and procedure above are
+unchanged; this block only records upstream Harness state.
+
+- Harness `origin/main` = `412f7e1`, CI 5/5 green (`gh run list --repo Sovereign-Communication/harness --branch main --limit 1`).
+- Harness agent lane migrated from Freebuff to Claude Code (harness PR #66 `6f00d38`):
+  `CLAUDE.md` + tool-neutral `AGENTS.md`, `/isolated-mission`, `/isolated-request`,
+  seats `/cto` `/ceo` `/bod`. The SCMessenger Freebuff transition doc is untouched;
+  whether SCMessenger follows is an operator decision.
+- Harness MCP now connects from Claude Code (harness PR #66 fixed `initialize` protocol
+  negotiation; it previously rejected `2025-11-25`). This supersedes the older note below
+  that the MCP server "needs a client registration": `claude mcp add harness --scope local
+  -e HARNESS_MCP_ALLOWED_ROOTS=<root> -- <python> -m harness.mcp` (observe-only by default).
+- Upstream behaviour changes relevant to `vendor/sovereign-harness` consumers (refresh only via
+  `python scripts/update_local_harness.py`):
+  - harness PR #67 `a9b58ab`: `harness jev-phase` Jev bar now scores six sentiment axes and
+    prints declared improvement buckets; `--all` board. SCMessenger's
+    `scripts/jev_canonical_check.py` gate is unaffected.
+  - harness PR #69 `e47001a`: with a paid key configured, free-tier runs fail over to the
+    cheapest paid rung (ceiling-bounded, ledgered). Ling was removed from the free apply
+    pool (open decision `DF-LING-2`).
+  - harness PR #70 `412f7e1`: `harness ledger verify` now exits 2 on a broken chain (was
+    always 0) — any script gating on it will now fail loudly as documented.
+- Not done here: no vendor refresh, no edit to the shared checkout (it holds another
+  session's uncommitted `vendor/`, `Cargo.*`, HANDOFF WIP on `glm/canonical-outlier-audit`).
+
+# ===== RESUME HERE (2026-09-21, orchestrator session close) =====
+
+## Canonical Freebuff transition (read first after AGENTS.md + FREEBUFF.md)
+
+**`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`** is the sole post-session
+execution handoff until the operator replaces it.
+
+Supporting plans on `origin/main`:
+- `HANDOFF/V040_CTO_MASTER_PLAN_2026-09-20.md`
+- `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md`
+- `HANDOFF/V040_WORKING_FIRST_PATH_2026-09-20.md`
+- `HANDOFF/V040_JEV_HARNESS_INTEGRATION_2026-09-21.md`
+- `HANDOFF/freebuff/README.md` (DISPATCHABLE paste set)
+
+## Operator standing rulings (2026-09-20/21)
+
+1. **Working-first** — reliable day-to-day mesh before tag/secret pressure.
+2. **WP order** — identity/routing/inbound/delivery truth then WP5 live proof.
+3. **DONE** — mechanical gates + keyed JEV `jev_canonical_check.py` `is_passing`.
+4. **Harness** — SCMessenger-local `vendor/sovereign-harness` only; update via
+   `python scripts/update_local_harness.py`; do not edit external Harness trees.
+5. **OpenRouter Jev fallback** — `~typesafe/jev-latest` on
+   `https://openrouter.ai/api/alpha/decisions` when TypeSafe is unhealthy;
+   operator must allow OpenRouter provider `typesafe`.
+6. **CI hygiene** — cancel superseded Actions after merges (`BUILD_AND_CI.md`).
+7. **Pixel** — fresh install allowed; UI is operator-driven; agents: install + passive logs.
+8. **Scoring** — no mid-wave scoring; after wave: harness + logs + operator phone session.
+
+## Fleet at session close (re-derive before treating as live)
+
+| Node | Last orchestrator observation |
+|---|---|
+| Windows CLI | `51edac4` main, healthy, peer AWS, binary under `tmp/radio-candidates/51edac4b/` |
+| AWS cloud | `51edac4b` healthy, identity preserved, seed-dial + gossip + custody retention |
+| Pixel | `51edac4b` APK installed (authorized fresh install); ADB connected |
+
+`origin/main` at close: `9d37f9e6` (#345). Staged open work: **PR #347**
+(local harness + OpenRouter JEV fallback) — merge when required CI green.
+
+## Freebuff next steps
+
+1. Merge #347 if open and green (`scripts/pr_scope.sh 347`).
+2. Paste DISPATCHABLE tickets from `HANDOFF/freebuff/README.md`.
+3. Worktrees + PRs; Rule-8 as required; JEV DONE contract.
+4. After Wave-1 + WP5: master plan §4 checklist → operator 0.4.0 tag.
+
+# ===== END RESUME 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-17, evening) — HISTORY -----
+
 
 ## Merge train: carrier landed; #295 is the last member in flight
 

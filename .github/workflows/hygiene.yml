@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
@@ -268,6 +269,76 @@ jobs:
             # Don't fail; warn only for now
           else
             echo "[OK] No oversized tracked files detected"
+          fi
+
+      - name: Verify required status contexts cannot be path-filtered
+        run: |
+          echo "Checking that branch-protection required contexts always report..."
+          python3 scripts/check_required_contexts.py
+
+      # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
+      # ------------------------------------------
+      # An unpinned Rust toolchain is the same failure as a path-filtered
+      # required context, reached by a different road. Between 2026-09-30 and
+      # 2026-10-02 `Lint` went red on 13 `clippy::double_must_use` errors with
+      # NO source commit: stable moved to rustc 1.99.0, clippy 1.99.0 added the
+      # lint, and `dtolnay/rust-toolchain@stable` updates the runner's
+      # preinstalled toolchain to whatever stable is that day. The repository's
+      # red/green state stopped being a function of its own source, so there was
+      # nothing to bisect and nobody to ask.
+      #
+      # A pin alone does not hold, because the version lives in two places:
+      # rust-toolchain.toml and 27 declarations across ten workflow files.
+      # Bumping one and not the other is not a partial fix, it is a trap. This
+      # check cross-checks them, and it fails CLOSED when it can evaluate
+      # nothing, so a renamed workflow cannot make it pass vacuously. Hygiene is
+      # already a required context, so this costs no new context and no new
+      # runner class.
+      - name: Verify the Rust toolchain is pinned and agrees across all sources
+        run: |
+          echo "Checking that every declared Rust toolchain is pinned and agrees..."
+          python3 scripts/check_toolchain_pin.py --repo-root .
+
+      # The check above is a new required-context step, so it gets the same
+      # treatment `handoff-scope`'s classifier already gets: prove it still
+      # fails on each regression it exists to catch, including the one where
+      # the workflow surface is renamed and the check can evaluate nothing.
+      # A gate that has quietly stopped failing looks exactly like a gate with
+      # nothing to check.
+      - name: Prove the toolchain-pin check can still fail
+        run: python3 scripts/check_toolchain_pin.py --self-test
+
+      # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
+      # ------------------------------------------
+      # A queue ticket whose status line advertises an open PR that has already
+      # merged is how a lane picks finished work off the dispatch queue: on
+      # 2026-09-19 four tickets cited PRs merged on 2026-09-03, and one of them was
+      # nearly dispatched again on the strength of its own status line. This is a
+      # required context already, so the check costs no new workflow and no new
+      # runner class. See scripts/check_queue_status.py for what it can and cannot
+      # see.
+      #
+      # ENFORCEMENT IS PR-ONLY. On a push to main it runs --warn-only, because
+      # merging the very PR that a ticket cites is what makes that citation stale;
+      # failing there would redden main for its own correct merge. On a pull request
+      # the cited PR cannot be the one under test in a merged state, so the verdict
+      # is enforced -- and only on tickets that PR actually changes, so pre-existing
+      # debt is reported rather than silently blocking unrelated work.
+      - name: Check queue ticket status lines against GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENFORCE: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$ENFORCE" = "true" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          echo "Checking queue ticket status lines (event=${{ github.event_name }}, base=${BASE:0:8})..."
+          if [ "$ENFORCE" = "true" ]; then
+            python3 scripts/check_queue_status.py --changed-only --base-ref "$BASE"
+          else
+            python3 scripts/check_queue_status.py --changed-only --base-ref "$BASE" --warn-only
           fi
 
       - name: Summary

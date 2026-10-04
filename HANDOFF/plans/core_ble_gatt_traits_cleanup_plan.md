@@ -1,5 +1,13 @@
 # Design Plan: BLE GATT Traits Cleanup (CORE-SWEEP-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Status:** PROPOSED / REVIEWED  
 **Date:** 2026-07-09  
 **Task reference:** [NEEDS PLANNING] CORE_SWEEP_03_ble_gatt_traits_never_implemented.md

@@ -1,5 +1,13 @@
 # ANDROID_PIXEL_6A_AUDIT_2026-04-17
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Status:  P0 BLOCKER - Critical App Instability
 **Source:** Google Pixel 6a Android 16 logs (170839.logcat, 171049.logcat)
 

@@ -1,5 +1,15 @@
 # v0.4.0-alpha.1 FINDING DISPOSITIONS (040-S1b live table)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: LIVE -- updated per remediation commit and review round
 Authority: operator mandate "fix ALL open findings before tagging" +
 GPT plan 040-S1b ("implicit deferral is forbidden -- every finding is

@@ -1,5 +1,13 @@
 # TASK: Add Contact screen has 2 bugs - button hidden on small screens, save doesn't persist
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: TODO. Found 2026-07-11 while manually adding a test contact for the
 Windows-CLI<->Android-emulator live delivery test. Both confirmed via direct
 device interaction (adb + uiautomator), not speculation.

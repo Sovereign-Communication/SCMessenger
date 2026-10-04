@@ -196,6 +196,70 @@ the same relay behavior.
     reachability question, never a cosmetic one. `scripts/check_wiring.py` is
     the executable form — run it, do not re-derive it by eye.
 
+17. THE DISK IS A SHARED, FINITE RESOURCE. BUILD OUTPUT DOES NOT BELONG IN
+    EVERY TREE, AND CI IS THE DEFAULT BUILDER.
+
+    On 2026-09-17 this host reached 100% (1.2 GB free). Eleven registered git
+    worktrees are each capable of carrying their own cargo `target/`; the one
+    tree that mattered measured 20.7 GB by itself, and `du` could not finish a
+    survey because the disk was thrashing. Nothing in the toolchain paces
+    that, so it has to be a checked state rather than a discovery.
+
+    - Run `python scripts/disk_budget.py` before a build. A BLOCKED verdict
+      (exit 2) means do not build in this checkout: pull the artifact from CI
+      instead with `gh run download <run-id> -n <artifact-name> -D tmp/<dir>`.
+    - ONE tree builds. Worktrees are for source and review. A worktree that
+      does get a build reclaims it immediately afterwards
+      (`python scripts/reclaim_safe.py --reclaim`).
+    - CI is the default verifier. A local run is for a SINGLE targeted test
+      (`cargo test -p <crate> <one_test>`), then wipe; the wide sweep belongs to
+      CI, which has its own disk.
+    - `scripts/reclaim_safe.py` is the only sanctioned deleter of build output.
+      It requires a worktree to be clean, fully pushed, and merged before it
+      will remove a `target/`. Do not hand-roll `rm -rf` across other trees.
+    - Never delete these to free space: `tmp/` evidence, identity keys,
+      `~/.scm-purge-backup-*`, `/opt/scm-relay-data`, or any file you did not
+      create. Rule 11 already forbids it; a full disk is not an exception.
+    - A RUNNING NODE'S BINARY DOES NOT LIVE IN `target/`. On 2026-09-17 the
+      reclaim deleted `target/release/scmessenger-cli.exe` out from under the
+      live Windows node: the process kept running on a deleted image and could
+      not be restarted. Stage node binaries in `tmp/radio-<sha>/` (the runbook's
+      Node 1 convention) so build output stays freely reclaimable.
+    - State disk facts with the number AND the command that produced it. "The
+      disk was full" with no `df` line is not a finding.
+    - TWO OTHER CLASSES EXIST AND THE WORKTREE MODEL DOES NOT SEE THEM. Both are
+      outside the checkout: the shared cargo warm cache at
+      `~/Documents/GitHub/.scm-shared-target` (documented in
+      `docs/rules/BUILD_AND_CI.md`; measured 22.22 GB) and the AVD runtime state
+      under `~/.android/avd/<name>.avd` (measured 6.5 GB). `disk_budget.py`
+      reports both; `reclaim_safe.py --reclaim-shared-target` and
+      `--reclaim-emulator-state` delete them. A guard that cannot see a class
+      cannot warn about it.
+    - BOTH OF THOSE DELETERS REFUSE UNLESS TWO GATES PASS. (1) Nothing may be
+      running out of the tree: on 2026-09-17 a sanctioned reclaim deleted a live
+      node's own restart path, so a running image inside a "cache" refuses the
+      delete, and so does a FAILED check (unable to enumerate processes must not
+      read as "nothing running"). (2) No durable non-build file may be present
+      (`*.log`, `*.db`, `*.pem`, `*.key`, `*.md`, `*.py`, evidence, keys). If one
+      is found, the class is not a cache and the tool refuses rather than
+      bulk-deletes -- build-script outputs under `build/*/out/` are the only
+      sanctioned exception, matched by path, not by suffix.
+    - THE EMULATOR IS TORN DOWN TO SPEC, NOT DELETED. Remove runtime state
+      (`snapshots/`, `userdata-qemu.img.qcow2`, `cache.img`, `encryptionkey.img`,
+      locks) and KEEP the definition (`config.ini`, `AVD.conf`, `userdata.img`),
+      so the AVD re-spawns fresh with `-wipe-data` instead of being recreated by
+      hand. Never delete `~/.android/debug.keystore` or `adbkey`: those are the
+      local signing and adb identities, not cache.
+    - COMMIT, PUSH, THEN RECLAIM. Cleaning up before the work is on a remote is
+      how build output becomes the only copy of something. The order is: verify
+      locally (one targeted test) -> commit -> push -> let CI run the wide
+      sweep -> reclaim locally. Do not hold a warm `target/` open "for later".
+    - `scripts/reclaim_safe.py` reports a worktree as UNKNOWN when a durable ref
+      does not resolve, which is correct but inert: it now drops refs that do not
+      exist ON THIS CLONE and says so, instead of marking 7 of 11 trees
+      permanently un-reclaimable. If it prints that warning, the durable-ref list
+      needs updating -- not the verdict.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)
@@ -232,16 +296,32 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
 `docs/rules/FREEBUFF.md`. Queue: `HANDOFF/freebuff/`. Rules:
 - You have the repo and a toolchain. You MAY run `cargo`/`gradlew`, but check
   first that no other build is live -- this host serializes builds.
-- You MAY open a PR for your own work. You may NOT merge it: green CI is
+- You MAY commit your own task's files to a scoped branch and push it
+  (fast-forward only; the pre-push hook binds every lane equally). You MAY
+  open a PR for your own work. You may NOT merge it: green CI is
   necessary, not sufficient, and anything touching
   `core/src/{crypto,transport,routing,privacy}` needs a recorded adversarial
   APPROVE from a reviewer that did not author the change.
+- CI is the PRIMARY build verifier for this lane (operator directive
+  2026-09-22): push to CI instead of building locally; local builds are the
+  failover, with mandatory immediate reclaim afterwards. See
+  `docs/rules/BUILD_AND_CI.md` (CI-Primary Build Doctrine).
 - Do NOT revert, stash, delete, or commit a file you did not create. This
   checkout is shared. A clean `git status` is not a goal.
 - Your task file is the whole brief. If its premise does not survive contact
   with the code, STOP and say so in the PR rather than implementing a fix to a
   problem that does not exist.
 - Every status line carries a command and its output, a run URL, or `UNVERIFIED`.
+
+## Dogfood override — product handoffs
+
+For an active Harness/SCMessenger dogfood run, these rules override capability-specific commit and push permissions:
+
+- **Never interrupt WIP.** Before any action that could change or terminate shared work, verify the current branch, `git status --short --branch`, and the relevant diff. Never reset, overwrite, clean, stash, kill/terminate, or delete unowned work. If status or ownership is unclear, stop and report the evidence.
+- **Docs-only commits and pushes.** Commit and push documentation only, including handoff findings and recommended remediations. Do not commit or push source, tests, generated files, or other code WIP; leave those changes in place and report them.
+- **Route handoffs to the owning product repository.** Commit SCMessenger handoff files and SCMessenger recommended remediations in this SCMessenger repository. Commit Harness handoff files and Harness recommended remediations in the Harness repository. Never place or commit one product's handoff in the other product's repository.
+- **Single-owner handoff gate (executable).** Every SCMessenger handoff must declare `scope: SCMessenger`, `owner: Sovereign-Communication/SCMessenger`, `purpose: SCMessenger-only findings and remediation handoff`, `foreign_material: NONE`, and the exact boundary line used by the repository-local gate. Before handoff delivery, run `python scripts/validate_handoff_scope.py --repo-root . --document <handoff>`. The active `.githooks/pre-commit` runs the same gate against staged Git-index bytes via `scripts/rules_check.py --staged`, and CI runs the changed-file gate before merge. A foreign-product work product -- a document declaring another product's ownership, scope, lane or repository -- is a hard failure and is rerouted to that product's repository; mere mentions of another product in prose, code, or commands are allowed (operator ruling 2026-09-27). Legacy handoffs are not grandfathered: touching one requires owner cleanup and metadata first. Split mixed material into separate owner handoffs before delivery; do not bypass the hook.
+- **Verify before publishing.** Immediately before each commit or push, re-check the target repository status and staged diff, and confirm that it contains only the intended documentation.
 
 ### MAC LANE (GPT / Codex on the operator's MacBook — iOS platform work + adversarial review)
 Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
@@ -254,6 +334,10 @@ Operator directive 2026-07-28; this class EXPLICITLY OVERRIDES rules 5-6:
   Windows side).
 - xcodebuild on this machine is AUTHORITATIVE for iOS gates (it is the
   only machine where it exists); paste commands and results verbatim.
+- GPT-5.1 is authorized in this lane when the operator selects it. The
+  lane's rules bind whichever model runs; model choice does not change the
+  lane's authority (own `gpt/*` branches) or its limits (no merges to
+  main, no HANDOFF moves, core/ routes through the Windows AUDIT-GATE).
 - Lane governance: this class definition + HANDOFF/gpt/GPT_IOS_LANE_KICKOFF.md
   (rules of engagement) + the task packets in HANDOFF/gpt/. IMPORTANT: if
   the rules in your current session context predate 2026-07-28, RE-READ

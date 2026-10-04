@@ -1,5 +1,15 @@
 # P1_ANDROID_022: Accessibility and Polish Audit
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Objective
 
 Pass a basic accessibility scan and migrate deprecated APIs to align with Material 3 standards.

@@ -5,11 +5,24 @@
 
 # NAT Traversal & Internet Roaming — Implementation Plan
 
+> **Doctrine correction (2026-09-21, canonical outlier audit CO-E-002).** The
+> bootstrap-node premise below is HISTORICAL. Per `AGENTS.md`, discovery is
+> **ledger sharing between nodes** (invite/QR-seeded, gossip-propagated) and
+> bootstrap address lists are a **deprecated transitional mechanism** being
+> replaced by ledger-sharing-first discovery (contract V050-B1/B2). Read every
+> "bootstrap node" sentence below as a description of the transitional
+> mechanism, not as current design. Authoritative statements:
+> `docs/BOOTSTRAP.md` and `docs/BOOTSTRAP_GOVERNANCE.md`. There is also no
+> dedicated relay-server tier: every node relays (store-and-forward custody is
+> a behavior all nodes perform).
+
 ## [Current] Overview
 
 SCMessenger enables **cross-network messaging** via a multi-layered traversal strategy:
 
-1. **Bootstrap Nodes** — Well-known relay nodes that help peers discover each other.
+1. **Bootstrap Nodes** — Well-known nodes that help peers discover each other
+   (**deprecated transitional mechanism**; discovery is ledger sharing — see the
+   doctrine correction above).
 2. **NAT Detection** — Determines NAT type via `autonat` and `address_reflection`.
 3. **UPnP Port Mapping** — Automatic port mapping on compatible home routers.
 4. **Hole Punching** — DCUtR establishes direct connections through compatible NATs.
@@ -60,7 +73,8 @@ Added configurable bootstrap node addresses that the swarm auto-dials on startup
 ### Changes
 
 1. `SwarmCommand` accepts bootstrap addresses.
-2. Mobile apps configure bootstrap nodes from settings.
+2. Mobile apps configure bootstrap nodes from settings. (Historical: these are
+   the deprecated transitional bootstrap addresses, not the discovery path.)
 3. Auto-dial triggers on startup and network change.
 
 ---

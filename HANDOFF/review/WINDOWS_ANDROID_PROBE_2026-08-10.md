@@ -1,5 +1,13 @@
 # Windows <-> Android Live Delivery Probe
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Complete
 Probe window (UTC): 2026-08-11T04:30:33Z - 2026-08-11T04:39:52Z
 Operator/agent: Claude (Cowork sandbox), read-only against the running node except

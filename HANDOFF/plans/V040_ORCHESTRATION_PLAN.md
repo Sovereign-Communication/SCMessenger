@@ -1,5 +1,13 @@
 # v0.4.0 Orchestration Plan — Josh Alpha Test
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: **Superseded** (2026-07-25 planning unity pass).
 Last updated: 2026-07-19 (Bob planning session). Corrections applied 2026-07-19 after subagent verification pass.
 

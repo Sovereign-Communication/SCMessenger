@@ -17,6 +17,80 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  handoff-scope:
+    name: Handoff ownership scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate changed handoffs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -z "$base" ]; then
+            echo "handoff-scope: no comparison commit; refusing to skip the gate" >&2
+            exit 2
+          fi
+          python scripts/validate_handoff_scope.py --repo-root . --changed-from "$base"
+      - name: Classify the gate itself
+        # The classification decides which documents are enforced at all, so a
+        # silent regression here is invisible from the outside: a gate that
+        # stops checking things looks exactly like a gate with nothing to
+        # check. This runs on every PR and every push, needs no repository
+        # state, and fails if the classifier drifts.
+        shell: bash
+        run: python scripts/validate_handoff_scope.py --repo-root . --self-test
+
+  naming-policy:
+    name: Naming policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Enforce naming policy on added lines
+        # The ratchet: only lines this change ADDS are judged, so the gate is
+        # green on day one and gets harder to loosen, and the pre-existing
+        # violations the audit counted stay the audit's backlog rather than
+        # becoming a reason to skip the gate.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -z "$base" ]; then
+            echo "naming-policy: no comparison commit; refusing to skip the gate" >&2
+            exit 2
+          fi
+          python scripts/check_naming.py --repo-root . --changed-from "$base"
+      - name: Prove the gate can still fail
+        # A gate that stops denying anything looks exactly like a gate with
+        # nothing to deny. These cases run on every PR and every push, need
+        # no repository state, and fail if the matcher or the policy
+        # validation drifts -- including if someone edits the policy into a
+        # shape where an unratified proposal can block a merge.
+        shell: bash
+        run: python scripts/check_naming.py --repo-root . --self-test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -25,7 +99,7 @@ jobs:
       - name: Detect docs-only change
         id: docs_only
         uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           components: rustfmt, clippy
@@ -46,6 +120,25 @@ jobs:
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
 
+  orchestration:
+    name: Orchestration control plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Runs on every pull request and every push, on the default merge checkout.
+      # The manual exact-SHA variant of this gate is a SEPARATE workflow
+      # (orchestration-dispatch.yml): this file hosts required status contexts and
+      # must not gain a workflow_dispatch trigger.
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate orchestration contract
+        run: python scripts/orchestration_contract.py
+      - name: Run deterministic orchestration tests
+        run: python scripts/test_orchestration_v2.py
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -58,17 +151,26 @@ jobs:
       - name: Detect docs-only change
         id: docs_only
         uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+      # Non-ubuntu legs additionally need Rust-relevant input: macos-latest and
+      # windows-latest run the same Rust workspace tests, and a diff that changes
+      # no Rust input cannot change what they compile. ubuntu-latest is the
+      # required context and keeps its existing condition exactly -- the
+      # 'matrix.os == ubuntu-latest' disjunct below short-circuits the new clause
+      # for that leg, so nothing about the required check changes.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+      - uses: dtolnay/rust-toolchain@1.99.0
+        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - name: Install libdbus-1-dev (Ubuntu)
         if: matrix.os == 'ubuntu-latest' && steps.docs_only.outputs.is_docs_only != 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       # Only Windows runners lack a preinstalled/vendored protoc; matches the
       # manual cross-platform-test.yml dispatch workflow's test-windows job.
       - name: Install protoc (Windows)
-        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true'
+        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && steps.platform.outputs.rust_relevant == 'true'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -77,10 +179,10 @@ jobs:
       # more readily, so keep only this platform's workspace test process
       # serialized while retaining normal parallelism on Unix runners.
       - name: Run workspace tests (Windows serialized)
-        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true'
+        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && steps.platform.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils -- --test-threads=1
       - name: Run workspace tests
-        if: matrix.os != 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true'
+        if: matrix.os != 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
         run: cargo test --workspace --features test-utils
 
   docs:
@@ -88,72 +190,84 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+      # One owner decides: the platform gate subsumes the docs-only gate, because
+      # a docs-only diff reports every platform flag false (lint.yml's rust job
+      # relies on the same equivalence). This job's work is pure Rust tooling, so
+      # rust_relevant is its input.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+      - uses: dtolnay/rust-toolchain@1.99.0
+        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: cargo doc --workspace --no-deps
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
 
   ffi-surface:
     name: FFI Surface Contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+      # One owner decides: the platform gate subsumes the docs-only gate, because
+      # a docs-only diff reports every platform flag false (lint.yml's rust job
+      # relies on the same equivalence). This job's work is pure Rust tooling, so
+      # rust_relevant is its input.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+      - uses: dtolnay/rust-toolchain@1.99.0
+        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       # gen_kotlin/gen_swift locate the compiled cdylib by filesystem path at
       # runtime rather than through a Cargo dependency edge, so `cargo run`
       # alone doesn't guarantee it's been built (verified: deleting the
       # cdylib and re-running `cargo run --bin gen_kotlin` reproduces the
       # "cdylib not found" panic even though nothing else changed).
       - run: cargo build -p scmessenger-core --features gen-bindings
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - run: scripts/ffi_surface.sh
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
 
   windows-cli-artifact:
     name: Windows CLI Artifact
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+      # One owner decides: the platform gate subsumes the docs-only gate, because
+      # a docs-only diff reports every platform flag false (lint.yml's rust job
+      # relies on the same equivalence). This job's work is pure Rust tooling, so
+      # rust_relevant is its input.
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+      - uses: dtolnay/rust-toolchain@1.99.0
+        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
       # Same protoc setup as the Test job's windows-latest leg: only Windows
       # runners lack a preinstalled/vendored protoc.
       - name: Install protoc (Windows)
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build release CLI binary
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
         run: cargo build -p scmessenger-cli --release
       # clap serves --version at arg-parse time, before any runtime or network
       # startup, so running the freshly built exe here is cheap and safe.
       - name: Write build provenance
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
         timeout-minutes: 5
         run: |
           $sha = git rev-parse HEAD
@@ -161,7 +275,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "git-sha: $sha", "cli-version: $ver" | Set-Content .\target\release\cli-provenance.txt
       - name: Upload CLI artifact
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: windows-cli-${{ github.sha }}

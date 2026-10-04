@@ -1,5 +1,13 @@
 # ORCHESTRATOR HANDOFF PROMPT — Next Session Start Here
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## CONTEXT
 PR #133 merged (all 29 CI green). PR #134 (remaining work) and PR #135 (identity canonicalization step 1) open. 5-node run 2 blocked on identity canonicalization completion.
 

@@ -1,5 +1,15 @@
 # iOS ↔ Android bidirectional messaging debug — 2026-08-02
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: active physical-device investigation. The paired Android evidence is
 now available; parity still requires a fresh two-direction retest after the
 transport fixes below.

@@ -1,5 +1,13 @@
 # CTO -- AWS LEG + FINAL-TREE ARTIFACT PLAN (paste-ready, dated 2026-09-03)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: coordination note. No merge authority changes: #274 merge is CEO-
 seat; every merge remains individually CEO-approved; no self-merge/tag/
 release; no cleanup while cargo/docker builds are live

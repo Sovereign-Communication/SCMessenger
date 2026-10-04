@@ -1,5 +1,15 @@
 # NEXT_ITER_03: Docs Sync + Sprint Residual Debt Cleanup
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 **Priority:** P2 (after NEXT_ITER_01/02 pass)
 **Recommended worker:** haiku for section A; sonnet for section B
 **Source:** Fable 5 session 2026-07-05/06 handoff

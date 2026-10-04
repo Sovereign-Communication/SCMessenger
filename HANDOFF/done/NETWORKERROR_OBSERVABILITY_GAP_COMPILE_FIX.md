@@ -1,5 +1,15 @@
 # TASK: NETWORKERROR_OBSERVABILITY_GAP Compile Fix
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Please implement the error details propagation from libp2p `DialError` to the FFI boundary using unified diffs. Do NOT touch or edit `core/src/transport/swarm.rs`.
 
 ## Precise Implementation Specifications

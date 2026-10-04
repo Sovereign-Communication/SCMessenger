@@ -1,5 +1,13 @@
 # Hardcoded IP Address Sweep -- 2026-08-04
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Audit complete, no files modified
 Scope: All 2,736 git-tracked files in the repository
 Author: analysis pass (read-only); no build tools invoked, no tracked file edited

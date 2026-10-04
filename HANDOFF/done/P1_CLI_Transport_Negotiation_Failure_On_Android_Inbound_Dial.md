@@ -1,5 +1,13 @@
 # TASK: P1-CLI-TRANSPORT  Windows CLI fails to negotiate transport protocol on inbound dials from Android
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Context
 
 Found during a live LAN discovery test (2026-07-04): a Windows CLI daemon

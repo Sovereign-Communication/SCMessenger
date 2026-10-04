@@ -1,5 +1,13 @@
 # DONE -- PR #274: kill the 5-minute recycle (dial dispatch self/connected guards)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 TYPE: task
 STATUS: DONE (PR open, Rule-8 APPROVED -- merge authority is the CEO seat)
 

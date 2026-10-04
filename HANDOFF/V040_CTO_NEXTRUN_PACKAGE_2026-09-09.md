@@ -1,5 +1,13 @@
 # V040 CTO next-run package — three-node test after parity fixes
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Written by the CEO seat, 2026-09-09T01:40Z, at operator direction ("CTO is
 stopped; prep the CTO for the next 3 node test after RCA + parity fixes").
 This is the whole brief for the next `/cto` session. Read it with

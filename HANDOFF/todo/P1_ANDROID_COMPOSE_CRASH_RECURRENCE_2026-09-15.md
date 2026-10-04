@@ -1,5 +1,13 @@
 # P1 - Android: Compose crash class recurs on device (2 FATALs in 52 minutes)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Open
 Priority: P1 (blocks the "no crashes" v0.4.0 claim; operator reported "still
 hits a crash" on the mesh screen and this is the concrete artifact)

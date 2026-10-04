@@ -1,5 +1,15 @@
 # Iteration 2 staging -- external/internal IP mapping and NAT traversal
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: Staged, not started. Five-node run 1/2 is HELD pending the blockers in
 Section 4.
 Written: 2026-08-10 ~04:00Z

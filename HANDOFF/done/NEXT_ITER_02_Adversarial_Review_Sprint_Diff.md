@@ -1,5 +1,13 @@
 # NEXT_ITER_02: Adversarial Security Review of the Fable 5 Sprint Diff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Priority:** P0  MANDATORY before the sprint changes are considered mergeable
 (CLAUDE.md Adversarial Review Protocol: all changes under `core/src/transport/`
 and `core/src/crypto/` require adversarial review)

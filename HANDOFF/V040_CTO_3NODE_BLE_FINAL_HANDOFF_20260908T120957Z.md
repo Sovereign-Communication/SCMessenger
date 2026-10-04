@@ -1,5 +1,15 @@
 # V040 CTO three-node BLE final handoff — blocked preflight
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 - Status: `BLOCKED`
 - UTC: `2026-09-08T12:09:57Z`
 - Controller: Freebuff `/cto`

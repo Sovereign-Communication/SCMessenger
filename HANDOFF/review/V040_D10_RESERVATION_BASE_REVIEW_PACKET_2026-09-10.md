@@ -1,5 +1,13 @@
 # V040 D10 — Relay-reservation base validation (mDNS LAN-discovery fix)
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 ## Status
 
 - Filed: 2026-09-10 (CTO seat, session D10)

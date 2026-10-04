@@ -1,5 +1,13 @@
 # FINAL WIRING AUDIT  Repository-Wide Sweep
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Date:** 2026-04-30
 **Scope:** `core/`, `android/`, `wasm/`, `cli/`
 **Method:** Grep-based fast sweep for `todo!()`, `unimplemented!()`, TODOs, FIXMEs, mock data, placeholders, hardcoded "Unknown" strings, missing JSON-RPC handlers, and unlinked UniFFI methods.

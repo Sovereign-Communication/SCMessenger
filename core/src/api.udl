@@ -335,6 +335,11 @@ dictionary MessageRecord {
     boolean delivered;
     MessageStatus status;
     boolean hidden;
+    // MSG-ORDER-003, the insertion fact: milliseconds at which the store first
+    // wrote this row. Assigned by the store, never by a caller; 0 means the row
+    // predates the field. Read-only for the UI, which uses it only to break a
+    // same-second tie in favour of the row written first.
+    u64 stored_at_millis = 0;
 };
 
 dictionary HistoryStats {

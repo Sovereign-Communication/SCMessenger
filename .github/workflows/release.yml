@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.target }}
 
@@ -146,7 +146,7 @@ jobs:
           ndk-version: r26b
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
 
@@ -162,6 +162,17 @@ jobs:
         run: |
           cd android
           ./gradlew assembleDebug
+
+      # Both APK-producing lanes share one signing rule (see
+      # .github/actions/sign-debug-apk). Without a pinned identity each runner
+      # generates its own ~/.android/debug.keystore, so consecutive runs emit
+      # different certificates and `adb install -r` over a previous install
+      # fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+      - name: Sign debug APK with the pinned identity
+        uses: ./.github/actions/sign-debug-apk
+        with:
+          apk-path: android/app/build/outputs/apk/debug/app-debug.apk
+          keystore-base64: ${{ secrets.SCMESSENGER_DEBUG_KEYSTORE_BASE64 }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -206,15 +217,57 @@ jobs:
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
           echo "${{ secrets.SCMESSENGER_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
 
-      # Fail fast on a signing-config mismatch. Today an incorrect
-      # SCMESSENGER_KEY_ALIAS (e.g. a PKCS12 case-sensitivity difference vs
-      # the documented JKS) only surfaces ~24 minutes into packageRelease as
-      # a KeytoolException. This checks the decoded keystore for the exact
-      # alias before any Gradle run. Never prints the alias or password.
+      # Fail fast on a signing-config mismatch, before any Gradle run: an
+      # incorrect SCMESSENGER_KEY_ALIAS (e.g. PKCS12 case-sensitivity vs the
+      # documented JKS) otherwise surfaces ~24 min into packageRelease as a
+      # KeytoolException. Never prints the alias or password.
+      #
+      # Classifies keytool's own stderr rather than asserting a guessed cause:
+      # a wrong STORE PASSWORD and a wrong ALIAS give the SAME non-zero exit,
+      # so a fixed assertion misattributes the fault and discards the output
+      # that tells them apart. Signatures matched: "Keystore was tampered
+      # with, or password was incorrect" (password), "does not exist" (alias),
+      # EOFException (truncated), "exists, but is empty" (empty file).
+      #
+      # Unchanged: still fails, still exits 1, same conditions. History:
+      # HANDOFF/audit/ANDROID_SIGNING_LINEAGE_2026-10-03.md
       - name: Verify SCMESSENGER_KEY_ALIAS present in keystore
         if: ${{ env.HAS_KEYSTORE == 'true' }}
+        env:
+          KEYSTORE_PATH: android/app/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SCMESSENGER_KEY_ALIAS }}
         run: |
-          keytool -list             -keystore android/app/release.keystore             -storepass "${{ secrets.SCMESSENGER_KEYSTORE_PASSWORD }}"             -alias "${{ secrets.SCMESSENGER_KEY_ALIAS }}" >/dev/null 2>&1             || { echo "::error::SCMESSENGER_KEY_ALIAS is not present in the decoded keystore"; exit 1; }
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error title=Release signing::SCMESSENGER_KEYSTORE_BASE64 decoded to an empty or missing file ($KEYSTORE_PATH). The secret is set (HAS_KEYSTORE is true) but did not decode."
+            exit 1
+          fi
+
+          if out=$(keytool -list -keystore "$KEYSTORE_PATH" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>&1); then
+            echo "Release signing preflight OK: keystore readable and the configured alias is present."
+            exit 0
+          fi
+
+          # Classify keytool's own message instead of asserting a guessed cause.
+          case "$out" in
+            *"does not exist"*)
+              echo "::error title=Release signing::SCMESSENGER_KEY_ALIAS does not exist in the decoded keystore. keytool: $(echo "$out" | head -1)"
+              echo "::error title=Release signing::Fix: set SCMESSENGER_KEY_ALIAS to an alias that exists. Run locally: keytool -list -v -keystore scmessenger-release.jks | grep -i 'alias name'. PKCS12 alias lookup is case-sensitive; match the case exactly."
+              ;;
+            *"tampered with, or password was incorrect"*)
+              echo "::error title=Release signing::SCMESSENGER_KEYSTORE_PASSWORD is wrong -- keytool could not open the keystore, so the alias was never checked. keytool: $(echo "$out" | head -1)"
+              echo "::error title=Release signing::Fix: set SCMESSENGER_KEYSTORE_PASSWORD. Note this is a DIFFERENT fault from a wrong alias; do not re-set SCMESSENGER_KEY_ALIAS in response to this message."
+              ;;
+            *EOFException*|*"Keystore file exists, but is empty"*)
+              echo "::error title=Release signing::The decoded keystore is unreadable or empty -- SCMESSENGER_KEYSTORE_BASE64 does not decode to a valid keystore. keytool: $(echo "$out" | head -1)"
+              ;;
+            *)
+              echo "::error title=Release signing::Release signing preflight failed for an unrecognised reason. keytool: $(echo "$out" | head -1)"
+              ;;
+          esac
+          echo "--- full keytool output (contains no alias or password) ---"
+          echo "$out"
+          exit 1
 
       - name: Build signed release AAB + APK
         if: ${{ env.HAS_KEYSTORE == 'true' }}
@@ -341,7 +394,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust WASM target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: wasm32-unknown-unknown
 

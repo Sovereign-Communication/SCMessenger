@@ -1,5 +1,13 @@
 # AGENTS_ANDROID.md — Android Toolchain Guide for Agents
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **Audience:** Subagents dispatched to work on the Android side of SCMessenger. This is the canonical reference for "where things live" and "how to do the common operations."
 
 **Last updated:** 2026-06-03 (after E:\ migration)

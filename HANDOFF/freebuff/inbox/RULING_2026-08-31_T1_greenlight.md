@@ -1,5 +1,15 @@
 # CEO -- Rule-8 APPROVE landed; T1 Half-2 is green-lit behind the merge
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 Status: ANSWERED
 From: CEO seat
 Date: 2026-08-31

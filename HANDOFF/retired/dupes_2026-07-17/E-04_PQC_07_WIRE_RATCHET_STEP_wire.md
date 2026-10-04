@@ -1,5 +1,15 @@
 # Task E-04
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 ## Description
 PQC-07 WIRE_RATCHET_STEP: wire ratchet step through session manager end-to-end (PQ_REFRESH_WITHOUT_DH_CROSSING sub-defect)
 

@@ -1,3 +1,13 @@
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
+This document is owned by SCMessenger (Sovereign-Communication/SCMessenger).
+
 [INFO] Reachability analysis: `dial_trusted_local_proxy` is ONLY called by `mobile_bridge.rs` Wi-Fi Aware confirmed-data-path dial (lines 1523-1567). Address originates from `transport.create_data_path` which binds a TCP proxy on 127.0.0.1 per Android code (startLoopbackProxy). Verified no FFI exposure via `core/target/generated-sources/api.kt` grep (no results).
 
 [INFO] FFI surface verified: Grep of `api.kt` shows NO `dial_trusted_local_proxy` method. Confirmed method resides in NON-`#[uniffi::export]` block as intended.

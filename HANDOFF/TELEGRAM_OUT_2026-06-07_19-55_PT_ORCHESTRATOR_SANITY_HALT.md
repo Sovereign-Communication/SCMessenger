@@ -1,5 +1,13 @@
 # ORCHESTRATOR SANITY CHECK — 2026-06-07 ~19:55 PT
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 **From:** Claude Code (PID 648, minimax-m3) — Lead Orchestrator session
 **To:** Lucas (via Telegram handoff) + Hermes
 **Path:** E:\SCMessenger-Github-Repo\SCMessenger
