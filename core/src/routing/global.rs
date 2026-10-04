@@ -52,6 +52,10 @@ pub struct RouteRequest {
     pub max_attempts: u32,
 }
 
+/// How long a route request stays pending before it is considered stale and a
+/// new RouteDiscovery may be issued (must match cleanup()'s window).
+const MAX_ROUTE_REQUEST_AGE_SECS: u64 = 300; // 5 minutes
+
 /// Global routing table — sparse, demand-driven
 ///
 /// Maintains route advertisements received from internet-connected peers. Each destination
@@ -229,6 +233,16 @@ impl GlobalRoutes {
         self.pending_requests.contains_key(hint)
     }
 
+    /// Check if a route request is pending AND still fresh (younger than the
+    /// staleness window). A stale pending request must not block a new
+    /// RouteDiscovery decision.
+    pub fn is_route_pending_fresh(&self, hint: &[u8; 4], now: u64) -> bool {
+        match self.pending_requests.get(hint) {
+            Some(req) => now.saturating_sub(req.requested_at) <= MAX_ROUTE_REQUEST_AGE_SECS,
+            None => false,
+        }
+    }
+
     /// Increment attempts for a pending route request
     ///
     /// Returns true if the request is still active, false if max attempts exceeded.
@@ -297,9 +311,8 @@ impl GlobalRoutes {
         });
 
         // Also clean up old route requests (older than 5 minutes)
-        let max_request_age = 300; // 5 minutes
         self.pending_requests
-            .retain(|_, req| now.saturating_sub(req.requested_at) <= max_request_age);
+            .retain(|_, req| now.saturating_sub(req.requested_at) <= MAX_ROUTE_REQUEST_AGE_SECS);
 
         removed
     }
@@ -633,6 +646,23 @@ mod tests {
         assert_eq!(req.hint, hint);
         assert_eq!(req.requested_at, 1000);
         assert_eq!(req.attempts, 0);
+        assert!(table.is_route_pending(&hint));
+    }
+
+    #[test]
+    fn test_route_request_pending_freshness() {
+        let mut table = GlobalRoutes::new();
+        let hint = make_hint(1);
+
+        table.request_route(hint, 1000);
+
+        // Fresh pending request blocks re-discovery
+        assert!(table.is_route_pending_fresh(&hint, 1000));
+        assert!(table.is_route_pending_fresh(&hint, 1000 + MAX_ROUTE_REQUEST_AGE_SECS - 1));
+
+        // Stale pending request (older than the window) must not block
+        assert!(!table.is_route_pending_fresh(&hint, 1000 + MAX_ROUTE_REQUEST_AGE_SECS + 1));
+        // Raw entry is still pending until cleanup() runs
         assert!(table.is_route_pending(&hint));
     }
 
