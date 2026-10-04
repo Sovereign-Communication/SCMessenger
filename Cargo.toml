@@ -50,7 +50,7 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # NOTE: cesride removed (was unused) — it pulled in vulnerable ed25519-dalek 1.0.1
 # and curve25519-dalek 3.2.0 (issue #42 security audit)
 ed25519-dalek = { version = "2.1", features = ["serde"] }
-x25519-dalek = { version = "3.0", features = ["static_secrets"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 curve25519-dalek = "4.1"
 chacha20poly1305 = "0.10"
 sha2 = "0.10"
@@ -62,13 +62,13 @@ libcrux-ml-kem = { version = "0.0.10", default-features = false, features = ["ml
 
 # WebSocket client (relay fallback transport)
 # Connect feature enabled for both desktop and Android targets
-tokio-tungstenite = { version = "0.29", features = ["connect"] }
+tokio-tungstenite = { version = "0.24", features = ["connect"] }
 
 # Storage
 sled = "0.34"
 
 # UniFFI for mobile bindings
-uniffi = { version = "0.32", features = ["cli"] }
+uniffi = { version = "0.31", features = ["cli"] }
 
 # WASM bindings
 wasm-bindgen = "0.2"
