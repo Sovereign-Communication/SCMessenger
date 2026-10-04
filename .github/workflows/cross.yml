@@ -83,6 +83,7 @@ jobs:
       - name: Upload artifacts
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-${{ matrix.abi }}
           path: target/${{ matrix.target }}/release/libscmessenger_core.a
@@ -112,12 +113,14 @@ jobs:
       - name: Upload aarch64-apple-ios
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64
           path: target/aarch64-apple-ios/release/libscmessenger_core.a
       - name: Upload aarch64-apple-ios-sim
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-aarch64-sim
           path: target/aarch64-apple-ios-sim/release/libscmessenger_core.a
@@ -144,6 +147,7 @@ jobs:
       - name: Upload artifacts
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: target/wasm32-unknown-unknown/release/
@@ -177,6 +181,7 @@ jobs:
       - name: Upload Kotlin bindings
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-kotlin
           path: core/target/generated-sources/uniffi/kotlin/
@@ -213,6 +218,7 @@ jobs:
       - name: Upload Swift bindings
         if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-swift
           path: core/target/generated-sources/uniffi/swift/
