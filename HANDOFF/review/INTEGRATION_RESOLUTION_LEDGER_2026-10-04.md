@@ -161,6 +161,49 @@ else's PR.
 | duplicate Cargo dependency keys | **0** — all six manifests parse under `tomllib`, which rejects a true same-table duplicate. Earlier apparent duplicates were an artifact of a naive line scan crossing `[dependencies]` / `[dev-dependencies]` / `[package]` sections |
 | resolutions with recorded evidence | **11 of 11** (this file) |
 
+## Regression found and fixed during the pre-merge audit
+
+**Four workflows were dead and nothing said so.**
+
+Resolutions #103 and #141 kept HEAD's step key *and* appended the incoming PR's
+same key, producing a step with two `uses:` (and, in `lint.yml`, two `if:`):
+
+```yaml
+      - name: Upload CLI artifact
+        if: steps.platform.outputs.rust_relevant == 'true'
+        uses: actions/upload-artifact@v4     # kept from HEAD
+        uses: actions/upload-artifact@v7     # appended from #141
+```
+
+That is invalid GitHub Actions YAML. The workflow does not dispatch at all, and the
+run reports the least legible failure Actions offers:
+
+```
+conclusion=failure   total_count=0
+```
+
+No jobs, no steps, no log. The four affected runs were `37179717815` (`lint.yml`),
+`37179718434` (`ci.yml`), `37179718955` (`mobile.yml`) and `37179719485` (`cross.yml`) --
+exactly the four files those two resolutions touched, and no others.
+
+**Why every review missed it.** `yaml.safe_load` accepts a duplicate mapping key and
+silently keeps the last one. So every parse check passed: the tree-wide YAML sweep,
+`check_toolchain_pin.py`, `rules_check.py`, and my own duplicate-coordinate audit --
+which scanned Gradle `implementation '...'` lines and never looked at YAML keys at
+all. The pre-merge audit in this ledger initially reported "0 problems" on a tree
+containing nine duplicate keys.
+
+**Fixed** by keeping the incoming value, which is what the PRs were bumping to: `@v7`
+supersedes `@v4`, and the `if:` carrying the `docs_only` clause supersedes the bare one.
+The guards survive intact -- 15 `is_docs_only` guards in `lint.yml`, and the
+platform-relevance guards in `ci.yml`, `cross.yml` and `mobile.yml`. Nine duplicate
+pairs across four files; zero remain.
+
+**Guard added so it cannot recur silently:** `scripts/check_workflow_yaml.py`, wired into
+the required `Repository Hygiene Checks` context with a `--self-test` step proving the
+loader still raises, mirroring `check_toolchain_pin.py --self-test`. A gate that has
+quietly stopped failing looks exactly like a gate with nothing to check.
+
 ## Deliberately not in this branch
 
 | PR | reason |
