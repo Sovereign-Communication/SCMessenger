@@ -1252,13 +1252,24 @@ mod tests {
     #[test]
     fn test_duplicate_delivery_keeps_session_and_nextressage_decrypts() {
         // The attack this guards: a relay or store-and-forward custodian
-        // replays a signed envelope it already delivered. The replay fails
-        // decrypt (its key is consumed), carries no bootstrap, and re-
-        // establishment is unavailable -- yet the session was healthy.
+        // replays a signed envelope it already delivered.
         //
-        // If the drop regressed, the contact is blackholed: the *next*
-        // genuine message also fails, because nothing carries bootstrap any
-        // more. This test asserts the message after the replay still works.
+        // Note the ratchet SERVES a replayed message rather than rejecting it:
+        // `get_message_key` removes and returns the cached skipped key for an
+        // already-consumed message number (`ratchet.rs:1104-1106`), which is
+        // required so a legitimately out-of-order or duplicated delivery can
+        // still be decrypted exactly once per key. That is correct behaviour,
+        // not the bug.
+        //
+        // The bug this guards is different: when a delivery cannot be
+        // decrypted AND carries no bootstrap material, the recovery path must
+        // not tear down the session. A far-behind replay (past the skipped-key
+        // window) is what actually reaches that branch, so we push the chain
+        // well past MAX_SKIP_KEYS first.
+        //
+        // If the drop regressed, the contact is blackholed: the *next* genuine
+        // message also fails, because nothing carries bootstrap any more. This
+        // test asserts the message after the replay still works.
         let alice_key = generate_keypair();
         let bob_key = generate_keypair();
         let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
@@ -1332,9 +1343,10 @@ mod tests {
         .unwrap();
         assert_eq!(pt2, b"live traffic");
 
-        // The attacker (or a buggy relay) replays message 2 verbatim. The key
-        // is consumed, so decrypt fails, and no bootstrap is present.
-        decrypt_with_ratchet_fallback(
+        // The attacker (or a buggy relay) replays message 2 verbatim. The
+        // skipped-key cache still holds its key, so the ratchet serves it --
+        // decrypting the duplicate, which is intended.
+        let replay = decrypt_with_ratchet_fallback(
             &bob_key,
             Some(&bob_x25519_secret),
             &wire2,
@@ -1343,11 +1355,11 @@ mod tests {
             Some(&bob_bundle),
             Some(&alice_bundle),
         )
-        .expect_err("a replayed message must not decrypt a second time");
+        .expect("the ratchet serves a duplicated delivery from the skipped-key cache");
 
         assert!(
             bob_sessions.has_session(&peer_id),
-            "a replay must not tear down the session"
+            "serving a duplicate must not tear down the session"
         );
 
         // Message 3: the contact must still be reachable after the replay.
@@ -1363,6 +1375,151 @@ mod tests {
         )
         .expect("traffic after a replayed duplicate must still decrypt");
         assert_eq!(pt3, b"live traffic");
+        drop(replay);
+    }
+
+    #[test]
+    fn test_far_behind_replay_keeps_session_when_reestablishment_unavailable() {
+        // The case that actually reaches the recovery branch: a replay whose
+        // message number is behind the chain AND outside the skipped-key
+        // window, so `get_message_key` bails with "behind current chain
+        // position" (`ratchet.rs:1113-1114`). The duplicate carries no
+        // bootstrap, so re-establishment is unavailable.
+        //
+        // Before the fix that combination deleted a healthy session, and since
+        // no later message carries bootstrap either, it blackholed the contact
+        // permanently.
+        let alice_key = generate_keypair();
+        let bob_key = generate_keypair();
+        let alice_x25519_secret = ed25519_to_x25519_secret(&alice_key);
+        let bob_x25519_secret = ed25519_to_x25519_secret(&bob_key);
+        let bob_mlkem = crate::crypto::pq::generate();
+
+        let alice_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: alice_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&alice_x25519_secret).to_bytes(),
+            mlkem_encaps_key: crate::crypto::pq::generate().public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+        let bob_bundle = crate::identity::PublicKeyBundle {
+            ed25519_public: bob_key.verifying_key().to_bytes(),
+            x25519_public: x25519_dalek::PublicKey::from(&bob_x25519_secret).to_bytes(),
+            mlkem_encaps_key: bob_mlkem.public_key().to_vec(),
+            created_at: 0,
+            supported_suites: vec![0x03],
+            signature: vec![],
+            mldsa_public: None,
+            mldsa_signature: None,
+        };
+
+        let mut bob_sessions = RatchetSessionManager::new();
+        let mut alice_sessions = RatchetSessionManager::new();
+
+        // Capture the very first envelope: message number 0, which will be far
+        // behind the chain position once enough messages have passed.
+        let first_wire = {
+            let session = alice_sessions
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"live traffic").unwrap()
+        };
+
+        let pt1 = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &first_wire,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .unwrap();
+        assert_eq!(pt1, b"live traffic");
+
+        let peer_id = hex::encode(blake3::hash(&alice_key.verifying_key().to_bytes()).as_bytes());
+
+        // Advance Bob's receiving chain past the skipped-key window
+        // (`MAX_SKIP_KEYS = 256` in `ratchet.rs:36`) so message number 0 can
+        // no longer be served from the cache and `get_message_key` bails with
+        // "behind current chain position" instead.
+        let advance = 300usize;
+        for _ in 0..advance {
+            let wire = {
+                let session = alice_sessions
+                    .get_or_create_session_hybrid(
+                        "bob",
+                        &alice_key,
+                        &alice_x25519_secret,
+                        &alice_bundle,
+                        &bob_bundle,
+                    )
+                    .unwrap();
+                encrypt_message_ratcheted(&alice_key, session, b"live traffic").unwrap()
+            };
+            decrypt_with_ratchet_fallback(
+                &bob_key,
+                Some(&bob_x25519_secret),
+                &wire,
+                Some(&mut bob_sessions),
+                Some(&bob_mlkem),
+                Some(&bob_bundle),
+                Some(&alice_bundle),
+            )
+            .expect("live traffic must keep flowing");
+        }
+
+        // Replay the first envelope. It is now far behind the chain and has no
+        // bootstrap, so recovery cannot rebuild -- and must not delete.
+        decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &first_wire,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .expect_err("a far-behind replay must not decrypt");
+
+        assert!(
+            bob_sessions.has_session(&peer_id),
+            "a far-behind replay must not tear down the session"
+        );
+
+        // And the contact is still reachable afterwards.
+        let final_wire = {
+            let session = alice_sessions
+                .get_or_create_session_hybrid(
+                    "bob",
+                    &alice_key,
+                    &alice_x25519_secret,
+                    &alice_bundle,
+                    &bob_bundle,
+                )
+                .unwrap();
+            encrypt_message_ratcheted(&alice_key, session, b"live traffic").unwrap()
+        };
+        let last = decrypt_with_ratchet_fallback(
+            &bob_key,
+            Some(&bob_x25519_secret),
+            &final_wire,
+            Some(&mut bob_sessions),
+            Some(&bob_mlkem),
+            Some(&bob_bundle),
+            Some(&alice_bundle),
+        )
+        .expect("traffic after a far-behind replay must still decrypt");
+        assert_eq!(last, b"live traffic");
     }
 
     #[test]
