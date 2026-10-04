@@ -258,7 +258,10 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
     
     // AndroidX Core
-    implementation 'androidx.core:core-ktx:1.12.0'
+    // Resolved on integrate/train-20261004: take the newer of each coordinate.
+    // core-ktx 1.19.0 is #108's; lifecycle 2.11.0 was already integrated and
+    // #108's 2.6.2 would have regressed it.
+    implementation 'androidx.core:core-ktx:1.19.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.11.0'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0'
