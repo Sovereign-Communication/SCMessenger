@@ -1646,9 +1646,8 @@ mod tests {
         let relay_peer = PeerId::random();
 
         // Single-hop circuit with explicit relay peer ID ending in self.
-        let self_circuit_with_relay_id = format!(
-            "/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{self_peer}"
-        );
+        let self_circuit_with_relay_id =
+            format!("/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{self_peer}");
         assert!(
             is_self_circuit(&self_circuit_with_relay_id, &self_peer),
             "single-hop circuit ending in self must be rejected"
@@ -1663,9 +1662,8 @@ mod tests {
         );
 
         // Single-hop circuit where relay hop is self.
-        let self_as_relay = format!(
-            "/ip4/198.51.100.1/tcp/443/p2p/{self_peer}/p2p-circuit/p2p/{relay_peer}"
-        );
+        let self_as_relay =
+            format!("/ip4/198.51.100.1/tcp/443/p2p/{self_peer}/p2p-circuit/p2p/{relay_peer}");
         assert!(
             is_self_circuit(&self_as_relay, &self_peer),
             "single-hop circuit with self as relay must be rejected"
@@ -1715,9 +1713,8 @@ mod tests {
         let relay_peer = PeerId::random();
         let target_peer = PeerId::random();
 
-        let legitimate_circuit = format!(
-            "/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{target_peer}"
-        );
+        let legitimate_circuit =
+            format!("/ip4/198.51.100.1/tcp/443/p2p/{relay_peer}/p2p-circuit/p2p/{target_peer}");
         assert!(
             !is_self_circuit(&legitimate_circuit, &self_peer),
             "legitimate circuit to a different peer must be accepted"

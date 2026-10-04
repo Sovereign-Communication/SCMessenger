@@ -727,13 +727,12 @@ pub fn decrypt_with_ratchet_fallback(
                             recipient_signing_key,
                             &sender_x25519,
                         )?;
-                        let session =
-                            manager.get_session_mut(&peer_id).ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "Session exists but cannot be retrieved for peer {}",
-                                    peer_id
-                                )
-                            })?;
+                        let session = manager.get_session_mut(&peer_id).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Session exists but cannot be retrieved for peer {}",
+                                peer_id
+                            )
+                        })?;
                         match decrypt_message_ratcheted(session, envelope) {
                             Ok(plaintext) => {
                                 tracing::warn!(
@@ -1183,8 +1182,7 @@ mod tests {
         .unwrap();
         assert_eq!(pt1, b"hello");
 
-        let peer_id =
-            hex::encode(blake3::hash(alice_key.verifying_key().to_bytes()).as_bytes());
+        let peer_id = hex::encode(blake3::hash(alice_key.verifying_key().to_bytes()).as_bytes());
         assert!(bob_sessions.has_session(&peer_id));
 
         // Corrupt the ciphertext so decrypt fails, and withhold the

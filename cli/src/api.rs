@@ -961,10 +961,7 @@ async fn handle_send_message(
                         StatusCode::SERVICE_UNAVAILABLE,
                         AxumJson(SendMessageResponse {
                             success: false,
-                            error: Some(format!(
-                                "Message was not accepted by BLE or Swarm: {}",
-                                e
-                            )),
+                            error: Some(format!("Message was not accepted by BLE or Swarm: {}", e)),
                             warning: None,
                             message_id: Some(prepared.message_id),
                             status: Some("rejected".to_string()),
@@ -1826,7 +1823,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).expect("must be JSON");
         assert_eq!(v["success"], true);
         assert_eq!(v["status"], "retrying");
-        assert!(v.get("warning").is_some(), "retry detail must be in warning");
+        assert!(
+            v.get("warning").is_some(),
+            "retry detail must be in warning"
+        );
         assert!(
             v.get("error").is_none(),
             "error field must be absent on success:true, got: {}",
@@ -1848,7 +1848,10 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("envelope must serialize");
         let v: serde_json::Value = serde_json::from_str(&json).expect("must be JSON");
         assert_eq!(v["success"], false);
-        assert!(v.get("error").is_some(), "rejection reason must be in error");
+        assert!(
+            v.get("error").is_some(),
+            "rejection reason must be in error"
+        );
         assert!(
             v.get("warning").is_none(),
             "warning field must be absent on success:false, got: {}",
