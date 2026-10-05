@@ -626,7 +626,7 @@ fn build_receiver_v2_session(
     our_bundle: Option<&crate::identity::PublicKeyBundle>,
     sender_bundle: Option<&crate::identity::PublicKeyBundle>,
     envelope_v2: &crate::message::EnvelopeV2,
-) -> Result<()> {
+) -> Result<crate::crypto::RatchetSession> {
     if let (Some(our_k), Some(our_b), Some(their_b)) =
         (our_mlkem_keypair, our_bundle, sender_bundle)
     {

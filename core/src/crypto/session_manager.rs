@@ -166,7 +166,7 @@ impl RatchetSessionManager {
         our_bundle: &crate::identity::PublicKeyBundle,
         their_bundle: &crate::identity::PublicKeyBundle,
         hct_opt: Option<&crate::crypto::pq::hybrid::HybridCiphertext>,
-    ) -> Result<&mut RatchetSession> {
+    ) -> Result<RatchetSession> {
         let (suite, hash) = crate::crypto::negotiation::negotiate_suite(
             &their_bundle.supported_suites, // Initiator's suites
             &our_bundle.supported_suites,   // Responder's suites
