@@ -260,6 +260,33 @@ the same relay behavior.
       permanently un-reclaimable. If it prints that warning, the durable-ref list
       needs updating -- not the verdict.
 
+18. **NEVER WAIT ON CI. CI IS A BACKGROUND PROCESS, NOT A TASK.**
+
+    Pushing a branch starts a run that takes 25-40 minutes. Sleeping in a poll
+    loop to watch it is the single most expensive habit in this repo's agent
+    history: it burns the whole turn, it blocks every other lane, and it
+    produces nothing that safe work would not have produced anyway.
+
+    **After a push, the next action is NEVER another poll.** It is always more
+    work. There is effectively always more work:
+
+    - audit a queued PR, or triage the next wave
+    - write the handoff/verdict/reconciliation docs the merge will need anyway
+    - review the NEXT gated file while the current one is still in CI
+    - prepare the operator-decision brief
+    - reclaim disk (rule 17)
+
+    **If you catch yourself writing `sleep`, or a `for` loop containing
+    `sleep`, in a command whose purpose is to watch a run: stop and go find
+    safe work.** A poll is legitimate in exactly two cases -- (a) the user's
+    explicit instruction is to report a CI verdict as the deliverable, in which
+    case report it once and move on; (b) you are about to make an irreversible
+    decision that depends on the result, and no safe work remains.
+
+    A green run that nobody read is not a delivered result. If you push and
+    stop without either (a) collecting the verdict or (b) handing the run id to
+    the operator, the work is unfinished regardless of what CI says.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)
