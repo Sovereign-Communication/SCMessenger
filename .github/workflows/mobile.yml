@@ -27,6 +27,9 @@ on:
       - 'scripts/test_check_wiring.py'
       - 'core/src/api.udl'
       - 'mobile/**'
+      # Docs under a trigger directory (core/README.md, android/*.md) cannot change a
+      # mobile build. Last matching pattern wins, so this negation must stay last.
+      - '!**.md'
 
 permissions:
   contents: read
