@@ -48,6 +48,36 @@ The Board is executed as an automated 5-judge panel powered by
 
 Record of all formal resolutions adjudicated by the Board of Directors:
 
+> **Session note 2026-09-29 (orchestrator).** The three newest entries
+> (`bod-032ca0f1`, `bod-f74509ff`, `bod-b77fbed7`) all adjudicate the same
+> landing-path proposal (D1-D7). None is an approval: each is
+> `DEFERRED_PANEL_SHORTFALL` (fewer than 5 valid votes), because the learned
+> BYOK org filter on the paid route removes `deepseek/*` and `google/*` seats
+> and the free tier is saturated. Harness source per run: `bod-b77fbed7` and
+> `bod-f74509ff` ran on the canary ref `6961c09`; `bod-032ca0f1` ran on the
+> admitted tag `v0.4.1` (BUILD_AND_CI.md requires consumer scripts to resolve
+> the admitted source). Read them together: the canary paid run had 3 of 3
+> valid votes APPROVE; the admitted-tag run had 2 APPROVE and 1 REJECT
+> (`openai/gpt-5.6-luna`, 0.72: "governance exceptions at the merge gate and
+> Rule-8 authorization boundary", i.e. D1 JEV post-merge and D3 orchestrator-
+> supplied sign-off). D1 to D3 are also explicit operator rulings of
+> 2026-09-29 (recorded on PR #403), which the operator may issue over the
+> Board; D4 to D7 are proposals not yet ratified by the Board or the operator.
+>
+> **Corrections recorded after an adversarial audit of the plan (same day).**
+> (1) The proposal text says the admitted tag "lacks jev_phase, the gate tool the
+> plan requires". That premise is misleading: the tag has the `jev-phase` CLI
+> (the plan's gate 2.3(b) names both the CLI and the MCP tool); only its MCP
+> server lacks a `jev_phase` tool. (2) **D5 is withdrawn.** As worded it admits an
+> exact commit SHA, which loosens BUILD_AND_CI.md's fail-closed admission by
+> immutable tag; the remedy is a new Harness tag that carries the phase-id and
+> merge-evidence fixes, admitted through BUILD_AND_CI.md. D4, D6 and D7 proceed only
+> as the cars already ratified in the merge-train plan (MT-00b, MT-12, section 10).
+> (3) The Board script's shortfall line is wrong when a vote is UNKNOWN: entries
+> such as `bod-a8ebe243` print "Only 5/5 models submitted valid votes" beside an
+> UNKNOWN vote (4 valid). It is a defect in `scripts/bod_governance.py`, not fixed
+> here.
+
 ### Resolution bod-9ee86618 [APPROVED]
 - **Timestamp**: 2026-09-14T19:29:30.035909+00:00
 - **Tier**: paid
@@ -1413,3 +1443,103 @@ Record of all formal resolutions adjudicated by the Board of Directors:
 - **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
 - **Proposal Text**:
   > DISPOSITION RULING REQUESTED - P1 Windows node silent wedge for v0.4.0 tag: The Windows desktop node silently wedged for 2h45m (process alive, logs frozen at 2026-09-15T01:32:14Z, HTTP API unresponsive, CLOSE_WAIT pile-up, no panic, existing event-loop watchdog blind because the event loop never died). Store-and-forward doctrine itself performed perfectly: 12/12 custody entries held on the AWS cloud node burst-delivered within 1s of node recovery, zero message loss, receipts converged (evidence: HANDOFF/audit/CELLULAR_PATH_TRIANGULATION_2026-09-15.md). Remediation landed: a log-silence heartbeat watchdog now exits the node loudly after 600s of no log output (verified by 2 black-box integration tests, locally 2 passed in 6.32s, CI Test lane re-runs), converting the silent wedge into a bounded, observable outage. PROPOSAL: Accept the P1 for the v0.4.0 tag as a KNOWN issue with the watchdog bounding its blast radius (max 10 min silent outage instead of unbounded), explicitly defer root-cause reproduction and fix to v0.5.0 (ticket P1_WINDOWS_NODE_SILENT_WEDGE_2026-09-15.md stays open), and proceed with the tag once CI is green. Alternative considered and rejected: block the tag on root-causing a nondeterministic 2h45m hang with zero log fingerprint, which has no reproduction path yet and would stall the release indefinitely. Is this disposition doctrinally sound (nodes-not-relays, sovereignty, cryptographic integrity, hygiene) and operationally safe for a 0.4.0 tag?
+
+### Resolution bod-b77fbed7 [DEFERRED]
+- **Timestamp**: 2026-09-29T13:14:06.624779+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.002906 (Ceiling: $0.10)
+- **Summary**: Only 3/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (3/5 APPROVE):
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 1.00) - _The proposal upholds all doctrinal principles: nodes-only relay, sovereignty, cryptographic integrity, multiplatform parity, and hygiene, while eliminating ambiguities in the release process._
+  - `openai/gpt-5.6-luna`: **APPROVE** (Score: 0.94) - _The proposal is governance-focused and preserves the stated node, sovereignty, cryptographic, parity, and safety doctrines. Its post-merge JEV handling follows the explicitly identified operator ruling while retaining independent Rule-8 review and stopping the train on failure._
+  - `z-ai/glm-5.3-flash`: **APPROVE** (Score: 0.92) - _The proposal is purely governance and release-machinery hygiene: it preserves every transport, cryptographic, and parity invariant, converts a mathematically unsatisfiable gate into a fail-closed post-merge check, and eliminates dual sources of truth. It weakens no operator gate and grants no agent-escalated authority._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Adopt one canonical landing path for v0.4.0 then v0.5.0, with the merge-gate reading that unblocks it.
+  >
+  > WHY (each fact verified by command on 2026-09-29):
+  > - origin/main is faf22a57 (last merge 2026-09-28). No merge car MT-00a..MT-12 has merged; 66 pull requests are open. Branch protection: strict, 5 required checks, admins enforced, no force-push.
+  > - The operator-ratified plan (merge-train task file, operator rulings of 2026-09-28) exists only on unmerged PR #403. SHIP_PLAN.md on main still calls itself the only execution queue and still lists D2 (signed APK downloadable) as a release gate, which operator ruling H-1 waives for v0.4.0. Two sources of truth disagree.
+  > - Merge condition A1 requires a JEV score of at least 85 before merge, but the scorer's pr_merged hard gate (25 of 100 points) can only be true after a merge, so the pre-merge ceiling is 75 and no PR can pass. The train has been halted since 2026-09-28.
+  > - The plan names the immutable harness tag v0.4.1 as admitted, but that tag exposes 12 MCP tools and lacks jev_phase, the gate tool the plan requires; the lane actually gated with commit 6961c09 (15 tools).
+  > - The lane's Claude authorisation expired, so Rule-8 step 2 (fresh Claude final sign-off) cannot run from the lane.
+  >
+  > DECISIONS (D1-D3 are operator rulings given in chat 2026-09-29; D4-D7 are proposed here):
+  > D1. JEV POST-MERGE: every other A1 condition stays a pre-merge hard gate (up to date, required checks green on head SHA, no unresolved threads, Rule-8 approval on gated code). JEV >= 85 is scored on the merge SHA right after each merge; a miss stops the train and blocks the next dependent car and the tag. PRs that add the JEV gate itself (MT-00a) are exempt.
+  > D2. #404's Rule-8 rejection is resolved by FIX+REVIEW: validate the dispatch identity before any checkout, re-review, land MT-00a as one PR.
+  > D3. Rule-8 step 2 is supplied by clean-context, read-only Claude reviewers dispatched from the orchestrator session; they authored nothing and sign only the exact head SHA reviewed. Multi-model panels still cannot clear Rule-8.
+  > D4. One canonical source: the plan lands on main through MT-00b with SHIP_PLAN.md reconciled to the operator rulings; PR #403 stays the live tracker; no other queue file is authoritative.
+  > D5. The admitted harness is recorded as an exact commit SHA plus its required tool set in BUILD_AND_CI.md, and the update script takes a SHA, not a moving branch.
+  > D6. Drift guard (MT-12): the session orientation hook warns when AGENTS.md, CLAUDE.md, docs/rules or SHIP_PLAN.md differ from origin/main, or HEAD is over 20 commits behind; a check confirms the plan file the tracker cites exists on main.
+  > D7. No v0.5.0 car starts before the v0.4.0 tag except documentation and the scope lock; the tag requires the three-node proof (TRI-040).
+  >
+  > DOCTRINAL ALIGNMENT: Nodes, not relays, is untouched (no transport or crypto code changes). The Rust core remains the sole cryptographic authority. Rule-8 is unchanged and stricter in practice (independent sign-off recorded per head SHA). Merges use merge commits, no admin bypass, no force-push. CI is the primary verifier.
+  >
+  > ASK: APPROVE. REJECT if any part weakens Rule-8, converts an operator gate into agent-granted authority, creates a second source of truth, or contradicts AGENTS.md.
+
+### Resolution bod-f74509ff [DEFERRED]
+- **Timestamp**: 2026-09-29T13:15:04.258036+00:00
+- **Tier**: free
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.000275 (Ceiling: $0.10)
+- **Summary**: Only 1/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (1/5 APPROVE):
+  - `inclusionai/ling-3.0-flash`: **APPROVE** (Score: 0.93) - _The proposal fixes broken pre-merge gates and formalizes operator rulings into the merge-gate without introducing centralized dependencies, weakening Rule-8, creating a second source of truth, or contradicting AGENTS.md; all workflow changes preserve the Rust core as cryptographic authority and maintain merge-commit integrity with no force-push or admin bypass._
+- **Judge Model**: `z-ai/glm-5.3-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Adopt one canonical landing path for v0.4.0 then v0.5.0, with the merge-gate reading that unblocks it.
+  >
+  > WHY (each fact verified by command on 2026-09-29):
+  > - origin/main is faf22a57 (last merge 2026-09-28). No merge car MT-00a..MT-12 has merged; 66 pull requests are open. Branch protection: strict, 5 required checks, admins enforced, no force-push.
+  > - The operator-ratified plan (merge-train task file, operator rulings of 2026-09-28) exists only on unmerged PR #403. SHIP_PLAN.md on main still calls itself the only execution queue and still lists D2 (signed APK downloadable) as a release gate, which operator ruling H-1 waives for v0.4.0. Two sources of truth disagree.
+  > - Merge condition A1 requires a JEV score of at least 85 before merge, but the scorer's pr_merged hard gate (25 of 100 points) can only be true after a merge, so the pre-merge ceiling is 75 and no PR can pass. The train has been halted since 2026-09-28.
+  > - The plan names the immutable harness tag v0.4.1 as admitted, but that tag exposes 12 MCP tools and lacks jev_phase, the gate tool the plan requires; the lane actually gated with commit 6961c09 (15 tools).
+  > - The lane's Claude authorisation expired, so Rule-8 step 2 (fresh Claude final sign-off) cannot run from the lane.
+  >
+  > DECISIONS (D1-D3 are operator rulings given in chat 2026-09-29; D4-D7 are proposed here):
+  > D1. JEV POST-MERGE: every other A1 condition stays a pre-merge hard gate (up to date, required checks green on head SHA, no unresolved threads, Rule-8 approval on gated code). JEV >= 85 is scored on the merge SHA right after each merge; a miss stops the train and blocks the next dependent car and the tag. PRs that add the JEV gate itself (MT-00a) are exempt.
+  > D2. #404's Rule-8 rejection is resolved by FIX+REVIEW: validate the dispatch identity before any checkout, re-review, land MT-00a as one PR.
+  > D3. Rule-8 step 2 is supplied by clean-context, read-only Claude reviewers dispatched from the orchestrator session; they authored nothing and sign only the exact head SHA reviewed. Multi-model panels still cannot clear Rule-8.
+  > D4. One canonical source: the plan lands on main through MT-00b with SHIP_PLAN.md reconciled to the operator rulings; PR #403 stays the live tracker; no other queue file is authoritative.
+  > D5. The admitted harness is recorded as an exact commit SHA plus its required tool set in BUILD_AND_CI.md, and the update script takes a SHA, not a moving branch.
+  > D6. Drift guard (MT-12): the session orientation hook warns when AGENTS.md, CLAUDE.md, docs/rules or SHIP_PLAN.md differ from origin/main, or HEAD is over 20 commits behind; a check confirms the plan file the tracker cites exists on main.
+  > D7. No v0.5.0 car starts before the v0.4.0 tag except documentation and the scope lock; the tag requires the three-node proof (TRI-040).
+  >
+  > DOCTRINAL ALIGNMENT: Nodes, not relays, is untouched (no transport or crypto code changes). The Rust core remains the sole cryptographic authority. Rule-8 is unchanged and stricter in practice (independent sign-off recorded per head SHA). Merges use merge commits, no admin bypass, no force-push. CI is the primary verifier.
+  >
+  > ASK: APPROVE. REJECT if any part weakens Rule-8, converts an operator gate into agent-granted authority, creates a second source of truth, or contradicts AGENTS.md.
+
+### Resolution bod-032ca0f1 [DEFERRED]
+- **Timestamp**: 2026-09-29T13:27:54.750884+00:00
+- **Tier**: paid
+- **Verdict**: `DEFERRED_PANEL_SHORTFALL`
+- **Cost**: $0.003423 (Ceiling: $0.10)
+- **Summary**: Only 3/5 models submitted valid votes. Fails closed.
+- **Panel Voting** (2/5 APPROVE):
+  - `nvidia/nemotron-3-super-120b-a12b`: **APPROVE** (Score: 0.94) - _The proposal upholds all doctrinal tenets: it preserves node‑only relay behavior, sovereign P2P mesh, cryptographic integrity, multiplatform parity, and hygiene safety while tightening verification via post‑merge JEV scoring and independent per‑SHA sign‑off._
+  - `openai/gpt-5.6-luna`: **REJECT** (Score: 0.72) - _Although the proposal preserves the core network and cryptographic doctrine, it introduces governance exceptions at the merge gate and Rule-8 authorization boundary. Strict adjudication requires rejecting unresolved weakening or substitution of mandatory gates._
+  - `z-ai/glm-5.3-flash`: **APPROVE** (Score: 0.90) - _This is a process/governance proposal that leaves the wire protocol, node model, and crypto authority untouched; it consolidates to one source of truth, preserves Rule-8 via independent per-SHA sign-off, and fails closed at every gate. No doctrine violation is introduced._
+- **Judge Model**: `deepseek/deepseek-v4.1-flash` (Agreed: False)
+- **Proposal Text**:
+  > PROPOSAL: Adopt one canonical landing path for v0.4.0 then v0.5.0, with the merge-gate reading that unblocks it.
+  >
+  > WHY (each fact verified by command on 2026-09-29):
+  > - origin/main is faf22a57 (last merge 2026-09-28). No merge car MT-00a..MT-12 has merged; 66 pull requests are open. Branch protection: strict, 5 required checks, admins enforced, no force-push.
+  > - The operator-ratified plan (merge-train task file, operator rulings of 2026-09-28) exists only on unmerged PR #403. SHIP_PLAN.md on main still calls itself the only execution queue and still lists D2 (signed APK downloadable) as a release gate, which operator ruling H-1 waives for v0.4.0. Two sources of truth disagree.
+  > - Merge condition A1 requires a JEV score of at least 85 before merge, but the scorer's pr_merged hard gate (25 of 100 points) can only be true after a merge, so the pre-merge ceiling is 75 and no PR can pass. The train has been halted since 2026-09-28.
+  > - The plan names the immutable harness tag v0.4.1 as admitted, but that tag exposes 12 MCP tools and lacks jev_phase, the gate tool the plan requires; the lane actually gated with commit 6961c09 (15 tools).
+  > - The lane's Claude authorisation expired, so Rule-8 step 2 (fresh Claude final sign-off) cannot run from the lane.
+  >
+  > DECISIONS (D1-D3 are operator rulings given in chat 2026-09-29; D4-D7 are proposed here):
+  > D1. JEV POST-MERGE: every other A1 condition stays a pre-merge hard gate (up to date, required checks green on head SHA, no unresolved threads, Rule-8 approval on gated code). JEV >= 85 is scored on the merge SHA right after each merge; a miss stops the train and blocks the next dependent car and the tag. PRs that add the JEV gate itself (MT-00a) are exempt.
+  > D2. #404's Rule-8 rejection is resolved by FIX+REVIEW: validate the dispatch identity before any checkout, re-review, land MT-00a as one PR.
+  > D3. Rule-8 step 2 is supplied by clean-context, read-only Claude reviewers dispatched from the orchestrator session; they authored nothing and sign only the exact head SHA reviewed. Multi-model panels still cannot clear Rule-8.
+  > D4. One canonical source: the plan lands on main through MT-00b with SHIP_PLAN.md reconciled to the operator rulings; PR #403 stays the live tracker; no other queue file is authoritative.
+  > D5. The admitted harness is recorded as an exact commit SHA plus its required tool set in BUILD_AND_CI.md, and the update script takes a SHA, not a moving branch.
+  > D6. Drift guard (MT-12): the session orientation hook warns when AGENTS.md, CLAUDE.md, docs/rules or SHIP_PLAN.md differ from origin/main, or HEAD is over 20 commits behind; a check confirms the plan file the tracker cites exists on main.
+  > D7. No v0.5.0 car starts before the v0.4.0 tag except documentation and the scope lock; the tag requires the three-node proof (TRI-040).
+  >
+  > DOCTRINAL ALIGNMENT: Nodes, not relays, is untouched (no transport or crypto code changes). The Rust core remains the sole cryptographic authority. Rule-8 is unchanged and stricter in practice (independent sign-off recorded per head SHA). Merges use merge commits, no admin bypass, no force-push. CI is the primary verifier.
+  >
+  > ASK: APPROVE. REJECT if any part weakens Rule-8, converts an operator gate into agent-granted authority, creates a second source of truth, or contradicts AGENTS.md.

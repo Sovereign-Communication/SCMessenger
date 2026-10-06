@@ -533,6 +533,9 @@ impl RatchetSession {
     /// separator exactly. For the ORIGINAL suite 0x02 derivation, preserved
     /// for peers that only advertise 0x02, see
     /// `init_as_receiver_hybrid_suite02`.
+    // PERIMETER-ALLOW-UNDERSCORE: receiver-side sender authentication is
+    // X25519-based (our_x25519_secret x sender_bundle.x25519_public) in the
+    // 0x03 derivation; the receiver's Ed25519 signing key never participates.
     pub fn init_as_receiver_hybrid(
         _our_signing_key: &ed25519_dalek::SigningKey,
         our_x25519_secret: &x25519_dalek::StaticSecret,
@@ -624,6 +627,9 @@ impl RatchetSession {
     /// Do NOT change this function's derivation. If suite 0x02's behavior
     /// ever needs to change, mint a new suite ID instead -- see
     /// `crypto::negotiation::HYBRID_SUITE_IDS` for why.
+    // PERIMETER-ALLOW-UNDERSCORE: suite 0x02 has no sender-authentication DH
+    // term by design; the signing key must stay unused to preserve the 0x02
+    // root-key derivation ("Do NOT change this function's derivation").
     pub fn init_as_sender_hybrid_suite02(
         _our_signing_key: &ed25519_dalek::SigningKey,
         their_bundle: &crate::identity::PublicKeyBundle,
@@ -695,6 +701,9 @@ impl RatchetSession {
     /// Preserved byte-for-byte from before PR #221; see
     /// `init_as_sender_hybrid_suite02` for why this must never be merged into
     /// the suite 0x03 code path.
+    // PERIMETER-ALLOW-UNDERSCORE: suite 0x02 receiver derivation has no
+    // sender-authentication term: neither our signing key nor the sender
+    // bundle participates (preserved byte-for-byte; do not change).
     pub fn init_as_receiver_hybrid_suite02(
         _our_signing_key: &ed25519_dalek::SigningKey,
         our_x25519_secret: &x25519_dalek::StaticSecret,
