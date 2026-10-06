@@ -27,6 +27,9 @@ on:
       - 'scripts/test_check_wiring.py'
       - 'core/src/api.udl'
       - 'mobile/**'
+      # Docs under a trigger directory (core/README.md, android/*.md) cannot change a
+      # mobile build. Last matching pattern wins, so this negation must stay last.
+      - '!**.md'
 
 permissions:
   contents: read
@@ -187,7 +190,7 @@ jobs:
           python scripts/verify_apk_native_libs.py android/app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
         if: steps.platform.outputs.android_relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-debug-apk
           path: android/app/build/outputs/apk/debug/

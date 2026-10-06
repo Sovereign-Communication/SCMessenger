@@ -17,6 +17,7 @@ Usage:
   python scripts/disk_budget.py            # survey (default)
   python scripts/disk_budget.py --tight 25 --floor 10
   python scripts/disk_budget.py --json
+  python scripts/disk_budget.py --fast     # free space + verdict only, no walk
 
 Exit codes:
   0  OK       -- at or above the tight threshold
@@ -246,6 +247,9 @@ def main():
     ap.add_argument("--floor", type=float, default=DEFAULT_FLOOR_GB,
                     help="hard-stop below this many GB free (default %g)" % DEFAULT_FLOOR_GB)
     ap.add_argument("--json", action="store_true", dest="as_json")
+    ap.add_argument("--fast", action="store_true",
+                    help="filesystem free space and verdict only; skip the "
+                         "directory walk (cheap enough for a commit hook)")
     args = ap.parse_args()
 
     root = repo_root()
@@ -258,6 +262,15 @@ def main():
         verdict = "TIGHT"
     else:
         verdict = "OK"
+
+    if args.fast:
+        # No directory walk: this is the mode a commit hook can afford.
+        print("disk: %s free of %s (%.1f%% used)  verdict=%s  "
+              "(TIGHT<%gGB BLOCKED<%gGB)"
+              % (human(usage.free), human(usage.total),
+                 100.0 * usage.used / usage.total, verdict, args.tight,
+                 args.floor))
+        return {"OK": 0, "TIGHT": 1, "BLOCKED": 2}[verdict]
 
     # Every candidate path in the repo, plus every registered worktree's
     # target/. Duplicates are collapsed so the total is not double-counted.
