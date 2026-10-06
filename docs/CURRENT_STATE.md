@@ -7,9 +7,8 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-07-25 (planning unity pass; executive summary refreshed)
-Last verified: **2026-07-21** (Workspace build gates clean on host; re-run gates after
-2026-07-25 transport edits per `HANDOFF/SESSION_HANDOFF_2026-07-25.md`)
+Last updated: 2026-10-01T04:24Z (landing-plan dispatch coverage linked; no runtime or release status changed)
+Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
 
@@ -32,7 +31,7 @@ remaining work are in `SHIP_PLAN.md` section 6. Long-horizon sequencing remains 
   v0.4.0 [NEXT RELEASE] -- Josh alpha: relay E2E, receipts, signed APK
      |                      (E-00 done 2026-07-17; outbox Sites 2+3 done 2026-07-17)
      v
-  v0.5.0 [FEATURE COMPLETE] -- PQC-14 close-out, farm drills, KMP/meeting mode depth
+  v0.5.0 [STATUS UNVERIFIED] -- the full V5 scope and TRI-050/TAG-050 remain unmerged proposals; see the unified landing handoff
      |
      v
   v1.0.0 [PRODUCTION GA] -- Phase 2 WS-A..F remainder + hardware mesh sign-off (P1-19 done)
@@ -54,6 +53,125 @@ remaining work are in `SHIP_PLAN.md` section 6. Long-horizon sequencing remains 
 
 ---
 
+### Evidence-bounded checkpoint (2026-10-01T01:30Z; GitHub refresh 01:24Z–01:30Z)
+
+This addendum records the observations below; it does not establish a release,
+deployment, or three-node pass.
+
+- **Local API (2026-10-01T00:43Z):** `curl.exe --max-time 5 -sS -i
+  http://127.0.0.1:9876/health` -> HTTP 200, `{"status":"healthy"}`;
+  `curl.exe --max-time 5 -sS -i http://127.0.0.1:9876/version` -> version
+  `0.4.0`, git hash `bceacb9`, build time
+  `2026-09-26T20:38:26.767320800+00:00`; `curl.exe --max-time 5 -sS -i
+  http://127.0.0.1:9876/api/identity` -> identity ID
+  `985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826`, peer ID
+  `12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw`, nickname
+  `Claude-Windows-Driver`. These are recorded command outputs, not current
+  availability evidence.
+- **Pixel 6a:** `adb devices -l` at 00:43Z listed serial
+  `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp` as `device`; at 01:02Z,
+  `adb devices -l` returned no device entries. Current availability is
+  UNVERIFIED.
+- **PR #421 CI artifact:** [Actions run 36654635755](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36654635755),
+  head `7a6c271924a4625e24ff80a30cc89ee9adede356`, APK SHA256
+  `8da295b760e50e44e174b11a1049505ec9b593f54de5ec73ce3db021373a6308`, signer
+  SHA256 `067d312c1470d9b36c39b54943e3d8c434243821c9874c03241e8668801fd672`;
+  CI reported `SCMESSENGER_DEBUG_KEYSTORE_BASE64` unset. `adb install -r` ->
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The recorded checkpoint says no
+  uninstall, wipe, UI, or onboarding occurred; installed-app full signer is
+  unknown and ADB later disconnected (recorded observations; current device and
+  installed-app signer state are UNVERIFIED).
+- **AWS cloud node:** `aws ec2 describe-instances ...` -> NOT RUN (`aws` CLI
+  unavailable). Cloud-node status is UNVERIFIED; this does not show that the
+  node is down.
+- **GitHub:** `main` is commit
+  [`e76e05933d49f5f764539960bf9768e409ea9fa4`](https://github.com/Sovereign-Communication/SCMessenger/commit/e76e05933d49f5f764539960bf9768e409ea9fa4).
+  PRs [#422](https://github.com/Sovereign-Communication/SCMessenger/pull/422)
+  and [#424](https://github.com/Sovereign-Communication/SCMessenger/pull/424)
+  are merged.
+- [PR #416](https://github.com/Sovereign-Communication/SCMessenger/pull/416)
+  is open at head `d4138a07b4ff508e40f16d1f72987244e8b09e19`; versus `main`,
+  it is 23 ahead and 15 behind (23 commits, 31 files, +4263/-15)
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...d4138a07b4ff508e40f16d1f72987244e8b09e19)).
+- [PR #403](https://github.com/Sovereign-Communication/SCMessenger/pull/403)
+  is open at head `1a3cb2744a53ee135ceada23b982a737116644ee`; versus `main`,
+  it is 10 ahead and 34 behind (10 commits, 8 files). The actual compare
+  includes `scripts/backup_purge.sh`, so its PR-body scope is not authoritative
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...1a3cb2744a53ee135ceada23b982a737116644ee)).
+  Its latest of 35 comments is #5893444868; the freeze remains on its named
+  Freebuff branches ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/403#issuecomment-5893444868)).
+- [PR #421](https://github.com/Sovereign-Communication/SCMessenger/pull/421)
+  is open at head `7a6c271924a4625e24ff80a30cc89ee9adede356`; versus `main`,
+  it is 3 ahead and 12 behind (3 commits, 2 files)
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...7a6c271924a4625e24ff80a30cc89ee9adede356)). The exact-head check-runs API returned
+  `total_count=36`, all successful
+  ([check-runs API](https://api.github.com/repos/Sovereign-Communication/SCMessenger/commits/7a6c271924a4625e24ff80a30cc89ee9adede356/check-runs)). Its latest and only comment,
+  #5902649210, records Rule-8 `REQUEST_CHANGES` with high global inbound
+  starvation and medium repeated-handover findings
+  ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/421#issuecomment-5902649210)). This is a PR comment, not itself a GitHub review-submission object. Checks pass; the merge/security gate does not.
+- **Operational/release gates:** cellular-test and deployment status since the
+  recorded observations is UNVERIFIED. The Pixel install command returned
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Whether a 0.4.0 or 0.5.0 release or a
+  three-node pass has since been established is UNVERIFIED. The #421 cap policy
+  remains unresolved; this checkpoint makes no cap or architecture choice.
+
+---
+
+---
+
+### Unified v0.4.0/v0.5.0 takeover audit (2026-10-01T02:13Z)
+
+This checkpoint records the current GitHub review and the evidence boundary. It does not establish a code merge, release, deployment, cellular pass, or three-node pass.
+
+- GitHub's `main` branch endpoint returned `e76e05933d49f5f764539960bf9768e409ea9fa4`. The open-PR search returned 64 records at a requested limit of 100. The 37 active/dependent train PRs are all still open and all compare behind that exact main commit. Their full head SHAs, ahead/behind counts, blockers, and next steps are in [V040_V050_LANDING_PLAN_20261001.md](../HANDOFF/V040_V050_LANDING_PLAN_20261001.md).
+- PR #416 is an unmerged proposal and does not supersede the current-main working-first path. PR #415 has three deferred panel outcomes, not approval. PR #403 includes `scripts/backup_purge.sh` and its ten-branch freeze remains active.
+- PR #421 head `7a6c271924a4625e24ff80a30cc89ee9adede356` has 36 successful check runs and zero GitHub review objects. Comment #5902649210 records an independent Rule-8 `REQUEST_CHANGES` for global inbound exhaustion and repeated-handover starvation. Its cap policy remains an operator decision.
+- The current session did not update a code branch, merge a PR, or deploy a cloud node. It attempted the in-place `adb install -r`; Android returned `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. No uninstall, wipe, or Pixel UI onboarding occurred. Device and cloud-node availability remain UNVERIFIED.
+- Current dogfood rules permit docs-only publication. Do not stage source, tests, scripts, generated files, or other code. Before any later merge, re-check exact head/scope/reviews/checks and run `scripts/pr_scope.sh <number>`.
+
+
+### GitHub inventory refresh (2026-10-01T02:51Z)
+
+- GitHub's GraphQL open-PR query at 02:51:21Z returned 64 records from requested page size 100, with main at e76e05933d49f5f764539960bf9768e409ea9fa4. All 37 active/dependent train PRs remain open; their exact head SHAs, declared base refs, and GitHub merge states are recorded in the unified landing plan.
+- The direct-comparison snapshot from 01:45Z-01:52Z recorded all 37 train heads behind main. The later GraphQL query confirmed the same main SHA and the same 37 head SHAs, but did not provide ahead/behind counts. Re-run an exact comparison before any branch update or merge. GitHub's merge state is relative to each declared base; #412 targets the frozen freebuff/train-mt00b branch.
+- On exact #421 head 7a6c271924a4625e24ff80a30cc89ee9adede356, the check-runs query returned 36 of 36 successful, the review-submissions query returned zero, and the issue-comments query returned one comment, #5902649210. That comment is an independent Rule-8 REQUEST_CHANGES identifying high inbound-capacity exhaustion and medium repeated-handover starvation. The merge/security gate remains blocked.
+- No source, test, script, generated-file, device, cloud-node, or release action is authorized by this documentation checkpoint. Current dogfood rules allow documentation-only publication.
+
+
+### Direct PR comparison refresh (2026-10-01T03:05Z)
+
+- GitHub compared all 37 current active/dependent PR head SHAs against main e76e05933d49f5f764539960bf9768e409ea9fa4 at 03:05:35Z. The query returned 37 comparisons for 37 requested PRs; every comparison was diverged and every behind count was positive. Exact ahead/behind counts are in the unified landing plan.
+- The compared head SHAs match the 02:51Z open-PR inventory. Main has not moved in the checked inventory; all 37 train PRs remain open.
+- This closes no code, release, or field-test gate. The PR train still needs exact-head review, CI, owner decisions, and required operator/device evidence.
+
+### Pixel ADB reconnection (2026-10-01T03:11:57Z)
+
+- `ipconfig.exe` reported active Wi-Fi IPv4 `192.168.0.121` with subnet mask `255.255.255.0`; the operator-provided `.111:33415` therefore resolves to `192.168.0.111:33415` on that subnet.
+- `adb connect 192.168.0.111:33415` returned `connected to 192.168.0.111:33415`. `adb devices -l` listed `192.168.0.111:33415` and `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp`, both reporting `product:bluejay model:Pixel_6a device:bluejay`.
+- This verifies ADB connectivity only. No installation, uninstall, wipe, or Pixel UI onboarding occurred in this check. The recorded `INSTALL_FAILED_UPDATE_INCOMPATIBLE` remains unresolved; do not infer that the candidate is installed.
+
+### PR #421 Pixel fresh install (2026-10-01T03:40Z)
+
+- The operator approved a fresh install after the earlier in-place update returned `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The CI artifact was run `36654635755`, artifact `11073276854`, for head `7a6c271924a4625e24ff80a30cc89ee9adede356`; local APK SHA-256 was `8da295b760e50e44e174b11a1049505ec9b593f54de5ec73ce3db021373a6308`. The APK manifest identified `com.scmessenger.android`, version `0.4.0`, version code `15`.
+- On the connected Pixel 6a TLS serial `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp`, `adb uninstall com.scmessenger.android` returned `Success`; `adb install <verified app-debug.apk>` returned `Performing Streamed Install` / `Success`. A subsequent `adb devices -l`, `pm list packages`, `pm path`, and `dumpsys package` readback confirmed the Pixel 6a and installed package version code `15`, version name `0.4.0`.
+- This fresh install cleared SCMessenger's local app data. This session did not launch or onboard the app, and did not perform a cellular-only send/handover test. Cellular transport behavior remains UNVERIFIED. The CI debug-signing secret was previously observed unset, so a later CI artifact may require another fresh install and onboarding.
+
+### PR #421 field-test report, bounded log review, and image publication (2026-10-01T04:01Z)
+
+- The operator reports that the Pixel cellular test completed successfully. The bounded Android app capture covers 2026-10-01T03:47:32.862Z–03:50:25.914Z (2026-09-30 17:47:32.862–17:50:25.914 HST), app UID 10684, installed version 15/0.4.0. All nine lines matching the cellular log pattern report `network=WIFI` and `cellular=false`; observed send/receipt routes include `tcp_mdns` LAN. The capture may not include the earlier reported field-test event, so it does not independently confirm or refute cellular transport success.
+- Incoming `fb11b25b-714a-4512-94d2-331ec89d319b` was received at 17:48:20.630 HST, stored in history at .679, and its delivery receipt returned via `tcp_mdns` at .768–.771. Outgoing `1e40ac9e-5ab7-4a7d-8a0c-fe42528e7ad1` received a `Delivered` receipt at 17:48:20.570, history updated at .587, pending outbox removed at .589, and receipt processing completed at .601; its originating send attempt is not present in the captured window. `77a0268b-59c3-49f5-849c-fad6372b6d2f` had a duplicate receipt. Five other matched IDs are history-sync requests, not user sends.
+- Post-test connectivity showed default Wi-Fi network 151 and connected LTE network 101. No cap/resource-exhaustion keyword matches appeared in this bounded capture, and the crash buffer contained no matching SCM app crash (only older system-init crash-helper lines). These observations are not a full TRI result and do not clear the PR #421 Rule-8 findings.
+- Docker Publish [run 36655697337](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36655697337) completed successfully for exact PR #421 head `7a6c271924a4625e24ff80a30cc89ee9adede356`; build-and-push job `109699454632` succeeded. The workflow log identifies source `testbotz/scmessenger`, tags `sha-7a6c271` and `fix-conn-cap-per-peer-64`, and manifest digest `sha256:c949405afcea2206f7a4d016b2085787d68e61f6ca4590b1154998c036692b5b`.
+- The successful image publication does not prove AWS deployment or establish the cloud node's running version. AWS/cloud-node state remains UNVERIFIED. PR #421 still has the recorded Rule-8 `REQUEST_CHANGES` findings for global inbound capacity exhaustion and repeated-handover starvation; successful CI and image publication do not resolve them.
+- Raw log evidence remains in local `tmp/cell-test-pr421-20261001`; it is not part of the documentation publication.
+
+### Landing-plan readiness update (2026-10-01T04:24Z)
+
+- [V040_V050_LANDING_PLAN_20261001.md](../HANDOFF/V040_V050_LANDING_PLAN_20261001.md) links the existing v0.4.0 working-first, merge-train, tag-path, and three-node runbooks plus the four V5 WP packets.
+- Its dispatch protocol records per-car ownership, candidate-SHA evidence, dependency ordering, remote durability, and sanctioned build-output reclaim prerequisites. PR #421's global inbound fairness and repeated-handover recovery have behavior-level acceptance, subject to the operator's policy decision and exact-head independent review.
+- Planning workflow only; no runtime, build, device, deployment, or release evidence is added.
+
+---
 ## 3. Milestone Execution Progress Log
 
 ### v0.4.0 Release Preparation (Current In-Flight Milestone)
