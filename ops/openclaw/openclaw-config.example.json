@@ -1,0 +1,11 @@
+{
+  "gateway": {"mode": "local", "auth": {"mode": "token"}},
+  "agents": {"defaults": {
+    "model": {"primary": "ollama/sparkx25:4b", "fallbacks": []},
+    "heartbeat": {"every": "0m"},
+    "timeoutSeconds": 7200
+  }},
+  "tools": {"toolSearch": {"enabled": true, "mode": "directory"}},
+  "plugins": {"entries": {"memory-core": {"config": {"dreaming": {"enabled": false}}}}},
+  "skills": {"workshop": {"autonomous": {"mode": "propose"}}}
+}
