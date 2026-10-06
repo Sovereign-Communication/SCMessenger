@@ -80,22 +80,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Docs-only PRs (markdown, docs/, HANDOFF/) cannot change what this job
+      # compiles or tests. The job still starts and completes green so the
+      # check reports instead of vanishing; every compile and test step below
+      # is gated on the classifier. detect-platform-change fails open: push to
+      # main, undiffable PRs and unrecognised paths all report
+      # rust_relevant=true, so main's runs are never weakened.
+      - name: Detect Rust-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
       # Pinned on integrate/train-20261004. This arrived unpinned from #228,
       # and an unpinned `stable` is exactly the drift the repo pin exists to
       # prevent: scripts/check_toolchain_pin.py fails closed on it, and left
       # alone it would turn this repo red on an unrelated diff one day.
       - uses: dtolnay/rust-toolchain@1.99.0
+        if: steps.platform.outputs.rust_relevant == 'true'
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.platform.outputs.rust_relevant == 'true'
         with:
           key: forgery-regression-${{ hashFiles('**/Cargo.lock') }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install libdbus-1-dev (Ubuntu)
+        if: steps.platform.outputs.rust_relevant == 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Run forgery/negative-security regression tests
+        if: steps.platform.outputs.rust_relevant == 'true'
         run: |
           set -euo pipefail
           OUTPUT_FILE=forgery_test_output.txt
