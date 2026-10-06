@@ -1,151 +1,98 @@
 # SCMessenger Phase-2 Prescriptions — Jev-selected implementation patterns
 
-Model: `jev-1.13.0`. 5,476 prescription judgments (5,076 wiring, 400 security) and
-5,407 context-needs judgments across 5,407 flagged functions (Rust/Kotlin/Swift).
-0 API errors, 0 missing answers. Tables `prescriptions`, `context_needs` in `audit.db`.
-Raw: `phase2/prescriptions.jsonl`, `phase2/context.jsonl`.
-
-## Headline findings
-
-- Prescription confidence runs LOW (wiring mean 0.42, security mean 0.56) — consistent
-  with the Jev calibration battery: Jev is a veto/escalation sensor, not an approver.
-  Under the 0.95 gate, only **5 prescriptions are execution-ready** (below).
-- 36% of wiring-flagged functions got `no-change`: the wiring flag is noisy, the
-  prescription pass correctly filters it.
-- Security flags are nearly all real: only 2% `no-change`.
-- Context hunger is high: mean `needs_more_context` 0.78; 1,949 functions score
-  important-or-critical context need. Jev most often wants a **callee** (2,326),
-  then a **caller** (1,700), then a **sibling** (1,244).
-- Context need is uncorrelated with prescription confidence (r=0.05): re-judging
-  with more context is a separate workstream (phase 2d), not a fix for low confidence.
+Post-0.5.0 refresh. Model: `jev-1.13.0`. 5581 prescription judgments, 5507 context-needs judgments. 0 API errors.
+Tables `prescriptions`, `context_needs`, `battery_security`, `battery_testplan`,
+`battery_concurrency` in `audit.db`.
 
 ## Execution-ready (>=0.95, generated/test excluded)
 
-- **0.98** `process_gossip` (rust, core/src/routing/neighborhood.rs:219) [security] -> **validate-guard**
-- **0.98** `readCharacteristic` (swift, iOS/SCMessenger/SCMessenger/Transport/BLECentralManager.swift:687) [wiring] -> **async-await**
-- **0.97** `chain_hash` (rust, core/src/observability.rs:128) [wiring] -> **propagate-question**
-- **0.96** `on_wifi_direct_connection_info` (rust, core/src/mobile_bridge.rs:1803) [security] -> **validate-guard**
-- **0.95** `remove_group` (rust, core/src/transport/wifi_direct.rs:401) [wiring] -> **propagate-question**
+- **0.99** `process_gossip` (rust, core/src/routing/neighborhood.rs:224) [security] -> **validate-guard**
+- **0.97** `on_wifi_direct_connection_info` (rust, core/src/mobile_bridge.rs:1809) [security] -> **validate-guard**
+- **0.96** `readCharacteristic` (swift, iOS/SCMessenger/SCMessenger/Transport/BLECentralManager.swift:687) [wiring] -> **async-await**
+- **0.96** `temp_storage_path` (rust, wasm/src/lib.rs:2364) [wiring] -> **propagate-question**
+- **0.95** `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:6040) [security] -> **validate-guard**
 
 ## Strong signal (0.80-0.95, generated/test excluded) — lane review required
 
-- 0.94 `make_keypair_pubkey_and_identity_id` (rust, core/src/mobile_bridge.rs:6372) [security] -> propagate-question
-- 0.94 `handle_message` (rust, core/src/wasm_support/transport.rs:132) [security] -> validate-guard
-- 0.94 `temp_storage_path` (rust, wasm/src/lib.rs:2364) [wiring] -> propagate-question
+- 0.94 `identity_hash_not_usable_as_recipient` (rust, core/src/iron_core.rs:5451) [security] -> validate-guard
+- 0.94 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:5577) [security] -> validate-guard
 - 0.93 `onCharacteristicReadRequest` (kotlin, android/app/src/main/java/com/scmessenger/android/transport/ble/BleGattServer.kt:294) [security] -> guard-early-return
-- 0.93 `self_certifying_peer` (rust, cli/src/main.rs:990) [wiring] -> propagate-question
-- 0.93 `identity_hash_not_usable_as_recipient` (rust, core/src/iron_core.rs:5436) [security] -> validate-guard
-- 0.93 `sign_token` (rust, core/src/relay/invite.rs:713) [security] -> propagate-question
-- 0.93 `bootstrap` (rust, core/src/transport/bootstrap.rs:205) [security] -> validate-guard
-- 0.92 `stop_discovery` (rust, core/src/transport/wifi_direct.rs:384) [wiring] -> propagate-question
-- 0.91 `startMonitoring` (kotlin, android/app/src/main/java/com/scmessenger/android/service/ServiceHealthMonitor.kt:52) [wiring] -> coroutine-scope
-- 0.91 `try_begin_dial` (rust, cli/src/ledger.rs:419) [wiring] -> drop-guard
-- 0.91 `serve_apk_stream` (rust, cli/src/main.rs:1399) [security] -> validate-guard
-- 0.91 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:5420) [security] -> validate-guard
-- 0.90 `notifyNetworkRecovered` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:4390) [wiring] -> coroutine-scope
-- 0.90 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:5583) [security] -> validate-guard
-- 0.90 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:5883) [security] -> validate-guard
-- 0.90 `sign_token_pq` (rust, core/src/relay/invite.rs:724) [wiring] -> propagate-question
+- 0.93 `wp1_non_key_recipients_are_not_encryptable` (rust, core/src/iron_core.rs:6278) [security] -> validate-guard
+- 0.93 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:5728) [security] -> validate-guard
+- 0.93 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:5889) [security] -> validate-guard
+- 0.93 `perform_sync` (rust, wasm/src/mesh.rs:215) [wiring] -> propagate-question
+- 0.92 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:5565) [security] -> validate-guard
+- 0.92 `chain_hash` (rust, core/src/observability.rs:128) [wiring] -> propagate-question
+- 0.92 `new` (rust, core/src/store/contacts.rs:136) [wiring] -> propagate-question
+- 0.91 `register_identity_with_relay` (rust, cli/src/main.rs:52) [wiring] -> propagate-question
+- 0.91 `self_certifying_peer` (rust, cli/src/main.rs:991) [wiring] -> propagate-question
+- 0.91 `serve_apk_stream` (rust, cli/src/main.rs:1400) [security] -> validate-guard
+- 0.91 `make_keypair_pubkey_and_identity_id` (rust, core/src/mobile_bridge.rs:6517) [security] -> propagate-question
+- 0.91 `advertiser` (swift, iOS/SCMessenger/SCMessenger/Transport/MultipeerTransport.swift:402) [security] -> guard-let
+- 0.90 `ensureServiceInitializedFireAndForget` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:6359) [wiring] -> coroutine-scope
+- 0.90 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:5716) [security] -> validate-guard
+- 0.90 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:6468) [security] -> validate-guard
+- 0.90 `drain_for_peer` (rust, core/src/store/outbox.rs:838) [wiring] -> propagate-question
+- 0.90 `bootstrap` (rust, core/src/transport/bootstrap.rs:205) [security] -> validate-guard
+- 0.90 `flush` (swift, iOS/SCMessenger/SCMessenger/ContactManagerFix.swift:93) [wiring] -> throws-propagate
 - 0.90 `connect` (rust, wasm/src/daemon_bridge.rs:518) [wiring] -> propagate-question
-- 0.89 `ensureServiceInitializedFireAndForget` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:6358) [wiring] -> coroutine-scope
-- 0.89 `ensurePendingOutboxRetryLoop` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:7775) [wiring] -> coroutine-scope
-- 0.89 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:6311) [security] -> validate-guard
-- 0.89 `peripheralManager` (swift, iOS/SCMessenger/SCMessenger/Transport/BLEPeripheralManager.swift:624) [wiring] -> guard-let
-- 0.88 `onRuntimePermissionsGranted` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:6106) [wiring] -> coroutine-scope
-- 0.88 `emitDisconnectedIfChanged` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:7469) [wiring] -> mutex-guard
-- 0.88 `resolveKnownPeerNickname` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:9583) [wiring] -> split-function
-- 0.88 `new` (rust, core/src/store/contacts.rs:136) [wiring] -> propagate-question
-- 0.88 `set_on_message_received` (rust, core/src/transport/wifi_aware.rs:299) [wiring] -> callback-closure
-- 0.87 `register_identity_with_relay` (rust, cli/src/main.rs:51) [wiring] -> propagate-question
-- 0.87 `get_external_addresses` (rust, core/src/mobile_bridge.rs:3927) [wiring] -> propagate-question
-- 0.87 `on_ble_data_received` (rust, core/src/mobile_bridge.rs:5732) [security] -> validate-guard
-- 0.87 `on_proximity_data_received` (rust, core/src/mobile_bridge.rs:5895) [security] -> validate-guard
-- 0.87 `set_on_service_discovered` (rust, core/src/transport/wifi_aware.rs:293) [wiring] -> callback-closure
-- 0.87 `onMessageReceived` (swift, iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift:1756) [wiring] -> split-function
-- 0.87 `perform_sync` (rust, wasm/src/mesh.rs:215) [wiring] -> propagate-question
-- 0.86 `isPortOpen` (kotlin, android/app/src/main/java/com/scmessenger/android/network/NetworkDiagnostics.kt:161) [wiring] -> use-block
-- 0.86 `createResponderSocket` (kotlin, android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt:356) [wiring] -> use-block
-- 0.86 `set_on_data_path_confirmed` (rust, core/src/mobile_bridge.rs:2852) [wiring] -> callback-closure
-- 0.86 `exportDiagnostics` (swift, iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift:3413) [wiring] -> async-await
+- 0.89 `onRuntimePermissionsGranted` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:6107) [wiring] -> coroutine-scope
+- 0.89 `testCommonPorts` (kotlin, android/app/src/main/java/com/scmessenger/android/network/NetworkDiagnostics.kt:98) [wiring] -> use-block
+- 0.89 `sign_token_pq` (rust, core/src/relay/invite.rs:724) [security] -> propagate-question
+- 0.88 `ensurePendingOutboxRetryLoop` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:7816) [wiring] -> coroutine-scope
+- 0.88 `isPortOpen` (kotlin, android/app/src/main/java/com/scmessenger/android/network/NetworkDiagnostics.kt:161) [wiring] -> use-block
+- 0.88 `handle_service_discovered` (rust, core/src/mobile_bridge.rs:2761) [security] -> validate-guard
+- 0.88 `sign_token_pq` (rust, core/src/relay/invite.rs:724) [wiring] -> propagate-question
+- 0.88 `remove_group` (rust, core/src/transport/wifi_direct.rs:411) [wiring] -> propagate-question
+- 0.88 `count` (swift, iOS/SCMessenger/SCMessenger/ContactManagerFix.swift:81) [wiring] -> throws-propagate
+- 0.87 `record_log` (rust, core/src/iron_core.rs:2415) [wiring] -> propagate-question
+- 0.87 `dataScanner` (swift, iOS/SCMessenger/SCMessenger/Views/Topics/JoinMeshView.swift:221) [wiring] -> guard-let
+- 0.86 `notifyNetworkRecovered` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:4391) [wiring] -> coroutine-scope
+- 0.86 `try_begin_dial` (rust, cli/src/ledger.rs:419) [wiring] -> drop-guard
+- 0.86 `register_device_id` (rust, core/src/mobile_bridge.rs:4368) [wiring] -> propagate-question
 - 0.86 `updateRelayAvailability` (swift, iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift:6146) [wiring] -> split-function
-- 0.86 `startBatteryMonitoring` (swift, iOS/SCMessenger/SCMessenger/Services/IosPlatformBridge.swift:187) [wiring] -> defer-cleanup
+- 0.86 `clearDiagnostics` (swift, iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift:6773) [wiring] -> throws-propagate
+- 0.85 `resolveKnownPeerNickname` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:9624) [wiring] -> split-function
+- 0.85 `readHttpRequestLine` (kotlin, android/app/src/main/java/com/scmessenger/android/utils/ApkShareManager.kt:293) [wiring] -> use-block
 
-(102 total at >=0.80 excluding generated/test; top 40 shown. Full list in `audit.db`.)
+(102 total at >=0.80 excluding generated/test; top 40 shown.)
 
 ## Batch by pattern x language (wiring facet, non-no-change)
 
 ### rust
-- propagate-question: 651 functions (avg conf 0.46)
-- handle-local-fallback: 154 functions (avg conf 0.37)
-- drop-guard: 138 functions (avg conf 0.35)
-- validate-guard: 138 functions (avg conf 0.39)
-- state-machine: 57 functions (avg conf 0.38)
-- return-value: 46 functions (avg conf 0.36)
-- split-function: 36 functions (avg conf 0.33)
-- complete-match: 32 functions (avg conf 0.38)
+- propagate-question: 644 functions (avg conf 0.47)
+- validate-guard: 155 functions (avg conf 0.38)
+- handle-local-fallback: 142 functions (avg conf 0.37)
+- drop-guard: 136 functions (avg conf 0.36)
+- state-machine: 60 functions (avg conf 0.38)
+- return-value: 54 functions (avg conf 0.34)
+- split-function: 35 functions (avg conf 0.34)
+- channel-event: 30 functions (avg conf 0.36)
 
 ### kotlin
-- result-sealed: 182 functions (avg conf 0.36)
-- guard-early-return: 179 functions (avg conf 0.41)
-- split-function: 118 functions (avg conf 0.44)
-- coroutine-scope: 106 functions (avg conf 0.44)
-- result-stdlib: 98 functions (avg conf 0.39)
-- mutex-guard: 59 functions (avg conf 0.41)
-- flow-collect: 35 functions (avg conf 0.35)
-- use-block: 26 functions (avg conf 0.53)
+- result-sealed: 195 functions (avg conf 0.37)
+- guard-early-return: 183 functions (avg conf 0.42)
+- split-function: 115 functions (avg conf 0.45)
+- result-stdlib: 104 functions (avg conf 0.38)
+- coroutine-scope: 102 functions (avg conf 0.46)
+- mutex-guard: 66 functions (avg conf 0.4)
+- flow-collect: 34 functions (avg conf 0.38)
+- use-block: 27 functions (avg conf 0.53)
 
 ### swift
-- guard-let: 102 functions (avg conf 0.43)
-- split-function: 83 functions (avg conf 0.44)
-- result-type: 60 functions (avg conf 0.36)
-- async-await: 59 functions (avg conf 0.42)
-- throws-propagate: 51 functions (avg conf 0.47)
-- defer-cleanup: 20 functions (avg conf 0.4)
-- task-cancel: 9 functions (avg conf 0.41)
-- precondition-invariant: 1 functions (avg conf 0.15)
+- guard-let: 104 functions (avg conf 0.43)
+- split-function: 89 functions (avg conf 0.42)
+- result-type: 67 functions (avg conf 0.35)
+- async-await: 60 functions (avg conf 0.42)
+- throws-propagate: 48 functions (avg conf 0.48)
+- defer-cleanup: 18 functions (avg conf 0.39)
+- task-cancel: 8 functions (avg conf 0.43)
 
-## Confirmed wiring gaps after contextual rescoring (250 weakest, with caller/callee context)
+## Battery headlines (post-0.5.0)
 
-- Seams: 110/250 confirmed bad (dropped call results/error paths), 94 exonerated by context.
-- Caller contracts: mostly uncertain even with context (only 64/250 decisive) — flag as noisy.
-- Completeness: 215/250 confirmed stub/partial — the completeness<=1 flags were real.
-- Resources: 175/250 fine, only 4 confirmed leaks — resources_cleaned flags were mostly noise.
-
-## Lane grouping: top files by prescription count
-
-- 265 — `core/src/mobile_bridge.rs`
-- 254 — `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt`
-- 171 — `iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift`
-- 135 — `core/src/iron_core.rs`
-- 88 — `iOS/SCMessenger/SCMessenger/Generated/api.swift`
-- 82 — `core/src/store/ledger_entry.rs`
-- 68 — `core/src/transport/swarm.rs`
-- 56 — `iOS/SCMessengerCore.xcframework/ios-arm64/Headers/SCMessengerCore.swift`
-- 48 — `iOS/SCMessengerCore.xcframework/ios-arm64-simulator/Headers/SCMessengerCore.swift`
-- 43 — `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt`
-- 42 — `wasm/src/lib.rs`
-- 37 — `iOS/SCMessengerTests/NotificationVerificationTests.swift`
-- 36 — `android/app/src/test/java/com/scmessenger/android/utils/DeepLinkValidatorTest.kt`
-- 35 — `android/app/src/main/java/com/scmessenger/android/service/AndroidPlatformBridge.kt`
-- 33 — `core/src/transport/manager.rs`
-
-## Critical context needs (phase-2d candidates)
-
-164 functions score context-need > 2.25 (critical). Top non-test:
-
-- 2.82 `main` (rust, core/src/bin/gen_kotlin.rs) — Jev wants a **sibling**
-- 2.81 `getMeshRepository` (kotlin, android/app/src/main/java/com/scmessenger/android/service/MeshSyncWorker.kt) — Jev wants a **caller**
-- 2.74 `main` (rust, core/src/bin/gen_swift.rs) — Jev wants a **sibling**
-- 2.74 `main` (rust, desktop_bridge/src/bin/gen_kotlin.rs) — Jev wants a **sibling**
-- 2.69 `isPublicInternetMultiaddr` (kotlin, android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt) — Jev wants a **caller**
-- 2.67 `notify` (kotlin, android/shared/src/commonMain/kotlin/com/scmessenger/shared/platform/PlatformNotifier.kt) — Jev wants a **caller**
-- 2.65 `attemptDirectSwarmDelivery` (swift, iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift) — Jev wants a **caller**
-- 2.63 `reset` (kotlin, android/app/src/main/java/com/scmessenger/android/utils/BackoffStrategy.kt) — Jev wants a **sibling**
-- 2.61 `update_keepalive` (rust, core/src/iron_core.rs) — Jev wants a **caller**
-- 2.60 `start` (kotlin, android/shared/src/commonMain/kotlin/com/scmessenger/shared/platform/PlatformNetworking.kt) — Jev wants a **sibling**
-- 2.60 `auto_reply_is_limited_to_one_ack_per_message_id` (rust, cli/src/main.rs) — Jev wants a **none**
-- 2.59 `cancel_request` (rust, wasm/src/daemon_bridge.rs) — Jev wants a **sibling**
-
-Recommended: fetch the chosen related function and re-run the prescription with
-expanded context; iterate until context-need drops below 1.5.
+- Security: input not validated: 150
+- Security: fail-open risk: 45
+- Testplan: hard-to-test: 10
+- Concurrency: bug likely+: 20
+- Context: critical need: 153
 
