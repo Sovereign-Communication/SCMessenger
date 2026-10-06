@@ -14,6 +14,28 @@ Status: READY FOR QWEN DELEGATION
 Owner: Qwen (investigation + spec writing)
 Scope: Phase 2 PQC depth work (low priority, informational)
 
+> **RECONCILIATION ANNOTATION, 2026-10-04. Added; nothing below was removed.**
+> Filed by the quantum/PQC tracking audit. The original ticket text is intact.
+>
+> The seven `[DONE]` acceptance criteria in this file are **not** corroborated
+> by an artifact:
+>
+> - The specified output, `HANDOFF/plans/PQC_09_HYBRID_ONION_DESIGN_NOTE.md`,
+>   **does not exist** (verified by `ls`; not found in `git ls-files`).
+> - `HANDOFF/archive/PQC_09_SECURITY_REVIEW_FIXES.md:11` still reads
+>   `Status: TODO`.
+> - `HANDOFF/archive/PQC_09_HYBRID_ONION.md` is a 49-line task stub, and
+>   `HANDOFF/archive/PQC_09_ONION_COMPILE_FIX.md` is an unstarted fix list.
+>
+> So three states are in tension: criteria marked done, deliverable absent,
+> follow-up work marked TODO. This is the AGENTS.md rule-16 shape -- the
+> checkboxes record intent, not artifact. The `[DONE]` marks have deliberately
+> been left in place rather than silently rewritten; correcting them is the
+> owner's or the operator's call.
+>
+> Full ledger: `HANDOFF/review/QUANTUM_REVIEW_TRACKING_AUDIT_2026-10-04.md`,
+> gap G2.
+
 ## Objective
 
 Investigate hybrid onion routing (X25519 + ML-KEM-768) privacy enhancement for v1.0.0. Current onion routing in `core/src/privacy/` is X25519-only (PQC-01 work). PQC-09 adds ML-KEM layer for PQ-resistant privacy.

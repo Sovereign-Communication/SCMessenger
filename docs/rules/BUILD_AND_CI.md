@@ -56,10 +56,12 @@ stops you paying it twice for dead work.
 Standing practice for SCMessenger completion work:
 
 1. **Toolchain:** **SCMessenger-local** harness only —
-   `python scripts/update_local_harness.py` refreshes
-   `vendor/sovereign-harness` from the official harness GitHub remote.
-   Do **not** edit `Documents/GitHub/Harness` product trees.
-   Callers use `scripts/local_harness.py` (override: `HARNESS_REPO`).
+   `python scripts/update_local_harness.py --mode admit-tag --tag v0.4.1`
+   admits the immutable source into `vendor/sovereign-harness`.
+   `python scripts/update_local_harness.py --mode canary-main` creates only
+   an isolated exact-SHA candidate. Do **not** edit
+   `Documents/GitHub/Harness` product trees. All callers use
+   `scripts/harness_source.py`; `local_harness.py` is the JEV adapter.
 2. **Insight / sentiment batches:** `python scripts/jev_repo_insights.py --mode full`
    (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
    `scripts/scmessenger_issue_sort_pack.json`).
@@ -96,9 +98,9 @@ Harness CI. The SCMessenger orchestrator owns the 0.4.0 freeze and merge
 sequence; platform owners own Android, CLI, cloud, and native behavior. No
 external Harness worktree is edited by SCMessenger.
 
-The local update flow below is the required target behavior. The current
-floating updater is not yet compliant and must not be treated as admission
-until the modes and exact-SHA checks are implemented.
+The local update flow below is implemented by `harness_admission.py` and
+exposed by `update_local_harness.py`. The manifest and source resolver are
+implemented by `harness_source.py`; callers must not add another fallback.
 
 1. `bootstrap`: create a clean consumer copy from the admitted tag in
    `tmp/harness-admission/<tag>-<sha>`; never use the system temp directory.
@@ -114,9 +116,9 @@ A dirty vendor copy, unknown version, missing imported symbol, wrong remote,
 wrong SHA, report-schema mismatch, or unavailable required key is a refusal,
 not a warning. Structural JEV fallback is never a canonical pass. The existing
 consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
-`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) must all
-resolve the same admitted source; direct installed-package fallback is not
-allowed.
+`jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) all resolve
+through `harness_source.py`; direct installed-package fallback is not allowed.
+The hermetic lifecycle tests are in `scripts/test_harness_admission.py`.
 
 ## Windows parallelism (measured on this box)
 
@@ -211,6 +213,35 @@ reports. That is a reviewed change, which is the entire point.
 
 It does not require the pin to be the newest stable. Chasing "newest" here would
 reintroduce exactly the ambient upgrade the pin exists to prevent.
+
+## CI-Primary Build Doctrine (operator directive, 2026-09-22)
+
+**CI is the primary verifier. Local builds are the failover.** A push that
+carries the applicable gates is how work is verified; a local build is the
+exception, not the default.
+
+- **Default loop:** commit scoped work -> push -> `gh run watch <run-id>` ->
+  triage failures from `gh run view <run-id> --log-failed` -> download any
+  needed artifact (`gh run download <run-id> -n <name> -D tmp/<dir>`, always
+  under `tmp/`). Do not build locally what CI is already building.
+- **Local build is justified only by:** CI unavailable/red for infra reasons,
+  a failover debugging session CI cannot reproduce, or a gate the workflows
+  do not run. Everything else waits for CI.
+- **If you do build locally, reclaim immediately afterwards.** The build is
+  not done when the command exits -- it is done when the disk is given back:
+  `python scripts/disk_budget.py` before, `python scripts/reclaim_safe.py --reclaim`
+  (or `scripts/clean_target.sh` for scoped output) after, same session.
+  Holding a warm `target/` "for later" is a rules violation, not a convenience.
+- **Fail closed on BLOCKED disk.** `scripts/disk_budget.py` exit 2 means no
+  local build, no exceptions: pull the artifact from CI instead. A build that
+  would fill the disk is how 2026-09-17 happened.
+- **Prefer committing over building.** An uncommitted fix has no provenance
+  and cannot be deployed or verified by CI. When in doubt: commit to a branch,
+  push, let CI run the wide sweep. (This lesson was paid for 2026-09-22: the
+  V040-T-CONN-04 fix was cross-built and deployed to two live nodes from an
+  uncommitted working tree before anyone committed it.)
+- The one-build-at-a-time rule, `build_lock.py`, and `CARGO_INCREMENTAL=0`
+  apply to failover builds exactly as before.
 
 ## Build Verification (Mandatory)
 
@@ -364,8 +395,10 @@ iOS lane is unblocked.
 
 ## Windows shell notes
 
-- Shell scripts need Git Bash/WSL; CI is ubuntu/macos only -- Windows builds are
-  verified locally.
+- Shell scripts need Git Bash/WSL. CI is ubuntu/macos only. Since
+  2026-09-22 CI is the PRIMARY verifier and local Windows builds are the
+  FAILOVER -- see "CI-Primary Build Doctrine" above and
+  `docs/runbooks/CI_PRIMARY_BUILD.md`.
 - `python3` is a shim at `~/.local/bin/python3.exe`; orchestrator scripts
   hardcode `python3` but only `python` exists natively.
 

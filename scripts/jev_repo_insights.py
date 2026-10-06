@@ -15,7 +15,8 @@ Usage:
 Design notes:
 - Aligns with Harness WIP JEV-P3/P5: operator-declared packs only; unkeyed =
   is_fallback and must not be treated as live canonical judgment.
-- Does not edit Harness P2/P3 worktrees. Uses HARNESS_REPO for harness.jev.
+- Does not edit external Harness worktrees. Uses the shared source resolver;
+  `HARNESS_REPO` is only an explicit unpinned canary override.
 - Completion gate for WPs remains scripts/jev_canonical_check.py.
 
 Evidence contract: every report section lists commands used to harvest.
@@ -24,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -43,9 +43,13 @@ def _load_harness():
     from local_harness import import_harness  # type: ignore
 
     mod = import_harness()
-    from harness.jev import jev_cost  # type: ignore
-
-    return mod["JevEvaluator"], jev_cost, (lambda: mod["key"]), mod["root"]
+    return (
+        mod["JevEvaluator"],
+        mod["jev_cost"],
+        (lambda: mod["key"]),
+        mod["root"],
+        mod["source"],
+    )
 
 
 def _run(cmd: List[str], cwd: Optional[Path] = None) -> str:
@@ -390,7 +394,11 @@ def write_report(path: Path, signals: Dict[str, Any], runs: List[Dict[str, Any]]
     lines.append("")
     lines.append(f"Generated: {signals.get('harvested_at')}")
     lines.append(f"Main tip (origin): `{signals.get('git_tip')}`")
-    lines.append(f"Harness: `{meta.get('harness_path')}`")
+    source = meta.get("harness_source") or {}
+    lines.append(
+        f"Harness: `{meta.get('harness_path')}` sha=`{source.get('sha')}` "
+        f"status=`{source.get('status')}` pinned=`{source.get('pinned')}`"
+    )
     lines.append(f"JEV keyed: {meta.get('keyed')} model={meta.get('model')}")
     lines.append("")
     lines.append("## Harvest (code-owned)")
@@ -510,13 +518,14 @@ def main() -> int:
         print(f"[OK] dry-run harvest written: {out_path}")
         return 0
 
-    JevEvaluator, jev_cost, resolve_jev_key, harness_path = _load_harness()
+    JevEvaluator, jev_cost, resolve_jev_key, harness_path, harness_source = _load_harness()
     api_key = resolve_jev_key() or None
     evaluator = JevEvaluator(api_key=api_key)
-    print(f"[INFO] harness={harness_path} keyed={bool(api_key)}")
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from jev_packs import pack_for  # type: ignore
+    print(
+        f"[INFO] harness={harness_path} sha={harness_source.sha} "
+        f"status={harness_source.status} pinned={harness_source.pinned} "
+        f"keyed={bool(api_key)}"
+    )
 
     runs = []
     for mode in modes:
@@ -565,6 +574,7 @@ def main() -> int:
         runs,
         {
             "harness_path": str(harness_path),
+            "harness_source": harness_source.as_dict(),
             "keyed": bool(api_key),
             "model": evaluator.model,
             "issue_sort": issue_sort_out,
