@@ -95,4 +95,3 @@ Tables `prescriptions`, `context_needs`, `battery_security`, `battery_testplan`,
 - Testplan: hard-to-test: 10
 - Concurrency: bug likely+: 20
 - Context: critical need: 153
-
