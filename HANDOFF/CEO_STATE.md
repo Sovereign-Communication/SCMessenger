@@ -9,9 +9,90 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 <!-- HANDOFF-SCOPE-END -->
 
 Status: Active
-Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
+Last updated: 2026-10-04T23:00Z (live node re-derivation; two legs verified, Pixel blocked)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-10-04, CEO audit of the CTO three-node seat) =====
+
+Newest CTO checkpoint audited:
+`HANDOFF/V040_CTO_3NODE_BLE_CHECKPOINT_20261004T230000Z_PREFLIGHT.md`.
+Audit verdict: the CTO's claim is honest and its blockers are correctly
+root-caused, but two of its premises were stale and are corrected below.
+
+## Correction 1: the release target is v0.4.1, not v0.4.0
+
+This file previously asserted that no final 0.4.0 tag exists. Re-derived from
+the remote in this session:
+
+- `refs/tags/v0.4.1` = `dcd67b94ecb4a5c4602e659ee0539b9e5e56fe3c`
+- `git log -1 v0.4.1` -> `Merge pull request #434 from .../bump-0.4.1`,
+  authored 2026-10-03.
+- `git merge-base --is-ancestor v0.4.1 origin/main` -> YES.
+- `git rev-list --count v0.4.1..origin/main` -> 20 commits behind.
+
+v0.4.1 is released. Every older instruction in this file that targets a 0.4.0
+tag is superseded on that point.
+
+## Correction 2: two legs are already at single-SHA parity
+
+The 2026-09-17 checkpoint called the provenance asymmetry
+(`1005da1` vs `eb55756`) unresolved and operator-blocking. Re-derived live:
+
+- Windows `127.0.0.1:9876/version` -> 0.4.1, `git_hash dcd67b94`,
+  `core_provenance 0.4.1 (dcd67b94...:v0.4.1:)`
+- AWS `18.234.62.247:9876/version` -> 0.4.1, `git_hash dcd67b94`,
+  `core_provenance 0.4.1 (dcd67b94...:main:)`
+- AWS `/api/peers` lists the Windows peer `12D3KooWD6vZ...` at reputation 50.0.
+
+Same commit on both; only the build ref suffix differs. That asymmetry is
+RESOLVED for these two nodes.
+
+## Audit verdict on the CTO seat: PASS on honesty, BLOCKED on the Pixel leg
+
+The CTO checkpoint reports BLOCKED and does not overclaim. It records AWS and
+Windows PASS with identity preserved, Pixel BLOCKED, BLE evidence NONE, and
+radio state "not isolated". Each of those matches what could be re-derived. No
+BLE, three-node-PASS, cellular, or release claim is made anywhere, so the
+package's evidence gates are correctly unpassed.
+
+The Pixel blocker is now root-caused rather than restated:
+`SCMESSENGER_DEBUG_KEYSTORE_BASE64` is absent from the repository secrets (the
+release keystore secrets exist; the debug one does not). Every CI runner then
+signs with its own ephemeral debug certificate, which is why `adb install -r`
+fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The `Android Debug APK` job
+log states this in its own warning text.
+
+A detail that may help the next session: the Pixel package shows
+`firstInstallTime` equal to `lastUpdateTime` at 2026-09-30 17:38:48, meaning it
+was installed FRESH rather than updated. That suggests the earlier signature
+blocker was cleared by a reinstall on 2026-09-30, which also means the phone's
+current 0.4.0 node identity is whatever that reinstall produced.
+
+## Newest merge-train state
+
+- 69 open PRs, enumerated not eyeballed: 45 Rule-8 clear, 13 Rule-8 blocked,
+  11 drafts.
+- PR #451 (the integration train) is green on CI but must NOT merge: 18 files
+  under `core/src/{crypto,transport,routing,privacy}/` have no live Rule-8
+  verdict. An independent Opus review returned BLOCK with one HIGH latent
+  finding, now fixed on the branch. Detail and the remaining governance gap:
+  `HANDOFF/review/RULE8_OPUS_VERDICT_2026-10-04.md`.
+- 10 open PRs are known-poison dependency bumps already proven to break this
+  build: `HANDOFF/review/WAVE2_MERGE_READINESS_2026-10-04.md`.
+
+## Exact next action
+
+Operator sets `SCMESSENGER_DEBUG_KEYSTORE_BASE64` per
+`docs/ANDROID_RELEASE_SIGNING.md`. This publishes key material and pins the
+phone's long-term debug identity, so it is an operator decision, not a lane
+action. In parallel the seats need a Rule-8 routing decision for #451 from the
+operator: fund a panel, human review, split the non-gated files, or record an
+explicit override.
+
+Evidence still UNVERIFIED at this point: Pixel identity and peer id this
+session, AWS identity (no ssh key on this host), BLE dimension, cell-only
+dimension, and any injected message traffic.
 
 # ===== RESUME HERE (2026-09-30, Codex takeover audit) =====
 

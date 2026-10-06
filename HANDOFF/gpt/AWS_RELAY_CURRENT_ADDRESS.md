@@ -13,6 +13,18 @@ This file is the ONE place the orchestrator updates immediately after every
 AWS node rebuild. Read it fresh at use time; never copy an IP from any
 other doc, ticket, or config.
 
+**Resolve, do not copy (SHIP_PLAN G5).** The address below is a convenience
+snapshot, not a source of truth. Resolve the live one at use time with:
+
+    scripts/aws_node_ip.sh
+
+That helper is the single source of truth: it reads `$SCM_AWS_HOST` when set,
+otherwise queries the EC2 API by the `scm-always-on-node` tag, and **never**
+falls back to a hardcoded address -- a stale hardcoded address is what produced
+issue I-02. `scripts/aws_deploy.sh` uses the same helper. If the value below
+disagrees with `scripts/aws_node_ip.sh`, the helper is right and this section is
+stale; update it after a rebuild.
+
 ## Current (updated 2026-09-14; instance rebuilt ~2026-09-13)
 
 - **2026-09-14: INSTANCE REBUILT ~2026-09-13 with a NEW instance ID and IP.
