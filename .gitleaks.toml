@@ -98,6 +98,57 @@ description = "Android Keystore Password"
 regex = '''(?i)(keystore|storePassword|keyPassword)['":\s]*[=:]\s*['"][^'"\s]{6,}['"]'''
 tags = ["android", "keystore", "password"]
 
+# Scoped allowlist, this rule only, two paths only.
+#
+# Proven false positives (P0-4, run 36292343654, all rule
+# android-keystore-password, 3 findings on 2 paths):
+#
+#   .github/actions/sign-debug-apk/action.yml
+#     The KEYSTORE variable is assigned a FILE PATH built from a $WORK prefix.
+#     The keystore itself arrives at runtime as KEYSTORE_B64 via the secrets
+#     context, is base64-decoded to that path, and its password is never in
+#     the repo. The rule matched the path because the variable is named
+#     "keystore" and the assigned value is a quoted 6+ char string.
+#
+#   scripts/verify_release_keystore.sh
+#     The KEYSTORE variable is assigned a CLI POSITIONAL PARAMETER -- the
+#     script's own usage line reads <keystore-file> <alias>. The password is
+#     prompted for at runtime. Same mechanism: a quoted 6+ char value under a
+#     variable named "keystore".
+#
+# NOTE on scope, and why .gitleaks.toml itself appears in this allowlist.
+#
+# This command is `gitleaks detect` with no --no-git, so it scans the REPO
+# HISTORY, not the working tree. Proven from a run artifact: the two findings
+# persisted after the offending lines were removed from the current file, and
+# the report named commit 8976291f -- an earlier revision of this very file --
+# as their source. A prose fix cannot clear this scan, because the string stays
+# in the commit that introduced it.
+#
+# .gitleaks.toml is listed so this rule does not fire on this file. That is the
+# intent main's own global allowlist already expressed by naming .gitleaks.toml
+# under `files` -- a block that is currently DEAD, because it uses the singular
+# `[allowlist]` key where gitleaks expects `[[allowlists]]`. Restoring that
+# intent here is scoped to one rule and one file, rather than reviving the dead
+# block and silently widening every rule at once. Fixing the singular/plural
+# bug properly is a separate change with its own review.
+#
+# This is deliberately a [rules.allowlist] on one rule, not a global path
+# allowlist and not a rule disable:
+#   - a `private-key`, `generic-api-key` or `aws-access-key` finding in ANY of
+#     these files would still fire, so a real secret added to them later is
+#     still caught;
+#   - the real leak this rule set must keep catching (the sk-ws- pattern in
+#     scripts/qwen_*_worker.py, operator-owed rotation) is in none of these
+#     paths and is untouched.
+[rules.allowlist]
+description = "keystore here names a file path or a CLI argument, not a password (P0-4)"
+paths = [
+    '''^\.github/actions/sign-debug-apk/action\.yml$''',
+    '''^scripts/verify_release_keystore\.sh$''',
+    '''^\.gitleaks\.toml$''',
+]
+
 # iOS Provisioning Profile
 [[rules]]
 id = "ios-provisioning"

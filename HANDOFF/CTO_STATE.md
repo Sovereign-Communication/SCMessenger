@@ -7,6 +7,7 @@ purpose: SCMessenger-only findings and remediation handoff
 foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
+Repository: scmessenger
 
 Status: Active
 Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
@@ -48,6 +49,18 @@ or release snapshots as current status.
   its ownership and remote durability are established.
 
 # ===== END RESUME 2026-09-30 =====
+
+> **READ BEFORE USING ANY AWS ADDRESS IN THIS FILE (SHIP_PLAN G5).**
+> This is an append-only log, so its dated entries are preserved exactly as
+> written. Four of them cite `54.226.67.101` -- that instance was **replaced
+> around 2026-09-13** and the address is dead (issue I-02, fixed by PR #259).
+> Those entries describe what was observed then, not a reachable node now.
+>
+> Resolve the live address at use time with `scripts/aws_node_ip.sh` (single
+> source of truth: `$SCM_AWS_HOST`, else the EC2 API by the `scm-always-on-node`
+> tag; it never falls back to a hardcoded value). `HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md`
+> carries the most recent recorded snapshot. Do not copy an address out of this
+> log.
 
 # ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
 
@@ -3318,6 +3331,37 @@ it; it is there because someone already paid for that lesson.
 
 ---
 
+## 2026-09-16 — 7-day merge plan + CI reference (workahead rollout audit)
+
+Base: origin/main 1e2fb747. 16 PRs audited (opened 2026-09-09..2026-09-16).
+
+- `#288` cannot serve as-is: predates the other 15, claims none,
+  6 direct file overlaps, BLOCKED with 11 pending + 0 reviews.
+  It becomes the carrier only after its children land.
+- Phase order:
+
+| Phase | PRs |
+|---|---|
+| 0 anytime | #283 -> main |
+| 1 into feat | #290 -> #291 -> #294 -> #293 -> #296 -> #297, HOLD #292/#295 |
+| 2 refresh | #288 -> main |
+| 3 main stack | #289, then rollout #298 -> #299 -> #300 -> #302 -> #301 |
+
+- HOLD #292 (docs-only) and #295 (docs-only + contradicts #291 gate).
+- Docs-only follow-ups after #298: #299 JoinMesh call-site,
+  #302 accept-side; #301 needs exact v0.4.0 asset URL post-D2.
+- Coordination notes posted 2026-09-16 on #288, #294, #296, #297.
+- Details: `HANDOFF/MERGE_PLAN_2026-09-16.md`.
+- CI resume sheet: `HANDOFF/CI_CHECK_REFERENCE_2026-09-16.md`
+  (docs-only stays cheap: Docs/lint/label only).
+- Re-verify later same day — see `HANDOFF/MERGE_PLAN_2026-09-16.md`
+  `## Re-verify 2026-09-16 (later same day) — deltas`: #292/#295 no
+  longer docs-only (code landed, #295 failing JVM tests, #291
+  contradiction stands); #289 failures cleared, fresh run pending;
+  rollout #299/#300/#302/#301 red under fix, #298 clean so far;
+  zero approvals on all 16 PRs — assign reviewers; feat head
+  b8f069a6->93408dbb docs-only, no rebase pressure; #303 still
+  draft+UNMERGED, 12 pass/6 pending.
 ## 2026-09-16 — Pre-v0.4.0 Shadow Audit, Remediation Merge Train & Work-Ahead Coordination
 
 Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main` 1e2fb747.

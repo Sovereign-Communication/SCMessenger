@@ -258,6 +258,13 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
     
     // AndroidX Core
+    // Pinned to origin/main's values on integrate/train-20261004. These six
+    // coordinates were raised by three dependabot commits in the train
+    // (b1e14a0d5 core-ktx, 3eee87077 lifecycle x4, 37d29f1ab hilt-navigation-compose),
+    // none of which is on main. Every one of them requires compileSdk 37 and
+    // AGP 9.1.0; this project is compileSdk 35 / AGP 8.13.2, so Gradle's
+    // checkDebugAarMetadata rejected all 12 resulting issues and the Android
+    // build could not configure. Same failure mode as b06e63c5c (Rust bumps).
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2'
@@ -307,6 +314,15 @@ dependencies {
     // Real org.json for JVM unit tests: the android.jar stubs no-op under
     // returnDefaultValues, which silently empties any JSON round-trip.
     testImplementation 'org.json:json:20240303'
+    // Pinned to origin/main's values on integrate/train-20261004. Two dependabot
+    // bumps in the train raised these (51f41d87b coroutines-test -> 1.11.0,
+    // d51154a84 mockk -> 1.14.11); neither is on main. coroutines-test 1.11.0
+    // is compiled with Kotlin 2.2 metadata, but this project pins
+    // kotlin_version = 1.9.20 (android/build.gradle:6), so KSP rejected all six
+    // .kotlin_module descriptors with "binary version of its metadata is 2.2.0,
+    // expected version is 1.9.0" and :app:kspDebugUnitTestKotlin failed.
+    // Third instance of the b06e63c5c / 74b21eb07 pattern: a version bump that
+    // no required context caught because the Android jobs are not merge gates.
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
     testImplementation 'io.mockk:mockk:1.13.10'
     testImplementation 'io.mockk:mockk-agent-jvm:1.13.10'

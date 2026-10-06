@@ -1,9 +1,22 @@
 # SCMessenger Quantum Readiness Audit
 
 Status: Active
-Last updated: 2026-07-03
-Last verified: 2026-07-03 (audit of source at commit state on this date)
+Last updated: 2026-10-04
+Last verified: 2026-10-04 (reachability re-verified against `integrate/train-20261004` @ `200bfc54e`; the July survey below is retained as the historical threat analysis it was)
 Scope: Post-quantum threat assessment of all cryptographic surfaces; migration plan
+
+> **CORRECTION NOTICE, 2026-10-04.** This document's threat analysis (July) and
+> its remediation-status table disagree with each other, and the table is the
+> wrong half. The July survey was accurate as a *survey*. The CLOSED marks
+> below record that PQ **code** landed, not that it **runs**. An independent
+> reachability audit (`HANDOFF/audit/QUANTUM_CRYPTO_AUDIT_2026-10-03.md`) plus
+> direct source re-verification established that the hybrid ML-KEM-768 send
+> path has **no production caller**. Two statements in this file were actively
+> misleading and have been corrected inline: the "no post-quantum primitives
+> anywhere in the workspace" claim (false since PQC-01) and Residual Exposure 1
+> (false: no production traffic is protected by ML-KEM or ML-DSA). Read
+> `HANDOFF/review/QUANTUM_REVIEW_TRACKING_AUDIT_2026-10-04.md` for the full
+> tracking ledger before citing this document as a security claim.
 
 ---
 
@@ -37,7 +50,15 @@ A mesh messenger with relay custody is a *worse-than-average* HNDL target: relay
 | 8 | KDFs and hashing | Blake3 `derive_key`, SHA-512 (key conversion), SHA-256 (PBKDF2), crc32 (integrity) | Hash-based | **SAFE** |
 | 9 | AEAD everywhere | XChaCha20-Poly1305, 256-bit keys | Symmetric | **SAFE** (Grover reduces to ~128-bit effective; acceptable) |
 
-No RSA, NIST P-curves, or secp256k1 anywhere in the workspace. No post-quantum primitives anywhere in the workspace (verified by grep for ML-KEM/Kyber/ML-DSA/Dilithium/SPHINCS/PQ across all `.rs` and `.toml`).
+No RSA, NIST P-curves, or secp256k1 anywhere in the workspace.
+
+**SUPERSEDED (2026-10-04).** This document previously stated that no
+post-quantum primitives existed anywhere in the workspace. That was true on
+2026-07-03 and is now false: `libcrux-ml-kem 0.0.10` and `ml-dsa 0.1.1` are
+declared in `Cargo.toml` / `core/Cargo.toml`, and `core/src/crypto/pq/`
+(`mod.rs`, `hybrid.rs`, `mldsa.rs`) implements the hybrid KEM and the ML-DSA
+identity signature. See the correction notice at the top of this file and the
+reachability ledger; presence is not the same as reachability.
 
 ---
 
@@ -135,17 +156,43 @@ Escalation note (per CLAUDE.md): this plan changes identity format, wire format,
 
 ---
 
-## Remediation Status (2026-07-29 Snapshot)
+## Remediation Status (REVISED 2026-10-04)
 
-| Finding | Severity | Landed Remediation Tasks | Status |
-|---|---|---|---|
-| F1 Legacy envelope path HNDL | CRITICAL | `PQC_08_LEGACY_PATH_RETIREMENT.md` (gated legacy sends, require_pq enforcement) | **CLOSED** |
-| F2 Ratcheted path HNDL | CRITICAL | `PQC_05_HYBRID_KEM_MODULE.md`, `PQC_06_HYBRID_SESSION_INIT.md`, `PQC_07_PQ_RATCHET.md` (root key mixing with ML-KEM-768 shared secret) | **CLOSED** |
-| F3 Single keypair / no agility | HIGH | `PQC_02_ENVELOPE_V2.md`, `PQC_03_IDENTITY_V2_KEYBUNDLE.md`, `PQC_04_SUITE_NEGOTIATION.md` | **CLOSED** |
-| F4 Onion routing retro-privacy | HIGH | `PQC_09_HYBRID_ONION.md` (spec and modules landed; parked until onion layer activation) | **PARKED** |
-| F5 Ed25519 signatures forgeable | MEDIUM | `PQC_10_MLDSA_IDENTITY_SIGNATURES.md`, `PQC_11_RELAY_INVITE_HYBRID_AUTH.md` | **CLOSED** |
-| F6 Transport hop encryption classical | MEDIUM | `PQC_12_TRANSPORT_TLS_PQ.md` (rustls PQ enabled; libp2p Noise remains classical) | **ACCEPTED** |
+> The 2026-07-29 snapshot marked F1/F2/F3/F5 **CLOSED** because the
+> corresponding PQC tickets had landed. Reachability re-verification on
+> 2026-10-04 disproved that for F1, F2 and F3: the hybrid path is never reached
+> from the production send path, so landing the code closed nothing at runtime.
+> The corrected disposition is below. **F1, F2 and F3 are OPEN.**
+
+| Finding | Severity | Landed Remediation Tasks | Status (2026-07-29) | Status (2026-10-04, corrected) |
+|---|---|---|---|---|
+| F1 Legacy envelope path HNDL | CRITICAL | `PQC_08_LEGACY_PATH_RETIREMENT.md` (gated legacy sends, require_pq enforcement) | CLOSED | **OPEN** -- primitives present but unreachable; `require_pq` is passed `false` at the only production call site (`core/src/iron_core.rs:1067`) |
+| F2 Ratcheted path HNDL | CRITICAL | `PQC_05_HYBRID_KEM_MODULE.md`, `PQC_06_HYBRID_SESSION_INIT.md`, `PQC_07_PQ_RATCHET.md` (root key mixing with ML-KEM-768 shared secret) | CLOSED | **OPEN** -- `save_contact_bundle` (`core/src/store/contacts.rs:770`) has zero production callers, so `recipient_bundle` is always `None` and the hybrid branch at `core/src/crypto/encrypt.rs:549` is never taken. ML-KEM-768 is never invoked on the send path. Tracked as `HANDOFF/todo/CRYPTO_T2_HYBRID_SEND_PATH_UNREACHABLE.md` |
+| F3 Single keypair / no agility | HIGH | `PQC_02_ENVELOPE_V2.md`, `PQC_03_IDENTITY_V2_KEYBUNDLE.md`, `PQC_04_SUITE_NEGOTIATION.md` | CLOSED | **OPEN** -- envelope v2, key bundle and suite negotiation all exist but are unreachable for the same reason as F2. Tracked as `HANDOFF/todo/CRYPTO_T4_ENCRYPT_AT_REST.md` (coupled: encrypt-at-rest closes the disk-side identity exposure independently of PQ reachability) |
+| F4 Onion routing retro-privacy | HIGH | `PQC_09_HYBRID_ONION.md` (spec and modules landed; parked until onion layer activation) | PARKED | **PARKED** -- unchanged |
+| F5 Ed25519 signatures forgeable | MEDIUM | `PQC_10_MLDSA_IDENTITY_SIGNATURES.md`, `PQC_11_RELAY_INVITE_HYBRID_AUTH.md` | CLOSED | **PARTIALLY CLOSED** -- ML-DSA is implemented and reachable from the invite path, but the session root key still folds a transcript over two Ed25519 keys (`ratchet.rs:478-484`, `negotiation.rs:52-64`), so it does not yet mitigate a CRQC. Requires operator sign-off (AGENTS.md rule 9) |
+| F6 Transport hop encryption classical | MEDIUM | `PQC_12_TRANSPORT_TLS_PQ.md` (rustls PQ enabled; libp2p Noise remains classical) | ACCEPTED | **ACCEPTED** -- unchanged |
+
+**What this table means now.** The PQC build-out was real work and is not
+wasted: the primitives, envelope, negotiation and identity-bundle layers are
+implemented and unit-tested. What is missing is a production path that *uses*
+them. This is the AGENTS.md "restoring code is not restoring a feature" failure
+class -- definition present, call site absent -- and it is the single most
+important correction in this file.
 
 Residual Exposures:
-1. **Relay Transit Signatures**: Envelope transit hop signatures use Ed25519 (64B) to preserve low overhead across mesh relay hops; payload authenticity and confidentiality are protected by E2E dual signatures (Ed25519 + ML-DSA-65) and hybrid ratchet encryption.
+1. **Relay Transit Signatures**: Envelope transit hop signatures use Ed25519 (64B) to preserve low overhead across mesh relay hops.
+
+   **CORRECTED 2026-10-04.** This item previously asserted that payload
+   authenticity and confidentiality "are protected by E2E dual signatures
+   (Ed25519 + ML-DSA-65) and hybrid ratchet encryption." That is **false in
+   production today**. No production send reaches either the ML-DSA signature
+   or the ML-KEM-768 encapsulation; see the F2 row above. What a production
+   send actually uses is one of:
+   - an existing session: the **classical** suite-0x02 Double Ratchet, or
+   - no session: `WireEnvelope::V1` static-ECDH, no ratchet at all.
+
+   There is therefore **no post-quantum protection of message payloads at
+   rest in transit today**, and any external claim to the contrary is
+   incorrect.
 2. **libp2p Noise Transport**: Peer connection establishment uses classical Noise XX (X25519+ChaCha20Poly1305) until upstream libp2p releases standard post-quantum Noise extensions.

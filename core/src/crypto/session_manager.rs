@@ -150,18 +150,23 @@ impl RatchetSessionManager {
         }
     }
 
-    /// Create a receiver hybrid session.
+    /// Build a receiver hybrid session WITHOUT touching the session map.
+    ///
+    /// Split out of `create_receiver_session_hybrid` so a caller can attempt a
+    /// decrypt against the candidate first and commit it only if that decrypt
+    /// succeeds. Writing before proving the session works lets a replayed
+    /// envelope destroy a healthy session: the rebuild unconditionally
+    /// overwrites the live entry, whether or not the rebuilt session can
+    /// decrypt anything.
     #[allow(clippy::too_many_arguments)]
-    pub fn create_receiver_session_hybrid(
-        &mut self,
-        peer_id: &str,
+    pub fn build_receiver_session_hybrid(
         our_signing_key: &ed25519_dalek::SigningKey,
         our_x25519_secret: &x25519_dalek::StaticSecret,
         our_mlkem_keypair: &crate::crypto::pq::MlKem768KeyPair,
         our_bundle: &crate::identity::PublicKeyBundle,
         their_bundle: &crate::identity::PublicKeyBundle,
         hct_opt: Option<&crate::crypto::pq::hybrid::HybridCiphertext>,
-    ) -> Result<&mut RatchetSession> {
+    ) -> Result<RatchetSession> {
         let (suite, hash) = crate::crypto::negotiation::negotiate_suite(
             &their_bundle.supported_suites, // Initiator's suites
             &our_bundle.supported_suites,   // Responder's suites
@@ -206,12 +211,47 @@ impl RatchetSessionManager {
             s
         };
 
+        Ok(session)
+    }
+
+    /// Create (or replace) a receiver hybrid session and store it immediately.
+    ///
+    /// Prefer `build_receiver_session_hybrid` + `insert_session` on any path
+    /// where an already-stored session must survive a failed rebuild.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_receiver_session_hybrid(
+        &mut self,
+        peer_id: &str,
+        our_signing_key: &ed25519_dalek::SigningKey,
+        our_x25519_secret: &x25519_dalek::StaticSecret,
+        our_mlkem_keypair: &crate::crypto::pq::MlKem768KeyPair,
+        our_bundle: &crate::identity::PublicKeyBundle,
+        their_bundle: &crate::identity::PublicKeyBundle,
+        hct_opt: Option<&crate::crypto::pq::hybrid::HybridCiphertext>,
+    ) -> Result<&mut RatchetSession> {
+        let session = Self::build_receiver_session_hybrid(
+            our_signing_key,
+            our_x25519_secret,
+            our_mlkem_keypair,
+            our_bundle,
+            their_bundle,
+            hct_opt,
+        )?;
+        Ok(self.insert_session(peer_id, session))
+    }
+
+    /// Insert (or replace) a session for a peer and return a mutable borrow.
+    pub fn insert_session(
+        &mut self,
+        peer_id: &str,
+        session: RatchetSession,
+    ) -> &mut RatchetSession {
         match self.sessions.entry(peer_id.to_string()) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 e.insert(session);
-                Ok(e.into_mut())
+                e.into_mut()
             }
-            std::collections::hash_map::Entry::Vacant(e) => Ok(e.insert(session)),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(session),
         }
     }
 
