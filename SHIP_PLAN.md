@@ -1,11 +1,27 @@
 # SCMessenger Ship Plan -- v0.4.0 Public Alpha
 
-Status: Active
+Status: Active (v0.4.0 and v0.4.1 SHIPPED, v0.5.0 line tagged; see 2026-10-06 status note)
+Last updated: 2026-10-06
 Created: 2026-08-14
 Owner: Operator (Treystu)
 Supersedes for execution purposes: `HANDOFF/todo/_QUEUE.md` (see Amnesty, S0-4)
 
-**2026-09-29 EXECUTION POINTER (authoritative):** the v0.4.0 and v0.5.0
+**2026-10-06 STATUS NOTE (authoritative where it conflicts with the sections below):**
+- **G4-1 is DONE.** The final `v0.4.0` tag exists on origin (annotated tag
+  `21bbfe1d7`, peeled commit `58c8970b9`, 2026-10-02), followed by `v0.4.1`
+  (`dcd67b94e`, 2026-10-03) and `v0.5.0` (`df3bd3af4`, 2026-10-05); verified with
+  `git ls-remote --tags origin`. The `v0.4.0-rc.1` tag is history. The 0.5.0 line
+  is now the active release line; wording below that treats the `v0.4.0` tag as
+  pending is SUPERSEDED (kept, not deleted).
+- **T5 (docs-sync gate repair) is DONE:** PR #260, commit `90372779`, on main.
+- PR #451 consolidated the 55 merge-train PRs into main. The execution pointers
+  below (2026-09-29 and 2026-09-20) are history; the merge-train task file
+  is closed out by #451, and tracker issue #452 carries the residual open-PR count.
+- The orchestration queue (`scm_v1_farm_queue.jsonl`) was reconciled the same day:
+  E-04, D-01, D-02, D-03 marked done; D-04, C-05, C-06 marked retired (archived in
+  the 2026-08-15 amnesty, never implemented).
+
+**2026-09-29 EXECUTION POINTER (authoritative until 2026-10-06; see status note above):** the v0.4.0 and v0.5.0
 execution queue is the merge-train task file
 **`HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md`**, with live
 state on the tracker PR #403, the operator rulings of 2026-09-28 (its section 14)
