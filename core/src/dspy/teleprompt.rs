@@ -15,9 +15,6 @@ pub trait Teleprompter {
     /// Compile the best prompt for a given signature
     fn compile(&mut self, signature: &str, examples: &[&str]) -> Result<String, TeleprompterError>;
 
-    /// Optimize against a test set
-    fn optimize(&mut self, test_set: &[&str]) -> Result<f64, TeleprompterError>;
-
     /// Get optimization stats
     fn get_stats(&self) -> &OptimizationStats;
 
@@ -206,13 +203,6 @@ impl Teleprompter for BasicTeleprompter {
         _examples: &[&str],
     ) -> Result<String, TeleprompterError> {
         self.compile_for_signature(signature)
-    }
-
-    fn optimize(&mut self, _test_set: &[&str]) -> Result<f64, TeleprompterError> {
-        // Run optimization pass against test set
-        // This would compile and evaluate prompts
-        self.stats.average_optimization_score = 0.95; // Target score
-        Ok(self.stats.average_optimization_score)
     }
 
     fn get_stats(&self) -> &OptimizationStats {
