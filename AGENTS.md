@@ -260,6 +260,33 @@ the same relay behavior.
       permanently un-reclaimable. If it prints that warning, the durable-ref list
       needs updating -- not the verdict.
 
+18. **NEVER WAIT ON CI. CI IS A BACKGROUND PROCESS, NOT A TASK.**
+
+    Pushing a branch starts a run that takes 25-40 minutes. Sleeping in a poll
+    loop to watch it is the single most expensive habit in this repo's agent
+    history: it burns the whole turn, it blocks every other lane, and it
+    produces nothing that safe work would not have produced anyway.
+
+    **After a push, the next action is NEVER another poll.** It is always more
+    work. There is effectively always more work:
+
+    - audit a queued PR, or triage the next wave
+    - write the handoff/verdict/reconciliation docs the merge will need anyway
+    - review the NEXT gated file while the current one is still in CI
+    - prepare the operator-decision brief
+    - reclaim disk (rule 17)
+
+    **If you catch yourself writing `sleep`, or a `for` loop containing
+    `sleep`, in a command whose purpose is to watch a run: stop and go find
+    safe work.** A poll is legitimate in exactly two cases -- (a) the user's
+    explicit instruction is to report a CI verdict as the deliverable, in which
+    case report it once and move on; (b) you are about to make an irreversible
+    decision that depends on the result, and no safe work remains.
+
+    A green run that nobody read is not a delivered result. If you push and
+    stop without either (a) collecting the verdict or (b) handing the run id to
+    the operator, the work is unfinished regardless of what CI says.
+
 ## Capability classes — know which one you are
 
 ### FULL (Claude Code or Qwen Code on the Windows host, toolchain available)
@@ -302,6 +329,42 @@ the CLI has no headless mode, so no orchestrator can dispatch to it. Full rules:
   necessary, not sufficient, and anything touching
   `core/src/{crypto,transport,routing,privacy}` needs a recorded adversarial
   APPROVE from a reviewer that did not author the change.
+- **STANDING OVERRIDE (operator grants, 2026-09-28).** For the v0.4.0 merge
+  train only, the "may NOT merge" sentence above is superseded for THIS lane
+  by **A1**: you MAY merge with `gh pr merge <n> --merge` (merge commit,
+  never `--admin`, never force-push) once ALL of these hold --
+  (a) the branch is up to date with main (`gh pr update-branch <n>`, wait for
+  the re-run); (b) every REQUIRED check is green on the head SHA, the list
+  re-read immediately before each merge via
+  `gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks --jq '.contexts[]'`;
+  (c) JEV (2.3) is a POST-MERGE closing gate (operator ruling 2026-09-29,
+  "JEV POST-MERGE": the pre-merge ceiling is 75 because `pr_merged` is a
+  25-point hard gate that is only true after a merge) -- it is scored on the
+  merge SHA immediately after each merge and must be >= 85 with all hard gates
+  clear before the next dependent car merges and before any tag; a miss stops
+  the train, and the fix or revert goes through the same gates (a car with
+  merged dependents is fixed forward, never reverted); the MT-00a anchor PR
+  (#414) is exempt from (c) because it adds the gate, and it is still scored
+  after its merge; (d) gated code
+  (`core/src/{crypto,transport,routing,privacy}/` or `vendor/`) carries an A2
+  APPROVE naming that exact head SHA; (e) no unresolved review threads or
+  requested changes; (f) any failing NON-required check has been investigated
+  and shown not to be a real defect. Green CI is still necessary, not
+  sufficient -- (a), (b) and (d) through (f) are the pre-merge gate and (c) is
+  the post-merge closing gate.
+- **A6 -- AWS node: full drive (2026-09-28).** You MAY ssh as `ec2-user` with
+  `~/.ssh/scm-node-key.pem` for these uses ONLY: `scripts/aws_deploy.sh` deploy
+  and rollback; `sudo docker logs`; API calls to `127.0.0.1:9876` on the host;
+  and the churn test's `aws ec2 stop-instances` / `start-instances` using the
+  local AWS CLI -- first confirm `aws sts get-caller-identity`, then discover
+  the instance exactly as `aws_deploy.sh` does. No other system changes, no
+  installs, no firewall edits.
+- **A10 -- tag and publish v0.4.0 and v0.5.0 (2026-09-28).** You MAY tag and
+  publish when EVERY tag gate passes, in this order: (1) read which workflows
+  fire on `v*` tags and whether they succeed without D2 signing; (2) push the
+  annotated tag on the proven commit C; (3) publish the release with notes
+  covering D2 skipped, the H-7 ruling, known issues, and the TRI evidence
+  summary.
 - CI is the PRIMARY build verifier for this lane (operator directive
   2026-09-22): push to CI instead of building locally; local builds are the
   failover, with mandatory immediate reclaim afterwards. See
