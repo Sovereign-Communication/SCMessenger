@@ -9,7 +9,7 @@ resolver = "2"
 # fail to load the workspace, which is what stopped Dependabot's cargo updater.
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 license = "Unlicense"
 
