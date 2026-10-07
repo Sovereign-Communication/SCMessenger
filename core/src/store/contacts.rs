@@ -1725,9 +1725,16 @@ mod tests {
 
         // Every spelling of that one identity resolves to the same row.
         let id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
-        for spelling in [peer_id, key_hex.clone(), key_hex.to_uppercase(), id] {
-            let got = mgr.get(spelling.clone()).unwrap();
-            assert_eq!(got.map(|c| c.peer_id), Some(key_hex.clone()), "{spelling}");
+        for (n, spelling) in [peer_id, key_hex.clone(), key_hex.to_uppercase(), id]
+            .into_iter()
+            .enumerate()
+        {
+            let got = mgr.get(spelling).unwrap();
+            let filed_under = got.map(|c| c.peer_id);
+            assert!(
+                filed_under.as_deref() == Some(key_hex.as_str()),
+                "spelling #{n} must resolve to the one canonical row"
+            );
         }
 
         // Non-key identifiers neither resolve nor delete anything.
