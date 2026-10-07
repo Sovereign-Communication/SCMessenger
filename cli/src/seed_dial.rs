@@ -1,23 +1,85 @@
-// Boot seed-dial sweep (V040-T1 HALF 2).
+// Boot seed-dial sweep (V040-T1 HALF 2, rescheduled by #469 T6).
 //
 // A node whose public address changed can never rejoin the mesh: nobody can
 // dial it at its old address, and it never dials out. This module fires
-// `SwarmHandle::connect_to_seed_peers` on boot and re-arms with bounded
-// exponential backoff until at least one peer is connected. The candidate
-// list comes from the core ledger (proven + unproven seed tiers), which the
-// V040-T1 HALF 1 promotion has just populated from the CLI peers.json store.
+// `SwarmHandle::connect_to_seed_peers` on boot and keeps sweeping, forever,
+// on the schedule of the shared event-driven `DiscoveryScheduler`
+// (core/src/transport/discovery_scheduler.rs). There is no fixed ladder and
+// no give-up: a network event (interface change, peer lost, ...) resets the
+// schedule to aggressive and wakes the loop immediately, then the interval
+// decays with jitter toward a ceiling derived from peer density and power.
+// The candidate list comes from the core ledger (proven + unproven seed
+// tiers).
 
-use scmessenger_core::transport::SwarmHandle;
+use scmessenger_core::transport::{
+    DiscoveryInputs, DiscoveryScheduler, NetworkEvent, PowerState, SchedulerConfig, SwarmHandle,
+    SystemClock, ThreadRngJitter, TransportClass,
+};
 use scmessenger_core::IronCore;
+use std::collections::BTreeSet;
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Notify;
 
-/// Bounded exponential backoff between boot seed-dial sweeps: 5s, 15s, 45s,
-/// then every 120s while the node still has zero connected peers.
-pub fn next_delay(sweep: u32) -> u64 {
-    match sweep {
-        1 => 5,
-        2 => 15,
-        3 => 45,
-        _ => 120,
+/// Why a [`SeedDialClient::wait`] returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitOutcome {
+    /// The scheduled delay elapsed with no event.
+    Elapsed,
+    /// An affecting network event arrived; sweep now.
+    Woken,
+}
+
+/// Client of the shared discovery scheduler for the internet/ledger dial.
+/// Owns the scheduler plus the wake-up used to cancel a pending timer when a
+/// network event resets the schedule.
+pub struct SeedDialClient {
+    scheduler: DiscoveryScheduler,
+    wake: Notify,
+}
+
+impl SeedDialClient {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            scheduler: DiscoveryScheduler::with_system_time(TransportClass::Internet),
+            wake: Notify::new(),
+        })
+    }
+
+    /// Feed a network event. If it affects the ledger dial the schedule is
+    /// reset to aggressive and any pending wait is cancelled.
+    pub fn emit(&self, event: NetworkEvent) -> bool {
+        let affected = self.scheduler.on_event(event);
+        if affected {
+            // notify_one stores a permit when nobody is waiting yet, so an
+            // event that lands mid-sweep still wakes the next wait.
+            self.wake.notify_one();
+        }
+        affected
+    }
+
+    /// Sleep for `delay`, or return early when an affecting event arrives.
+    pub async fn wait(&self, delay: Duration) -> WaitOutcome {
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => WaitOutcome::Elapsed,
+            _ = self.wake.notified() => WaitOutcome::Woken,
+        }
+    }
+}
+
+/// Event implied by a change in the connected peer count between sweeps.
+pub fn peer_transition(previous: usize, now: usize) -> Option<NetworkEvent> {
+    if now > previous {
+        Some(NetworkEvent::NewPeerConnected)
+    } else if now == 0 && previous > 0 {
+        Some(NetworkEvent::AllPeersLost)
+    } else if now < previous {
+        Some(NetworkEvent::PeerDisconnected {
+            count_now: u32::try_from(now).unwrap_or(u32::MAX),
+        })
+    } else {
+        None
     }
 }
 
@@ -34,7 +96,7 @@ pub fn candidate_count(lm: &scmessenger_core::store::LedgerManager) -> usize {
 /// seed list is non-empty and the peer count is zero).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepAction {
-    /// Peers are already connected -- no dial, just the steady 120s watch.
+    /// Peers are already connected -- no dial, just keep watching.
     WatchOnly,
     /// Zero candidates to dial (nothing in the core ledger yet).
     Wait,
@@ -52,31 +114,26 @@ pub fn sweep_decision(peer_count: usize, candidates: usize) -> SweepAction {
     }
 }
 
-/// Run one boot seed-dial sweep and return the delay in seconds until the
-/// next one.
+/// Run one boot seed-dial sweep and return the connected peer count observed
+/// at the start of the sweep (the scheduler input for density).
 ///
-/// - connected: no dial, steady 120s watch (re-arms the moment the count
-///   returns to zero)
-/// - zero candidates: log the empty sweep, back off
+/// - connected: no dial, just watch (the schedule re-arms aggressively the
+///   moment the count drops)
+/// - zero candidates: log the empty sweep
 /// - candidates present, zero peers: issue `connect_to_seed_peers` (one dial
 ///   per sweep -- the swarm command itself waits for a real outcome and
 ///   dials only one candidate per call, so callers retry)
-pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> u64 {
+pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> usize {
     let peer_count = swarm.get_peers().await.unwrap_or_default().len();
     match sweep_decision(peer_count, candidate_count(&core.ledger_manager)) {
         SweepAction::WatchOnly => {
-            tracing::debug!(
-                "[SEED-DIAL] peers={} -- connected; re-check in 120s",
-                peer_count
-            );
-            120
+            tracing::debug!("[SEED-DIAL] peers={} -- connected; watching", peer_count);
         }
         SweepAction::Wait => {
             tracing::info!(
                 "[SEED-DIAL] sweep {}: 0 candidate(s), peers=0 -- nothing to dial yet",
                 sweep
             );
-            next_delay(sweep)
         }
         SweepAction::Dial => {
             let count = candidate_count(&core.ledger_manager);
@@ -93,7 +150,80 @@ pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> u64
                     e
                 ),
             }
-            next_delay(sweep)
+        }
+    }
+    peer_count
+}
+
+/// Long-lived seed-dial loop. Never returns: sweeps, then waits the
+/// scheduler's delay or an affecting network event, whichever comes first.
+pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialClient>) {
+    let mut sweep: u32 = 0;
+    let mut previous_peers: usize = 0;
+    loop {
+        sweep = sweep.saturating_add(1);
+        let peers = sweep_once(&swarm, &core, sweep).await;
+        // Peer-count changes are events too; they reset the schedule but need
+        // no wake-up because the next delay is computed right below.
+        if let Some(event) = peer_transition(previous_peers, peers) {
+            client.scheduler.on_event(event);
+        }
+        previous_peers = peers;
+        // Desktop/server CLI has no battery signal: treat as mains powered,
+        // foreground. Density comes from the live peer count.
+        client.scheduler.set_inputs(DiscoveryInputs {
+            connected_peers: u32::try_from(peers).unwrap_or(u32::MAX),
+            power: PowerState::Charging,
+            foreground: true,
+        });
+        let delay = client.scheduler.next_delay();
+        if client.wait(delay).await == WaitOutcome::Woken {
+            tracing::info!("[SEED-DIAL] network event -- sweeping now");
+        }
+    }
+}
+
+/// Non-loopback local interface addresses. An enumeration failure yields an
+/// empty set (treated as "no addresses"), never a panic.
+pub fn interface_snapshot() -> BTreeSet<IpAddr> {
+    if_addrs::get_if_addrs()
+        .map(|ifaces| {
+            ifaces
+                .into_iter()
+                .filter(|iface| !iface.is_loopback())
+                .map(|iface| iface.ip())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Interface-set monitor: a lightweight periodic diff of local addresses.
+/// The poll is event *detection* (it emits `LanInterfaceChanged`), not the
+/// dial backoff; its own interval still follows the shared decay: aggressive
+/// right after a change, slowing while the interface set is stable.
+pub async fn run_interface_monitor(client: Arc<SeedDialClient>) {
+    let monitor = DiscoveryScheduler::new(
+        TransportClass::Lan,
+        SchedulerConfig {
+            floor_ms: 250,
+            base_ceiling_ms: 2_000,
+            growth: 1.75,
+        },
+        Arc::new(SystemClock::new()),
+        Arc::new(ThreadRngJitter),
+    );
+    let mut previous = interface_snapshot();
+    loop {
+        tokio::time::sleep(monitor.next_delay()).await;
+        let current = interface_snapshot();
+        if current != previous {
+            tracing::info!(
+                "[DISCOVERY] event=LanInterfaceChanged detected interfaces={}",
+                current.len()
+            );
+            previous = current;
+            monitor.on_event(NetworkEvent::LanInterfaceChanged);
+            client.emit(NetworkEvent::LanInterfaceChanged);
         }
     }
 }
@@ -102,13 +232,84 @@ pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> u64
 mod tests {
     use super::*;
 
+    /// T6 acceptance: a simulated network-change event wakes the pending wait
+    /// within one tick instead of sitting out the scheduled delay.
+    #[tokio::test]
+    async fn network_event_wakes_sweep_within_one_tick() {
+        let client = SeedDialClient::new();
+        assert!(client.emit(NetworkEvent::LanInterfaceChanged));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.wait(Duration::from_secs(3600)),
+        )
+        .await
+        .expect("wait must return promptly after an affecting event");
+        assert_eq!(outcome, WaitOutcome::Woken);
+    }
+
+    /// An event that does not affect the ledger dial must not wake it.
+    #[tokio::test]
+    async fn unaffecting_event_does_not_wake() {
+        let client = SeedDialClient::new();
+        assert!(!client.emit(NetworkEvent::BleStateChanged { on: true }));
+        let outcome = client.wait(Duration::from_millis(50)).await;
+        assert_eq!(outcome, WaitOutcome::Elapsed);
+    }
+
+    /// An event delivered while a sweep is running is not lost: the next
+    /// wait returns immediately.
+    #[tokio::test]
+    async fn event_during_sweep_is_not_lost() {
+        let client = SeedDialClient::new();
+        client.emit(NetworkEvent::CellularChanged);
+        let outcome = client.wait(Duration::from_secs(3600)).await;
+        assert_eq!(outcome, WaitOutcome::Woken);
+    }
+
+    /// The schedule resets to the aggressive floor on an event and then
+    /// decays; the ceiling is a function of density, not one literal.
+    #[tokio::test]
+    async fn schedule_resets_then_decays_without_fixed_ladder() {
+        let client = SeedDialClient::new();
+        for _ in 0..40 {
+            client.scheduler.next_delay();
+        }
+        let plateau = client.scheduler.snapshot().interval_ms;
+        client.emit(NetworkEvent::WifiChanged);
+        let snap = client.scheduler.snapshot();
+        assert!(snap.interval_ms < plateau);
+        assert_eq!(snap.attempts, 0);
+        client.scheduler.set_inputs(DiscoveryInputs {
+            connected_peers: 0,
+            power: PowerState::Charging,
+            foreground: true,
+        });
+        let sparse = client.scheduler.ceiling_ms();
+        client.scheduler.set_inputs(DiscoveryInputs {
+            connected_peers: 16,
+            power: PowerState::Charging,
+            foreground: true,
+        });
+        assert!(client.scheduler.ceiling_ms() > sparse);
+    }
+
     #[test]
-    fn next_delay_is_bounded_exponential_backoff() {
-        assert_eq!(next_delay(1), 5);
-        assert_eq!(next_delay(2), 15);
-        assert_eq!(next_delay(3), 45);
-        assert_eq!(next_delay(4), 120);
-        assert_eq!(next_delay(50), 120);
+    fn peer_transition_maps_count_changes_to_events() {
+        assert_eq!(peer_transition(0, 0), None);
+        assert_eq!(peer_transition(2, 2), None);
+        assert_eq!(peer_transition(0, 1), Some(NetworkEvent::NewPeerConnected));
+        assert_eq!(peer_transition(1, 3), Some(NetworkEvent::NewPeerConnected));
+        assert_eq!(peer_transition(1, 0), Some(NetworkEvent::AllPeersLost));
+        assert_eq!(
+            peer_transition(3, 1),
+            Some(NetworkEvent::PeerDisconnected { count_now: 1 })
+        );
+    }
+
+    #[test]
+    fn interface_snapshot_excludes_loopback() {
+        let snap = interface_snapshot();
+        assert!(snap.iter().all(|ip| !ip.is_loopback()));
     }
 
     /// V040-T1 HALF 2 acceptance: the startup path issues a seed dial when
