@@ -364,119 +364,410 @@ pub fn multiaddr_to_key(addr: &Multiaddr) -> String {
     stripped.to_string()
 }
 
-/// A known relay peer: its peer ID plus its external addresses.
-type RelayEntry = (PeerId, Vec<Multiaddr>);
+/// Cap on relay records one node tracks (connected or not).
+pub const RELAY_TRACKING_CAP: usize = 16;
+
+/// Cap on relay CIRCUIT ADDRESSES EMITTED for ONE target peer, so the
+/// synthesised dial ladder (3 direct ports + 1 last-good + these) stays far
+/// inside the per-peer admission ceiling (`behaviour::MAX_ESTABLISHED_PER_PEER`).
+pub const MAX_RELAY_LADDER_ADDRS: usize = 4;
+
+/// Addresses remembered per relay. A relay that advertises hundreds of
+/// listen addresses cannot widen the ladder or the table.
+pub const MAX_ADDRS_PER_RELAY: usize = 4;
+
+/// Identity slots: relays tracked per network group (IPv4 /24, IPv6 /48 of the
+/// relay's first address). A Sybil minting unlimited peer ids from one
+/// network gets this many slots in total, not one per id.
+pub const MAX_RELAYS_PER_NETWORK_GROUP: usize = 2;
+
+/// Re-registration of an already-tracked relay (identify re-fires every 60 s
+/// per connection) is ignored inside this interval: it neither refreshes the
+/// address list nor touches the relay's rank.
+pub const RELAY_REREGISTER_MIN_INTERVAL: Duration = Duration::from_secs(300);
+
+/// Admission of NEW relay identities is rate limited: at most
+/// `NEW_RELAY_ADMISSIONS_PER_WINDOW` per `NEW_RELAY_WINDOW`.
+pub const NEW_RELAY_ADMISSIONS_PER_WINDOW: usize = 4;
+pub const NEW_RELAY_WINDOW: Duration = Duration::from_secs(60);
+
+/// Longevity credit saturates here, so score cannot grow without bound.
+const RELAY_UPTIME_CAP: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// Each relay-success (accepted relay response / accepted reservation) is
+/// worth this many seconds of uptime in the score.
+const RELAY_SUCCESS_WEIGHT_SECS: u64 = 3600;
+const RELAY_SUCCESS_CAP: u32 = 1000;
+
+/// A full table only evicts a record that is disconnected or whose score is
+/// below this (ten minutes of uptime, no proven relays). Established relays
+/// are never displaced by newcomers.
+const RELAY_EVICTABLE_SCORE_SECS: u64 = 600;
+
+/// Why `add_relay` did or did not change the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayRegistration {
+    /// New relay admitted.
+    Admitted,
+    /// Known relay; address list refreshed.
+    Refreshed,
+    /// Known relay seen again inside the re-registration interval; ignored.
+    Ignored,
+    /// New relay refused: admission rate limit.
+    RateLimited,
+    /// New relay refused: its network group already holds its slots.
+    GroupFull,
+    /// New relay refused: table full and every record is established.
+    TableFull,
+    /// No usable address supplied.
+    NoUsableAddr,
+}
+
+#[derive(Debug, Clone)]
+struct RelayRecord {
+    peer: PeerId,
+    addrs: Vec<Multiaddr>,
+    group: Option<String>,
+    first_seen: Instant,
+    connected_since: Option<Instant>,
+    uptime_banked: Duration,
+    successes: u32,
+    last_registration: Instant,
+}
+
+impl RelayRecord {
+    fn uptime(&self, now: Instant) -> Duration {
+        let live = self
+            .connected_since
+            .map(|since| now.saturating_duration_since(since))
+            .unwrap_or_default();
+        (self.uptime_banked + live).min(RELAY_UPTIME_CAP)
+    }
+
+    /// Reputation score in seconds-equivalent: longevity plus proven relays.
+    fn score(&self, now: Instant) -> u64 {
+        self.uptime(now).as_secs().saturating_add(
+            u64::from(self.successes.min(RELAY_SUCCESS_CAP)) * RELAY_SUCCESS_WEIGHT_SECS,
+        )
+    }
+
+    fn connected(&self) -> bool {
+        self.connected_since.is_some()
+    }
+}
+
+#[derive(Debug, Default)]
+struct RelayTable {
+    records: Vec<RelayRecord>,
+    recent_admissions: Vec<Instant>,
+}
+
+/// Network group of an address: IPv4 /24 or IPv6 /48. `None` when the address
+/// has no IP component (such a relay can never emit a circuit anyway).
+fn network_group(addrs: &[Multiaddr]) -> Option<String> {
+    use libp2p::multiaddr::Protocol;
+    for addr in addrs {
+        for proto in addr.iter() {
+            match proto {
+                Protocol::Ip4(ip) => {
+                    let o = ip.octets();
+                    return Some(format!("v4:{}.{}.{}", o[0], o[1], o[2]));
+                }
+                Protocol::Ip6(ip) => {
+                    let s = ip.segments();
+                    return Some(format!("v6:{:x}:{:x}:{:x}", s[0], s[1], s[2]));
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Build the circuit address through `relay_pid` for `target`, or `None` when
+/// the relay address is nested, portless or has no IP.
+fn circuit_through(
+    relay_pid: &PeerId,
+    relay_addr: &Multiaddr,
+    target: PeerId,
+) -> Option<Multiaddr> {
+    use libp2p::multiaddr::Protocol;
+    // Identify can repeat /p2p and /p2p-circuit components when a peer has
+    // already used a relay; appending another circuit suffix would create
+    // nested/self-returning routes.
+    if relay_addr
+        .iter()
+        .any(|proto| matches!(proto, Protocol::P2pCircuit))
+    {
+        return None;
+    }
+    // Preserve each transport component (IP, port, transport wrappers) so the
+    // relay's concrete dialable prefix survives.
+    let mut direct_addr = Multiaddr::empty();
+    let mut has_ip = false;
+    let mut has_port = false;
+    for proto in relay_addr.iter() {
+        match proto {
+            Protocol::Ip4(_) | Protocol::Ip6(_) => {
+                has_ip = true;
+                direct_addr.push(proto);
+            }
+            Protocol::Tcp(_) | Protocol::Udp(_) => {
+                has_port = true;
+                direct_addr.push(proto);
+            }
+            Protocol::P2p(_) => {}
+            other => direct_addr.push(other),
+        }
+    }
+    if !(has_ip && has_port) {
+        return None;
+    }
+    let mut circuit_addr = direct_addr;
+    circuit_addr.push(Protocol::P2p(*relay_pid));
+    circuit_addr.push(Protocol::P2pCircuit);
+    circuit_addr.push(Protocol::P2p(target));
+    Some(circuit_addr)
+}
 
 /// Circuit-relay ladder builder: adds relay addresses to a peer's dial candidates.
 ///
 /// Once a peer is connected, we construct circuit-relay multiaddrs to that peer
-/// through known relay peers. This improves connectivity for future dials.
+/// through known relay peers. Every identified peer is a relay candidate and
+/// identify re-fires every 60 s, so the set MUST resist Sybil
+/// re-registration (Rule-8 review of #372, finding 1). Nothing is pinned or
+/// statically trusted; reputation decides:
+///
+/// * Rank: uptime (connected time, capped) plus proven relays
+///   (`record_relay_success`). Ties go to the OLDEST record, never the
+///   newest, so a flood of fresh identities sorts behind established relays.
+/// * Re-registration of a tracked relay is rate limited
+///   ([`RELAY_REREGISTER_MIN_INTERVAL`]) and never resets its record.
+/// * Admission of new identities is rate limited
+///   ([`NEW_RELAY_ADMISSIONS_PER_WINDOW`] per [`NEW_RELAY_WINDOW`]).
+/// * Per-identity slots: at most [`MAX_RELAYS_PER_NETWORK_GROUP`] relays per
+///   IPv4 /24 (IPv6 /48), and [`MAX_ADDRS_PER_RELAY`] addresses per relay.
+/// * Eviction: a full table only displaces a disconnected or unproven record;
+///   established relays are never evicted by newcomers.
+/// * Emission is round-robin across ranked relays, so no single relay fills
+///   the whole ladder.
 pub struct CircuitRelayLadder {
-    /// List of known relay peers (peer ID + their external addresses).
-    relays: Arc<RwLock<Vec<RelayEntry>>>,
+    relays: Arc<RwLock<RelayTable>>,
 }
 
 impl CircuitRelayLadder {
     /// Create a new circuit-relay ladder.
     pub fn new() -> Self {
         Self {
-            relays: Arc::new(RwLock::new(Vec::new())),
+            relays: Arc::new(RwLock::new(RelayTable::default())),
         }
     }
 
     /// Register a known relay peer with its external addresses.
     pub fn add_relay(&self, relay_peer_id: PeerId, external_addrs: Vec<Multiaddr>) {
-        let mut relays = self.relays.write();
-
-        // Remove any stale entry for this relay.
-        relays.retain(|(pid, _)| pid != &relay_peer_id);
-
+        let outcome = self.add_relay_at(relay_peer_id, external_addrs, Instant::now());
         debug!(
             relay_peer_id=%relay_peer_id,
-            addr_count=external_addrs.len(),
-            "[CIRCUIT-RELAY] Registered relay peer"
+            ?outcome,
+            "[CIRCUIT-RELAY] Relay registration"
         );
-        relays.push((relay_peer_id, external_addrs));
     }
 
-    /// Remove a relay after its authenticated connection is gone.
-    pub fn remove_relay(&self, relay_peer_id: &PeerId) {
-        self.relays
-            .write()
-            .retain(|(peer_id, _)| peer_id != relay_peer_id);
-    }
-
-    /// Build a list of circuit-relay multiaddrs to a target peer through known relays.
-    ///
-    /// Returns a list of circuit-relay addresses in the format:
-    /// `/ip4/<relay-ip>/tcp/<relay-port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>`
-    pub fn build_relay_addresses(&self, target_peer_id: PeerId) -> Vec<Multiaddr> {
-        use libp2p::multiaddr::Protocol;
-
-        let relays = self.relays.read();
-        let mut relay_addrs = HashSet::new();
-
-        for (relay_pid, external_addrs) in relays.iter() {
-            // A relay cannot provide a useful circuit to itself. More
-            // importantly, accepting a self-target here creates a circuit
-            // path that returns to the originating node and multiplies during
-            // mesh growth.
-            if relay_pid == &target_peer_id {
-                continue;
+    /// `add_relay` with an explicit clock, for deterministic tests.
+    pub fn add_relay_at(
+        &self,
+        relay_peer_id: PeerId,
+        external_addrs: Vec<Multiaddr>,
+        now: Instant,
+    ) -> RelayRegistration {
+        let mut addrs: Vec<Multiaddr> = Vec::with_capacity(MAX_ADDRS_PER_RELAY);
+        for addr in external_addrs {
+            if addrs.len() >= MAX_ADDRS_PER_RELAY {
+                break;
             }
-            for relay_addr in external_addrs {
-                // Only use direct addresses with a proper IP and port. Identify
-                // can repeat /p2p and /p2p-circuit components when a peer has
-                // already used a relay; appending another circuit suffix would
-                // create nested/self-returning routes.
-                if relay_addr
-                    .iter()
-                    .any(|proto| matches!(proto, Protocol::P2pCircuit))
-                {
-                    continue;
+            if !addrs.contains(&addr) {
+                addrs.push(addr);
+            }
+        }
+        if addrs.is_empty() {
+            return RelayRegistration::NoUsableAddr;
+        }
+
+        let mut table = self.relays.write();
+
+        if let Some(record) = table.records.iter_mut().find(|r| r.peer == relay_peer_id) {
+            // A reconnect after remove_relay resumes the uptime clock.
+            if record.connected_since.is_none() {
+                record.connected_since = Some(now);
+            }
+            if now.saturating_duration_since(record.last_registration)
+                < RELAY_REREGISTER_MIN_INTERVAL
+            {
+                return RelayRegistration::Ignored;
+            }
+            record.group = network_group(&addrs);
+            record.addrs = addrs;
+            record.last_registration = now;
+            return RelayRegistration::Refreshed;
+        }
+
+        table
+            .recent_admissions
+            .retain(|t| now.saturating_duration_since(*t) < NEW_RELAY_WINDOW);
+        if table.recent_admissions.len() >= NEW_RELAY_ADMISSIONS_PER_WINDOW {
+            return RelayRegistration::RateLimited;
+        }
+
+        let group = network_group(&addrs);
+        if let Some(group) = &group {
+            let in_group = table
+                .records
+                .iter()
+                .filter(|r| r.group.as_ref() == Some(group))
+                .count();
+            if in_group >= MAX_RELAYS_PER_NETWORK_GROUP {
+                return RelayRegistration::GroupFull;
+            }
+        }
+
+        if table.records.len() >= RELAY_TRACKING_CAP {
+            // Lowest-score evictable record; newest first on ties.
+            let victim = table
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !r.connected() || r.score(now) < RELAY_EVICTABLE_SCORE_SECS)
+                .min_by(|(_, a), (_, b)| {
+                    a.score(now)
+                        .cmp(&b.score(now))
+                        .then(b.first_seen.cmp(&a.first_seen))
+                })
+                .map(|(i, _)| i);
+            match victim {
+                Some(index) => {
+                    table.records.remove(index);
                 }
-                // Preserve each transport component (IP, port, transport wrappers)
-                // in direct_addr so the relay's concrete dialable prefix survives.
-                // Rust match arms do not fall through; failing to push in the IP
-                // and port arms strips the prefix and produces undialable addresses.
-                let mut direct_addr = Multiaddr::empty();
-                let mut has_ip = false;
-                let mut has_port = false;
-                for proto in relay_addr.iter() {
-                    match proto {
-                        Protocol::Ip4(_) | Protocol::Ip6(_) => {
-                            has_ip = true;
-                            direct_addr.push(proto);
-                        }
-                        Protocol::Tcp(_) | Protocol::Udp(_) => {
-                            has_port = true;
-                            direct_addr.push(proto);
-                        }
-                        Protocol::P2p(_) => {}
-                        other => direct_addr.push(other),
+                None => return RelayRegistration::TableFull,
+            }
+        }
+
+        table.recent_admissions.push(now);
+        table.records.push(RelayRecord {
+            peer: relay_peer_id,
+            addrs,
+            group,
+            first_seen: now,
+            connected_since: Some(now),
+            uptime_banked: Duration::ZERO,
+            successes: 0,
+            last_registration: now,
+        });
+        RelayRegistration::Admitted
+    }
+
+    /// Credit a relay for a proven relay service (an accepted relay response
+    /// or accepted reservation). This is the reputation signal that cannot be
+    /// bought by re-registering.
+    pub fn record_relay_success(&self, relay_peer_id: &PeerId) {
+        if let Some(record) = self
+            .relays
+            .write()
+            .records
+            .iter_mut()
+            .find(|r| &r.peer == relay_peer_id)
+        {
+            record.successes = record.successes.saturating_add(1).min(RELAY_SUCCESS_CAP);
+        }
+    }
+
+    /// A relay's authenticated connection is gone: stop offering it, bank its
+    /// uptime. The record (and its reputation) is retained so a reconnect does
+    /// not restart from zero, but it becomes evictable.
+    pub fn remove_relay(&self, relay_peer_id: &PeerId) {
+        self.remove_relay_at(relay_peer_id, Instant::now());
+    }
+
+    /// `remove_relay` with an explicit clock, for deterministic tests.
+    pub fn remove_relay_at(&self, relay_peer_id: &PeerId, now: Instant) {
+        if let Some(record) = self
+            .relays
+            .write()
+            .records
+            .iter_mut()
+            .find(|r| &r.peer == relay_peer_id)
+        {
+            if let Some(since) = record.connected_since.take() {
+                record.uptime_banked += now.saturating_duration_since(since);
+            }
+        }
+    }
+
+    /// Number of tracked relay records (connected or not).
+    pub fn tracked_relays(&self) -> usize {
+        self.relays.read().records.len()
+    }
+
+    /// Build circuit-relay multiaddrs to a target peer through known relays.
+    ///
+    /// Returns at most [`MAX_RELAY_LADDER_ADDRS`] addresses in the format
+    /// `/ip4/<relay-ip>/tcp/<relay-port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>`,
+    /// best-reputation relay first, round-robin across relays.
+    pub fn build_relay_addresses(&self, target_peer_id: PeerId) -> Vec<Multiaddr> {
+        self.build_relay_addresses_at(target_peer_id, Instant::now())
+    }
+
+    /// `build_relay_addresses` with an explicit clock, for deterministic tests.
+    pub fn build_relay_addresses_at(&self, target_peer_id: PeerId, now: Instant) -> Vec<Multiaddr> {
+        let table = self.relays.read();
+
+        // A relay cannot provide a useful circuit to itself: a self-target
+        // creates a path that returns to the originating node.
+        let mut ranked: Vec<&RelayRecord> = table
+            .records
+            .iter()
+            .filter(|r| r.connected() && r.peer != target_peer_id)
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.score(now)
+                .cmp(&a.score(now))
+                .then(a.first_seen.cmp(&b.first_seen))
+                .then(a.peer.to_bytes().cmp(&b.peer.to_bytes()))
+        });
+
+        let per_relay: Vec<Vec<Multiaddr>> = ranked
+            .iter()
+            .map(|r| {
+                r.addrs
+                    .iter()
+                    .filter_map(|a| circuit_through(&r.peer, a, target_peer_id))
+                    .collect()
+            })
+            .collect();
+
+        let mut out: Vec<Multiaddr> = Vec::with_capacity(MAX_RELAY_LADDER_ADDRS);
+        let mut seen: HashSet<Multiaddr> = HashSet::new();
+        for round in 0..MAX_ADDRS_PER_RELAY {
+            for circuits in &per_relay {
+                if out.len() >= MAX_RELAY_LADDER_ADDRS {
+                    break;
+                }
+                if let Some(circuit) = circuits.get(round) {
+                    if seen.insert(circuit.clone()) {
+                        out.push(circuit.clone());
                     }
                 }
-
-                if has_ip && has_port {
-                    // Construct circuit-relay address: base -> /p2p/<relay> -> /p2p-circuit -> /p2p/<target>
-                    let mut circuit_addr = direct_addr;
-                    circuit_addr.push(Protocol::P2p(*relay_pid));
-                    circuit_addr.push(Protocol::P2pCircuit);
-                    circuit_addr.push(Protocol::P2p(target_peer_id));
-                    relay_addrs.insert(circuit_addr);
-                }
             }
         }
 
-        if !relay_addrs.is_empty() {
+        if !out.is_empty() {
             debug!(
                 target_peer_id=%target_peer_id,
-                relay_count=relay_addrs.len(),
-                "[CIRCUIT-RELAY] Built relay addresses for target"
+                relay_count=out.len(),
+                cap=MAX_RELAY_LADDER_ADDRS,
+                "[CIRCUIT-RELAY] Built relay addresses for target, best reputation first"
             );
         }
-
-        relay_addrs.into_iter().collect()
+        out
     }
 }
 
@@ -796,5 +1087,230 @@ mod tests {
         assert!(!key.contains("/p2p/"));
         assert!(key.contains("192.168.1.1"));
         assert!(key.contains("4001"));
+    }
+
+    // ---- Relay-ladder hostile-registration tests (Rule-8 review of #372, F1) ----
+
+    fn fresh_pid() -> PeerId {
+        libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+    }
+
+    /// Address in a distinct /24 per `net`, so group caps do not interfere.
+    fn net_addr(net: u8, host: u8) -> Multiaddr {
+        format!("/ip4/10.{net}.0.{host}/tcp/4001")
+            .parse()
+            .expect("fixture addr")
+    }
+
+    /// Admit `count` relays one admission-window apart so the admission rate
+    /// limit never interferes with fixture setup. Returns the ids.
+    fn seed_relays(
+        ladder: &CircuitRelayLadder,
+        base: Instant,
+        first_net: u8,
+        count: usize,
+    ) -> Vec<PeerId> {
+        (0..count)
+            .map(|i| {
+                let pid = fresh_pid();
+                let at = base + NEW_RELAY_WINDOW * (i as u32);
+                assert_eq!(
+                    ladder.add_relay_at(pid, vec![net_addr(first_net + i as u8, 1)], at),
+                    RelayRegistration::Admitted
+                );
+                pid
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sybil_flood_cannot_displace_established_relays_in_the_ladder() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        // Two honest relays, long-lived, one with proven relays.
+        let honest = seed_relays(&ladder, t0, 1, 2);
+        ladder.record_relay_success(&honest[0]);
+        ladder.record_relay_success(&honest[0]);
+
+        // A Sybil mints 200 identities, each on its own network, hammering
+        // registration for ten minutes after the honest relays were admitted.
+        let sybil_start = t0 + Duration::from_secs(600);
+        let mut admitted_sybils = 0;
+        for i in 0..200u32 {
+            let at = sybil_start + Duration::from_millis(u64::from(i) * 50);
+            let outcome = ladder.add_relay_at(
+                fresh_pid(),
+                vec![net_addr(100 + (i % 100) as u8, (i / 100) as u8 + 1)],
+                at,
+            );
+            if outcome == RelayRegistration::Admitted {
+                admitted_sybils += 1;
+            }
+        }
+        assert!(
+            admitted_sybils <= NEW_RELAY_ADMISSIONS_PER_WINDOW,
+            "admission rate limit must cap a burst, admitted {admitted_sybils}"
+        );
+
+        let target = fresh_pid();
+        let now = sybil_start + Duration::from_secs(30);
+        let built = ladder.build_relay_addresses_at(target, now);
+        assert!(built.len() <= MAX_RELAY_LADDER_ADDRS);
+        let first = built[0].to_string();
+        let second = built[1].to_string();
+        assert!(
+            first.contains(&honest[0].to_string()),
+            "proven long-lived relay must rank first, got {first}"
+        );
+        assert!(
+            second.contains(&honest[1].to_string()),
+            "older relay must outrank unproven newcomers, got {second}"
+        );
+    }
+
+    #[test]
+    fn same_network_sybil_is_capped_to_the_group_slots() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let mut outcomes = Vec::new();
+        // Many identities from one /24, spaced past the admission window.
+        for i in 0..10u32 {
+            outcomes.push(ladder.add_relay_at(
+                fresh_pid(),
+                vec![net_addr(7, (i + 1) as u8)],
+                t0 + NEW_RELAY_WINDOW * i,
+            ));
+        }
+        let admitted = outcomes
+            .iter()
+            .filter(|o| **o == RelayRegistration::Admitted)
+            .count();
+        assert_eq!(admitted, MAX_RELAYS_PER_NETWORK_GROUP);
+        assert!(outcomes.contains(&RelayRegistration::GroupFull));
+        assert_eq!(ladder.tracked_relays(), MAX_RELAYS_PER_NETWORK_GROUP);
+    }
+
+    #[test]
+    fn reregistration_is_rate_limited_and_does_not_reset_rank() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let pid = fresh_pid();
+        assert_eq!(
+            ladder.add_relay_at(pid, vec![net_addr(1, 1)], t0),
+            RelayRegistration::Admitted
+        );
+        // Identify fires every 60 s: all inside the interval are ignored and
+        // must not replace the address list.
+        for k in 1..5u32 {
+            assert_eq!(
+                ladder.add_relay_at(pid, vec![net_addr(2, 9)], t0 + Duration::from_secs(60) * k),
+                RelayRegistration::Ignored
+            );
+        }
+        let built = ladder.build_relay_addresses_at(fresh_pid(), t0 + Duration::from_secs(300));
+        assert!(built[0].to_string().starts_with("/ip4/10.1.0.1/"));
+        // After the interval a refresh is accepted, but first_seen (rank) is kept.
+        assert_eq!(
+            ladder.add_relay_at(
+                pid,
+                vec![net_addr(2, 9)],
+                t0 + RELAY_REREGISTER_MIN_INTERVAL
+            ),
+            RelayRegistration::Refreshed
+        );
+        let built = ladder.build_relay_addresses_at(fresh_pid(), t0 + Duration::from_secs(301));
+        assert!(built[0].to_string().starts_with("/ip4/10.2.0.9/"));
+        assert_eq!(ladder.tracked_relays(), 1);
+    }
+
+    #[test]
+    fn full_table_never_evicts_established_relays_for_newcomers() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let established = seed_relays(&ladder, t0, 1, RELAY_TRACKING_CAP);
+        assert_eq!(ladder.tracked_relays(), RELAY_TRACKING_CAP);
+
+        // Well past the evictable score, a newcomer is refused outright.
+        let later = t0 + NEW_RELAY_WINDOW * (RELAY_TRACKING_CAP as u32 + 20);
+        assert_eq!(
+            ladder.add_relay_at(fresh_pid(), vec![net_addr(200, 1)], later),
+            RelayRegistration::TableFull
+        );
+        let built = ladder.build_relay_addresses_at(fresh_pid(), later);
+        for circuit in &built {
+            assert!(established
+                .iter()
+                .any(|pid| circuit.to_string().contains(&pid.to_string())));
+        }
+    }
+
+    #[test]
+    fn disconnected_unproven_records_are_evictable_but_keep_reputation_on_reconnect() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let ids = seed_relays(&ladder, t0, 1, RELAY_TRACKING_CAP);
+        // One relay proves itself, then drops; another just drops.
+        ladder.record_relay_success(&ids[0]);
+        let drop_at = t0 + NEW_RELAY_WINDOW * (RELAY_TRACKING_CAP as u32 + 20);
+        ladder.remove_relay_at(&ids[0], drop_at);
+        ladder.remove_relay_at(&ids[1], drop_at);
+
+        // A newcomer takes the lowest-score disconnected record (ids[1]: no
+        // successes), not the proven one.
+        assert_eq!(
+            ladder.add_relay_at(fresh_pid(), vec![net_addr(220, 1)], drop_at),
+            RelayRegistration::Admitted
+        );
+        assert_eq!(ladder.tracked_relays(), RELAY_TRACKING_CAP);
+        // ids[0] reconnects: reputation survived (success still counted).
+        assert_eq!(
+            ladder.add_relay_at(
+                ids[0],
+                vec![net_addr(1, 1)],
+                drop_at + Duration::from_secs(1)
+            ),
+            RelayRegistration::Refreshed
+        );
+        let built = ladder.build_relay_addresses_at(fresh_pid(), drop_at + Duration::from_secs(2));
+        assert!(built[0].to_string().contains(&ids[0].to_string()));
+    }
+
+    #[test]
+    fn one_relay_advertising_many_addresses_cannot_fill_the_ladder() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let greedy = fresh_pid();
+        let addrs: Vec<Multiaddr> = (1..=50u8).map(|h| net_addr(5, h)).collect();
+        ladder.add_relay_at(greedy, addrs, t0);
+        let other = fresh_pid();
+        ladder.add_relay_at(other, vec![net_addr(6, 1)], t0 + NEW_RELAY_WINDOW);
+        let built = ladder.build_relay_addresses_at(fresh_pid(), t0 + Duration::from_secs(120));
+        assert!(built.len() <= MAX_RELAY_LADDER_ADDRS);
+        assert!(
+            built
+                .iter()
+                .any(|a| a.to_string().contains(&other.to_string())),
+            "a second relay must keep a slot against an address-flooding relay"
+        );
+        assert!(
+            built
+                .iter()
+                .filter(|a| a.to_string().contains(&greedy.to_string()))
+                .count()
+                <= MAX_RELAY_LADDER_ADDRS - 1
+        );
+    }
+
+    #[test]
+    fn ladder_width_is_inside_the_per_peer_admission_ceiling() {
+        // 3 direct ports + 1 last-good + the relay half must fit under the
+        // real admission cap used by behaviour.rs (not a copy of it).
+        let ladder_width = 3 + 1 + MAX_RELAY_LADDER_ADDRS as u32;
+        assert!(
+            ladder_width <= crate::transport::behaviour::MAX_ESTABLISHED_PER_PEER,
+            "a full dial ladder must be admissible by the per-peer cap"
+        );
     }
 }
