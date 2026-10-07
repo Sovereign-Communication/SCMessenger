@@ -33,7 +33,10 @@ impl JitterSource for Lcg {
 }
 
 fn build_all() -> Vec<DiscoveryScheduler> {
-    let clock = Arc::new(TestClock(AtomicU64::new(0)));
+    build_all_with_clock(Arc::new(TestClock(AtomicU64::new(0))))
+}
+
+fn build_all_with_clock(clock: Arc<TestClock>) -> Vec<DiscoveryScheduler> {
     TransportClass::ALL
         .iter()
         .map(|t| {
@@ -83,7 +86,8 @@ fn integration_discovery_scheduler_ble_on_resets_only_ble() {
 
 #[test]
 fn integration_discovery_scheduler_network_change_then_quiet_backoff_never_stops() {
-    let all = build_all();
+    let clock = Arc::new(TestClock(AtomicU64::new(0)));
+    let all = build_all_with_clock(clock.clone());
     let internet = all
         .iter()
         .find(|s| s.transport() == TransportClass::Internet)
@@ -104,7 +108,34 @@ fn integration_discovery_scheduler_network_change_then_quiet_backoff_never_stops
         assert!(d > Duration::ZERO);
         assert!(d.as_millis() as u64 <= internet.ceiling_ms());
     }
-    // A later network change restarts aggressive probing immediately.
+    // A later network change (after a quiet period) restarts aggressive
+    // probing immediately.
+    clock
+        .0
+        .fetch_add(10 * internet.ceiling_ms(), Ordering::SeqCst);
     assert!(internet.on_event(NetworkEvent::WifiChanged));
     assert_eq!(internet.snapshot().interval_ms, 500);
+}
+
+#[test]
+fn integration_discovery_scheduler_flap_storm_is_coalesced_then_recovers() {
+    let clock = Arc::new(TestClock(AtomicU64::new(0)));
+    let all = build_all_with_clock(clock.clone());
+    let internet = all
+        .iter()
+        .find(|s| s.transport() == TransportClass::Internet)
+        .expect("internet scheduler built");
+    let mut accepted = 0;
+    for _ in 0..5_000 {
+        if internet.on_event(NetworkEvent::WifiChanged) {
+            accepted += 1;
+        }
+        clock.0.fetch_add(2, Ordering::SeqCst);
+    }
+    assert!(accepted <= 6, "flap storm accepted {} resets", accepted);
+    assert!(internet.snapshot().coalesced > 0);
+    // A proven connection restores normal responsiveness.
+    internet.record_success();
+    clock.0.fetch_add(500, Ordering::SeqCst);
+    assert!(internet.on_event(NetworkEvent::WifiChanged));
 }

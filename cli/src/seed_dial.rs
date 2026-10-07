@@ -11,9 +11,9 @@
 // The candidate list comes from the core ledger (proven + unproven seed
 // tiers).
 
+use crate::platform_signals;
 use scmessenger_core::transport::{
-    DiscoveryInputs, DiscoveryScheduler, NetworkEvent, PowerState, SchedulerConfig, SwarmHandle,
-    SystemClock, ThreadRngJitter, TransportClass,
+    DiscoveryInputs, DiscoveryScheduler, NetworkEvent, SwarmHandle, TransportClass,
 };
 use scmessenger_core::IronCore;
 use std::collections::BTreeSet;
@@ -57,6 +57,14 @@ impl SeedDialClient {
             self.wake.notify_one();
         }
         affected
+    }
+
+    /// Poll interval for platforms with no OS network-change notification.
+    /// Computed from the live scheduler state (its current interval, which
+    /// is the floor right after a change and decays toward the density/power
+    /// ceiling), never a literal: detection is no slower than the next sweep.
+    pub fn poll_interval(&self) -> Duration {
+        Duration::from_millis(self.scheduler.snapshot().interval_ms.max(1))
     }
 
     /// Sleep for `delay`, or return early when an affecting event arrives.
@@ -163,17 +171,24 @@ pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialCl
     loop {
         sweep = sweep.saturating_add(1);
         let peers = sweep_once(&swarm, &core, sweep).await;
-        // Peer-count changes are events too; they reset the schedule but need
-        // no wake-up because the next delay is computed right below.
+        // Peer-count changes are events too; they reset the schedule (subject
+        // to flap coalescing) but need no wake-up because the next delay is
+        // computed right below.
         if let Some(event) = peer_transition(previous_peers, peers) {
             client.scheduler.on_event(event);
         }
+        // A peer still connected across two consecutive sweeps is a proven
+        // connection: restore normal reset responsiveness.
+        if previous_peers > 0 && peers > 0 {
+            client.scheduler.record_success();
+        }
         previous_peers = peers;
-        // Desktop/server CLI has no battery signal: treat as mains powered,
-        // foreground. Density comes from the live peer count.
+        // Power is read from the OS where cheap (Linux sysfs, Windows power
+        // status); with no battery the computed default is mains powered. The
+        // CLI is always foreground. Density comes from the live peer count.
         client.scheduler.set_inputs(DiscoveryInputs {
             connected_peers: u32::try_from(peers).unwrap_or(u32::MAX),
-            power: PowerState::Charging,
+            power: platform_signals::detect_power_state(),
             foreground: true,
         });
         let delay = client.scheduler.next_delay();
@@ -197,24 +212,22 @@ pub fn interface_snapshot() -> BTreeSet<IpAddr> {
         .unwrap_or_default()
 }
 
-/// Interface-set monitor: a lightweight periodic diff of local addresses.
-/// The poll is event *detection* (it emits `LanInterfaceChanged`), not the
-/// dial backoff; its own interval still follows the shared decay: aggressive
-/// right after a change, slowing while the interface set is stable.
+/// Interface-set monitor. Detection is driven by OS change notifications
+/// (Windows `NotifyUnicastIpAddressChange`, Linux netlink); each wake-up is
+/// diffed against the last interface set so only a real change emits
+/// `LanInterfaceChanged`. On platforms with no notification source, or if the
+/// source dies, it falls back to polling at an interval computed from the
+/// dial scheduler's live state (`SeedDialClient::poll_interval`), not a
+/// literal. Notification storms are absorbed by the scheduler's reset
+/// coalescing.
 pub async fn run_interface_monitor(client: Arc<SeedDialClient>) {
-    let monitor = DiscoveryScheduler::new(
-        TransportClass::Lan,
-        SchedulerConfig {
-            floor_ms: 250,
-            base_ceiling_ms: 2_000,
-            growth: 1.75,
-        },
-        Arc::new(SystemClock::new()),
-        Arc::new(ThreadRngJitter),
-    );
+    let watch = platform_signals::start_change_watch();
     let mut previous = interface_snapshot();
     loop {
-        tokio::time::sleep(monitor.next_delay()).await;
+        match &watch {
+            Some(w) if w.alive() => w.changed().await,
+            _ => tokio::time::sleep(client.poll_interval()).await,
+        }
         let current = interface_snapshot();
         if current != previous {
             tracing::info!(
@@ -222,7 +235,6 @@ pub async fn run_interface_monitor(client: Arc<SeedDialClient>) {
                 current.len()
             );
             previous = current;
-            monitor.on_event(NetworkEvent::LanInterfaceChanged);
             client.emit(NetworkEvent::LanInterfaceChanged);
         }
     }
@@ -291,6 +303,28 @@ mod tests {
             foreground: true,
         });
         assert!(client.scheduler.ceiling_ms() > sparse);
+    }
+
+    /// The fallback poll interval follows scheduler state, not a literal.
+    #[test]
+    fn poll_interval_follows_scheduler_state() {
+        let client = SeedDialClient::new();
+        let at_floor = client.poll_interval();
+        for _ in 0..40 {
+            client.scheduler.next_delay();
+        }
+        assert!(client.poll_interval() > at_floor);
+        assert!(client.poll_interval() <= Duration::from_millis(client.scheduler.ceiling_ms()));
+    }
+
+    /// Back-to-back interface events: the first resets, the second is
+    /// coalesced and does not wake the dial loop again.
+    #[test]
+    fn back_to_back_interface_events_are_coalesced_at_the_client() {
+        let client = SeedDialClient::new();
+        assert!(client.emit(NetworkEvent::LanInterfaceChanged));
+        assert!(!client.emit(NetworkEvent::LanInterfaceChanged));
+        assert_eq!(client.scheduler.snapshot().coalesced, 1);
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod ble_mesh;
 mod bootstrap;
 mod config;
 mod ledger;
+mod platform_signals;
 mod seed_dial;
 mod server;
 mod transport_api;

@@ -4647,6 +4647,7 @@ dependencies = [
  "hyper-util",
  "if-addrs",
  "lazy_static",
+ "libc",
  "libp2p",
  "scmessenger-core",
  "serde",

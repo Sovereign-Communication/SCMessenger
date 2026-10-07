@@ -24,6 +24,17 @@
 //   `base_ceiling`, so the node keeps probing at a short steady interval
 //   rather than going quiet. `base_ceiling` is per-transport configuration.
 //
+// Reset coalescing (Rule-8 review of #484, finding F1): a flapping peer or
+// interface must not pin the node at the floor. Resets are rate-limited by a
+// window derived from the floor: after `k` accepted resets without a proven
+// connection (`record_success`), the next reset is accepted only once
+// `floor * 2^(k-1)` ms (capped at the live ceiling) have passed since the
+// previous one. An event inside the window is not dropped: it is remembered
+// and applied when the window ends (`next_delay` caps its wait to that moment),
+// so a real change is never lost, only delayed by at most the window. A quiet
+// period of at least one ceiling, or `record_success`, restores immediate
+// resets. There is still no give-up and no literal cap on the window.
+//
 // The scheduler is pure logic: time comes from an injected `SchedulerClock`
 // and randomness from an injected `JitterSource`, so tests are deterministic.
 
@@ -301,6 +312,10 @@ pub struct SchedulerSnapshot {
     pub last_attempt_at_ms: Option<u64>,
     /// Kind of the most recent affecting event, if any.
     pub last_event: Option<&'static str>,
+    /// Events absorbed by reset coalescing since creation.
+    pub coalesced: u64,
+    /// Current minimum spacing between accepted resets (0 before the first).
+    pub reset_window_ms: u64,
 }
 
 struct State {
@@ -310,6 +325,25 @@ struct State {
     inputs: DiscoveryInputs,
     last_attempt_at_ms: Option<u64>,
     last_event: Option<&'static str>,
+    /// Clock reading of the last accepted reset.
+    last_reset_at_ms: Option<u64>,
+    /// Accepted resets since the last proven connection or quiet period.
+    unproven_resets: u32,
+    /// An event was coalesced; apply a reset when the window ends.
+    pending_reset: Option<&'static str>,
+    coalesced: u64,
+}
+
+/// Minimum spacing between accepted resets after `unproven` accepted resets
+/// without a proven connection: `floor * 2^(unproven-1)`, never above the
+/// live ceiling and never below the floor.
+fn coalesce_window_ms(config: &SchedulerConfig, unproven: u32, ceiling_ms: u64) -> u64 {
+    let shift = unproven.saturating_sub(1).min(32);
+    config
+        .floor_ms
+        .saturating_mul(1u64 << shift)
+        .min(ceiling_ms)
+        .max(config.floor_ms)
 }
 
 /// Computes the decay ceiling from configuration and live inputs.
@@ -355,6 +389,10 @@ impl DiscoveryScheduler {
                 inputs: DiscoveryInputs::default(),
                 last_attempt_at_ms: None,
                 last_event: None,
+                last_reset_at_ms: None,
+                unproven_resets: 0,
+                pending_reset: None,
+                coalesced: 0,
             }),
         }
     }
@@ -391,23 +429,70 @@ impl DiscoveryScheduler {
         if !event.affects(self.transport) {
             return false;
         }
-        let (interval_ms, attempts, peers) = {
+        let now = self.clock.now_ms();
+        let accepted = {
             let mut st = self.state.write();
-            st.interval_ms = self.config.floor_ms;
-            st.attempts = 0;
-            st.resets = st.resets.saturating_add(1);
-            st.last_event = Some(event.kind());
-            (st.interval_ms, st.attempts, st.inputs.connected_peers)
+            let ceiling = compute_ceiling_ms(&self.config, &st.inputs);
+            let mut allowed = true;
+            if let Some(last) = st.last_reset_at_ms {
+                let elapsed = now.saturating_sub(last);
+                if elapsed >= ceiling {
+                    // A full quiet ceiling proves stability: forgive history.
+                    st.unproven_resets = 0;
+                }
+                let window = coalesce_window_ms(&self.config, st.unproven_resets, ceiling);
+                if elapsed < window {
+                    st.coalesced = st.coalesced.saturating_add(1);
+                    st.pending_reset = Some(event.kind());
+                    allowed = false;
+                }
+            }
+            if allowed {
+                Some(self.apply_reset(&mut st, now, event.kind()))
+            } else {
+                None
+            }
         };
-        tracing::info!(
-            "[DISCOVERY] event={} transport={} phase=aggressive interval_ms={} attempt={} peers={}",
-            event.kind(),
-            self.transport.as_str(),
-            interval_ms,
-            attempts,
-            peers
-        );
-        true
+        match accepted {
+            Some((interval_ms, attempts, peers)) => {
+                tracing::info!(
+                    "[DISCOVERY] event={} transport={} phase=aggressive interval_ms={} attempt={} peers={}",
+                    event.kind(),
+                    self.transport.as_str(),
+                    interval_ms,
+                    attempts,
+                    peers
+                );
+                true
+            }
+            None => {
+                tracing::debug!(
+                    "[DISCOVERY] event={} transport={} coalesced (flap damping); reset deferred to window end",
+                    event.kind(),
+                    self.transport.as_str()
+                );
+                false
+            }
+        }
+    }
+
+    /// Record that a connection was proven stable (for example a peer still
+    /// connected across consecutive observations). Restores immediate reset
+    /// responsiveness by clearing the coalescing history.
+    pub fn record_success(&self) {
+        self.state.write().unproven_resets = 0;
+    }
+
+    /// Apply an accepted reset. Returns (interval, attempts, peers) for logging.
+    fn apply_reset(&self, st: &mut State, now: u64, kind: &'static str) -> (u64, u32, u32) {
+        st.interval_ms = self.config.floor_ms;
+        st.attempts = 0;
+        st.resets = st.resets.saturating_add(1);
+        st.last_event = Some(kind);
+        st.last_reset_at_ms = Some(now);
+        st.unproven_resets = st.unproven_resets.saturating_add(1);
+        st.pending_reset = None;
+        (st.interval_ms, st.attempts, st.inputs.connected_peers)
     }
 
     /// Delay to wait before the next attempt, then advance the decay. Call
@@ -426,8 +511,22 @@ impl DiscoveryScheduler {
         let (delay_ms, phase, base_ms, attempt, peers) = {
             let mut st = self.state.write();
             let ceiling = compute_ceiling_ms(&self.config, &st.inputs);
+            // A coalesced event is applied the moment its window has ended;
+            // until then the wait below is capped so it ends exactly there.
+            let mut cap_ms = u64::MAX;
+            if let (Some(kind), Some(last)) = (st.pending_reset, st.last_reset_at_ms) {
+                let window = coalesce_window_ms(&self.config, st.unproven_resets, ceiling);
+                let due = last.saturating_add(window);
+                if now >= due {
+                    self.apply_reset(&mut st, now, kind);
+                } else {
+                    cap_ms = due - now;
+                }
+            }
             let base = st.interval_ms.min(ceiling).max(self.config.floor_ms);
-            let delay = (((base as f64) * (0.5 + 0.5 * unit)).round() as u64).max(1);
+            let delay = (((base as f64) * (0.5 + 0.5 * unit)).round() as u64)
+                .min(cap_ms)
+                .max(1);
             let phase = if st.attempts == 0 {
                 Phase::Aggressive
             } else {
@@ -470,6 +569,16 @@ impl DiscoveryScheduler {
             resets: st.resets,
             last_attempt_at_ms: st.last_attempt_at_ms,
             last_event: st.last_event,
+            coalesced: st.coalesced,
+            reset_window_ms: if st.last_reset_at_ms.is_some() {
+                coalesce_window_ms(
+                    &self.config,
+                    st.unproven_resets,
+                    compute_ceiling_ms(&self.config, &st.inputs),
+                )
+            } else {
+                0
+            },
         }
     }
 }
@@ -853,15 +962,97 @@ mod tests {
 
     #[test]
     fn repeated_resets_keep_restarting_from_floor() {
-        let (s, _) = sched(TransportClass::Internet);
+        let (s, clock) = sched(TransportClass::Internet);
         for round in 1..=5u64 {
             for _ in 0..10 {
                 s.next_delay();
             }
+            // Spaced past the (widening) coalescing window, but not proven.
+            clock.advance(s.ceiling_ms());
             assert!(s.on_event(NetworkEvent::CellularChanged));
             assert_eq!(s.snapshot().interval_ms, 500);
             assert_eq!(s.snapshot().resets, round);
         }
+    }
+
+    #[test]
+    fn event_storm_is_bounded_by_coalescing() {
+        let (s, clock) = sched(TransportClass::Internet);
+        let mut accepted = 0u64;
+        // 10_000 flap events, one per millisecond, over ten seconds.
+        for _ in 0..10_000 {
+            if s.on_event(NetworkEvent::WifiChanged) {
+                accepted += 1;
+            }
+            clock.advance(1);
+        }
+        // Windows 500, 1000, 2000, 4000, 8000 ms: at most five resets fit.
+        assert!((1..=6).contains(&accepted), "storm accepted {}", accepted);
+        let snap = s.snapshot();
+        assert_eq!(snap.resets, accepted);
+        assert_eq!(snap.coalesced, 10_000 - accepted);
+    }
+
+    #[test]
+    fn window_widens_with_unproven_resets_up_to_ceiling() {
+        let (s, clock) = sched(TransportClass::Internet);
+        let mut prev = 0;
+        for _ in 0..9 {
+            assert!(s.on_event(NetworkEvent::WifiChanged));
+            let w = s.snapshot().reset_window_ms;
+            assert!(w >= prev, "window must not shrink: {} < {}", w, prev);
+            assert!(w <= s.ceiling_ms());
+            prev = w;
+            clock.advance(w);
+        }
+        assert_eq!(prev, s.ceiling_ms());
+    }
+
+    #[test]
+    fn real_change_after_quiet_period_resets_immediately() {
+        let (s, clock) = sched(TransportClass::Internet);
+        for _ in 0..8 {
+            s.on_event(NetworkEvent::WifiChanged);
+            clock.advance(10);
+        }
+        assert!(s.snapshot().coalesced > 0);
+        clock.advance(s.ceiling_ms());
+        assert!(s.on_event(NetworkEvent::CellularChanged));
+        assert_eq!(s.snapshot().interval_ms, 500);
+        // History was forgiven: the next window is the floor again.
+        assert_eq!(s.snapshot().reset_window_ms, 500);
+    }
+
+    #[test]
+    fn record_success_restores_immediate_resets() {
+        let (s, clock) = sched(TransportClass::Internet);
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+        clock.advance(600);
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+        clock.advance(600);
+        // Window is now 1000 ms: an event 600 ms after the last reset is damped.
+        assert!(!s.on_event(NetworkEvent::WifiChanged));
+        s.record_success();
+        // Same instant, but proven history gone: window is the floor again.
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+    }
+
+    #[test]
+    fn coalesced_event_is_applied_when_window_ends_not_lost() {
+        let (s, clock) = sched(TransportClass::Internet);
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+        clock.advance(600);
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+        // Window is now 1000 ms from t=600. Inside it: damped, remembered.
+        clock.advance(100);
+        assert!(!s.on_event(NetworkEvent::CellularChanged));
+        // The wait is capped to end at the window boundary (900 ms away).
+        assert!(s.next_delay().as_millis() as u64 <= 900);
+        clock.advance(900);
+        let resets = s.snapshot().resets;
+        s.next_delay();
+        assert_eq!(s.snapshot().resets, resets + 1);
+        assert_eq!(s.snapshot().last_event, Some("CellularChanged"));
     }
 
     #[test]
