@@ -753,6 +753,13 @@ impl ContactManager {
         if let Some(contact) = self.get(peer_id.clone())? {
             let bundle_key = contact_bundle_key(&contact.public_key);
             let _ = self.backend.remove(&bundle_key);
+            // `get` resolves identity-id and libp2p spellings to the stored
+            // row; the row lives under the contact's own peer_id, so removing
+            // only the caller's spelling would leave it behind (#209 forward-port).
+            let stored_key = contact_key(&contact.peer_id);
+            self.backend
+                .remove(&stored_key)
+                .map_err(|_| IronCoreError::StorageError)?;
         }
         let key = contact_key(&peer_id);
         self.backend
@@ -1680,6 +1687,26 @@ mod tests {
         // contact identity, so the stored peer_id is the lowercased public
         // key, not the arbitrary add-time label.
         assert_eq!(contact.peer_id, public_key);
+    }
+
+    #[test]
+    fn remove_by_identity_id_or_libp2p_id_deletes_the_stored_row() {
+        let mgr = make_manager();
+        let (peer_a, key_a) = crate::test_support::self_certifying_keypair(b"scm-idv2-rm-a");
+        let (_peer_b, key_b) = crate::test_support::self_certifying_keypair(b"scm-idv2-rm-b");
+        mgr.add(Contact::new(peer_a.clone(), key_a.clone()))
+            .unwrap();
+        mgr.add(Contact::new(key_b.clone(), key_b.clone())).unwrap();
+
+        // libp2p spelling resolves to the hex-keyed row and must delete it.
+        mgr.remove(peer_a.clone()).unwrap();
+        assert!(mgr.get(key_a.clone()).unwrap().is_none());
+        assert!(mgr.get(peer_a).unwrap().is_none());
+
+        // identity_id spelling likewise.
+        let id_b = crate::identity::identity_id_from_public_key_hex(&key_b).unwrap();
+        mgr.remove(id_b).unwrap();
+        assert!(mgr.get(key_b).unwrap().is_none());
     }
 
     #[test]

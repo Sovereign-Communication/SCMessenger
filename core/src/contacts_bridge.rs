@@ -153,7 +153,7 @@ impl ContactManager {
         Ok(())
     }
 
-    /// Get a contact by peer ID
+    /// Get a contact by peer ID, public key, or identity ID
     // UNIFICATION verbose logging for nickname load
     pub fn get(&self, peer_id: String) -> Result<Option<Contact>, crate::IronCoreError> {
         let db = self.db.lock();
@@ -171,17 +171,50 @@ impl ContactManager {
                 local_nickname = ?contact.local_nickname,
                 "UNIFICATION loaded contact nickname"
             );
-            Ok(Some(contact))
-        } else {
-            Ok(None)
+            return Ok(Some(contact));
         }
+        // Fallback: the row may be filed under a different spelling of the
+        // same identity (libp2p peer id vs public-key hex vs identity id).
+        Ok(Self::scan_for_identifier(&db, &peer_id)?.map(|(_, contact)| contact))
     }
 
-    /// Remove a contact
+    /// Does `contact` answer to `identifier` (peer id or public key, case
+    /// insensitive, or the identity id derived from its public key)?
+    fn contact_answers_to(contact: &Contact, identifier: &str) -> bool {
+        if identifier.is_empty() {
+            return false;
+        }
+        contact.peer_id.eq_ignore_ascii_case(identifier)
+            || contact.public_key.eq_ignore_ascii_case(identifier)
+            || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
+                .is_some_and(|id| id.eq_ignore_ascii_case(identifier))
+    }
+
+    fn scan_for_identifier(
+        db: &Db,
+        identifier: &str,
+    ) -> Result<Option<(sled::IVec, Contact)>, crate::IronCoreError> {
+        let trimmed = identifier.trim();
+        for item in db.iter() {
+            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if Self::contact_answers_to(&contact, trimmed) {
+                    return Ok(Some((key, contact)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Remove a contact by peer ID, public key, or identity ID
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         db.remove(peer_id.as_bytes())
             .map_err(|_| crate::IronCoreError::StorageError)?;
+        if let Some((key, _)) = Self::scan_for_identifier(&db, &peer_id)? {
+            db.remove(key)
+                .map_err(|_| crate::IronCoreError::StorageError)?;
+        }
         Ok(())
     }
 
@@ -488,6 +521,31 @@ mod tests {
 
         assert_eq!(contact.display_name(), "Alice");
         assert_eq!(contact.peer_id, "12D3KooTest");
+    }
+
+    #[test]
+    fn contact_manager_resolves_and_removes_by_any_identity_spelling(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_id, key_hex) = self_certifying_keypair(b"scm-idv2-bridge");
+        let identity_id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
+        manager
+            .add(Contact::new(peer_id.clone(), key_hex.clone()).with_nickname("A".to_string()))?;
+
+        assert!(manager.get(peer_id.clone())?.is_some());
+        assert!(manager.get(key_hex.clone())?.is_some());
+        assert!(manager.get(key_hex.to_uppercase())?.is_some());
+        assert!(manager.get(identity_id.clone())?.is_some());
+        assert!(manager.get("unrelated".to_string())?.is_none());
+        assert!(manager.get(String::new())?.is_none());
+
+        manager.remove(identity_id)?;
+        assert!(manager.get(peer_id)?.is_none());
+        assert!(manager.get(key_hex)?.is_none());
+        Ok(())
     }
 
     #[test]
