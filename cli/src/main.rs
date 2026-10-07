@@ -2078,10 +2078,12 @@ async fn cmd_contact(action: ContactAction) -> Result<()> {
 
 /// One-time #469 migration. Any legacy `bootstrap_nodes` found in the config
 /// are imported into the ledger as unproven seed entries (so existing
-/// deployments keep their connectivity), then the key is dropped by saving the
-/// drained config. If the save fails the in-memory list is already drained but
-/// the file keeps the key, so the next start retries; the ledger import is
-/// idempotent (duplicates collapse).
+/// deployments keep their connectivity). Addresses the ledger refuses are
+/// logged and kept in `legacy_bootstrap_nodes_rejected`; the original key is
+/// dropped only by a successful save of the config holding both lists. If the
+/// save fails the in-memory list is already drained but the file keeps the key,
+/// so the next start retries; the ledger import is idempotent (duplicates
+/// collapse) and the rejected list is deduplicated.
 fn migrate_legacy_bootstrap_config(
     config: &mut config::Config,
     ledger_manager: &scmessenger_core::store::LedgerManager,
@@ -2091,17 +2093,19 @@ fn migrate_legacy_bootstrap_config(
     }
     let outcome = bootstrap::migrate_legacy_bootstrap_nodes(
         &mut config.legacy_bootstrap_nodes,
+        &mut config.legacy_bootstrap_nodes_rejected,
         ledger_manager,
     );
     tracing::info!(
-        "[MIGRATION] legacy config bootstrap_nodes: found={} imported_as_unproven_seeds={}",
+        "[MIGRATION] legacy config bootstrap_nodes: found={} imported_as_unproven_seeds={} rejected_and_recorded={}",
         outcome.found,
-        outcome.imported
+        outcome.imported,
+        outcome.rejected
     );
-    if outcome.imported < outcome.found {
+    if outcome.rejected > 0 {
         tracing::warn!(
-            "[MIGRATION] {} legacy address(es) were not imported (duplicate, non-routable, or DNS form)",
-            outcome.found - outcome.imported
+            "[MIGRATION] {} legacy address(es) were not imported; preserved in config key legacy_bootstrap_nodes_rejected",
+            outcome.rejected
         );
     }
     if let Err(e) = config.save() {

@@ -1,9 +1,11 @@
 // Bootstrap Recovery & Fallback System
 //
-// Resilient connectivity to ledger-derived candidates (#469): there are no
-// static, environment-supplied, or compiled-in seed addresses. Candidates are
-// added at runtime from the peer ledger (invite-seeded) via
-// `add_bootstrap_node`.
+// Resilient connectivity for dial candidates (#469): there are no static,
+// environment-supplied, or compiled-in seed addresses, so the manager starts
+// empty. Candidates enter only through `add_bootstrap_node`, which today is
+// called by this module's own fallback discovery (and tests). The peer ledger
+// does NOT populate this manager; ledger-derived candidates are dialed through
+// the swarm path (`cli/src/bootstrap.rs::ledger_candidate_addrs`).
 //
 // - Exponential backoff on connection failures
 // - Local network peer discovery as fallback
@@ -100,8 +102,9 @@ pub struct BootstrapManager {
 impl BootstrapManager {
     /// Create a new bootstrap manager with the given config
     pub fn new(config: BootstrapConfig) -> Self {
-        // No static seeds: the candidate set starts empty and is filled from
-        // the ledger through `add_bootstrap_node`.
+        // No static seeds: the candidate set starts empty. Nothing pre-fills
+        // it; nodes are added later through `add_bootstrap_node` (fallback
+        // discovery). The peer ledger does not feed this manager.
         let relay_discovery = RelayDiscovery::new(Vec::new());
         let relay_fallback = RelayFallback::new(config.max_retries_per_node);
         let circuit_breaker = CircuitBreakerManager::new(config.circuit_breaker_config.clone());

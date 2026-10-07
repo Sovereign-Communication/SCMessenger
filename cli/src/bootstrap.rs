@@ -7,15 +7,22 @@
 //
 // The single remaining legacy read is the one-time migration of a pre-#469
 // config's `bootstrap_nodes` key into the ledger as UNPROVEN seed entries, so
-// existing deployments keep their connectivity. After the import the key is
-// dropped from the config file.
+// existing deployments keep their connectivity. Addresses the ledger refuses
+// are logged and preserved in `legacy_bootstrap_nodes_rejected`; only then is
+// the original key dropped from the config file.
 
 use crate::ledger;
-use scmessenger_core::store::{LedgerManager, SeedLedgerEntry, MAX_SEED_LEDGER_ENTRIES};
+use scmessenger_core::store::{
+    LedgerManager, SeedLedgerEntry, MAX_LEDGER_ENTRIES, MAX_SEED_LEDGER_ENTRIES,
+};
 use scmessenger_core::{TOPIC_LOBBY, TOPIC_MESH};
 
 /// Upper bound on ledger-derived dial candidates handed to the swarm at boot.
 const LEDGER_CANDIDATE_LIMIT: u32 = 64;
+
+/// Hard cap on legacy entries migrated in one pass: the ledger's own retention
+/// limit. Anything beyond it is recorded as rejected, never silently dropped.
+pub const LEGACY_MIGRATION_MAX_ENTRIES: usize = MAX_LEDGER_ENTRIES;
 
 /// Outcome of the one-time legacy config migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -24,6 +31,21 @@ pub struct LegacyMigrationOutcome {
     pub found: usize,
     /// Addresses newly added to the ledger as unproven seed entries.
     pub imported: usize,
+    /// Addresses refused by the ledger (or over the migration cap) and
+    /// recorded in the rejected list instead of being imported.
+    pub rejected: usize,
+}
+
+/// Record a rejected legacy address (once) and log why.
+fn record_rejected(rejected: &mut Vec<String>, addr: &str, reason: &str) {
+    tracing::warn!(
+        "[MIGRATION] legacy bootstrap address rejected: {} ({})",
+        addr,
+        reason
+    );
+    if !rejected.iter().any(|r| r == addr) {
+        rejected.push(addr.to_string());
+    }
 }
 
 /// Import legacy config-supplied bootstrap addresses into the ledger as
@@ -33,24 +55,65 @@ pub struct LegacyMigrationOutcome {
 /// forms are rejected, peer-id components are stripped, duplicates collapse),
 /// so a hostile or stale config cannot do more than an invite could. Entries
 /// are fed in batches of `MAX_SEED_LEDGER_ENTRIES` because the import caps each
-/// call. The caller persists the config afterwards, which drops the key.
+/// call, and at most `LEGACY_MIGRATION_MAX_ENTRIES` are considered in total.
+///
+/// Nothing is lost: every address that is neither imported nor already known
+/// (a duplicate) is appended to `rejected` with a logged reason, so the caller
+/// can persist both lists and only then drop the original key.
 pub fn migrate_legacy_bootstrap_nodes(
     legacy: &mut Vec<String>,
+    rejected: &mut Vec<String>,
     ledger_manager: &LedgerManager,
 ) -> LegacyMigrationOutcome {
     let addrs = std::mem::take(legacy);
     let found = addrs.len();
     let mut imported = 0usize;
-    for batch in addrs.chunks(MAX_SEED_LEDGER_ENTRIES.max(1)) {
+    let mut newly_rejected = 0usize;
+
+    let mut candidates: Vec<String> = Vec::with_capacity(found.min(LEGACY_MIGRATION_MAX_ENTRIES));
+    for addr in &addrs {
+        let trimmed = addr.trim();
+        if trimmed.is_empty() {
+            record_rejected(rejected, addr, "empty address");
+            newly_rejected += 1;
+        } else if candidates.len() >= LEGACY_MIGRATION_MAX_ENTRIES {
+            record_rejected(
+                rejected,
+                trimmed,
+                "legacy migration cap reached (ledger retention limit)",
+            );
+            newly_rejected += 1;
+        } else {
+            candidates.push(trimmed.to_string());
+        }
+    }
+
+    for batch in candidates.chunks(MAX_SEED_LEDGER_ENTRIES.max(1)) {
         let entries: Vec<SeedLedgerEntry> = batch
             .iter()
             .map(|a| SeedLedgerEntry {
-                multiaddr: a.trim().to_string(),
+                multiaddr: a.clone(),
             })
             .collect();
         imported += ledger_manager.import_seed_entries(entries) as usize;
+        // Known afterwards means imported or an existing duplicate; unknown
+        // means the ledger refused it.
+        for addr in batch {
+            if ledger_manager.entry_for_multiaddr(addr).is_none() {
+                record_rejected(
+                    rejected,
+                    addr,
+                    "refused by ledger: non-routable, DNS form, or no transport component",
+                );
+                newly_rejected += 1;
+            }
+        }
     }
-    LegacyMigrationOutcome { found, imported }
+    LegacyMigrationOutcome {
+        found,
+        imported,
+        rejected: newly_rejected,
+    }
 }
 
 /// Dial candidates derived from the peer ledger only: proven peers first
@@ -135,9 +198,13 @@ mod tests {
             // DNS forms are rejected by seed import.
             "/dns4/relay.example/tcp/9001".to_string(),
         ];
-        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &lm);
+        let mut rej = Vec::new();
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &mut rej, &lm);
         assert_eq!(out.found, 4);
         assert_eq!(out.imported, 2);
+        // The DNS form is not lost: it is recorded as rejected.
+        assert_eq!(out.rejected, 1);
+        assert_eq!(rej, vec!["/dns4/relay.example/tcp/9001".to_string()]);
         assert!(legacy.is_empty(), "legacy list must be drained");
 
         // Unproven: never in the proven/dialable tier, present as seeds.
@@ -160,20 +227,54 @@ mod tests {
                 .collect()
         };
         let mut legacy = make();
-        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &lm);
+        let mut rej = Vec::new();
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &mut rej, &lm);
         assert_eq!(out.found, total);
         assert_eq!(out.imported, total);
 
         // Second run over the same addresses adds nothing new.
         let mut again = make();
-        let out2 = migrate_legacy_bootstrap_nodes(&mut again, &lm);
+        let out2 = migrate_legacy_bootstrap_nodes(&mut again, &mut rej, &lm);
         assert_eq!(out2.imported, 0);
 
         // Empty legacy list is a no-op.
         let mut none: Vec<String> = Vec::new();
         assert_eq!(
-            migrate_legacy_bootstrap_nodes(&mut none, &lm),
+            migrate_legacy_bootstrap_nodes(&mut none, &mut rej, &lm),
             LegacyMigrationOutcome::default()
         );
+    }
+
+    #[test]
+    fn test_migration_caps_total_and_records_overflow_as_rejected() {
+        let lm = LedgerManager::ephemeral();
+        let extra = 5usize;
+        let total = LEGACY_MIGRATION_MAX_ENTRIES + extra;
+        let mut legacy: Vec<String> = (0..total)
+            .map(|i| format!("/ip4/10.3.{}.{}/tcp/9001", i / 200, i % 200 + 1))
+            .collect();
+        let mut rej = Vec::new();
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &mut rej, &lm);
+        assert_eq!(out.found, total);
+        assert_eq!(out.imported, LEGACY_MIGRATION_MAX_ENTRIES);
+        assert_eq!(out.rejected, extra);
+        assert_eq!(rej.len(), extra);
+        assert!(legacy.is_empty());
+    }
+
+    #[test]
+    fn test_migration_records_empty_and_duplicate_rejections_once() {
+        let lm = LedgerManager::ephemeral();
+        let mut legacy = vec![
+            "   ".to_string(),
+            "/dns4/a.example/tcp/1".to_string(),
+            "/dns4/a.example/tcp/1".to_string(),
+        ];
+        let mut rej = Vec::new();
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &mut rej, &lm);
+        assert_eq!(out.imported, 0);
+        assert_eq!(out.rejected, 3);
+        // Deduplicated in the persisted list.
+        assert_eq!(rej.len(), 2);
     }
 }

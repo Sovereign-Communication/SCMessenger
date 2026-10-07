@@ -59,6 +59,13 @@ pub struct Config {
     )]
     pub legacy_bootstrap_nodes: Vec<String>,
 
+    /// LEGACY, read-only record of `bootstrap_nodes` addresses the one-time
+    /// migration could not import (non-routable, DNS form, over the migration
+    /// cap, empty). Kept so no operator-supplied address is silently lost.
+    /// Never written while empty, never settable, never dialed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_bootstrap_nodes_rejected: Vec<String>,
+
     /// Wrap outbound chat messages in the scm.message.identity.v1 envelope so
     /// peers auto-learn our nickname + route hints (parity with Android/iOS).
     #[serde(default = "default_true")]
@@ -101,6 +108,7 @@ impl Default for Config {
             storage_path: None,
             network: NetworkConfig::default(),
             legacy_bootstrap_nodes: Vec::new(),
+            legacy_bootstrap_nodes_rejected: Vec::new(),
             identity_envelope: true,
         }
     }
