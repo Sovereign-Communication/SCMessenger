@@ -1,9 +1,11 @@
 // Bootstrap Recovery & Fallback System
 //
-// Resilient bootstrap connectivity with:
-// - Multi-node bootstrap with priority ordering
+// Resilient connectivity to ledger-derived candidates (#469): there are no
+// static, environment-supplied, or compiled-in seed addresses. Candidates are
+// added at runtime from the peer ledger (invite-seeded) via
+// `add_bootstrap_node`.
+//
 // - Exponential backoff on connection failures
-// - Environment variable override for bootstrap nodes
 // - Local network peer discovery as fallback
 // - Dynamic relay discovery from connected peers
 // - WebSocket fallback for cellular networks (P0_NETWORK_001)
@@ -18,14 +20,6 @@ use libp2p::{Multiaddr, PeerId};
 use std::collections::VecDeque;
 use tracing::{debug, info, warn};
 use web_time::{Duration, SystemTime};
-
-/// Default bootstrap node multiaddrs (core-level fallback)
-///
-/// P0_NETWORK_001: Added WebSocket endpoints on standard ports (80/443)
-/// for cellular networks that block non-standard ports.
-/// P0_NETWORK_002: Added enhanced error diagnostics for connectivity failures
-/// and extended WebSocket fallback endpoints.
-pub const CORE_BOOTSTRAP_NODES: &[&str] = &[];
 
 /// Configuration for bootstrap recovery
 #[derive(Debug, Clone)]
@@ -44,10 +38,6 @@ pub struct BootstrapConfig {
     pub connect_timeout: Duration,
     /// Whether to enable local network discovery fallback
     pub enable_local_discovery: bool,
-    /// Whether to enable DNS-based bootstrap discovery
-    pub enable_dns_discovery: bool,
-    /// Whether to enable WebSocket fallback on standard ports
-    pub enable_websocket_fallback: bool,
     /// Circuit breaker configuration for relay failures
     pub circuit_breaker_config: CircuitBreakerConfig,
 }
@@ -62,8 +52,6 @@ impl Default for BootstrapConfig {
             max_retries_per_node: 5,
             connect_timeout: Duration::from_secs(10),
             enable_local_discovery: true,
-            enable_dns_discovery: true,
-            enable_websocket_fallback: true,
             circuit_breaker_config: CircuitBreakerConfig::default(),
         }
     }
@@ -112,30 +100,12 @@ pub struct BootstrapManager {
 impl BootstrapManager {
     /// Create a new bootstrap manager with the given config
     pub fn new(config: BootstrapConfig) -> Self {
-        let default_addrs: Vec<Multiaddr> = CORE_BOOTSTRAP_NODES
-            .iter()
-            .filter_map(|s| s.parse().ok())
-            .collect();
-
-        let env_addrs = resolve_env_bootstrap_nodes();
-
-        let all_addrs: Vec<Multiaddr> = env_addrs.into_iter().chain(default_addrs).collect();
-
-        let relay_discovery = RelayDiscovery::new(all_addrs.clone());
+        // No static seeds: the candidate set starts empty and is filled from
+        // the ledger through `add_bootstrap_node`.
+        let relay_discovery = RelayDiscovery::new(Vec::new());
         let relay_fallback = RelayFallback::new(config.max_retries_per_node);
         let circuit_breaker = CircuitBreakerManager::new(config.circuit_breaker_config.clone());
-
-        let nodes: VecDeque<BootstrapNode> = all_addrs
-            .into_iter()
-            .map(|addr| BootstrapNode {
-                addr,
-                peer_id: None,
-                attempts: 0,
-                last_attempt: None,
-                last_failure: None,
-                connected: false,
-            })
-            .collect();
+        let nodes: VecDeque<BootstrapNode> = VecDeque::new();
 
         Self {
             config,
@@ -379,31 +349,12 @@ impl BootstrapManager {
             .find(|n| !n.connected && self.relay_fallback.should_retry(&n.addr))
     }
 
-    /// Discover fallback bootstrap nodes via DNS, WebSocket, and local network
+    /// Discover fallback candidates from the local network.
     ///
-    /// P0_NETWORK_001: Added WebSocket fallback endpoints on standard
-    /// HTTP ports (80/443) to bypass carrier-level port blocking.
-    /// P0_NETWORK_002: Added alternative bootstrap source discovery with
-    /// hardcoded backup relay addresses and community-sourced relay list mechanism.
+    /// Static DNS / WebSocket / hardcoded sources were removed (#469); the only
+    /// remaining source is local discovery, which the swarm's mDNS layer drives.
     fn discover_fallback_nodes(&self) -> Vec<Multiaddr> {
         let mut discovered = Vec::new();
-
-        // DNS-based discovery
-        if self.config.enable_dns_discovery {
-            if let Ok(addrs) = discover_dns_bootstrap() {
-                info!("DNS discovery found {} fallback nodes", addrs.len());
-                discovered.extend(addrs);
-            }
-        }
-
-        // P0_NETWORK_001: WebSocket fallback on standard ports
-        if self.config.enable_websocket_fallback {
-            let ws_addrs = discover_websocket_bootstrap();
-            if !ws_addrs.is_empty() {
-                info!("WebSocket fallback found {} nodes", ws_addrs.len());
-                discovered.extend(ws_addrs);
-            }
-        }
 
         // Local network mDNS discovery
         if self.config.enable_local_discovery {
@@ -411,13 +362,6 @@ impl BootstrapManager {
                 info!("Local discovery found {} fallback nodes", addrs.len());
                 discovered.extend(addrs);
             }
-        }
-
-        // P0_NETWORK_002: Hardcoded backup relay addresses
-        let backup_addrs = discover_hardcoded_backup_relays();
-        if !backup_addrs.is_empty() {
-            info!("Hardcoded backup relays found {} nodes", backup_addrs.len());
-            discovered.extend(backup_addrs);
         }
 
         discovered
@@ -495,26 +439,6 @@ impl BootstrapManager {
     }
 }
 
-/// Resolve bootstrap nodes from SC_BOOTSTRAP_NODES environment variable
-fn resolve_env_bootstrap_nodes() -> Vec<Multiaddr> {
-    if let Ok(nodes_str) = std::env::var("SC_BOOTSTRAP_NODES") {
-        if !nodes_str.trim().is_empty() {
-            return nodes_str
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-        }
-    }
-    Vec::new()
-}
-
-/// DNS-based bootstrap node discovery
-/// Attempts to resolve bootstrap nodes via SRV records and A records
-fn discover_dns_bootstrap() -> Result<Vec<Multiaddr>, String> {
-    // DNS discovery is disabled in sovereign mode since no centralized domain exists.
-    Ok(Vec::new())
-}
-
 /// Local network peer discovery
 /// Uses mDNS to find SCMessenger peers on the local network
 fn discover_local_peers() -> Result<Vec<Multiaddr>, String> {
@@ -523,24 +447,6 @@ fn discover_local_peers() -> Result<Vec<Multiaddr>, String> {
     // This function provides addresses that the swarm's mDNS layer
     // would discover — actual discovery happens at the swarm level.
     Ok(Vec::new())
-}
-
-/// P0_NETWORK_001: WebSocket bootstrap node discovery
-///
-/// Generates WebSocket multiaddrs on standard HTTP ports (80/443) for
-/// cellular networks that block non-standard ports like 9001/9010.
-/// These addresses use /ws suffix to indicate WebSocket transport.
-/// P0_NETWORK_002: Extended with additional backup WebSocket endpoints.
-fn discover_websocket_bootstrap() -> Vec<Multiaddr> {
-    Vec::new()
-}
-
-/// P0_NETWORK_002: Hardcoded backup relay addresses
-///
-/// Provides fallback relay addresses when all other discovery methods fail.
-/// These addresses are hardcoded as a last-resort fallback mechanism.
-fn discover_hardcoded_backup_relays() -> Vec<Multiaddr> {
-    Vec::new()
 }
 
 #[cfg(test)]
@@ -554,16 +460,18 @@ mod tests {
         assert_eq!(config.initial_backoff, Duration::from_secs(2));
         assert_eq!(config.max_backoff, Duration::from_secs(300));
         assert!(config.enable_local_discovery);
-        assert!(config.enable_dns_discovery);
-        assert!(config.enable_websocket_fallback);
+    }
+
+    #[test]
+    fn test_manager_ignores_env_seed() {
+        // SC_BOOTSTRAP_NODES is no longer read; a fresh manager is always empty.
+        assert_eq!(BootstrapManager::with_defaults().total_nodes(), 0);
     }
 
     #[test]
     fn test_bootstrap_manager_creation() {
-        // Hermetic: with_defaults()'s total_nodes() depends on the
-        // SC_BOOTSTRAP_NODES env var (empty by design in sovereign mode with
-        // no shell override), so seed a node explicitly rather than relying
-        // on environment state.
+        // No static seeds: a fresh manager is empty until a node is added.
+        assert_eq!(BootstrapManager::with_defaults().total_nodes(), 0);
         let mut mgr = BootstrapManager::with_defaults();
         let addr: Multiaddr = "/ip4/10.0.0.1/tcp/9001".parse().unwrap();
         mgr.add_bootstrap_node(addr);
@@ -611,36 +519,9 @@ mod tests {
     }
 
     #[test]
-    fn test_env_bootstrap_override() {
-        // This test verifies the env var path exists — actual env var
-        // manipulation is not thread-safe in tests.
-        let addrs = resolve_env_bootstrap_nodes();
-        // Without env var set, returns empty
-        assert!(addrs.is_empty());
-    }
-
-    #[test]
-    fn test_dns_discovery() {
-        let addrs = discover_dns_bootstrap().unwrap();
-        assert!(
-            addrs.is_empty(),
-            "DNS bootstrap discovery should be empty in sovereign mode"
-        );
-    }
-
-    #[test]
     fn test_local_discovery() {
         let addrs = discover_local_peers().unwrap();
         // Local discovery relies on libp2p mDNS, returns empty here
         assert!(addrs.is_empty());
-    }
-
-    #[test]
-    fn test_websocket_discovery() {
-        let addrs = discover_websocket_bootstrap();
-        assert!(
-            addrs.is_empty(),
-            "WebSocket fallback should be empty when no hardcoded IPs exist"
-        );
     }
 }

@@ -6,7 +6,6 @@
 // - Windows: %APPDATA%\scmessenger\config.toml
 
 use anyhow::{Context, Result};
-use scmessenger_core::transport::addr_filter::strip_peer_id;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -48,9 +47,17 @@ pub struct Config {
     #[serde(default)]
     pub network: NetworkConfig,
 
-    /// User-configured bootstrap nodes (community ledger)
-    #[serde(default)]
-    pub bootstrap_nodes: Vec<String>,
+    /// LEGACY, read-only. Pre-#469 configs stored static bootstrap addresses
+    /// under `bootstrap_nodes`. They are read once at startup, imported into
+    /// the peer ledger as unproven seed entries
+    /// (`bootstrap::migrate_legacy_bootstrap_nodes`), and the key is then
+    /// dropped from the file. Never written while empty, never settable.
+    #[serde(
+        default,
+        rename = "bootstrap_nodes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub legacy_bootstrap_nodes: Vec<String>,
 
     /// Wrap outbound chat messages in the scm.message.identity.v1 envelope so
     /// peers auto-learn our nickname + route hints (parity with Android/iOS).
@@ -93,7 +100,7 @@ impl Default for Config {
             enable_dht: true,
             storage_path: None,
             network: NetworkConfig::default(),
-            bootstrap_nodes: Vec::new(), // No hardcoded bootstrap nodes (community ledger)
+            legacy_bootstrap_nodes: Vec::new(),
             identity_envelope: true,
         }
     }
@@ -240,16 +247,6 @@ impl Config {
             "enable_relay" => {
                 self.network.enable_relay = value.parse().context("Invalid boolean value")?;
             }
-            "bootstrap_node_add" => {
-                if !value.is_empty() {
-                    self.bootstrap_nodes.push(value.to_string());
-                }
-            }
-            "bootstrap_node_remove" => {
-                if !value.is_empty() {
-                    self.bootstrap_nodes.retain(|n| n != value);
-                }
-            }
             "identity_envelope" => {
                 self.identity_envelope = value.parse().context("Invalid boolean value")?;
             }
@@ -273,7 +270,6 @@ impl Config {
             "connection_timeout" => Some(self.network.connection_timeout.to_string()),
             "enable_nat_traversal" => Some(self.network.enable_nat_traversal.to_string()),
             "enable_relay" => Some(self.network.enable_relay.to_string()),
-            "bootstrap_nodes" => Some(self.bootstrap_nodes.join(",")),
             "identity_envelope" => Some(self.identity_envelope.to_string()),
             _ => None,
         }
@@ -316,47 +312,10 @@ impl Config {
                 self.network.enable_relay.to_string(),
             ),
             (
-                "bootstrap_nodes".to_string(),
-                self.bootstrap_nodes.join(","),
-            ),
-            (
                 "identity_envelope".to_string(),
                 self.identity_envelope.to_string(),
             ),
         ]
-    }
-
-    /// Add a bootstrap node to the config
-    pub fn add_bootstrap_node(&mut self, multiaddr: String) -> Result<()> {
-        // Check for duplicates by IP:Port only (strip PeerID)
-        let stripped = strip_peer_id(&multiaddr);
-        if self
-            .bootstrap_nodes
-            .iter()
-            .any(|n| strip_peer_id(n) == stripped)
-        {
-            anyhow::bail!("Bootstrap node already exists");
-        }
-        self.bootstrap_nodes.push(multiaddr);
-        self.save()?;
-        Ok(())
-    }
-
-    /// Remove a bootstrap node from the config
-    pub fn remove_bootstrap_node(&mut self, multiaddr: &str) -> Result<()> {
-        let stripped = strip_peer_id(multiaddr);
-        let removed_count = self
-            .bootstrap_nodes
-            .iter()
-            .filter(|n| strip_peer_id(n) == stripped)
-            .count();
-        if removed_count == 0 {
-            anyhow::bail!("Bootstrap node not found");
-        }
-        self.bootstrap_nodes
-            .retain(|n| strip_peer_id(n) != stripped);
-        self.save()?;
-        Ok(())
     }
 }
 
@@ -427,43 +386,28 @@ mod tests {
     }
 
     #[test]
-    fn test_add_bootstrap_node_circuit_relay_dedup() {
-        let _env_guard = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        let config_file = tmp.path().join("config.json");
-        std::env::set_var("SCMESSENGER_CONFIG", &config_file);
-
-        let mut config = Config::default();
-        let direct =
-            "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-        // Two circuits through the same IP:port but DIFFERENT relay peers:
-        // the canonical stripper keeps the relay's own peer id (it is part
-        // of the dialable address), so these must stay distinct. The naive
-        // first-/p2p/-truncate collapses all three onto /ip4/1.2.3.4/tcp/443
-        // and wrongly rejects two of them.
-        let circuit_relay_1 = "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN/p2p-circuit/p2p/12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay";
-        let circuit_relay_2 = "/ip4/1.2.3.4/tcp/443/p2p/12D3KooWSHj3RRbBjD15g6wekV8y3mm57Pobmps2g2WJm6F67Lay/p2p-circuit/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-
-        // Direct relay address is added successfully
-        assert!(config.add_bootstrap_node(direct.to_string()).is_ok());
-
-        // Circuit through relay 1 does not collapse onto the direct address
+    fn test_legacy_bootstrap_nodes_key_loads_but_is_not_settable() {
+        // A pre-#469 config.json still parses so the one-time migration can
+        // read it; the key can no longer be set or listed.
+        let json = r#"{"listen_port": 9000, "bootstrap_nodes": ["/ip4/192.0.2.1/tcp/9001"]}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.legacy_bootstrap_nodes,
+            vec!["/ip4/192.0.2.1/tcp/9001"]
+        );
+        assert!(config.get("bootstrap_nodes").is_none());
+        assert!(config.list().iter().all(|(k, _)| k != "bootstrap_nodes"));
+        let mut config = config;
         assert!(config
-            .add_bootstrap_node(circuit_relay_1.to_string())
-            .is_ok());
-
-        // Circuit through a different relay peer at the same IP:port is a
-        // distinct address and must also be added
-        assert!(config
-            .add_bootstrap_node(circuit_relay_2.to_string())
-            .is_ok());
-
-        // Exact duplicates are still rejected
-        assert!(config
-            .add_bootstrap_node(circuit_relay_1.to_string())
+            .set("bootstrap_node_add", "/ip4/192.0.2.2/tcp/9001")
             .is_err());
+    }
 
-        std::env::remove_var("SCMESSENGER_CONFIG");
+    #[test]
+    fn test_empty_legacy_bootstrap_nodes_not_serialized() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("bootstrap_nodes"));
     }
 }
 

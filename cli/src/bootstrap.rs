@@ -1,84 +1,73 @@
-// Aggressive Bootstrap — Promiscuous Peer Discovery
+// Bootstrap helpers (#469)
 //
-// Philosophy: "A node is a node." IP is the source of truth.
+// There are NO static bootstrap seeds: no environment variable, no build-time
+// option, no compiled-in or config-supplied address list. The only seed
+// sources are an invite (`SCI1:` seed ledger) and live discovery (LAN/BLE).
+// Dial candidates are always derived from the peer ledger.
 //
-// This module implements promiscuous bootstrap dialing:
-// - Dial by IP:Port only, ignoring PeerID in the multiaddr
-// - If the remote presents a different PeerID than expected, ACCEPT it
-// - Log the identity change and update the routing table
-// - Never reject a connection based on PeerID mismatch
-//
-// Build-time customization:
-// - Set SC_BOOTSTRAP_NODES environment variable during build
-// - Format: comma-separated multiaddrs
-// - Example: export SC_BOOTSTRAP_NODES="/ip4/1.2.3.4/tcp/9001/p2p/12D3Koo..."
+// The single remaining legacy read is the one-time migration of a pre-#469
+// config's `bootstrap_nodes` key into the ledger as UNPROVEN seed entries, so
+// existing deployments keep their connectivity. After the import the key is
+// dropped from the config file.
 
 use crate::ledger;
+use scmessenger_core::store::{LedgerManager, SeedLedgerEntry, MAX_SEED_LEDGER_ENTRIES};
 use scmessenger_core::{TOPIC_LOBBY, TOPIC_MESH};
 
-/// Default bootstrap nodes — can be overridden at build time
-///
-/// Strategy: Multiple public relay nodes with varying availability
-/// - Node 1: Primary GCP (high availability)
-/// - Node 2: Secondary relay (geographic redundancy)
-/// - Node 3: Tertiary relay (provider diversity)
-///
-/// All nodes relay for the mesh. Connection attempts fail over automatically.
-pub const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[];
+/// Upper bound on ledger-derived dial candidates handed to the swarm at boot.
+const LEDGER_CANDIDATE_LIMIT: u32 = 64;
 
-/// Get default bootstrap nodes, with optional build-time override
-pub fn default_bootstrap_nodes() -> Vec<String> {
-    // 1. Check runtime environment variable (for Docker/Cloud)
-    if let Ok(nodes_str) = std::env::var("SC_BOOTSTRAP_NODES") {
-        if !nodes_str.trim().is_empty() {
-            return nodes_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-        }
-    }
-
-    // 2. Check build-time override
-    let build_time_nodes = option_env!("SC_BOOTSTRAP_NODES");
-
-    if let Some(nodes_str) = build_time_nodes {
-        if nodes_str.trim().is_empty() {
-            // Empty string means use defaults (treat as if env var was unset)
-            DEFAULT_BOOTSTRAP_NODES
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        } else {
-            // Parse comma-separated multiaddrs
-            nodes_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        }
-    } else {
-        // Use hardcoded defaults
-        DEFAULT_BOOTSTRAP_NODES
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    }
+/// Outcome of the one-time legacy config migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LegacyMigrationOutcome {
+    /// Legacy addresses found in the config.
+    pub found: usize,
+    /// Addresses newly added to the ledger as unproven seed entries.
+    pub imported: usize,
 }
 
-/// Get bootstrap addresses stripped of PeerID for promiscuous dialing.
+/// Import legacy config-supplied bootstrap addresses into the ledger as
+/// unproven seeds, draining `legacy` in the process.
 ///
-/// This is the core of aggressive discovery: we dial the IP:Port ONLY.
-/// libp2p will accept whatever PeerID the remote presents during the
-/// Noise handshake. No identity validation occurs at this stage.
-/// Reserved for a future aggressive-discovery bootstrap mode; not yet called
-/// from the CLI entry point or elsewhere.
-#[allow(dead_code)]
-pub fn promiscuous_bootstrap_addrs() -> Vec<String> {
-    default_bootstrap_nodes()
-        .into_iter()
-        .map(|addr| ledger::strip_peer_id(&addr))
-        .collect()
+/// Seed import enforces the ledger's own safety filters (non-routable and DNS
+/// forms are rejected, peer-id components are stripped, duplicates collapse),
+/// so a hostile or stale config cannot do more than an invite could. Entries
+/// are fed in batches of `MAX_SEED_LEDGER_ENTRIES` because the import caps each
+/// call. The caller persists the config afterwards, which drops the key.
+pub fn migrate_legacy_bootstrap_nodes(
+    legacy: &mut Vec<String>,
+    ledger_manager: &LedgerManager,
+) -> LegacyMigrationOutcome {
+    let addrs = std::mem::take(legacy);
+    let found = addrs.len();
+    let mut imported = 0usize;
+    for batch in addrs.chunks(MAX_SEED_LEDGER_ENTRIES.max(1)) {
+        let entries: Vec<SeedLedgerEntry> = batch
+            .iter()
+            .map(|a| SeedLedgerEntry {
+                multiaddr: a.trim().to_string(),
+            })
+            .collect();
+        imported += ledger_manager.import_seed_entries(entries) as usize;
+    }
+    LegacyMigrationOutcome { found, imported }
+}
+
+/// Dial candidates derived from the peer ledger only: proven peers first
+/// (best-ranked), then unproven seeds. Peer-id components are not included.
+pub fn ledger_candidate_addrs(ledger_manager: &LedgerManager) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in ledger_manager.get_preferred_relays(LEDGER_CANDIDATE_LIMIT) {
+        if !out.contains(&e.multiaddr) {
+            out.push(e.multiaddr);
+        }
+    }
+    for e in ledger_manager.seed_addresses(LEDGER_CANDIDATE_LIMIT) {
+        if !out.contains(&e.multiaddr) {
+            out.push(e.multiaddr);
+        }
+    }
+    out
 }
 
 /// Extract the expected PeerID from a bootstrap multiaddr (if present).
@@ -94,32 +83,6 @@ pub fn parse_bootstrap_addr(multiaddr: &str) -> (String, Option<String>) {
     (stripped, peer_id)
 }
 
-/// Merge user-provided bootstrap nodes with defaults.
-/// Ensures defaults are preserved unless explicitly removed.
-/// Deduplicates by IP:Port (ignoring PeerID differences).
-pub fn merge_bootstrap_nodes(user_nodes: Vec<String>) -> Vec<String> {
-    let mut seen_addrs = std::collections::HashSet::new();
-    let mut merged = Vec::new();
-
-    // Add defaults first
-    for node in default_bootstrap_nodes() {
-        let stripped = ledger::strip_peer_id(&node);
-        if seen_addrs.insert(stripped) {
-            merged.push(node);
-        }
-    }
-
-    // Add user nodes that don't duplicate an existing address
-    for node in user_nodes {
-        let stripped = ledger::strip_peer_id(&node);
-        if seen_addrs.insert(stripped) {
-            merged.push(node);
-        }
-    }
-
-    merged
-}
-
 /// Get all default topics that a node should subscribe to
 pub fn default_topics() -> Vec<String> {
     vec![TOPIC_LOBBY.to_string(), TOPIC_MESH.to_string()]
@@ -130,42 +93,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_bootstrap_nodes() {
-        // Now returns empty unless env is set
-        let nodes = default_bootstrap_nodes();
-        // Just verify basic multiaddr format if any are present
-        for node in &nodes {
-            assert!(
-                node.starts_with("/ip4/"),
-                "Bootstrap node should be a multiaddr: {}",
-                node
-            );
-        }
-    }
-
-    #[test]
-    fn test_promiscuous_addrs_strip_peer_id() {
-        let addrs = promiscuous_bootstrap_addrs();
-        for addr in &addrs {
-            assert!(
-                !addr.contains("/p2p/"),
-                "Promiscuous addrs must NOT contain PeerID: {}",
-                addr
-            );
-            assert!(
-                addr.contains("/tcp/") || addr.contains("/udp/"),
-                "Must contain transport: {}",
-                addr
-            );
-        }
-    }
-
-    #[test]
     fn test_parse_bootstrap_addr() {
         let (stripped, peer_id) = parse_bootstrap_addr(
-            "/ip4/1.2.3.4/tcp/9001/p2p/12D3KooWGGdvGNJb3JwkNpmYuapgk7SAZ4DsBmQsU989yhvnTB8W",
+            "/ip4/192.0.2.4/tcp/9001/p2p/12D3KooWGGdvGNJb3JwkNpmYuapgk7SAZ4DsBmQsU989yhvnTB8W",
         );
-        assert_eq!(stripped, "/ip4/1.2.3.4/tcp/9001");
+        assert_eq!(stripped, "/ip4/192.0.2.4/tcp/9001");
         assert_eq!(
             peer_id,
             Some("12D3KooWGGdvGNJb3JwkNpmYuapgk7SAZ4DsBmQsU989yhvnTB8W".to_string())
@@ -177,26 +109,71 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_deduplicates_by_ip() {
-        // Same IP but different PeerIDs should be deduplicated
-        let user_nodes = vec![
-            "/ip4/1.2.3.4/tcp/9001/p2p/DIFFERENT_PEER_ID".to_string(),
-            "/ip4/10.0.0.1/tcp/9001/p2p/SomeNewPeer".to_string(),
-        ];
-        let merged = merge_bootstrap_nodes(user_nodes);
-
-        // Count entries for 1.2.3.4 — should only be 1
-        let ip_count = merged.iter().filter(|n| n.contains("1.2.3.4")).count();
-        assert_eq!(ip_count, 1, "Should deduplicate by IP:Port");
-
-        // 10.0.0.1 is new, should be added
-        assert!(merged.iter().any(|n| n.contains("10.0.0.1")));
-    }
-
-    #[test]
     fn test_default_topics() {
         let topics = default_topics();
         assert!(topics.contains(&TOPIC_LOBBY.to_string()));
         assert!(topics.contains(&TOPIC_MESH.to_string()));
+    }
+
+    #[test]
+    fn test_env_var_is_not_a_seed_source() {
+        // SC_BOOTSTRAP_NODES is no longer read anywhere: candidates come from
+        // the ledger alone, so a fresh ledger yields none regardless of env.
+        let lm = LedgerManager::ephemeral();
+        assert!(ledger_candidate_addrs(&lm).is_empty());
+    }
+
+    #[test]
+    fn test_migration_imports_legacy_as_unproven_seeds_and_drains() {
+        let lm = LedgerManager::ephemeral();
+        let mut legacy = vec![
+            "/ip4/10.1.0.1/tcp/9001".to_string(),
+            // Same address with a peer id: must dedupe onto the first.
+            "/ip4/10.1.0.1/tcp/9001/p2p/12D3KooWGGdvGNJb3JwkNpmYuapgk7SAZ4DsBmQsU989yhvnTB8W"
+                .to_string(),
+            "/ip4/10.1.0.2/tcp/9001".to_string(),
+            // DNS forms are rejected by seed import.
+            "/dns4/relay.example/tcp/9001".to_string(),
+        ];
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &lm);
+        assert_eq!(out.found, 4);
+        assert_eq!(out.imported, 2);
+        assert!(legacy.is_empty(), "legacy list must be drained");
+
+        // Unproven: never in the proven/dialable tier, present as seeds.
+        assert!(lm.get_preferred_relays(10).is_empty());
+        let seeds = lm.seed_addresses(10);
+        assert_eq!(seeds.len(), 2);
+        assert!(seeds
+            .iter()
+            .all(|e| e.success_count == 0 && !e.locally_verified));
+        assert_eq!(ledger_candidate_addrs(&lm).len(), 2);
+    }
+
+    #[test]
+    fn test_migration_is_idempotent_and_batches_past_the_import_cap() {
+        let lm = LedgerManager::ephemeral();
+        let total = MAX_SEED_LEDGER_ENTRIES * 2 + 3;
+        let make = || -> Vec<String> {
+            (0..total)
+                .map(|i| format!("/ip4/10.2.{}.{}/tcp/9001", i / 200, i % 200 + 1))
+                .collect()
+        };
+        let mut legacy = make();
+        let out = migrate_legacy_bootstrap_nodes(&mut legacy, &lm);
+        assert_eq!(out.found, total);
+        assert_eq!(out.imported, total);
+
+        // Second run over the same addresses adds nothing new.
+        let mut again = make();
+        let out2 = migrate_legacy_bootstrap_nodes(&mut again, &lm);
+        assert_eq!(out2.imported, 0);
+
+        // Empty legacy list is a no-op.
+        let mut none: Vec<String> = Vec::new();
+        assert_eq!(
+            migrate_legacy_bootstrap_nodes(&mut none, &lm),
+            LegacyMigrationOutcome::default()
+        );
     }
 }
