@@ -1710,6 +1710,35 @@ mod tests {
     }
 
     #[test]
+    fn contact_is_filed_only_under_lowercase_public_key_hex_and_junk_ids_miss() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = crate::test_support::self_certifying_keypair(b"scm-idv2-canon");
+        mgr.add(Contact::new(peer_id.clone(), key_hex.clone()))
+            .unwrap();
+
+        // Exactly one row, keyed by the lowercase public-key hex; the libp2p
+        // spelling was canonicalized on write, not stored as a second row.
+        let rows = mgr.list().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].peer_id, key_hex);
+        assert_eq!(rows[0].peer_id, rows[0].peer_id.to_lowercase());
+
+        // Every spelling of that one identity resolves to the same row.
+        let id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
+        for spelling in [peer_id, key_hex.clone(), key_hex.to_uppercase(), id] {
+            let got = mgr.get(spelling.clone()).unwrap();
+            assert_eq!(got.map(|c| c.peer_id), Some(key_hex.clone()), "{spelling}");
+        }
+
+        // Non-key identifiers neither resolve nor delete anything.
+        for junk in ["not-a-key", "12D3KooWnotakey", "zz"] {
+            assert!(mgr.get(junk.to_string()).unwrap().is_none(), "{junk}");
+            mgr.remove(junk.to_string()).unwrap();
+        }
+        assert_eq!(mgr.list().unwrap().len(), 1);
+    }
+
+    #[test]
     fn step2_test_reject_hash_as_public_key_in_send() {
         // This test verifies that prepare_message_internal rejects a blake3 hash
         // when used as a public key (i.e., when the sender mistakenly passes

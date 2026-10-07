@@ -455,10 +455,20 @@ impl ContactManager {
         if identifier.is_empty() {
             return false;
         }
-        contact.peer_id.eq_ignore_ascii_case(identifier)
-            || contact.public_key.eq_ignore_ascii_case(identifier)
-            || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
-                .is_some_and(|id| id.eq_ignore_ascii_case(identifier))
+        // A libp2p peer id is base58 and therefore case-SENSITIVE: two distinct
+        // peer ids can differ only by case, so it must match exactly (a
+        // case-insensitive match could remove the wrong contact). Only the hex
+        // spellings (public key, identity id) are case-folded, and only when the
+        // identifier is itself hex-shaped.
+        if contact.peer_id == identifier {
+            return true;
+        }
+        let hex_shaped = identifier.bytes().all(|b| b.is_ascii_hexdigit());
+        hex_shaped
+            && (contact.peer_id.eq_ignore_ascii_case(identifier)
+                || contact.public_key.eq_ignore_ascii_case(identifier)
+                || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
+                    .is_some_and(|id| id.eq_ignore_ascii_case(identifier)))
     }
 
     fn scan_for_identifier(
@@ -549,6 +559,49 @@ mod tests {
         manager.remove(identity_id)?;
         assert!(manager.get(peer_id)?.is_none());
         assert!(manager.get(key_hex)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn contact_manager_rejects_non_key_identifiers_and_keeps_peer_id_case_exact(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_a, key_a) = self_certifying_keypair(b"scm-idv2-neg-a");
+        let (peer_b, key_b) = self_certifying_keypair(b"scm-idv2-neg-b");
+        manager.add(Contact::new(peer_a.clone(), key_a.clone()))?;
+        manager.add(Contact::new(peer_b.clone(), key_b.clone()))?;
+
+        // Non-key identifiers never resolve and never delete anything.
+        for junk in ["not-a-key", "12D3KooWnotakey", "zz", " "] {
+            assert!(manager.get(junk.to_string())?.is_none(), "{junk}");
+            manager.remove(junk.to_string())?;
+        }
+        assert_eq!(manager.list()?.len(), 2);
+
+        // A base58 peer id is case-sensitive: a case-flipped spelling must not
+        // resolve to (or remove) the contact.
+        let flipped: String = peer_a
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        assert!(manager.get(flipped.clone())?.is_none());
+        manager.remove(flipped)?;
+        assert!(manager.get(peer_a.clone())?.is_some());
+
+        // The hex spelling of a different contact does not touch the first.
+        manager.remove(key_b.to_uppercase())?;
+        assert!(manager.get(peer_b)?.is_none());
+        assert!(manager.get(peer_a)?.is_some());
+        assert_eq!(manager.list()?.len(), 1);
         Ok(())
     }
 

@@ -5130,6 +5130,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_resolve_identity_rejects_non_key_recipients_without_panicking() {
+        let core = IronCore::new();
+        for junk in ["", " ", "not-a-key", "zz", "12D3KooWnotakey", "0x1234"] {
+            assert!(
+                core.resolve_identity(junk.to_string()).is_err(),
+                "non-key recipient {junk:?} must be rejected"
+            );
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_resolve_identity_resolves_identity_id_of_ledger_only_peer() {
