@@ -147,19 +147,33 @@ impl ContactManager {
     /// Idempotent - a no-op once every contact has been rewritten under its
     /// prefixed key.
     fn migrate_unprefixed_contacts(&self) {
-        if self
-            .backend
-            .get(b"metadata_contacts_migrated")
-            .map(|opt| opt.is_some())
-            .unwrap_or(false)
-        {
-            return;
+        match self.backend.get(b"metadata_contacts_migrated") {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(e) => {
+                // Fall through: the migration is idempotent, so re-running
+                // after an unreadable flag is safe.
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_flag_unreadable",
+                    error = %e,
+                    "could not read migration flag; re-running idempotent migration"
+                );
+            }
         }
 
-        let Ok(entries) = self.backend.scan_prefix(b"") else {
-            return;
+        let entries = match self.backend.scan_prefix(b"") {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_scan_failed",
+                    error = %e,
+                    "could not scan backend; contact key migration deferred"
+                );
+                return;
+            }
         };
         let mut migrated = 0u32;
+        let mut failed = 0u32;
         for (key, value) in entries {
             if key.starts_with(CONTACT_KEY_PREFIX) {
                 continue;
@@ -184,14 +198,37 @@ impl ContactManager {
             if already_exists {
                 // Prefixed key already exists, don't overwrite.
                 // Just remove the legacy bare key to clean up the backend.
-                let _ = self.backend.remove(&key);
+                if self.backend.remove(&key).is_err() {
+                    failed += 1;
+                }
             } else if self.backend.put(&prefixed, &value).is_ok() {
-                let _ = self.backend.remove(&key);
+                if self.backend.remove(&key).is_err() {
+                    failed += 1;
+                }
                 migrated += 1;
+            } else {
+                failed += 1;
             }
         }
 
-        let _ = self.backend.put(b"metadata_contacts_migrated", b"true");
+        // Only mark the migration complete when every record was handled;
+        // otherwise a transient write failure would permanently strand the
+        // remaining bare-keyed contacts (the flag short-circuits future runs).
+        if failed == 0 {
+            if let Err(e) = self.backend.put(b"metadata_contacts_migrated", b"true") {
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_flag_write_failed",
+                    error = %e,
+                    "could not persist migration flag; migration will re-run next start"
+                );
+            }
+        } else {
+            tracing::warn!(
+                event = "contacts_key_prefix_migration_incomplete",
+                failed_count = failed,
+                "some contacts could not be migrated; will retry on next start"
+            );
+        }
 
         if migrated > 0 {
             tracing::info!(

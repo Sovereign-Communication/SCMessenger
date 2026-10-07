@@ -111,6 +111,13 @@ pub enum ConsentState {
     Granted,
 }
 
+/// Crate-visible entry to the single peer-id parser, for transport-ingress
+/// guards (mobile bridge) that must decide whether a platform-supplied peer
+/// string is a real 32-byte peer id before it may touch routing state.
+pub(crate) fn parse_transport_peer_id(peer_id_str: &str) -> Option<[u8; 32]> {
+    parse_peer_id_32(peer_id_str)
+}
+
 /// Map a transport string (as passed to `routing_peer_seen`) to a
 /// `TransportType` for the optimized routing engine.
 fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
@@ -950,10 +957,25 @@ impl IronCore {
     ) -> Result<crate::PreparedMessage, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
+        // Canon: the only valid recipient is ONE public-key-hex identity (64
+        // hex chars that are a canonical Ed25519 point). Anything else -- a
+        // libp2p PeerId, an identity_id hash that is not a curve point, a
+        // prefixed/padded/oversized string -- is rejected before any decoding.
+        if !crate::identity::keys::is_valid_public_key(recipient_id) {
+            tracing::error!("[ERROR] refusing to send: recipient is not a public-key hex identity");
+            return Err(IronCoreError::InvalidInput);
+        }
         let recipient_bytes = hex::decode(recipient_id).map_err(|_| IronCoreError::InvalidInput)?;
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
             .map_err(|_| IronCoreError::InvalidInput)?;
+        // Our own identity_id (blake3 of our public key) can decompress to a
+        // curve point about half the time and would then be encrypted to as if
+        // it were a key. We always know it, so refuse it deterministically.
+        if keys.identity_id().eq_ignore_ascii_case(recipient_id) {
+            tracing::error!("[ERROR] refusing to send: recipient_id is our own identity_id hash");
+            return Err(IronCoreError::InvalidInput);
+        }
         // Reject a recipient id that is well-formed but MEANINGLESS as a key.
         //
         // identity_id() is hex(blake3(pubkey)) and public_key_hex() is
@@ -1862,7 +1884,7 @@ impl IronCore {
     fn build_identity_backup_payload(&self) -> Result<String, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
-        let identity_key_hex = hex::encode(keys.to_bytes());
+        let identity_key_hex = hex::encode(keys.to_bytes().map_err(|_| IronCoreError::Internal)?);
         let nickname = identity.nickname();
 
         let ratchet_sessions_json = self.ratchet_sessions.read().serialize_sessions().ok();
@@ -6386,6 +6408,62 @@ mod tests {
             .is_ok(),
             "the same contact must remain sendable by public key"
         );
+    }
+
+    /// JEV audit (iron_core identity_hash_not_usable_as_recipient, validate-guard
+    /// 0.94): every non-public-key recipient shape is refused up front, and the
+    /// control (a real public key) still works.
+    #[test]
+    fn prepare_message_rejects_every_non_public_key_recipient_shape() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let info = core.get_identity_info();
+        let my_public_key = info.public_key_hex.expect("public key");
+        let my_identity_id = info.identity_id.expect("identity id");
+
+        let send = |recipient: &str| {
+            core.prepare_message(
+                recipient.to_string(),
+                "guard".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+        };
+
+        // Control: a real key is accepted, so rejections below are not vacuous.
+        assert!(send(&my_public_key).is_ok());
+
+        // A 64-hex string that is NOT a curve point (an identity_id-shaped hash),
+        // found deterministically.
+        let non_point = (0u32..)
+            .map(|i| hex::encode(blake3::hash(&i.to_le_bytes()).as_bytes()))
+            .find(|h| !crate::identity::keys::is_valid_public_key(h))
+            .expect("a non-point hash exists");
+
+        let hostile: Vec<String> = vec![
+            String::new(),
+            "   ".to_string(),
+            my_identity_id.clone(),
+            my_identity_id.to_uppercase(),
+            non_point,
+            "0".repeat(64),
+            format!("0x{my_public_key}"),
+            format!("public_key:{my_public_key}"),
+            format!(" {my_public_key} "),
+            my_public_key[..62].to_string(),
+            format!("{my_public_key}00"),
+            "zz".repeat(32),
+            "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string(),
+            "a".repeat(100_000),
+        ];
+        for recipient in hostile {
+            assert!(
+                send(&recipient).is_err(),
+                "non-key recipient must be rejected (len {})",
+                recipient.len()
+            );
+        }
     }
 
     /// Captures the delegate callback arguments for the WP1.4 / CRYPTO-01 check.

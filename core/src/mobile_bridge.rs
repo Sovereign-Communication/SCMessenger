@@ -18,6 +18,58 @@ use crate::transport::wifi_aware::{
 use crate::transport::wifi_direct::{PlatformWifiDirectBridge, WifiDirectTransport};
 use crate::transport::SwarmHandle;
 
+// ---------------------------------------------------------------------------
+// Untrusted transport-ingress guards (JEV audit: validate-guard rows for
+// on_proximity_data_received / on_ble_data_received overloads,
+// on_wifi_direct_connection_info, handle_service_discovered).
+//
+// Everything a platform radio hands us (peer handle, address, payload, rssi)
+// is attacker-influenced. These checks run BEFORE the value reaches routing
+// state, a dial, or an unbounded per-peer map, and fail closed.
+// ---------------------------------------------------------------------------
+
+/// Longest platform peer handle we accept (a 64-hex key or libp2p PeerId is
+/// well under this; BLE UUIDs/MACs are shorter).
+const MAX_TRANSPORT_PEER_HANDLE_LEN: usize = 128;
+/// Cap on distinct BLE peers remembered in `nearby_ble_peers`.
+const MAX_NEARBY_BLE_PEERS: usize = 1024;
+/// Cap on distinct Wi-Fi Aware peers remembered in `discovered_peers`.
+const MAX_DISCOVERED_AWARE_PEERS: usize = 256;
+/// Largest Wi-Fi Aware service-specific-info blob we accept.
+const MAX_SERVICE_INFO_LEN: usize = 1024;
+
+/// A platform peer handle is opaque (BLE UUID / MAC / libp2p id / hex key), so
+/// we only require it to be non-blank, bounded, and free of control chars.
+fn is_valid_transport_peer_handle(peer_id: &str) -> bool {
+    !peer_id.trim().is_empty()
+        && peer_id.len() <= MAX_TRANSPORT_PEER_HANDLE_LEN
+        && !peer_id.chars().any(char::is_control)
+}
+
+/// Sanity bounds for a Wi-Fi Aware discovery event.
+fn is_valid_aware_discovery(peer_id: &str, service_info: &[u8], rssi: i32) -> bool {
+    is_valid_transport_peer_handle(peer_id)
+        && service_info.len() <= MAX_SERVICE_INFO_LEN
+        && (-127..=20).contains(&rssi)
+}
+
+/// Wi-Fi Direct group-owner address as supplied by the platform. It is later
+/// formatted into a `/ip4/<ip>/tcp/<port>` multiaddr and dialed, so it must be
+/// a bare IPv4 literal (no injected `/p2p/...` segments) in a private or
+/// link-local range; loopback, unspecified, multicast and broadcast are refused.
+fn validate_wifi_direct_group_owner_ip(ip: &str) -> Option<std::net::Ipv4Addr> {
+    let addr = ip.parse::<std::net::Ipv4Addr>().ok()?;
+    if addr.is_loopback()
+        || addr.is_unspecified()
+        || addr.is_multicast()
+        || addr.is_broadcast()
+        || !(addr.is_private() || addr.is_link_local())
+    {
+        return None;
+    }
+    Some(addr)
+}
+
 // MOBILE SERVICE
 // ============================================================================
 
@@ -1671,23 +1723,41 @@ impl MeshService {
         transport: ProximityTransport,
         data: Vec<u8>,
     ) {
-        tracing::info!("{} data received from {}", transport, peer_id);
-        // WP2: a frame that actually arrived is proof the data link is live.
-        // Feed the same routing entry the swarm uses for ConnectionEstablished;
-        // discovery adverts alone are intentionally not enough.
-        self.record_data_link_for_routing(&peer_id, &transport.to_string());
+        // Validate untrusted input first: nothing below (routing feed, peer
+        // map, core) may see a malformed handle or an empty/oversized frame.
+        if !is_valid_transport_peer_handle(&peer_id) {
+            tracing::warn!(
+                "{} data dropped: invalid peer handle (len {})",
+                transport,
+                peer_id.len()
+            );
+            return;
+        }
+        if data.is_empty() {
+            tracing::warn!("{} empty payload dropped", transport);
+            return;
+        }
         if data.len() > transport.max_payload_size() {
             tracing::warn!(
-                "{} payload from {} exceeds max ({} > {}), dropping",
+                "{} payload exceeds max ({} > {}), dropping",
                 transport,
-                peer_id,
                 data.len(),
                 transport.max_payload_size()
             );
             return;
         }
+        tracing::info!("{} data received ({} bytes)", transport, data.len());
+        // WP2: a frame that actually arrived is proof the data link is live.
+        // Feed the same routing entry the swarm uses for ConnectionEstablished;
+        // discovery adverts alone are intentionally not enough.
+        self.record_data_link_for_routing(&peer_id, &transport.to_string());
         if transport == ProximityTransport::Ble {
-            self.nearby_ble_peers.lock().insert(peer_id.clone());
+            let mut nearby = self.nearby_ble_peers.lock();
+            if nearby.contains(&peer_id) || nearby.len() < MAX_NEARBY_BLE_PEERS {
+                nearby.insert(peer_id.clone());
+            } else {
+                tracing::warn!("nearby BLE peer table full; not tracking new peer");
+            }
         }
         self.on_data_received(peer_id, data);
     }
@@ -1707,6 +1777,10 @@ impl MeshService {
     }
 
     pub fn on_wifi_aware_peer_discovered(&self, peer_id: String, service_info: Vec<u8>, rssi: i32) {
+        if !is_valid_aware_discovery(&peer_id, &service_info, rssi) {
+            tracing::warn!("Wi-Fi Aware discovery dropped: malformed input");
+            return;
+        }
         if let Some(transport) = self.wifi_aware_transport.lock().as_ref() {
             transport.add_discovered_peer(peer_id.clone(), service_info.clone(), rssi);
         }
@@ -1812,6 +1886,17 @@ impl MeshService {
         group_owner_ip: String,
         is_group_owner: bool,
     ) {
+        // Validate platform-supplied peer handle and address before they reach
+        // routing state, GroupInfo, or the dial below (fail closed).
+        if !is_valid_transport_peer_handle(&peer_id) {
+            tracing::warn!("Wi-Fi Direct connection info dropped: invalid peer handle");
+            return;
+        }
+        let Some(owner_ip) = validate_wifi_direct_group_owner_ip(group_owner_ip.trim()) else {
+            tracing::warn!("Wi-Fi Direct connection info dropped: group owner address rejected");
+            return;
+        };
+        let group_owner_ip = owner_ip.to_string();
         // WP2: group info means this peer has a real Wi-Fi Direct link to us,
         // so it feeds the routing engine the way a swarm connection does.
         self.record_data_link_for_routing(&peer_id, "wifi_direct");
@@ -2072,6 +2157,15 @@ impl MeshService {
     /// handle, an unreadable block list, or a blocked peer never raises
     /// routing confidence.
     fn record_data_link_for_routing(&self, peer_id: &str, transport: &str) {
+        // Only a real 32-byte peer id (parsed by the core's single parser) may
+        // reach routing state; opaque platform handles (BLE UUID/MAC) are not
+        // routable identities and are skipped.
+        if !is_valid_transport_peer_handle(peer_id)
+            || crate::iron_core::parse_transport_peer_id(peer_id).is_none()
+        {
+            tracing::debug!(transport, "Non-peer-id handle; routing feed skipped");
+            return;
+        }
         let Some(core) = self.get_core() else {
             tracing::debug!(peer_id, transport, "No core handle; routing feed skipped");
             return;
@@ -2759,9 +2853,21 @@ impl PlatformWifiAwareBridge {
     }
 
     pub fn handle_service_discovered(&self, peer_id: String, service_info: Vec<u8>, rssi: i32) {
-        self.discovered_peers
-            .lock()
-            .insert(peer_id.clone(), (service_info.clone(), rssi));
+        // Validate before the value is stored or handed to the discovery
+        // callback (which dials / derives keys): bounded handle, bounded info,
+        // sane rssi, bounded table.
+        if !is_valid_aware_discovery(&peer_id, &service_info, rssi) {
+            tracing::warn!("Wi-Fi Aware service discovery rejected: malformed input");
+            return;
+        }
+        {
+            let mut peers = self.discovered_peers.lock();
+            if !peers.contains_key(&peer_id) && peers.len() >= MAX_DISCOVERED_AWARE_PEERS {
+                tracing::warn!("Wi-Fi Aware discovered-peer table full; ignoring new peer");
+                return;
+            }
+            peers.insert(peer_id.clone(), (service_info.clone(), rssi));
+        }
         if let Some(cb) = self.on_service_discovered.lock().as_ref() {
             cb(peer_id, service_info, rssi);
         }
@@ -6671,5 +6777,164 @@ mod tests {
         manager.add(other_record).unwrap();
         assert!(manager.recent(Some(identity_id), 10).unwrap().is_empty());
         assert_eq!(manager.recent(Some(other_pubkey), 10).unwrap().len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // JEV audit: untrusted transport-ingress guards
+    // -----------------------------------------------------------------------
+
+    fn routing_peer_count(core: &Arc<crate::IronCore>) -> usize {
+        core.routing_engine_handle()
+            .write()
+            .as_mut()
+            .expect("engine installed")
+            .base_engine_mut()
+            .local_cell_mut()
+            .peer_count()
+    }
+
+    #[test]
+    fn transport_peer_handle_validator_rejects_malformed() {
+        assert!(is_valid_transport_peer_handle("AA:BB:CC:DD:EE:FF"));
+        assert!(is_valid_transport_peer_handle(
+            "E621E1F8-C36C-495A-93FC-0C247A3E6E5F"
+        ));
+        assert!(is_valid_transport_peer_handle(&hex::encode([7u8; 32])));
+        assert!(!is_valid_transport_peer_handle(""));
+        assert!(!is_valid_transport_peer_handle("   "));
+        assert!(!is_valid_transport_peer_handle("peer\0id"));
+        assert!(!is_valid_transport_peer_handle("peer\nid"));
+        assert!(!is_valid_transport_peer_handle(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn group_owner_ip_validator_rejects_injection_and_non_private() {
+        assert!(validate_wifi_direct_group_owner_ip("192.168.49.1").is_some());
+        assert!(validate_wifi_direct_group_owner_ip("169.254.1.1").is_some());
+        for bad in [
+            "",
+            "not-an-ip",
+            "192.168.49.1/tcp/1/p2p/12D3KooWAbc",
+            "192.168.49.1 ",
+            "127.0.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "8.8.8.8",
+            "::1",
+            "fe80::1",
+            "192.168.49.1\n",
+        ] {
+            assert!(
+                validate_wifi_direct_group_owner_ip(bad).is_none(),
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn proximity_ingress_drops_malformed_peer_handle_and_payload() {
+        let service = MeshService::new(test_mesh_service_config());
+        let long_handle = "x".repeat(10_000);
+        for peer in ["", "   ", "bad\0handle", long_handle.as_str()] {
+            service.on_proximity_data_received(
+                peer.to_string(),
+                ProximityTransport::Ble,
+                vec![1, 2, 3],
+            );
+        }
+        // Empty and oversized frames from a valid handle are dropped too.
+        service.on_ble_data_received("AA:BB:CC:DD:EE:FF".to_string(), Vec::new());
+        service.on_proximity_data_received(
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            ProximityTransport::Ble,
+            vec![0u8; ProximityTransport::Ble.max_payload_size() + 1],
+        );
+        assert!(
+            service.nearby_ble_peers.lock().is_empty(),
+            "no malformed input may be remembered as a nearby peer"
+        );
+
+        // Control: a well-formed frame is tracked.
+        service.on_ble_data_received("AA:BB:CC:DD:EE:FF".to_string(), vec![1]);
+        assert!(service
+            .nearby_ble_peers
+            .lock()
+            .contains("AA:BB:CC:DD:EE:FF"));
+    }
+
+    #[test]
+    fn nearby_ble_peer_table_is_bounded() {
+        let service = MeshService::new(test_mesh_service_config());
+        for i in 0..(MAX_NEARBY_BLE_PEERS + 50) {
+            service.on_ble_data_received(format!("peer-handle-{i}"), vec![1]);
+        }
+        assert_eq!(service.nearby_ble_peers.lock().len(), MAX_NEARBY_BLE_PEERS);
+    }
+
+    #[test]
+    fn opaque_ble_handle_does_not_feed_routing_state() {
+        let (service, core) = routing_feed_fixture();
+        service.on_ble_data_received("E621E1F8-C36C-495A-93FC-0C247A3E6E5F".to_string(), vec![1]);
+        service.on_ble_data_received("AA:BB:CC:DD:EE:FF".to_string(), vec![1]);
+        assert_eq!(routing_peer_count(&core), 0);
+
+        // Control: a real 32-byte peer id still feeds routing.
+        service.on_ble_data_received(hex::encode([42u8; 32]), vec![1]);
+        assert_eq!(routing_peer_count(&core), 1);
+    }
+
+    #[test]
+    fn wifi_direct_connection_info_rejects_hostile_input_before_routing() {
+        let (service, core) = routing_feed_fixture();
+        let peer = hex::encode([42u8; 32]);
+        for ip in [
+            "192.168.49.1/tcp/1/p2p/12D3KooWAbc",
+            "127.0.0.1",
+            "8.8.8.8",
+            "",
+        ] {
+            service.on_wifi_direct_connection_info(peer.clone(), ip.to_string(), true);
+        }
+        service.on_wifi_direct_connection_info(String::new(), "192.168.49.1".to_string(), true);
+        service.on_wifi_direct_connection_info(
+            "a\0b".to_string(),
+            "192.168.49.1".to_string(),
+            true,
+        );
+        assert_eq!(routing_peer_count(&core), 0);
+
+        // Control (group owner => no dial is spawned).
+        service.on_wifi_direct_connection_info(peer, "192.168.49.1".to_string(), true);
+        assert_eq!(routing_peer_count(&core), 1);
+    }
+
+    #[test]
+    fn service_discovery_rejects_malformed_and_is_bounded() {
+        let bridge =
+            PlatformWifiAwareBridge::new_platform_ref(std::sync::Arc::new(Mutex::new(None)));
+        bridge.handle_service_discovered(String::new(), vec![1], -50);
+        bridge.handle_service_discovered("bad\0".to_string(), vec![1], -50);
+        bridge.handle_service_discovered("p".repeat(500), vec![1], -50);
+        bridge.handle_service_discovered(
+            "peer-a".to_string(),
+            vec![0u8; MAX_SERVICE_INFO_LEN + 1],
+            -50,
+        );
+        bridge.handle_service_discovered("peer-a".to_string(), vec![1], i32::MIN);
+        bridge.handle_service_discovered("peer-a".to_string(), vec![1], 1000);
+        assert!(bridge.get_discovered_peer("peer-a").is_none());
+        assert_eq!(bridge.discovered_peers.lock().len(), 0);
+
+        bridge.handle_service_discovered("peer-a".to_string(), vec![1, 2, 3], -50);
+        assert!(bridge.get_discovered_peer("peer-a").is_some());
+
+        for i in 0..(MAX_DISCOVERED_AWARE_PEERS + 50) {
+            bridge.handle_service_discovered(format!("peer-{i}"), vec![1], -60);
+        }
+        assert_eq!(
+            bridge.discovered_peers.lock().len(),
+            MAX_DISCOVERED_AWARE_PEERS
+        );
     }
 }
