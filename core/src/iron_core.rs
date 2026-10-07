@@ -130,13 +130,13 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
     }
 }
 
-/// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
-/// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
-/// PeerId encoding.
 /// Longest raw peer-id string `routing_peer_seen` will even attempt to parse
 /// (a 32-byte id is 64 hex chars; allows prefixes and libp2p base58 forms).
 const MAX_ROUTING_PEER_ID_STR_LEN: usize = 128;
 
+/// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
+/// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
+/// PeerId encoding.
 fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
     let clean_str = peer_id_str.trim();
     let unescaped = clean_str
