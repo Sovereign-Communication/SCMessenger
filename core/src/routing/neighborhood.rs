@@ -376,15 +376,15 @@ impl NeighborhoodTable {
                             timestamp: gossip.timestamp,
                         };
                     }
-                } else if self.summaries.len() < MAX_STORED_SUMMARIES {
-                    // Add new summary (bounded: dropped when the table is full)
-                    self.summaries.push(NeighborhoodSummary {
+                } else {
+                    let candidate = NeighborhoodSummary {
                         total_reachable: neighbor_summary.total_reachable,
                         reachable_hints: neighbor_summary.reachable_hints,
                         path_reliability: neighbor_summary.path_reliability,
                         hop_count: our_hops,
                         timestamp: gossip.timestamp,
-                    });
+                    };
+                    self.insert_bounded_summary(candidate);
                 }
             }
         }
@@ -481,6 +481,37 @@ impl NeighborhoodTable {
     }
 
     /// Rebuild neighborhood summaries (deduplicate and clean)
+    /// Insert a summary, keeping at most `MAX_STORED_SUMMARIES`. When full, the
+    /// weakest stored entry (lowest reliability, then stalest) is evicted to
+    /// make room, but only if the candidate ranks strictly above it; otherwise
+    /// the candidate is dropped. First-come entries therefore cannot pin the
+    /// table against fresher or better-measured knowledge.
+    fn insert_bounded_summary(&mut self, candidate: NeighborhoodSummary) {
+        if self.summaries.len() < MAX_STORED_SUMMARIES {
+            self.summaries.push(candidate);
+            return;
+        }
+        let rank = |s: &NeighborhoodSummary| (s.path_reliability, s.timestamp);
+        let weakest = self
+            .summaries
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                rank(a)
+                    .partial_cmp(&rank(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = weakest {
+            if rank(&candidate)
+                .partial_cmp(&rank(&self.summaries[i]))
+                .is_some_and(|o| o == std::cmp::Ordering::Greater)
+            {
+                self.summaries[i] = candidate;
+            }
+        }
+    }
+
     fn rebuild_summaries(&mut self) {
         // Deduplicate by reachable hints (prefer freshest)
         let mut unique_summaries: HashMap<Vec<[u8; 8]>, NeighborhoodSummary> = HashMap::new();
@@ -1236,6 +1267,49 @@ mod tests {
                 .expect("valid gossip");
         }
         assert!(table.summary_count() <= MAX_STORED_SUMMARIES);
+    }
+
+    #[test]
+    fn test_full_summary_table_evicts_weakest_for_better_entry() {
+        let mut table = NeighborhoodTable::new();
+        for i in 0..MAX_STORED_SUMMARIES as u32 {
+            // hop 2 so these never collide with the incoming hop-1 summary.
+            table.summaries.push(make_summary(5000 + i, 2, 0.5));
+        }
+        // One clearly weakest entry.
+        table.summaries[100] = make_summary(9999, 2, 0.01);
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+
+        // A worse newcomer is dropped; the table is unchanged.
+        table
+            .process_gossip(
+                make_peer_id(1),
+                make_gossip(vec![make_summary(7, 0, 0.001)]),
+            )
+            .expect("valid gossip");
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+        assert!(table
+            .summaries
+            .iter()
+            .all(|s| s.reachable_hints != vec![make_hint(7)]));
+        assert!(table
+            .summaries
+            .iter()
+            .any(|s| s.reachable_hints == vec![make_hint(9999)]));
+
+        // A better newcomer evicts the weakest entry rather than being rejected.
+        table
+            .process_gossip(make_peer_id(1), make_gossip(vec![make_summary(8, 0, 0.9)]))
+            .expect("valid gossip");
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+        assert!(table
+            .summaries
+            .iter()
+            .any(|s| s.reachable_hints == vec![make_hint(8)]));
+        assert!(table
+            .summaries
+            .iter()
+            .all(|s| s.reachable_hints != vec![make_hint(9999)]));
     }
 
     #[test]
