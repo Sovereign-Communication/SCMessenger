@@ -229,11 +229,12 @@ fn test_circuit_relay_ladder_multiple_relays() {
     let target_kp = Keypair::generate_ed25519();
     let target_pid = target_kp.public().to_peer_id();
 
-    // Register multiple relays
+    // Register multiple relays, each in a distinct IPv4 /24: conn-cap v2 admits
+    // at most MAX_RELAYS_PER_NETWORK_GROUP relays per /24 (Sybil resistance).
     for i in 0..3 {
         let relay_kp = Keypair::generate_ed25519();
         let relay_pid = relay_kp.public().to_peer_id();
-        let relay_addr: libp2p::Multiaddr = format!("/ip4/192.168.1.{}/tcp/4001", 100 + i)
+        let relay_addr: libp2p::Multiaddr = format!("/ip4/192.168.{}.100/tcp/4001", 1 + i)
             .parse()
             .unwrap();
         ladder.add_relay(relay_pid, vec![relay_addr]);
