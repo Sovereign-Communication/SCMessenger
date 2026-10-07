@@ -16,15 +16,40 @@ Authority: `HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md` sectio
 
 These are the **state files actually fed** to the canonical completion gate, one
 per work package, so a WP verdict is reproducible rather than trusted. The gate
-is `scripts/jev_canonical_check.py`, which evaluates the section 3.3 canonical
-question pack:
+is `scripts/jev_canonical_check.py`, a **bucketed** completion gate (result
+schema 1.1.0) inspired by the JEV completion audit
+(`docs/jev-completion/PRESCRIPTIONS.md`, tracker #455).
 
-- `canon_identity` -- one contact identity flavor (public-key hex) as the
-  addressing key
-- `canon_routing_feed` -- one routing feed entry point
-  (`IronCore::routing_peer_seen`) for all data-link transports
-- `instruction_matches` -- the WP instruction and acceptance rows are met, with
-  command/test evidence cited
+The section 3.3 canonical questions are kept verbatim: `canon_identity` (one
+public-key-hex contact identity flavor), `canon_routing_feed` (one
+`IronCore::routing_peer_seen` entry point) and `instruction_matches` (WP
+instruction and acceptance rows met, with command/test evidence cited). They now
+live inside buckets, alongside audit-derived questions.
+
+Buckets (path globs in `BUCKETS`): `identity`, `routing`, `security_input`,
+`security_crypto`, `ffi_boundary`, `concurrency`, `lifecycle`, `testplan`,
+`dead_code` (selected from deletions in the diff) and `instruction` (always).
+Buckets are selected from the state file's `files` and, optionally,
+`--changed-paths-from <base-ref>` (`git diff`). One evaluate call is made with
+ids `bucket.question`.
+
+- Bucket questions use the Harness `choice` primitive with `yes` / `no` / `na`.
+  `na` (does not apply) is excluded from the score and never counted as
+  unsupported; a `noul` question cannot express N/A, which is why the former
+  fixed pack failed every change unrelated to identity/routing.
+- Any `no` in a protected bucket (identity, routing, security_*, ffi_boundary)
+  fails the gate outright. Every applicable bucket must score >= 0.80
+  (`--bucket-threshold`); `instruction` and the overall weighted score use
+  `--min-confidence` (0.70).
+- Answers must be backed by `state.evidence`; with no evidence every applicable
+  `yes` is forced to `no`.
+- With no applicable buckets the gate passes on `instruction` alone. A state with
+  no `files` and no `--changed-paths-from` keeps the legacy identity + routing +
+  instruction selection.
+- The result file adds `buckets_selected`, `buckets_na`, per-bucket
+  `{score, verdict, answers}`, `applicable_count`, `overall_score` and
+  `gate_failures`; all 1.0.0 fields are retained. `is_passing` is the bucketed
+  gate decision, not the raw Harness `is_passing`.
 
 ## Re-run
 
@@ -34,7 +59,7 @@ python scripts/jev_canonical_check.py --wp WP1 --state-file HANDOFF/freebuff/jev
 python scripts/jev_canonical_check.py --wp WP2 --state-file HANDOFF/freebuff/jev/WP2_state_2026-09-21.json
 ```
 
-Exit 0 requires a **keyed, non-fallback** `result.is_passing(0.70)`. An
+Exit 0 requires a **keyed, non-fallback** bucketed pass (see above). An
 `is_fallback=True` result prints `UNVERIFIED-JEV` and is not DONE.
 
 ## Recorded verdicts (2026-09-21, this checkout, keyed TypeSafe)

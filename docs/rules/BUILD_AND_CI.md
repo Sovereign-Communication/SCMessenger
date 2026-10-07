@@ -66,8 +66,11 @@ Standing practice for SCMessenger completion work:
    (includes issue-sort via `JevPolicy.evaluate_issue_sort` + frozen pack
    `scripts/scmessenger_issue_sort_pack.json`).
 3. **WP / canonical DONE:** mechanical CI + greps **and**
-   `python scripts/jev_canonical_check.py --wp WPn --state-file ...`
-   (`is_passing` at min_confidence 0.70). Unkeyed fallback → `UNVERIFIED-JEV`.
+   `python scripts/jev_canonical_check.py --wp WPn --state-file ... [--changed-paths-from origin/main]`
+   (bucketed gate, schema 1.1.0: changed paths select audit buckets, `na` answers
+   are excluded from the score, any `no` in a protected bucket fails outright,
+   per-bucket threshold 0.80, overall min_confidence 0.70; see
+   `HANDOFF/freebuff/jev/README.md`). Unkeyed fallback → `UNVERIFIED-JEV`.
 4. **Clarification:** if confidence <99% on a claim/design, run harness verify
    or a typed JEV question pack — do not invent a new root-cause plan.
 5. Full design: `HANDOFF/V040_JEV_HARMESS_INTEGRATION_2026-09-21.md`.
@@ -118,7 +121,8 @@ not a warning. Structural JEV fallback is never a canonical pass. The existing
 consumer scripts (`local_harness.py`, `jev_canonical_check.py`,
 `jev_repo_insights.py`, `harness_gate.py`, and `bod_governance.py`) all resolve
 through `harness_source.py`; direct installed-package fallback is not allowed.
-The hermetic lifecycle tests are in `scripts/test_harness_admission.py`.
+The hermetic lifecycle tests are in `scripts/test_harness_admission.py`; the
+bucketed JEV gate tests are in `scripts/test_jev_canonical_check.py`.
 
 ## Windows parallelism (measured on this box)
 
