@@ -396,15 +396,24 @@ pub const NEW_RELAY_ADMISSIONS_PER_WINDOW: usize = 4;
 pub const NEW_RELAY_WINDOW: Duration = Duration::from_secs(60);
 
 /// Of the admission budget, this many slots per window are held back for
-/// identities with LOCALLY PROVEN history (see `record_proven_relay`). A
+/// identities with LOCALLY PROVEN history (see `record_proven_relay_via_target`). A
 /// stream of fresh unproven identities can use at most
 /// `NEW_RELAY_ADMISSIONS_PER_WINDOW - NEW_RELAY_PROVEN_RESERVED` of them, so
 /// it cannot starve a returning relay that has earned its place.
 pub const NEW_RELAY_PROVEN_RESERVED: usize = 2;
 
-/// Peer ids remembered as having locally proven history after their record
-/// was evicted (oldest forgotten first).
+/// Peers remembered as having locally proven history after their record was
+/// evicted. When full, the lowest-scoring (then least recently proven) entry
+/// is displaced, and a newcomer scoring below every entry is not admitted, so
+/// a stream of fresh proven identities cannot push veterans out.
 const PROVEN_HISTORY_CAP: usize = 64;
+
+/// A (relay, target) pair earns at most one proven credit per this interval,
+/// so one trusted contact reached repeatedly through the same relay cannot
+/// be turned into a credit stream.
+pub const PROVEN_TARGET_MIN_INTERVAL: Duration = Duration::from_secs(24 * 3600);
+/// Bound on remembered (relay, target) credit stamps.
+const PROVEN_TARGET_TRACK_CAP: usize = 1024;
 
 /// Longevity credit saturates here, so score cannot grow without bound.
 const RELAY_UPTIME_CAP: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -422,9 +431,14 @@ const RELAY_SUCCESS_CAP: u32 = 60;
 /// Credits for one relay are at least this far apart: a burst of proofs
 /// counts once, so the cap cannot be reached quickly.
 pub const RELAY_SUCCESS_MIN_INTERVAL: Duration = Duration::from_secs(30);
-/// The proven component decays linearly to zero this long after the latest
-/// credit: reputation must be re-earned, not banked forever.
+/// Reference window for the proven component: after this long without a
+/// credit it has fallen to a sixteenth (four half-lives).
 pub const RELAY_SUCCESS_DECAY: Duration = Duration::from_secs(24 * 3600);
+/// Half-life of the proven component. It is a time-decayed accumulator: each
+/// credit adds [`RELAY_SUCCESS_WEIGHT_SECS`] to the decayed score, which is
+/// capped. Reputation is re-earned, not banked: one credit per
+/// [`RELAY_SUCCESS_DECAY`] settles near 1.07 weights, far below the cap.
+const RELAY_SUCCESS_HALF_LIFE: Duration = Duration::from_secs(RELAY_SUCCESS_DECAY.as_secs() / 4);
 
 /// A full table only evicts a record that is disconnected or whose score is
 /// below this (ten minutes of uptime, no proven relays). Established relays
@@ -461,7 +475,9 @@ struct RelayRecord {
     first_seen: Instant,
     connected_since: Option<Instant>,
     uptime_banked: Duration,
-    successes: u32,
+    /// Time-decayed proven-service accumulator, in score-seconds, as of
+    /// `last_success`.
+    proven_score: f64,
     last_success: Option<Instant>,
     last_registration: Instant,
 }
@@ -475,19 +491,24 @@ impl RelayRecord {
         (self.uptime_banked + live).min(RELAY_UPTIME_CAP)
     }
 
-    /// Proven-service component: capped, and decaying linearly to zero over
-    /// [`RELAY_SUCCESS_DECAY`] since the latest credit.
-    fn proven_secs(&self, now: Instant) -> u64 {
+    /// Upper bound of the proven accumulator, in score-seconds.
+    fn proven_cap() -> f64 {
+        (u64::from(RELAY_SUCCESS_CAP) * RELAY_SUCCESS_WEIGHT_SECS) as f64
+    }
+
+    /// Accumulator value at `now`: exponential decay from the latest credit.
+    fn proven_score_at(&self, now: Instant) -> f64 {
         let Some(last) = self.last_success else {
-            return 0;
+            return 0.0;
         };
-        let age = now.saturating_duration_since(last);
-        if age >= RELAY_SUCCESS_DECAY {
-            return 0;
-        }
-        let full = u64::from(self.successes.min(RELAY_SUCCESS_CAP)) * RELAY_SUCCESS_WEIGHT_SECS;
-        let remaining = (RELAY_SUCCESS_DECAY - age).as_secs();
-        full.saturating_mul(remaining) / RELAY_SUCCESS_DECAY.as_secs().max(1)
+        let elapsed = now.saturating_duration_since(last).as_secs_f64();
+        let half_life = RELAY_SUCCESS_HALF_LIFE.as_secs_f64().max(1.0);
+        self.proven_score * 0.5f64.powf(elapsed / half_life)
+    }
+
+    /// Proven-service component: capped and exponentially decaying.
+    fn proven_secs(&self, now: Instant) -> u64 {
+        self.proven_score_at(now).clamp(0.0, Self::proven_cap()) as u64
     }
 
     /// Reputation score in seconds-equivalent: longevity plus the (small,
@@ -509,7 +530,71 @@ struct RelayTable {
     /// Admission time and whether the admitted identity had proven history.
     recent_admissions: Vec<(Instant, bool)>,
     /// Peers that earned a proven credit, kept past record eviction.
-    proven_history: Vec<PeerId>,
+    proven_history: Vec<ProvenEntry>,
+    /// Last credit time per (relay, target) pair.
+    proven_targets: HashMap<(PeerId, PeerId), Instant>,
+}
+
+/// A remembered proven relay: score snapshot at its latest credit.
+#[derive(Debug, Clone)]
+struct ProvenEntry {
+    peer: PeerId,
+    score_secs: u64,
+    proven_at: Instant,
+}
+
+/// Remember `peer` as proven. At capacity the lowest-scoring (ties: least
+/// recently proven) entry is displaced; a newcomer scoring below every
+/// entry is dropped instead, so fresh Sybils cannot evict veterans.
+fn note_proven_history(
+    history: &mut Vec<ProvenEntry>,
+    peer: PeerId,
+    score_secs: u64,
+    now: Instant,
+) {
+    if let Some(entry) = history.iter_mut().find(|e| e.peer == peer) {
+        entry.score_secs = score_secs;
+        entry.proven_at = now;
+        return;
+    }
+    if history.len() >= PROVEN_HISTORY_CAP {
+        let victim = history
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, e)| (e.score_secs, e.proven_at))
+            .map(|(i, e)| (i, e.score_secs));
+        match victim {
+            Some((i, victim_score)) if score_secs >= victim_score => {
+                history.swap_remove(i);
+            }
+            _ => return,
+        }
+    }
+    history.push(ProvenEntry {
+        peer,
+        score_secs,
+        proven_at: now,
+    });
+}
+
+/// Record one credit for `relay` (caller holds the write lock). Rate limited
+/// per relay; unknown relays are ignored.
+fn credit_locked(table: &mut RelayTable, relay: &PeerId, now: Instant) -> bool {
+    let Some(record) = table.records.iter_mut().find(|r| &r.peer == relay) else {
+        return false;
+    };
+    let too_soon = record
+        .last_success
+        .is_some_and(|last| now.saturating_duration_since(last) < RELAY_SUCCESS_MIN_INTERVAL);
+    if too_soon {
+        return false;
+    }
+    record.proven_score = (record.proven_score_at(now) + RELAY_SUCCESS_WEIGHT_SECS as f64)
+        .min(RelayRecord::proven_cap());
+    record.last_success = Some(now);
+    let score = record.score(now);
+    note_proven_history(&mut table.proven_history, *relay, score, now);
+    true
 }
 
 /// Whether `ip` is in a range whose /24 (or /48) says nothing about who
@@ -648,9 +733,9 @@ fn circuit_through(
 /// statically trusted; reputation decides:
 ///
 /// * Rank: uptime (connected time, capped) plus a small, capped, decaying
-///   credit for LOCALLY PROVEN relay service (`record_proven_relay`: an
-///   end-to-end authenticated connection that actually ran over the relay's
-///   circuit). Self-asserted claims never score. Ties go to the OLDEST
+///   credit for LOCALLY PROVEN relay service (`record_proven_relay_via_target`:
+///   an end-to-end authenticated connection WE dialed to a trusted contact
+///   over the relay's circuit; inbound circuits never count). Self-asserted claims never score. Ties go to the OLDEST
 ///   record, never the newest, so a flood of fresh identities sorts behind
 ///   established relays.
 /// * Re-registration of a tracked relay is rate limited
@@ -742,7 +827,7 @@ impl CircuitRelayLadder {
             return RelayRegistration::NoObservedAddr;
         };
 
-        let proven = table.proven_history.contains(&relay_peer_id);
+        let proven = table.proven_history.iter().any(|e| e.peer == relay_peer_id);
         table
             .recent_admissions
             .retain(|(t, _)| now.saturating_duration_since(*t) < NEW_RELAY_WINDOW);
@@ -800,7 +885,7 @@ impl CircuitRelayLadder {
             first_seen: now,
             connected_since: Some(now),
             uptime_banked: Duration::ZERO,
-            successes: 0,
+            proven_score: 0.0,
             last_success: None,
             last_registration: now,
         });
@@ -808,43 +893,67 @@ impl CircuitRelayLadder {
     }
 
     /// Credit a relay for service WE proved locally: an end-to-end
-    /// authenticated connection to a third peer that actually ran over this
-    /// relay's circuit (or a delivery receipt for a message sent via it).
-    /// Never call this for something the relay merely claims (a
-    /// `RelayResponse.accepted` flag, a granted reservation): those are
-    /// forgeable and would let a Sybil outrank honest relays.
+    /// authenticated connection WE dialed to `target` that ran over this
+    /// relay's circuit, where `target` is independently trusted (a saved
+    /// contact). The caller is responsible for the trust check and for
+    /// refusing inbound circuits: an inbound circuit is dialed by a peer the
+    /// relay (or its Sybil) controls, so it proves nothing.
     ///
-    /// Returns `true` when a credit was recorded (it is rate limited per
-    /// relay by [`RELAY_SUCCESS_MIN_INTERVAL`] and capped).
-    pub fn record_proven_relay(&self, relay_peer_id: &PeerId) -> bool {
-        self.record_proven_relay_at(relay_peer_id, Instant::now())
+    /// Never call this for something the relay merely claims (a
+    /// `RelayResponse.accepted` flag, a granted reservation).
+    ///
+    /// Returns `true` when a credit was recorded. Limits: once per
+    /// (relay, target) per [`PROVEN_TARGET_MIN_INTERVAL`], per relay at most
+    /// one per [`RELAY_SUCCESS_MIN_INTERVAL`], and the score is capped.
+    pub fn record_proven_relay_via_target(&self, relay_peer_id: &PeerId, target: &PeerId) -> bool {
+        self.record_proven_relay_via_target_at(relay_peer_id, target, Instant::now())
     }
 
-    /// `record_proven_relay` with an explicit clock, for deterministic tests.
-    pub fn record_proven_relay_at(&self, relay_peer_id: &PeerId, now: Instant) -> bool {
-        let mut table = self.relays.write();
-        let credited = match table.records.iter_mut().find(|r| &r.peer == relay_peer_id) {
-            Some(record) => {
-                let too_soon = record.last_success.is_some_and(|last| {
-                    now.saturating_duration_since(last) < RELAY_SUCCESS_MIN_INTERVAL
-                });
-                if too_soon {
-                    false
-                } else {
-                    record.successes = record.successes.saturating_add(1).min(RELAY_SUCCESS_CAP);
-                    record.last_success = Some(now);
-                    true
-                }
-            }
-            None => false,
-        };
-        if credited && !table.proven_history.contains(relay_peer_id) {
-            if table.proven_history.len() >= PROVEN_HISTORY_CAP {
-                table.proven_history.remove(0);
-            }
-            table.proven_history.push(*relay_peer_id);
+    /// `record_proven_relay_via_target` with an explicit clock, for tests.
+    pub fn record_proven_relay_via_target_at(
+        &self,
+        relay_peer_id: &PeerId,
+        target: &PeerId,
+        now: Instant,
+    ) -> bool {
+        if relay_peer_id == target {
+            return false;
         }
-        credited
+        let mut table = self.relays.write();
+        let key = (*relay_peer_id, *target);
+        if table
+            .proven_targets
+            .get(&key)
+            .is_some_and(|last| now.saturating_duration_since(*last) < PROVEN_TARGET_MIN_INTERVAL)
+        {
+            return false;
+        }
+        if !credit_locked(&mut table, relay_peer_id, now) {
+            return false;
+        }
+        if table.proven_targets.len() >= PROVEN_TARGET_TRACK_CAP {
+            table.proven_targets.retain(|_, last| {
+                now.saturating_duration_since(*last) < PROVEN_TARGET_MIN_INTERVAL
+            });
+        }
+        if table.proven_targets.len() >= PROVEN_TARGET_TRACK_CAP {
+            let oldest = table
+                .proven_targets
+                .iter()
+                .min_by_key(|(_, last)| **last)
+                .map(|(k, _)| *k);
+            if let Some(oldest) = oldest {
+                table.proven_targets.remove(&oldest);
+            }
+        }
+        table.proven_targets.insert(key, now);
+        true
+    }
+
+    /// Per-relay credit without the target gate; test-only building block.
+    #[cfg(test)]
+    pub(crate) fn record_proven_relay_at(&self, relay_peer_id: &PeerId, now: Instant) -> bool {
+        credit_locked(&mut self.relays.write(), relay_peer_id, now)
     }
 
     /// A relay's authenticated connection is gone: stop offering it, bank its
@@ -1520,7 +1629,7 @@ mod tests {
     }
 
     /// The reputation signal is local proof only: a relay that merely claims
-    /// service (nothing calls `record_proven_relay`) gains nothing, so an
+    /// service (nothing calls `record_proven_relay_via_target`) gains nothing, so an
     /// honest proven relay outranks it even when the claimant is older.
     #[test]
     fn unproven_claims_gain_nothing_and_honest_proven_relay_outranks() {
@@ -1587,11 +1696,130 @@ mod tests {
         let cap_secs = u64::from(RELAY_SUCCESS_CAP) * RELAY_SUCCESS_WEIGHT_SECS;
         assert!(rec.proven_secs(at) <= cap_secs);
         assert!(cap_secs < RELAY_UPTIME_CAP.as_secs() / 100);
-        // Linear decay to zero without new credits.
-        let half = at + RELAY_SUCCESS_DECAY / 2;
-        assert!(rec.proven_secs(half) <= cap_secs / 2 + 1);
-        assert!(rec.proven_secs(half) > 0);
-        assert_eq!(rec.proven_secs(at + RELAY_SUCCESS_DECAY), 0);
+        // Credits stop: the score halves every half-life and heads to zero.
+        let after_two = at + RELAY_SUCCESS_HALF_LIFE * 2;
+        assert!(rec.proven_secs(after_two) <= cap_secs / 4 + 1);
+        assert!(rec.proven_secs(after_two) > 0);
+        assert!(rec.proven_secs(at + RELAY_SUCCESS_HALF_LIFE * 20) <= 1);
+    }
+
+    /// Finding 1 (batch 3): one credit per 24 h must not hold the maximum.
+    #[test]
+    fn periodic_single_credits_cannot_hold_the_cap() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let pid = fresh_pid();
+        assert_eq!(
+            add_at(&ladder, pid, vec![net_addr(1, 1)], t0),
+            RelayRegistration::Admitted
+        );
+        // Reach the cap quickly.
+        let mut at = t0;
+        for _ in 0..(RELAY_SUCCESS_CAP * 2) {
+            at += RELAY_SUCCESS_MIN_INTERVAL;
+            ladder.record_proven_relay_at(&pid, at);
+        }
+        let cap_secs = u64::from(RELAY_SUCCESS_CAP) * RELAY_SUCCESS_WEIGHT_SECS;
+        assert!(ladder.relays.read().records[0].proven_secs(at) > cap_secs * 9 / 10);
+        // Then one credit per 24 h for 30 days.
+        for _ in 0..30 {
+            at += RELAY_SUCCESS_DECAY;
+            assert!(ladder.record_proven_relay_at(&pid, at));
+        }
+        let held = ladder.relays.read().records[0].proven_secs(at);
+        assert!(
+            held <= RELAY_SUCCESS_WEIGHT_SECS * 2,
+            "daily credit must settle near one weight, got {held}"
+        );
+        assert!(held < cap_secs / 10);
+    }
+
+    /// Finding 2 (batch 3): credit is per (relay, target), at most daily.
+    #[test]
+    fn proven_credit_is_once_per_relay_target_pair_per_day() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let relay = fresh_pid();
+        let contact = fresh_pid();
+        let other = fresh_pid();
+        assert_eq!(
+            add_at(&ladder, relay, vec![net_addr(1, 1)], t0),
+            RelayRegistration::Admitted
+        );
+        let t1 = t0 + Duration::from_secs(100);
+        assert!(ladder.record_proven_relay_via_target_at(&relay, &contact, t1));
+        // The same contact again, even long after the per-relay interval.
+        for mins in [1u64, 60, 600, 1439] {
+            assert!(!ladder.record_proven_relay_via_target_at(
+                &relay,
+                &contact,
+                t1 + Duration::from_secs(mins * 60)
+            ));
+        }
+        // A different trusted contact is a distinct pair.
+        assert!(ladder.record_proven_relay_via_target_at(
+            &relay,
+            &other,
+            t1 + Duration::from_secs(60)
+        ));
+        // After a day the original pair may credit once more.
+        assert!(ladder.record_proven_relay_via_target_at(
+            &relay,
+            &contact,
+            t1 + PROVEN_TARGET_MIN_INTERVAL
+        ));
+        // A relay is never credited for itself, nor an unknown relay.
+        assert!(!ladder.record_proven_relay_via_target_at(&relay, &relay, t1));
+        assert!(!ladder.record_proven_relay_via_target_at(&fresh_pid(), &contact, t1));
+    }
+
+    /// Finding 3 (batch 3): proven Sybils must not push veterans out.
+    #[test]
+    fn proven_history_evicts_lowest_score_not_oldest() {
+        let ladder = CircuitRelayLadder::new();
+        let t0 = Instant::now();
+        let veteran = fresh_pid();
+        assert_eq!(
+            add_at(&ladder, veteran, vec![net_addr(1, 1)], t0),
+            RelayRegistration::Admitted
+        );
+        // The veteran proves itself long after admission: high score.
+        let vet_at = t0 + Duration::from_secs(5 * 24 * 3600);
+        assert!(ladder.record_proven_relay_at(&veteran, vet_at));
+        // A stream of young proven Sybils (low score) floods the history.
+        let mut now = vet_at;
+        {
+            let mut table = ladder.relays.write();
+            for _ in 0..(PROVEN_HISTORY_CAP * 2) {
+                now += NEW_RELAY_WINDOW;
+                note_proven_history(&mut table.proven_history, fresh_pid(), 100, now);
+            }
+        }
+        let table = ladder.relays.read();
+        assert!(table.proven_history.len() <= PROVEN_HISTORY_CAP);
+        assert!(
+            table.proven_history.iter().any(|e| e.peer == veteran),
+            "FIFO eviction would have dropped the veteran"
+        );
+    }
+
+    #[test]
+    fn proven_history_evicts_least_recently_proven_among_equal_scores() {
+        let t0 = Instant::now();
+        let mut history = Vec::new();
+        let peers: Vec<PeerId> = (0..PROVEN_HISTORY_CAP).map(|_| fresh_pid()).collect();
+        for (i, p) in peers.iter().enumerate() {
+            note_proven_history(&mut history, *p, 100, t0 + Duration::from_secs(i as u64));
+        }
+        let newcomer = fresh_pid();
+        note_proven_history(&mut history, newcomer, 100, t0 + Duration::from_secs(1000));
+        assert_eq!(history.len(), PROVEN_HISTORY_CAP);
+        assert!(history.iter().any(|e| e.peer == newcomer));
+        assert!(!history.iter().any(|e| e.peer == peers[0]));
+        // A lower-scoring newcomer is refused.
+        let weak = fresh_pid();
+        note_proven_history(&mut history, weak, 1, t0 + Duration::from_secs(2000));
+        assert!(!history.iter().any(|e| e.peer == weak));
     }
 
     #[test]

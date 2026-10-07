@@ -78,6 +78,46 @@ fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId)
         .unwrap_or(true)
 }
 
+/// The relay to credit for a freshly established connection, if any.
+///
+/// Relay reputation is earned only from a circuit WE dialed: an inbound
+/// circuit is opened by a peer that may be the relay's own Sybil, so it
+/// proves nothing. Returns `None` for inbound connections, non-circuit paths
+/// and self-referential circuits.
+fn outbound_circuit_relay(
+    is_dialer: bool,
+    remote_addr: &libp2p::Multiaddr,
+    target: &PeerId,
+) -> Option<PeerId> {
+    if !is_dialer {
+        return None;
+    }
+    super::dial_policy::circuit_relay_of(remote_addr).filter(|relay| relay != target)
+}
+
+/// Whether `peer_id` is independently trusted: a saved contact (identified
+/// by its public-key hex) that is not blocked. Missing core state fails
+/// closed. Invite-verified peers become contacts through the same store.
+fn peer_is_trusted_contact(core_handle: &Option<Weak<crate::IronCore>>, peer_id: &PeerId) -> bool {
+    let Ok(public_key) = extract_ed25519_public_key_from_peer_id(peer_id) else {
+        return false;
+    };
+    let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
+        return false;
+    };
+    if core
+        .is_peer_blocked(peer_id.to_string(), None)
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    core.contacts_store_manager()
+        .get_by_public_key(&hex::encode(public_key))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 fn empty_ledger_exchange_response() -> LedgerExchangeResponse {
     LedgerExchangeResponse {
         version_tag: 1,
@@ -6911,18 +6951,22 @@ pub async fn start_swarm_with_config(
                                 }
 
                                 // Relay reputation is earned only by service we proved
-                                // locally: this connection to `peer_id` was just
-                                // authenticated end to end (Noise) and runs over a
-                                // circuit through the relay named in its address.
+                                // locally: a circuit WE dialed (never an inbound one,
+                                // which a colluding peer can open at will) to a target
+                                // we independently trust (a saved contact), credited at
+                                // most once per (relay, target) per day.
                                 if !path_outcome.new_path_trimmed {
-                                    if let Some(relay_pid) = super::dial_policy::circuit_relay_of(&remote_addr) {
-                                        if relay_pid != peer_id
-                                            && circuit_relay_ladder.record_proven_relay(&relay_pid)
+                                    if let Some(relay_pid) =
+                                        outbound_circuit_relay(endpoint.is_dialer(), &remote_addr, &peer_id)
+                                    {
+                                        if peer_is_trusted_contact(&core_handle, &peer_id)
+                                            && circuit_relay_ladder
+                                                .record_proven_relay_via_target(&relay_pid, &peer_id)
                                         {
                                             tracing::debug!(
                                                 relay = %relay_pid,
                                                 via_peer = %peer_id,
-                                                "[CIRCUIT-RELAY] proven relay service: end-to-end connection over its circuit"
+                                                "[CIRCUIT-RELAY] proven relay service: outbound circuit to a trusted contact"
                                             );
                                         }
                                     }
@@ -10647,13 +10691,13 @@ mod tests {
             count("path_ledger.stamp(".to_string()) >= 9,
             "every liveness/traffic arm must stamp path activity"
         );
-        // Relay reputation is credited from exactly one signal: a connection
-        // authenticated end to end over the relay's circuit. Self-asserted
-        // relay claims (accepted response, granted reservation) never score.
-        assert_eq!(
-            count("circuit_relay_ladder.record_proven_relay(".to_string()),
-            1
-        );
+        // Relay reputation is credited from exactly one signal: an outbound
+        // circuit to a trusted contact. Self-asserted relay claims (accepted
+        // response, granted reservation) and inbound circuits never score.
+        assert_eq!(count(".record_proven_relay_via_target(".to_string()), 1);
+        assert_eq!(count(".record_proven_relay(".to_string()), 0);
+        assert_eq!(count("outbound_circuit_relay(".to_string()), 2);
+        assert_eq!(count("peer_is_trusted_contact(".to_string()), 2);
         assert_eq!(count("record_relay_success".to_string()), 0);
         // Registration is gated on the trim result.
         assert!(count("path_outcome.new_path_trimmed".to_string()) >= 1);
@@ -11265,6 +11309,59 @@ mod tests {
             &Some(Arc::downgrade(&core)),
             PeerId::random()
         ));
+    }
+
+    fn circuit_addr(relay: &PeerId, target: &PeerId) -> libp2p::Multiaddr {
+        format!("/ip4/198.51.100.7/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+            .parse()
+            .expect("fixture addr")
+    }
+
+    #[test]
+    fn inbound_circuit_gives_no_relay_credit() {
+        let relay = PeerId::random();
+        let target = PeerId::random();
+        let addr = circuit_addr(&relay, &target);
+        // Listener side (inbound): never credited.
+        assert_eq!(outbound_circuit_relay(false, &addr, &target), None);
+        // Dialer side (outbound): the relay is named.
+        assert_eq!(outbound_circuit_relay(true, &addr, &target), Some(relay));
+        // Direct (non-circuit) outbound paths and self-circuits: none.
+        let direct: libp2p::Multiaddr = "/ip4/198.51.100.7/tcp/4001".parse().expect("fixture");
+        assert_eq!(outbound_circuit_relay(true, &direct, &target), None);
+        assert_eq!(outbound_circuit_relay(true, &addr, &relay), None);
+    }
+
+    #[test]
+    fn only_saved_unblocked_contacts_are_trusted_circuit_targets() {
+        let core = Arc::new(crate::IronCore::new());
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test identity initialization must succeed");
+        let handle = Some(Arc::downgrade(&core));
+
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let contact_peer = keypair.public().to_peer_id();
+        let stranger = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        // Fail closed without core state, and for an unknown peer.
+        assert!(!peer_is_trusted_contact(&None, &contact_peer));
+        assert!(!peer_is_trusted_contact(&handle, &contact_peer));
+
+        let pk = extract_ed25519_public_key_from_peer_id(&contact_peer)
+            .expect("ed25519 peer id carries its key");
+        let pk_hex = hex::encode(pk);
+        core.contacts_store_manager()
+            .add(crate::store::contacts::Contact::new(pk_hex.clone(), pk_hex))
+            .expect("contact add must succeed");
+        assert!(peer_is_trusted_contact(&handle, &contact_peer));
+        assert!(!peer_is_trusted_contact(&handle, &stranger));
+
+        // A blocked contact is not trusted.
+        core.block_peer(contact_peer.to_string(), None, Some("test".to_string()))
+            .expect("test block must succeed");
+        assert!(!peer_is_trusted_contact(&handle, &contact_peer));
     }
 
     #[test]
