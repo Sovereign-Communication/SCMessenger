@@ -220,6 +220,34 @@ pub struct DiscoveryPeersResponse {
     pub peers: Vec<DiscoveredPeer>,
 }
 
+/// Default invite lifetime when `ttl_secs` is omitted (24 hours).
+pub const DEFAULT_INVITE_TTL_SECS: u64 = 24 * 3600;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateRequest {
+    pub ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateResponse {
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteRedeemRequest {
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteRedeemResponse {
+    pub inviter_id: String,
+    pub inviter_peer_id: Option<String>,
+    pub addresses_offered: u32,
+    pub addresses_imported: u32,
+    pub dial_attempted: u32,
+    pub dial_succeeded: u32,
+}
+
 // Farm Test Harness Types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -619,6 +647,58 @@ pub async fn get_identity_via_api() -> Result<serde_json::Value> {
     let value: serde_json::Value =
         serde_json::from_slice(&body_bytes).context("Failed to parse identity response JSON")?;
     Ok(value)
+}
+
+async fn post_json_via_api(path: &str, json: String) -> Result<(StatusCode, Vec<u8>)> {
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let req = hyper::Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{}{}", API_ADDR, path))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(json)))?;
+    let resp = client.request(req).await?;
+    let status = resp.status();
+    let body = resp.into_body().collect().await?.to_bytes();
+    Ok((status, body.to_vec()))
+}
+
+/// Ask the running node to mint a signed `SCI1:` invite (issue #469 T2).
+pub async fn create_invite_via_api(ttl_secs: u64) -> Result<String> {
+    let json = serde_json::to_string(&InviteCreateRequest {
+        ttl_secs: Some(ttl_secs),
+    })?;
+    let (status, body) = post_json_via_api("/api/invite/create", json).await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "invite create failed ({}): {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let response: InviteCreateResponse =
+        serde_json::from_slice(&body).context("Failed to parse invite create response")?;
+    Ok(response.payload)
+}
+
+/// Ask the running node to verify, import and dial an `SCI1:` invite.
+pub async fn redeem_invite_via_api(payload: &str) -> Result<InviteRedeemResponse> {
+    let json = serde_json::to_string(&InviteRedeemRequest {
+        payload: payload.to_string(),
+    })?;
+    let (status, body) = post_json_via_api("/api/invite/redeem", json).await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "invite rejected ({}): {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
+    }
+    serde_json::from_slice(&body).context("Failed to parse invite redeem response")
 }
 
 // Server implementation
@@ -1307,6 +1387,12 @@ fn export_diagnostics(
         "custody_audit_count".to_string(),
         core.custody_audit_count().into(),
     );
+    // Issue #469: unproven seed entries imported from invites and not yet
+    // promoted by a live dial.
+    payload.insert(
+        "invite_unproven_seed_entries".to_string(),
+        (core.ledger_manager.seed_addresses(u32::MAX).len() as u64).into(),
+    );
 
     let mut drift = Map::new();
     drift.insert("state".to_string(), core.drift_network_state().into());
@@ -1629,6 +1715,77 @@ async fn handle_fetch_artifact(
     }))
 }
 
+/// `POST /api/invite/create`: mint a signed `SCI1:` invite from this node's
+/// live listeners and external addresses (external first: more likely public).
+async fn handle_invite_create(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<InviteCreateRequest>,
+) -> Result<AxumJson<InviteCreateResponse>, (StatusCode, String)> {
+    let mut addrs: Vec<String> = Vec::new();
+    for addr in ctx
+        .swarm_handle
+        .get_external_addresses()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .chain(
+            ctx.swarm_handle
+                .get_listeners()
+                .await
+                .unwrap_or_default()
+                .into_iter(),
+        )
+    {
+        let addr = addr.to_string();
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
+    }
+
+    let ttl = request.ttl_secs.unwrap_or(DEFAULT_INVITE_TTL_SECS);
+    let payload = ctx.core.create_invite_qr(addrs, ttl).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to create invite: {}", e),
+        )
+    })?;
+    Ok(AxumJson(InviteCreateResponse { payload }))
+}
+
+/// `POST /api/invite/redeem`: verify + import via `IronCore`, then dial the
+/// returned addresses immediately through the swarm.
+async fn handle_invite_redeem(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<InviteRedeemRequest>,
+) -> Result<AxumJson<InviteRedeemResponse>, (StatusCode, String)> {
+    let report = ctx
+        .core
+        .redeem_invite_qr(request.payload)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invite rejected: {}", e)))?;
+
+    let mut attempted = 0u32;
+    let mut succeeded = 0u32;
+    for addr in &report.dial_addrs {
+        let Ok(multiaddr) = addr.parse::<libp2p::Multiaddr>() else {
+            continue;
+        };
+        attempted += 1;
+        match ctx.swarm_handle.dial(multiaddr).await {
+            Ok(()) => succeeded += 1,
+            Err(e) => tracing::warn!("[INVITE] dial {} failed: {}", addr, e),
+        }
+    }
+
+    Ok(AxumJson(InviteRedeemResponse {
+        inviter_id: report.inviter_id,
+        inviter_peer_id: report.inviter_peer_id,
+        addresses_offered: report.addresses_offered,
+        addresses_imported: report.addresses_imported,
+        dial_attempted: attempted,
+        dial_succeeded: succeeded,
+    }))
+}
+
 #[allow(clippy::disallowed_methods)] // serde_json::json! expands to unwrap() calls internally
 pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Result<()> {
     let ctx = Arc::new(ctx);
@@ -1697,6 +1854,8 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .route("/api/discovery/status", get(handle_get_discovery_status))
         .route("/api/discovery/scan", post(handle_trigger_discovery_scan))
         .route("/api/discovery/peers", get(handle_get_discovery_peers))
+        .route("/api/invite/create", post(handle_invite_create))
+        .route("/api/invite/redeem", post(handle_invite_redeem))
         .route("/api/shutdown", post(handle_shutdown))
         // Farm test harness routes
         .route("/submit-run", post(handle_submit_run))

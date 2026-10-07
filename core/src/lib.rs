@@ -130,6 +130,19 @@ pub struct SignatureResult {
     pub public_key_hex: String,
 }
 
+/// Outcome of redeeming an `SCI1:` invite (see `IronCore::redeem_invite_qr`).
+///
+/// `dial_addrs` is the list the caller must dial immediately through its
+/// existing dial path (`SwarmBridge::dial`): `IronCore` owns no swarm handle,
+/// so the dial itself is performed by the platform shell that owns the swarm.
+pub struct RedeemReport {
+    pub inviter_id: String,
+    pub inviter_peer_id: Option<String>,
+    pub addresses_offered: u32,
+    pub addresses_imported: u32,
+    pub dial_addrs: Vec<String>,
+}
+
 pub struct PreparedMessage {
     pub message_id: String,
     pub envelope_data: Vec<u8>,
