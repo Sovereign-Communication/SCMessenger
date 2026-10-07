@@ -5746,8 +5746,8 @@ pub async fn start_swarm_with_config(
                                         if let Some(message_id) = pending_relay_requests.remove(&request_id) {
                                             if let Some(pending) = pending_messages.remove(&message_id) {
                                                 if response.accepted {
-                                                    // Reputation: this relay just relayed a message for us.
-                                                    circuit_relay_ladder.record_relay_success(&peer);
+                                                    // No relay reputation here: `accepted` is the
+                                                    // relay's own claim, not proof of delivery.
                                                     let latency_ms = pending.attempt_start.elapsed().unwrap_or_default().as_millis() as u64;
                                                     multi_path_delivery.record_success(&message_id, vec![peer, pending.target_peer], latency_ms);
                                                     tracing::info!("[OK] Message relayed successfully via {} to {} ({}ms)", peer, pending.target_peer, latency_ms);
@@ -6331,8 +6331,8 @@ pub async fn start_swarm_with_config(
                                         renewal,
                                         ..
                                     } => {
-                                        // Reputation: the relay granted a reservation.
-                                        circuit_relay_ladder.record_relay_success(&relay_peer_id);
+                                        // No relay reputation here: a granted reservation
+                                        // is the relay's own claim, not proof of service.
                                         if renewal {
                                             tracing::debug!(
                                                 "Relay circuit reservation RENEWED via {}",
@@ -6676,9 +6676,16 @@ pub async fn start_swarm_with_config(
                                         &local_transport_addrs,
                                     );
                                     if !routable_relay_addrs.is_empty() {
+                                        // The relay's network group comes from the remote
+                                        // IP of THIS authenticated connection, never from
+                                        // the addresses it advertises about itself.
+                                        let observed_relay_ip = connection_tracker
+                                            .get_connection_by_id(&peer_id, &connection_id.to_string())
+                                            .and_then(|c| super::dial_policy::observed_direct_ip(&c.remote_addr));
                                         circuit_relay_ladder.add_relay(
                                             peer_id,
                                             routable_relay_addrs.clone(),
+                                            observed_relay_ip,
                                         );
                                     }
 
@@ -6901,6 +6908,24 @@ pub async fn start_swarm_with_config(
                                         retained_bound = super::per_peer_cap::RETAINED_MAX_PATHS_PER_PEER,
                                         "[CONN-CAP] closing redundant per-peer path to hold the retained bound"
                                     );
+                                }
+
+                                // Relay reputation is earned only by service we proved
+                                // locally: this connection to `peer_id` was just
+                                // authenticated end to end (Noise) and runs over a
+                                // circuit through the relay named in its address.
+                                if !path_outcome.new_path_trimmed {
+                                    if let Some(relay_pid) = super::dial_policy::circuit_relay_of(&remote_addr) {
+                                        if relay_pid != peer_id
+                                            && circuit_relay_ladder.record_proven_relay(&relay_pid)
+                                        {
+                                            tracing::debug!(
+                                                relay = %relay_pid,
+                                                via_peer = %peer_id,
+                                                "[CIRCUIT-RELAY] proven relay service: end-to-end connection over its circuit"
+                                            );
+                                        }
+                                    }
                                 }
 
                                 // ZOMBIE tracker: register the path (connection id +
@@ -10622,8 +10647,14 @@ mod tests {
             count("path_ledger.stamp(".to_string()) >= 9,
             "every liveness/traffic arm must stamp path activity"
         );
-        // Relay reputation is credited from both signals.
-        assert!(count("circuit_relay_ladder.record_relay_success(".to_string()) >= 2);
+        // Relay reputation is credited from exactly one signal: a connection
+        // authenticated end to end over the relay's circuit. Self-asserted
+        // relay claims (accepted response, granted reservation) never score.
+        assert_eq!(
+            count("circuit_relay_ladder.record_proven_relay(".to_string()),
+            1
+        );
+        assert_eq!(count("record_relay_success".to_string()), 0);
         // Registration is gated on the trim result.
         assert!(count("path_outcome.new_path_trimmed".to_string()) >= 1);
         // The old loose maps must not come back.
