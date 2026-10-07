@@ -21,6 +21,11 @@ use std::sync::Arc;
 pub const PLACEHOLDER_KEY_NOTE: &str =
     "public_key unavailable: not self-certifying from peer id; awaiting verified key";
 
+/// Longest peer id / public key string accepted by `ContactManager::add`.
+const MAX_CONTACT_ID_LEN: usize = 256;
+/// Longest nickname / note accepted by `ContactManager::add`.
+const MAX_CONTACT_TEXT_LEN: usize = 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
     pub peer_id: String,
@@ -661,6 +666,28 @@ impl ContactManager {
     }
 
     pub fn add(&self, mut contact: Contact) -> Result<(), IronCoreError> {
+        // Contacts arrive from platform/UI code and from parsed envelopes: bound
+        // every free-form field before it is canonicalized or persisted, and
+        // refuse a contact with no id at all (fails closed).
+        let too_long = |value: &Option<String>| {
+            value
+                .as_ref()
+                .is_some_and(|v| v.len() > MAX_CONTACT_TEXT_LEN)
+        };
+        if contact.peer_id.trim().is_empty()
+            || contact.peer_id.len() > MAX_CONTACT_ID_LEN
+            || contact.public_key.len() > MAX_CONTACT_ID_LEN
+            || too_long(&contact.nickname)
+            || too_long(&contact.local_nickname)
+            || too_long(&contact.notes)
+            || contact
+                .last_known_device_id
+                .as_ref()
+                .is_some_and(|v| v.len() > MAX_CONTACT_ID_LEN)
+        {
+            tracing::warn!("contact rejected: empty id or oversized field");
+            return Err(IronCoreError::InvalidInput);
+        }
         // UNIFICATION: Live canonicalize contact writes — mirrors migrate_libp2p_peer_ids_to_canonical_hex (load migration).
         // Prevents new 12D3 entries that would duplicate already-migrated hex nodes until next load.
         let peer_id_trimmed = contact.peer_id.trim().to_string();
@@ -1990,5 +2017,59 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Entry-point guard: `ContactManager::add` refuses an empty/blank id and
+    /// any oversized field, stores nothing for them, and still accepts a
+    /// well-formed contact.
+    #[test]
+    fn add_rejects_empty_and_oversized_fields() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"contact-input-bounds");
+
+        assert!(matches!(
+            mgr.add(Contact::new(String::new(), key_hex.clone())),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new("   ".to_string(), key_hex.clone())),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new(
+                "p".repeat(MAX_CONTACT_ID_LEN + 1),
+                key_hex.clone()
+            )),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new(
+                peer_id.clone(),
+                "k".repeat(MAX_CONTACT_ID_LEN + 1)
+            )),
+            Err(IronCoreError::InvalidInput)
+        ));
+        for field in 0..3 {
+            let mut contact = Contact::new(peer_id.clone(), key_hex.clone());
+            let big = Some("n".repeat(MAX_CONTACT_TEXT_LEN + 1));
+            match field {
+                0 => contact.nickname = big,
+                1 => contact.local_nickname = big,
+                _ => contact.notes = big,
+            }
+            assert!(matches!(mgr.add(contact), Err(IronCoreError::InvalidInput)));
+        }
+        let mut contact = Contact::new(peer_id.clone(), key_hex.clone());
+        contact.last_known_device_id = Some("d".repeat(MAX_CONTACT_ID_LEN + 1));
+        assert!(matches!(mgr.add(contact), Err(IronCoreError::InvalidInput)));
+        assert!(
+            mgr.get(key_hex.clone()).unwrap().is_none(),
+            "no rejected contact may be persisted"
+        );
+
+        // Control: the well-formed contact is accepted, so the rejections above
+        // are not vacuous.
+        mgr.add(Contact::new(peer_id, key_hex.clone())).unwrap();
+        assert!(mgr.get(key_hex).unwrap().is_some());
     }
 }
