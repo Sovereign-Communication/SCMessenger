@@ -69,7 +69,10 @@ Standing practice for SCMessenger completion work:
    `python scripts/jev_canonical_check.py --wp WPn --state-file ... [--changed-paths-from origin/main]`
    (bucketed gate, schema 1.1.0: changed paths select audit buckets, `na` answers
    are excluded from the score, any `no` in a protected bucket fails outright,
-   per-bucket threshold 0.80, overall min_confidence 0.70; see
+   per-bucket threshold 0.80, overall min_confidence 0.70; every `yes` must cite
+   evidence ids via `state.evidence_map`, and `na` on a path-selected protected
+   bucket's primary question is a hard fail unless justified plus
+   `--allow-protected-na`; see
    `HANDOFF/freebuff/jev/README.md`). Unkeyed fallback → `UNVERIFIED-JEV`.
 4. **Clarification:** if confidence <99% on a claim/design, run harness verify
    or a typed JEV question pack — do not invent a new root-cause plan.

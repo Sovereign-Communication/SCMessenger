@@ -41,14 +41,28 @@ ids `bucket.question`.
   fails the gate outright. Every applicable bucket must score >= 0.80
   (`--bucket-threshold`); `instruction` and the overall weighted score use
   `--min-confidence` (0.70).
-- Answers must be backed by `state.evidence`; with no evidence every applicable
-  `yes` is forced to `no`.
+- Every `yes` must cite specific evidence. Each `state.evidence` entry has an id
+  (its own `id` field, else `E1`, `E2`, ... by position; the evaluator sees the
+  ids). The state must carry `state.evidence_map["<bucket>.<question>"] = [ids]`.
+  The Harness answer objects (`choice`/`noul`) have no rationale or citation
+  field, so the citation is this structured map. A `yes` whose map entry is
+  missing, empty, or names an unknown id is downgraded to `no` (reason recorded
+  per answer in the result file).
+- `na` on the primary question of a protected bucket selected by changed paths
+  (identity `canon_identity`, routing `canon_routing_feed`, security_input
+  `validates_input`, security_crypto `safe_crypto`, ffi_boundary `ffi_contract`)
+  is treated as `no` (hard fail). Only
+  `state.na_justifications["<bucket>.<question>"]` (non-empty reason) together
+  with `--allow-protected-na` lets it stay excluded; every honoured override is
+  listed in the result file as `na_overrides` and printed as `[WARNING]`.
+  Non-primary questions and non-protected buckets keep plain N/A exclusion, as
+  does the legacy no-`files` invocation (nothing was selected by path).
 - With no applicable buckets the gate passes on `instruction` alone. A state with
   no `files` and no `--changed-paths-from` keeps the legacy identity + routing +
   instruction selection.
 - The result file adds `buckets_selected`, `buckets_na`, per-bucket
   `{score, verdict, answers}`, `applicable_count`, `overall_score` and
-  `gate_failures`; all 1.0.0 fields are retained. `is_passing` is the bucketed
+  `na_overrides`, `gate_failures`; all 1.0.0 fields are retained. `is_passing` is the bucketed
   gate decision, not the raw Harness `is_passing`.
 
 ## Re-run

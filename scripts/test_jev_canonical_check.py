@@ -35,6 +35,9 @@ def answers_for(selected, pick="yes", instruction=0.95, overrides=None) -> dict:
     return out
 
 
+ALL_CITED = {f"{b}.{q}": ["E1"] for b in jc.BUCKETS for q in jc.BUCKETS[b]["questions"]}
+
+
 class SelectionTests(unittest.TestCase):
     def test_instruction_always_selected(self):
         self.assertEqual(jc.select_buckets([]), ["instruction"])
@@ -91,7 +94,9 @@ class SelectionTests(unittest.TestCase):
 
 class ScoringTests(unittest.TestCase):
     def score(self, selected, ans, evidence=True, **kw):
-        return jc.score_gate(ans, selected, evidence_cited=evidence, **kw)
+        kw.setdefault("evidence_ids", ["E1"] if evidence else [])
+        kw.setdefault("evidence_map", ALL_CITED)
+        return jc.score_gate(ans, selected, **kw)
 
     def test_all_yes_passes(self):
         sel = ["identity", "instruction"]
@@ -107,7 +112,8 @@ class ScoringTests(unittest.TestCase):
             "routing.canon_routing_feed": choice("na"),
             "routing.callbacks_validated": choice("na"),
         })
-        g = self.score(sel, ans)
+        # Not selected by path (legacy / model-judged), so na stays excluded.
+        g = self.score(sel, ans, path_selected=[])
         self.assertTrue(g["passed"], g["failures"])
         self.assertEqual(g["applicable_count"], 2)  # dead_code + instruction
         self.assertIn("identity", g["buckets_na"])
@@ -152,8 +158,89 @@ class ScoringTests(unittest.TestCase):
         sel = ["identity", "instruction"]
         ans = answers_for(sel, overrides={
             "identity.canon_identity": choice("na"), "identity.recipient_parse_safe": choice("na")})
-        g = self.score(sel, ans, evidence=False)
+        g = self.score(sel, ans, evidence=False, path_selected=[])
         self.assertEqual(g["buckets"]["identity"]["verdict"], "na")
+
+    def test_yes_without_map_entry_downgraded(self):
+        sel = ["identity", "instruction"]
+        g = self.score(sel, answers_for(sel), evidence_map={})
+        self.assertFalse(g["passed"])
+        a = g["buckets"]["identity"]["answers"]["canon_identity"]
+        self.assertEqual(a["verdict"], "no")
+        self.assertIn("no evidence_map entry", a["reason"])
+
+    def test_yes_with_unknown_evidence_id_downgraded(self):
+        sel = ["identity", "instruction"]
+        emap = dict(ALL_CITED, **{"identity.canon_identity": ["E9"]})
+        g = self.score(sel, answers_for(sel), evidence_map=emap)
+        self.assertFalse(g["passed"])
+        a = g["buckets"]["identity"]["answers"]["canon_identity"]
+        self.assertIn("unknown evidence id", a["reason"])
+
+    def test_yes_with_empty_citation_list_downgraded(self):
+        sel = ["lifecycle", "instruction"]
+        emap = dict(ALL_CITED, **{"lifecycle.resources_closed": []})
+        self.assertFalse(self.score(sel, answers_for(sel), evidence_map=emap)["passed"])
+
+    def test_instruction_yes_also_needs_citation(self):
+        sel = ["instruction"]
+        emap = dict(ALL_CITED, **{"instruction.instruction_matches": ["nope"]})
+        self.assertFalse(self.score(sel, answers_for(sel), evidence_map=emap)["passed"])
+
+    def test_evidence_ids_from_position_or_id_field(self):
+        idx = jc.evidence_index({"evidence": ["cmd one", {"id": "T-7", "text": "t"}, {"text": "x"}]})
+        self.assertEqual(list(idx), ["E1", "T-7", "E3"])
+        st = jc.with_evidence_ids({"evidence": ["cmd one"]})
+        self.assertEqual(st["evidence"], [{"id": "E1", "text": "cmd one"}])
+
+    def test_protected_primary_na_is_hard_fail(self):
+        sel = ["identity", "instruction"]
+        ans = answers_for(sel, overrides={
+            "identity.canon_identity": choice("na"), "identity.recipient_parse_safe": choice("na")})
+        g = self.score(sel, ans)  # path_selected defaults to all selected
+        self.assertFalse(g["passed"])
+        self.assertEqual(g["buckets"]["identity"]["verdict"], "hard_fail")
+        self.assertEqual(g["na_overrides"], [])
+
+    def test_protected_primary_na_with_justification_needs_flag(self):
+        sel = ["routing", "instruction"]
+        ans = answers_for(sel, overrides={
+            "routing.canon_routing_feed": choice("na"), "routing.callbacks_validated": choice("na")})
+        just = {"routing.canon_routing_feed": "doc-only touch of a comment in transport/"}
+        g = self.score(sel, ans, na_justifications=just)
+        self.assertFalse(g["passed"])
+        self.assertIn("--allow-protected-na", g["buckets"]["routing"]["answers"]["canon_routing_feed"]["reason"])
+
+    def test_protected_primary_na_justified_and_flagged_passes_recorded(self):
+        sel = ["routing", "instruction"]
+        ans = answers_for(sel, overrides={
+            "routing.canon_routing_feed": choice("na"), "routing.callbacks_validated": choice("na")})
+        just = {"routing.canon_routing_feed": "doc-only touch of a comment in transport/"}
+        g = self.score(sel, ans, na_justifications=just, allow_protected_na=True)
+        self.assertTrue(g["passed"], g["failures"])
+        self.assertEqual(len(g["na_overrides"]), 1)
+        self.assertEqual(g["na_overrides"][0]["question"], "routing.canon_routing_feed")
+
+    def test_blank_justification_rejected(self):
+        sel = ["routing", "instruction"]
+        ans = answers_for(sel, overrides={
+            "routing.canon_routing_feed": choice("na"), "routing.callbacks_validated": choice("na")})
+        g = self.score(sel, ans, na_justifications={"routing.canon_routing_feed": "   "},
+                       allow_protected_na=True)
+        self.assertFalse(g["passed"])
+
+    def test_non_primary_na_in_protected_bucket_stays_excluded(self):
+        sel = ["identity", "instruction"]
+        ans = answers_for(sel, overrides={"identity.recipient_parse_safe": choice("na")})
+        g = self.score(sel, ans)
+        self.assertTrue(g["passed"], g["failures"])
+
+    def test_non_protected_na_still_excluded(self):
+        sel = ["lifecycle", "instruction"]
+        ans = answers_for(sel, overrides={"lifecycle.resources_closed": choice("na")})
+        g = self.score(sel, ans)
+        self.assertTrue(g["passed"], g["failures"])
+        self.assertIn("lifecycle", g["buckets_na"])
 
     def test_missing_answer_counts_as_no(self):
         sel = ["identity", "instruction"]
@@ -209,7 +296,8 @@ class MainSchemaTests(unittest.TestCase):
 
     def test_schema_and_single_call(self):
         state = {"instruction": "x", "files": ["core/src/old.rs", "docs/a.md"],
-                 "deleted_files": ["core/src/old.rs"], "evidence": ["cargo test: ok"]}
+                 "deleted_files": ["core/src/old.rs"], "evidence": ["cargo test: ok"],
+                 "evidence_map": ALL_CITED}
         rc, payload, cap = self.run_main(state, lambda ids: self.all_ids(ids))
         self.assertEqual(rc, 0)
         self.assertEqual(cap["calls"], 1)
@@ -225,13 +313,14 @@ class MainSchemaTests(unittest.TestCase):
         self.assertTrue(all("." in q for q in cap["questions"]))
 
     def test_legacy_invocation_without_files(self):
-        rc, payload, cap = self.run_main({"instruction": "x", "evidence": ["e"]},
+        rc, payload, cap = self.run_main({"instruction": "x", "evidence": ["e"], "evidence_map": ALL_CITED},
                                          lambda ids: self.all_ids(ids))
         self.assertEqual(rc, 0)
         self.assertEqual(payload["buckets_selected"], ["identity", "routing", "instruction"])
 
     def test_protected_no_exit_code(self):
-        state = {"instruction": "x", "files": ["core/src/routing/a.rs"], "evidence": ["e"]}
+        state = {"instruction": "x", "files": ["core/src/routing/a.rs"], "evidence": ["e"],
+                 "evidence_map": ALL_CITED}
 
         def ans(ids):
             a = self.all_ids(ids)
@@ -242,6 +331,31 @@ class MainSchemaTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(payload["is_passing"])
         self.assertEqual(payload["buckets"]["routing"]["verdict"], "hard_fail")
+
+    def test_main_protected_na_rejected_then_overridden_and_recorded(self):
+        state = {"instruction": "x", "files": ["core/src/routing/a.rs"], "evidence": ["e"],
+                 "evidence_map": ALL_CITED,
+                 "na_justifications": {"routing.canon_routing_feed": "comment-only change"}}
+
+        def ans(ids):
+            a = self.all_ids(ids)
+            a["routing.canon_routing_feed"] = choice("na")
+            a["routing.callbacks_validated"] = choice("na")
+            return a
+
+        rc, payload, _ = self.run_main(state, ans)
+        self.assertEqual(rc, 1)
+        self.assertEqual(payload["na_overrides"], [])
+        rc, payload, _ = self.run_main(state, ans, extra=("--allow-protected-na",))
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["na_overrides"][0]["question"], "routing.canon_routing_feed")
+
+    def test_main_passes_evidence_ids_to_evaluator_and_rejects_uncited(self):
+        seen = {}
+        state = {"instruction": "x", "files": ["docs/a.md"], "evidence": ["cmd"], "evidence_map": {}}
+        rc, payload, _ = self.run_main(state, lambda ids: self.all_ids(ids))
+        self.assertEqual(rc, 1)  # instruction yes has no evidence_map entry
+        self.assertFalse(payload["is_passing"])
 
 
 if __name__ == "__main__":

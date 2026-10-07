@@ -26,8 +26,17 @@ Gate rules:
   * any `no` in a protected bucket (identity, routing, security_*,
     ffi_boundary) fails the gate outright.
   * every applicable bucket must score >= --bucket-threshold (default 0.80).
-  * answers must be backed by state["evidence"]; with no evidence every
-    applicable `yes` is forced to `no` (uncited claims are not support).
+  * every `yes` must cite specific evidence. Each state["evidence"] entry has
+    an id (its own "id" field, else E1, E2, ... by position) and the state must
+    carry state["evidence_map"]["<bucket>.<question>"] = [evidence ids]. The
+    Harness choice/noul answers carry no rationale or citation field, so the
+    citation lives in this structured map; a `yes` whose map entry is missing,
+    empty, or names an id that does not exist is downgraded to `no`.
+  * a protected bucket selected by changed paths may NOT drop out via `na` on
+    its primary question (PROTECTED_PRIMARY). That `na` counts as `no` (hard
+    fail) unless state["na_justifications"]["<bucket>.<question>"] holds a
+    non-empty reason AND --allow-protected-na is passed; honoured overrides are
+    listed in the result as `na_overrides` and printed as [WARNING].
   * an empty applicable set passes on the instruction bucket alone.
 
 Exit 0 only if the gate passes on a live keyed answer. `--allow-fallback`
@@ -51,6 +60,16 @@ SCHEMA_VERSION = "1.1.0"
 DEFAULT_BUCKET_THRESHOLD = 0.80
 INSTRUCTION_BUCKET = "instruction"
 
+# Primary (canon) question of each protected bucket: `na` here is not allowed
+# when the bucket was selected by changed paths (see score_gate).
+PROTECTED_PRIMARY = {
+    "identity": ["canon_identity"],
+    "routing": ["canon_routing_feed"],
+    "security_input": ["validates_input"],
+    "security_crypto": ["safe_crypto"],
+    "ffi_boundary": ["ffi_contract"],
+}
+
 _NA_TEXT = "The question does not apply to this change (excluded from the score)."
 
 
@@ -59,8 +78,9 @@ def _ynq(question: str, yes: str, no: str) -> Dict[str, Any]:
     return {
         "type": "choice",
         "instructions": question
-        + " Answer yes only if cited evidence (a command or named test in the state) supports it;"
-        " answer na if the question does not apply to this change.",
+        + " Answer yes only if specific evidence supports it, and cite it: the state's evidence_map"
+        " must list the evidence ids (E1, E2, ...) for this question. Uncited yes counts as no."
+        " Answer na only if the question does not apply to this change.",
         "criteria": {"yes": yes, "no": no, "na": _NA_TEXT},
     }
 
@@ -395,7 +415,36 @@ def build_questions(selected: Iterable[str]) -> Dict[str, Dict[str, Any]]:
 # --------------------------------------------------------------------------- scoring
 
 
-def _score_answer(answer: Dict[str, Any], evidence_cited: bool) -> Dict[str, Any]:
+def evidence_index(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Map evidence id -> entry. Entries may be strings or dicts with an "id"."""
+    out: Dict[str, Any] = {}
+    for i, entry in enumerate(state.get("evidence") or [], start=1):
+        eid = str(entry["id"]) if isinstance(entry, dict) and entry.get("id") else f"E{i}"
+        out[eid] = entry
+    return out
+
+
+def with_evidence_ids(state: Dict[str, Any]) -> Dict[str, Any]:
+    """State copy whose evidence entries carry their ids, for the evaluator."""
+    ev = []
+    for eid, entry in evidence_index(state).items():
+        ev.append(dict(entry, id=eid) if isinstance(entry, dict) else {"id": eid, "text": entry})
+    return dict(state, evidence=ev)
+
+
+def _citation_problem(qkey: str, evidence_ids: Set[str], evidence_map: Dict[str, Any]) -> Optional[str]:
+    cited = evidence_map.get(qkey)
+    if isinstance(cited, str):
+        cited = [cited]
+    if not isinstance(cited, list) or not cited:
+        return "uncited: no evidence_map entry for this question"
+    bad = [str(c) for c in cited if str(c) not in evidence_ids]
+    if bad:
+        return "uncited: evidence_map names unknown evidence id(s) " + ",".join(bad)
+    return None
+
+
+def _score_answer(answer: Dict[str, Any], citation_problem: Optional[str]) -> Dict[str, Any]:
     """Normalise one Harness answer to {verdict: yes|no|na, score, ...}."""
     if answer.get("type") == "choice":
         probs = answer.get("probabilities") or {}
@@ -410,8 +459,8 @@ def _score_answer(answer: Dict[str, Any], evidence_cited: bool) -> Dict[str, Any
     else:  # noul
         value = float(answer.get("noul", 0.0))
         out = {"verdict": "yes" if value >= 0.5 else "no", "score": value}
-    if not evidence_cited and out["verdict"] == "yes":
-        out.update(verdict="no", score=0.0, reason="uncited: state.evidence is empty")
+    if citation_problem and out["verdict"] == "yes":
+        out.update(verdict="no", score=0.0, reason=citation_problem)
     return out
 
 
@@ -419,11 +468,25 @@ def score_gate(
     answers: Dict[str, Any],
     selected: List[str],
     *,
-    evidence_cited: bool,
+    evidence_ids: Iterable[str] = (),
+    evidence_map: Optional[Dict[str, Any]] = None,
+    na_justifications: Optional[Dict[str, Any]] = None,
+    allow_protected_na: bool = False,
+    path_selected: Optional[Iterable[str]] = None,
     min_confidence: float = 0.70,
     bucket_threshold: float = DEFAULT_BUCKET_THRESHOLD,
 ) -> Dict[str, Any]:
-    """Pure scoring of a merged `bucket.qid` answer map. N/A never counts."""
+    """Pure scoring of a merged `bucket.qid` answer map.
+
+    N/A is excluded from the score, except for the primary question of a
+    protected bucket selected by path (`path_selected`; None = every selected
+    bucket), where it is a hard fail unless justified AND allow_protected_na.
+    """
+    ids = set(evidence_ids)
+    emap = evidence_map or {}
+    justif = na_justifications or {}
+    path_sel = set(selected) if path_selected is None else set(path_selected)
+    na_overrides: List[Dict[str, str]] = []
     buckets: Dict[str, Any] = {}
     failures: List[str] = []
     weighted, weight_sum, applicable = 0.0, 0.0, 0
@@ -435,12 +498,29 @@ def score_gate(
             continue
         q_results: Dict[str, Any] = {}
         for qid in spec["questions"]:
-            ans = answers.get(f"{name}.{qid}")
+            qkey = f"{name}.{qid}"
+            ans = answers.get(qkey)
             q_results[qid] = (
-                _score_answer(ans, evidence_cited)
+                _score_answer(ans, _citation_problem(qkey, ids, emap))
                 if isinstance(ans, dict)
                 else {"verdict": "no", "score": 0.0, "reason": "missing answer"}
             )
+            if (
+                q_results[qid]["verdict"] == "na"
+                and spec["protected"]
+                and name in path_sel
+                and qid in PROTECTED_PRIMARY.get(name, [])
+            ):
+                reason = justif.get(qkey)
+                reason = reason.strip() if isinstance(reason, str) else ""
+                if reason and allow_protected_na:
+                    na_overrides.append({"question": qkey, "justification": reason})
+                    q_results[qid]["na_override"] = reason
+                else:
+                    why = ("justification given but --allow-protected-na not set" if reason
+                           else "no na_justifications entry")
+                    q_results[qid] = {"verdict": "no", "score": 0.0,
+                                      "reason": f"protected primary question answered na ({why}); treated as no"}
         live = {k: v for k, v in q_results.items() if v["verdict"] != "na"}
         if not live:
             buckets[name] = {"score": None, "verdict": "na", "na_reason": "model_na",
@@ -472,6 +552,7 @@ def score_gate(
         "applicable_count": applicable,
         "buckets_selected": list(selected),
         "buckets_na": [n for n, b in buckets.items() if b["verdict"] == "na"],
+        "na_overrides": na_overrides,
         "buckets": buckets,
     }
 
@@ -518,6 +599,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Select buckets from `git diff` against BASE_REF (merged with state files)")
     ap.add_argument("--repo-root", default=".", help="Repo for --changed-paths-from (default: cwd)")
     ap.add_argument(
+        "--allow-protected-na",
+        action="store_true",
+        help="Honour state['na_justifications'] for `na` on a path-selected protected bucket's "
+             "primary question (default: such na is treated as no)",
+    )
+    ap.add_argument(
         "--allow-fallback",
         action="store_true",
         help="Exit 0 on structural fallback only if explicitly allowed (still prints UNVERIFIED-JEV).",
@@ -544,6 +631,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     state.setdefault("wp", args.wp)
 
     info = resolve_paths(args, state)
+    path_selected: Optional[Set[str]] = None
     if info["paths"] or info["deleted"]:
         selected = select_buckets(
             info["paths"],
@@ -554,9 +642,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         # Legacy invocation with no file list: the original canon pair + instruction.
         selected = ["identity", "routing", INSTRUCTION_BUCKET]
+        path_selected = set()  # not selected by path: legitimate na stays excluded
+    if path_selected is None:
+        path_selected = set(selected)
     questions = build_questions(selected)
-    evidence_cited = bool(state.get("evidence"))
-    state = dict(state, jev_gate={"buckets_selected": selected, "changed_paths": info["paths"][:200]})
+    ev_idx = evidence_index(state)
+    evidence_map = state.get("evidence_map") or {}
+    na_justifications = state.get("na_justifications") or {}
+    state = dict(with_evidence_ids(state), jev_gate={"buckets_selected": selected, "changed_paths": info["paths"][:200]})
 
     mod = import_harness()
     source = mod["source"]
@@ -589,7 +682,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     gate = score_gate(
         result.answers or {},
         selected,
-        evidence_cited=evidence_cited,
+        evidence_ids=ev_idx.keys(),
+        evidence_map=evidence_map,
+        na_justifications=na_justifications,
+        allow_protected_na=args.allow_protected_na,
+        path_selected=path_selected,
         min_confidence=args.min_confidence,
         bucket_threshold=args.bucket_threshold,
     )
@@ -597,6 +694,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         b = gate["buckets"][name]
         score = "n/a" if b["score"] is None else f"{b['score']:.2f}"
         print(f"[INFO] bucket {name}: verdict={b['verdict']} score={score}")
+    for ov in gate["na_overrides"]:
+        print(f"[WARNING] PROTECTED-NA OVERRIDE {ov['question']}: {ov['justification']}")
     for failure in gate["failures"]:
         print(f"[INFO] gate failure: {failure}")
     canonical_pass = bool(gate["passed"]) and not result.is_fallback
@@ -619,6 +718,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "output_tokens": getattr(result, "output_tokens", 0),
         "buckets_selected": gate["buckets_selected"],
         "buckets_na": gate["buckets_na"],
+        "na_overrides": gate["na_overrides"],
         "buckets": {
             n: {"score": b["score"], "verdict": b["verdict"], "answers": b["answers"]}
             for n, b in gate["buckets"].items()
