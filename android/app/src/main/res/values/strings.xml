@@ -433,7 +433,7 @@
     <string name="add_contact_nearby_title">Nearby Discovery</string>
     <string name="add_contact_nearby_description">Find peers broadcasting on this network via BLE, Wi-Fi, mDNS, or TCP.</string>
     <string name="add_contact_nearby_searching">Searching for nearby peers on this network…</string>
-    <string name="add_contact_nearby_empty">No nearby peers found</string>
+    <string name="add_contact_nearby_empty">Searching for nearby nodes</string>
     <string name="add_contact_nearby_rescan">Rescan</string>
     <string name="add_contact_nearby_rescan_content_description">Rescan for nearby peers, including any you previously dismissed</string>
     <string name="add_contact_nearby_add_button">Add</string>
