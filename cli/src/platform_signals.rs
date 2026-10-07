@@ -18,7 +18,7 @@
 
 use scmessenger_core::transport::PowerState;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 
 /// Battery percentage at or below which an unplugged device counts as Low.
@@ -128,16 +128,42 @@ impl ChangeWatch {
     }
 }
 
+/// The one process-wide registration. The OS source (a Windows address-change
+/// registration, a Linux netlink thread) is created at most once; later calls
+/// share it, so repeated calls cannot leak a registration or an `Arc` each.
+static SHARED_WATCH: OnceLock<(Arc<Notify>, Arc<AtomicBool>)> = OnceLock::new();
+static SHARED_INIT: Mutex<()> = Mutex::new(());
+
 /// Start the OS notification source for this platform, or `None` when the
-/// platform has none (or registration failed): the caller then polls.
+/// platform has none (or registration failed): the caller then polls. Safe
+/// to call repeatedly: only the first successful call registers with the OS.
+/// A failed registration is not cached, so a later call may succeed.
 pub fn start_change_watch() -> Option<ChangeWatch> {
-    let notify = Arc::new(Notify::new());
-    let alive = Arc::new(AtomicBool::new(true));
-    if platform_start(&notify, &alive) {
-        Some(ChangeWatch { notify, alive })
-    } else {
-        None
+    let _guard = SHARED_INIT.lock().unwrap_or_else(|e| e.into_inner());
+    if SHARED_WATCH.get().is_none() {
+        let notify = Arc::new(Notify::new());
+        let alive = Arc::new(AtomicBool::new(true));
+        if platform_start(&notify, &alive) {
+            // Serialised by SHARED_INIT, so this cannot already be set.
+            let _ = SHARED_WATCH.set((notify, alive));
+        }
     }
+    SHARED_WATCH.get().map(|(notify, alive)| ChangeWatch {
+        notify: Arc::clone(notify),
+        alive: Arc::clone(alive),
+    })
+}
+
+/// Delay before re-opening a dead netlink socket after `failures`
+/// consecutive failed attempts: exponential from the base, bounded so a
+/// recovered kernel interface is picked up again within the cap. Never
+/// returns a give-up signal.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn reopen_backoff(failures: u32) -> std::time::Duration {
+    const BASE_MS: u64 = 500;
+    const CAP_MS: u64 = 60_000;
+    let shift = failures.min(16);
+    std::time::Duration::from_millis(BASE_MS.saturating_mul(1u64 << shift).min(CAP_MS))
 }
 
 #[cfg(windows)]
@@ -184,8 +210,10 @@ fn platform_start(notify: &Arc<Notify>, _alive: &Arc<AtomicBool>) -> bool {
     }
 }
 
+/// Open and bind a `NETLINK_ROUTE` socket subscribed to link and address
+/// changes. Returns the raw descriptor, owned by the caller.
 #[cfg(target_os = "linux")]
-fn platform_start(notify: &Arc<Notify>, alive: &Arc<AtomicBool>) -> bool {
+fn open_netlink() -> std::io::Result<libc::c_int> {
     // Netlink multicast groups (linux/rtnetlink.h).
     const RTMGRP_LINK: u32 = 0x1;
     const RTMGRP_IPV4_IFADDR: u32 = 0x10;
@@ -200,11 +228,7 @@ fn platform_start(notify: &Arc<Notify>, alive: &Arc<AtomicBool>) -> bool {
         )
     };
     if fd < 0 {
-        tracing::warn!(
-            "[DISCOVERY] netlink socket failed ({}); falling back to scheduler-driven poll",
-            std::io::Error::last_os_error()
-        );
-        return false;
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: sockaddr_nl is plain-old-data; all-zero is a valid value.
     let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
@@ -219,41 +243,98 @@ fn platform_start(notify: &Arc<Notify>, alive: &Arc<AtomicBool>) -> bool {
         )
     };
     if rc < 0 {
-        tracing::warn!(
-            "[DISCOVERY] netlink bind failed ({}); falling back to scheduler-driven poll",
-            std::io::Error::last_os_error()
-        );
+        let err = std::io::Error::last_os_error();
         // SAFETY: `fd` is an open descriptor owned by this function.
         unsafe { libc::close(fd) };
-        return false;
+        return Err(err);
     }
+    Ok(fd)
+}
 
+/// Read one netlink socket until it fails fatally. Receive-buffer overruns
+/// (`ENOBUFS`) mean notifications were dropped, which is itself a change
+/// hint: wake the monitor (it diffs the real interface set) and keep
+/// reading. Returns the fatal error and whether any message was received.
+#[cfg(target_os = "linux")]
+fn read_netlink(fd: libc::c_int, notify: &Notify) -> (std::io::Error, bool) {
+    let mut buf = [0u8; 4096];
+    let mut received = false;
+    loop {
+        // SAFETY: `buf` is a valid writable buffer of the given length and
+        // `fd` is an open netlink socket owned by the calling thread.
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if err.raw_os_error() == Some(libc::ENOBUFS) {
+                notify.notify_one();
+                continue;
+            }
+            return (err, received);
+        }
+        received = true;
+        // Any link/address message is a change hint; the monitor diffs the
+        // real interface set.
+        notify.notify_one();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_start(notify: &Arc<Notify>, alive: &Arc<AtomicBool>) -> bool {
+    let first_fd = match open_netlink() {
+        Ok(fd) => fd,
+        Err(e) => {
+            tracing::warn!(
+                "[DISCOVERY] netlink socket failed ({}); falling back to scheduler-driven poll",
+                e
+            );
+            return false;
+        }
+    };
     let notify = Arc::clone(notify);
     let alive = Arc::clone(alive);
     let spawned = std::thread::Builder::new()
         .name("scm-netlink-watch".to_string())
         .spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut fd = first_fd;
+            let mut failures: u32 = 0;
             loop {
-                // SAFETY: `buf` is a valid writable buffer of the given
-                // length and `fd` is an open netlink socket owned by this
-                // thread.
-                let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
-                if n < 0 {
-                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                        continue;
+                let (err, received) = read_netlink(fd, &notify);
+                // SAFETY: `fd` is still owned by this thread and is closed
+                // exactly once before being replaced below.
+                unsafe { libc::close(fd) };
+                alive.store(false, Ordering::SeqCst);
+                // Wake the monitor so it polls while the source is down.
+                notify.notify_one();
+                // A socket that delivered messages was healthy: restart the
+                // backoff; one that died unproductively keeps escalating.
+                failures = if received {
+                    0
+                } else {
+                    failures.saturating_add(1)
+                };
+                tracing::warn!(
+                    "[DISCOVERY] netlink read failed ({}); re-opening with backoff, polling meanwhile",
+                    err
+                );
+                // The source is never abandoned: retry until a socket opens.
+                fd = loop {
+                    std::thread::sleep(reopen_backoff(failures));
+                    match open_netlink() {
+                        Ok(new_fd) => break new_fd,
+                        Err(e) => {
+                            failures = failures.saturating_add(1);
+                            tracing::warn!("[DISCOVERY] netlink re-open failed ({})", e);
+                        }
                     }
-                    break;
-                }
-                // Any link/address message is a change hint; the monitor
-                // diffs the real interface set.
+                };
+                alive.store(true, Ordering::SeqCst);
+                tracing::info!("[DISCOVERY] network-change source: netlink re-opened");
+                // Changes during the outage were missed: force a diff.
                 notify.notify_one();
             }
-            alive.store(false, Ordering::SeqCst);
-            // SAFETY: `fd` is still owned by this thread and is closed once.
-            unsafe { libc::close(fd) };
-            // Wake the monitor so it notices `alive == false` and polls.
-            notify.notify_one();
         });
     match spawned {
         Ok(_) => {
@@ -265,8 +346,8 @@ fn platform_start(notify: &Arc<Notify>, alive: &Arc<AtomicBool>) -> bool {
                 "[DISCOVERY] netlink thread spawn failed ({}); falling back to scheduler-driven poll",
                 e
             );
-            // SAFETY: the thread never started, so `fd` is still ours.
-            unsafe { libc::close(fd) };
+            // SAFETY: the thread never started, so `first_fd` is still ours.
+            unsafe { libc::close(first_fd) };
             false
         }
     }
@@ -289,6 +370,28 @@ mod tests {
         assert_eq!(classify_power(Some(false), Some(80)), PowerState::Normal);
         assert_eq!(classify_power(Some(false), Some(20)), PowerState::Low);
         assert_eq!(classify_power(Some(false), Some(3)), PowerState::Low);
+    }
+
+    #[test]
+    fn reopen_backoff_grows_is_bounded_and_never_zero() {
+        let mut prev = std::time::Duration::ZERO;
+        for failures in 0..64u32 {
+            let d = reopen_backoff(failures);
+            assert!(d > std::time::Duration::ZERO);
+            assert!(d >= prev);
+            assert!(d <= std::time::Duration::from_secs(60));
+            prev = d;
+        }
+        assert!(reopen_backoff(3) > reopen_backoff(0));
+        assert_eq!(reopen_backoff(u32::MAX), std::time::Duration::from_secs(60));
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn repeated_start_shares_one_registration() {
+        if let (Some(a), Some(b)) = (start_change_watch(), start_change_watch()) {
+            assert!(Arc::ptr_eq(&a.notify, &b.notify));
+        }
     }
 
     #[test]

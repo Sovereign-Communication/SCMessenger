@@ -13,7 +13,7 @@
 
 use crate::platform_signals;
 use scmessenger_core::transport::{
-    DiscoveryInputs, DiscoveryScheduler, NetworkEvent, SwarmHandle, TransportClass,
+    DiscoveryInputs, DiscoveryScheduler, NetworkEvent, PowerState, SwarmHandle, TransportClass,
 };
 use scmessenger_core::IronCore;
 use std::collections::BTreeSet;
@@ -37,13 +37,24 @@ pub enum WaitOutcome {
 pub struct SeedDialClient {
     scheduler: DiscoveryScheduler,
     wake: Notify,
+    /// Signalled when an event is coalesced, so a wait in flight re-reads the
+    /// scheduler's pending-reset due time.
+    rearm: Notify,
 }
 
 impl SeedDialClient {
     pub fn new() -> Arc<Self> {
+        Self::with_scheduler(DiscoveryScheduler::with_system_time(
+            TransportClass::Internet,
+        ))
+    }
+
+    /// Client over a caller-supplied scheduler (injected clock in tests).
+    pub fn with_scheduler(scheduler: DiscoveryScheduler) -> Arc<Self> {
         Arc::new(Self {
-            scheduler: DiscoveryScheduler::with_system_time(TransportClass::Internet),
+            scheduler,
             wake: Notify::new(),
+            rearm: Notify::new(),
         })
     }
 
@@ -55,6 +66,10 @@ impl SeedDialClient {
             // notify_one stores a permit when nobody is waiting yet, so an
             // event that lands mid-sweep still wakes the next wait.
             self.wake.notify_one();
+        } else if self.scheduler.pending_reset_due_in().is_some() {
+            // Coalesced, not lost: the wait must also end when the deferred
+            // reset falls due (a stored permit covers a not-yet-started wait).
+            self.rearm.notify_one();
         }
         affected
     }
@@ -67,11 +82,36 @@ impl SeedDialClient {
         Duration::from_millis(self.scheduler.snapshot().interval_ms.max(1))
     }
 
-    /// Sleep for `delay`, or return early when an affecting event arrives.
+    /// Sleep for `delay`, or return early when an affecting event arrives or
+    /// when a coalesced reset falls due: the wait is effectively
+    /// `min(delay, pending reset due time)`, so a real change absorbed by flap
+    /// damping is applied within its window instead of after the full sleep.
     pub async fn wait(&self, delay: Duration) -> WaitOutcome {
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => WaitOutcome::Elapsed,
-            _ = self.wake.notified() => WaitOutcome::Woken,
+        let sleep = tokio::time::sleep(delay);
+        tokio::pin!(sleep);
+        loop {
+            let rearmed = self.rearm.notified();
+            tokio::pin!(rearmed);
+            // Registered before the due time is read so a coalesce landing in
+            // between is not missed.
+            rearmed.as_mut().enable();
+            let pending = self.scheduler.pending_reset_due_in();
+            let due = async {
+                match pending {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::select! {
+                _ = &mut sleep => return WaitOutcome::Elapsed,
+                _ = self.wake.notified() => return WaitOutcome::Woken,
+                _ = due => {
+                    if self.scheduler.apply_pending_reset() {
+                        return WaitOutcome::Woken;
+                    }
+                }
+                _ = &mut rearmed => {}
+            }
         }
     }
 }
@@ -168,6 +208,8 @@ pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> usi
 pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialClient>) {
     let mut sweep: u32 = 0;
     let mut previous_peers: usize = 0;
+    // No battery (or an unread sample) means mains powered.
+    let mut power = PowerState::Charging;
     loop {
         sweep = sweep.saturating_add(1);
         let peers = sweep_once(&swarm, &core, sweep).await;
@@ -186,9 +228,14 @@ pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialCl
         // Power is read from the OS where cheap (Linux sysfs, Windows power
         // status); with no battery the computed default is mains powered. The
         // CLI is always foreground. Density comes from the live peer count.
+        // The sysfs reads are blocking file I/O: keep them off the async
+        // worker. A failed join keeps the previous sample.
+        power = tokio::task::spawn_blocking(platform_signals::detect_power_state)
+            .await
+            .unwrap_or(power);
         client.scheduler.set_inputs(DiscoveryInputs {
             connected_peers: u32::try_from(peers).unwrap_or(u32::MAX),
-            power: platform_signals::detect_power_state(),
+            power,
             foreground: true,
         });
         let delay = client.scheduler.next_delay();
@@ -303,6 +350,49 @@ mod tests {
             foreground: true,
         });
         assert!(client.scheduler.ceiling_ms() > sparse);
+    }
+
+    struct ManualClock(std::sync::atomic::AtomicU64);
+    impl scmessenger_core::transport::SchedulerClock for ManualClock {
+        fn now_ms(&self) -> u64 {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// Rule-8 review F1: a flap followed by a real change 300 ms later is
+    /// coalesced, but a long sleep already in flight must still end by the
+    /// window end (500 ms floor), not after the full delay.
+    #[tokio::test]
+    async fn coalesced_real_change_ends_long_sleep_by_window_end() {
+        let clock = Arc::new(ManualClock(std::sync::atomic::AtomicU64::new(0)));
+        let scheduler = DiscoveryScheduler::new(
+            TransportClass::Internet,
+            scmessenger_core::transport::SchedulerConfig::for_transport(TransportClass::Internet),
+            clock.clone(),
+            Arc::new(scmessenger_core::transport::ThreadRngJitter),
+        );
+        let client = SeedDialClient::with_scheduler(scheduler);
+        assert!(client.emit(NetworkEvent::WifiChanged));
+        // The reset's own wake permit belongs to the sweep that just ran.
+        assert_eq!(
+            client.wait(Duration::from_secs(3600)).await,
+            WaitOutcome::Woken
+        );
+        clock.0.store(300, std::sync::atomic::Ordering::SeqCst);
+        let waiter = {
+            let c = Arc::clone(&client);
+            tokio::spawn(async move { c.wait(Duration::from_secs(3600)).await })
+        };
+        tokio::task::yield_now().await;
+        // Coalesced while the long sleep is in flight.
+        assert!(!client.emit(NetworkEvent::CellularChanged));
+        let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
+            .await
+            .expect("coalesced reset must end the wait by the window end")
+            .expect("waiter task");
+        assert_eq!(outcome, WaitOutcome::Woken);
+        assert_eq!(client.scheduler.snapshot().resets, 2);
+        assert_eq!(client.scheduler.pending_reset_due_in(), None);
     }
 
     /// The fallback poll interval follows scheduler state, not a literal.

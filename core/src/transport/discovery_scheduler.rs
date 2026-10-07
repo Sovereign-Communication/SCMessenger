@@ -483,6 +483,55 @@ impl DiscoveryScheduler {
         self.state.write().unproven_resets = 0;
     }
 
+    /// Clock reading at which the coalesced reset (if any) becomes due.
+    fn pending_due_ms(&self, st: &State) -> Option<u64> {
+        let (Some(_), Some(last)) = (st.pending_reset, st.last_reset_at_ms) else {
+            return None;
+        };
+        let ceiling = compute_ceiling_ms(&self.config, &st.inputs);
+        let window = coalesce_window_ms(&self.config, st.unproven_resets, ceiling);
+        Some(last.saturating_add(window))
+    }
+
+    /// Time until a coalesced (deferred) reset falls due, or `None` when no
+    /// reset is pending. `Some(ZERO)` means it is already due. A caller
+    /// sleeping on a long timer must also wake at this instant, otherwise a
+    /// real change absorbed by flap damping is only noticed when the current
+    /// sleep (up to the ceiling) ends.
+    pub fn pending_reset_due_in(&self) -> Option<Duration> {
+        let now = self.clock.now_ms();
+        let st = self.state.read();
+        self.pending_due_ms(&st)
+            .map(|due| Duration::from_millis(due.saturating_sub(now)))
+    }
+
+    /// Apply the coalesced reset now. Call when the timer from
+    /// [`pending_reset_due_in`](Self::pending_reset_due_in) fired. Returns
+    /// `true` when a reset was applied (the caller must attempt immediately),
+    /// `false` when nothing was pending.
+    pub fn apply_pending_reset(&self) -> bool {
+        let now = self.clock.now_ms();
+        let applied = {
+            let mut st = self.state.write();
+            let pending = st.pending_reset;
+            pending.map(|kind| (kind, self.apply_reset(&mut st, now, kind)))
+        };
+        match applied {
+            Some((kind, (interval_ms, attempts, peers))) => {
+                tracing::info!(
+                    "[DISCOVERY] event={} transport={} phase=aggressive interval_ms={} attempt={} peers={} (deferred reset applied at window end)",
+                    kind,
+                    self.transport.as_str(),
+                    interval_ms,
+                    attempts,
+                    peers
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Apply an accepted reset. Returns (interval, attempts, peers) for logging.
     fn apply_reset(&self, st: &mut State, now: u64, kind: &'static str) -> (u64, u32, u32) {
         st.interval_ms = self.config.floor_ms;
@@ -514,9 +563,7 @@ impl DiscoveryScheduler {
             // A coalesced event is applied the moment its window has ended;
             // until then the wait below is capped so it ends exactly there.
             let mut cap_ms = u64::MAX;
-            if let (Some(kind), Some(last)) = (st.pending_reset, st.last_reset_at_ms) {
-                let window = coalesce_window_ms(&self.config, st.unproven_resets, ceiling);
-                let due = last.saturating_add(window);
+            if let (Some(kind), Some(due)) = (st.pending_reset, self.pending_due_ms(&st)) {
                 if now >= due {
                     self.apply_reset(&mut st, now, kind);
                 } else {
@@ -1053,6 +1100,24 @@ mod tests {
         s.next_delay();
         assert_eq!(s.snapshot().resets, resets + 1);
         assert_eq!(s.snapshot().last_event, Some("CellularChanged"));
+    }
+
+    #[test]
+    fn pending_reset_due_time_is_exposed_and_applied() {
+        let (s, clock) = sched(TransportClass::Internet);
+        assert_eq!(s.pending_reset_due_in(), None);
+        assert!(!s.apply_pending_reset());
+        // Flap, then a real change 300 ms later (floor is 500 ms): coalesced.
+        assert!(s.on_event(NetworkEvent::WifiChanged));
+        clock.advance(300);
+        assert!(!s.on_event(NetworkEvent::CellularChanged));
+        // Due exactly at the end of the 500 ms window: 200 ms from now.
+        assert_eq!(s.pending_reset_due_in(), Some(Duration::from_millis(200)));
+        let resets = s.snapshot().resets;
+        assert!(s.apply_pending_reset());
+        assert_eq!(s.snapshot().resets, resets + 1);
+        assert_eq!(s.snapshot().last_event, Some("CellularChanged"));
+        assert_eq!(s.pending_reset_due_in(), None);
     }
 
     #[test]
