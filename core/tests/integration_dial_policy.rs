@@ -201,7 +201,8 @@ fn test_circuit_relay_ladder_construction() {
 
     // Register relay with some addresses
     let relay_addr: libp2p::Multiaddr = "/ip4/192.168.1.100/tcp/4001".parse().unwrap();
-    ladder.add_relay(relay_pid, vec![relay_addr.clone()]);
+    let observed = scmessenger_core::transport::dial_policy::observed_direct_ip(&relay_addr);
+    ladder.add_relay(relay_pid, vec![relay_addr.clone()], observed);
 
     // Build relay addresses for target
     let relay_addresses = ladder.build_relay_addresses(target_pid);
@@ -231,17 +232,34 @@ fn test_circuit_relay_ladder_multiple_relays() {
 
     // Register multiple relays, each in a distinct IPv4 /24: conn-cap v2 admits
     // at most MAX_RELAYS_PER_NETWORK_GROUP relays per /24 (Sybil resistance).
-    for i in 0..3 {
+    // Unproven identities are also admission-rate limited (a reserved share of
+    // the per-window budget is held for proven ones), so register them one
+    // admission window apart on an explicit clock.
+    let base = web_time::Instant::now();
+    for i in 0..3u32 {
         let relay_kp = Keypair::generate_ed25519();
         let relay_pid = relay_kp.public().to_peer_id();
         let relay_addr: libp2p::Multiaddr = format!("/ip4/192.168.{}.100/tcp/4001", 1 + i)
             .parse()
             .unwrap();
-        ladder.add_relay(relay_pid, vec![relay_addr]);
+        let observed = scmessenger_core::transport::dial_policy::observed_direct_ip(&relay_addr);
+        let outcome = ladder.add_relay_at(
+            relay_pid,
+            vec![relay_addr],
+            observed,
+            base + scmessenger_core::transport::dial_policy::NEW_RELAY_WINDOW * i,
+        );
+        assert_eq!(
+            outcome,
+            scmessenger_core::transport::dial_policy::RelayRegistration::Admitted
+        );
     }
 
     // Build addresses for target
-    let relay_addresses = ladder.build_relay_addresses(target_pid);
+    let relay_addresses = ladder.build_relay_addresses_at(
+        target_pid,
+        base + scmessenger_core::transport::dial_policy::NEW_RELAY_WINDOW * 3,
+    );
 
     // Should have addresses from all relays
     assert_eq!(relay_addresses.len(), 3);
@@ -360,7 +378,8 @@ fn test_circuit_relay_invalid_addresses_skipped() {
 
     // Add relay with invalid addresses (no IP or port)
     let invalid_addr: libp2p::Multiaddr = "/dns/example.com".parse().unwrap();
-    ladder.add_relay(relay_pid, vec![invalid_addr]);
+    let observed = scmessenger_core::transport::dial_policy::observed_direct_ip(&invalid_addr);
+    ladder.add_relay(relay_pid, vec![invalid_addr], observed);
 
     // Build relay addresses - should be empty since relay address has no TCP port
     let relay_addresses = ladder.build_relay_addresses(target_pid);
