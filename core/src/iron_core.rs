@@ -133,6 +133,10 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
 /// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
 /// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
 /// PeerId encoding.
+/// Longest raw peer-id string `routing_peer_seen` will even attempt to parse
+/// (a 32-byte id is 64 hex chars; allows prefixes and libp2p base58 forms).
+const MAX_ROUTING_PEER_ID_STR_LEN: usize = 128;
+
 fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
     let clean_str = peer_id_str.trim();
     let unescaped = clean_str
@@ -2826,15 +2830,30 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Record that a peer was seen on a given transport.
+    ///
+    /// Untrusted-input contract: `peer_id_hex` must parse to a 32-byte peer id
+    /// (via `parse_peer_id_32`) and its raw form is length-bounded before any
+    /// decoding. Anything else is dropped (fail closed) and never reaches the
+    /// engine, so a hostile transport cannot grow the adaptive-TTL or
+    /// negative-cache maps with arbitrary strings.
     pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
+        if peer_id_hex.len() > MAX_ROUTING_PEER_ID_STR_LEN {
+            tracing::warn!(
+                len = peer_id_hex.len(),
+                "routing_peer_seen: oversized peer id rejected"
+            );
+            return;
+        }
+        let Some(peer_id) = parse_peer_id_32(&peer_id_hex) else {
+            tracing::warn!("routing_peer_seen: unparseable peer id rejected");
+            return;
+        };
+        if peer_id == [0u8; 32] {
+            tracing::warn!("routing_peer_seen: all-zero peer id rejected");
+            return;
+        }
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            let transport_type = parse_transport_type(&transport);
-            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
-                engine.peer_seen(peer_id, transport_type);
-            } else {
-                engine.record_message_activity(&peer_id_hex);
-                engine.clear_unreachable_peer(&peer_id_hex);
-            }
+            engine.peer_seen(peer_id, parse_transport_type(&transport));
         }
     }
 
@@ -6186,6 +6205,39 @@ mod tests {
             "relayed-circuit sighting must be recorded distinctly, got {:?}",
             stored.transports
         );
+    }
+
+    #[test]
+    fn routing_peer_seen_rejects_hostile_peer_ids() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer_count = |core: &IronCore| {
+            core.routing_engine
+                .write()
+                .as_mut()
+                .expect("engine set")
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_count()
+        };
+
+        let hostile = [
+            String::new(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+        ];
+        for id in hostile {
+            core.routing_peer_seen(id, "tcp".to_string());
+        }
+        assert_eq!(peer_count(&core), 0, "hostile ids must not create peers");
+
+        core.routing_peer_seen(hex::encode([7u8; 32]), "tcp".to_string());
+        assert_eq!(peer_count(&core), 1, "a valid 32-byte id is still accepted");
     }
 
     #[test]
