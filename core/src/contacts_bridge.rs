@@ -178,34 +178,6 @@ impl ContactManager {
         Ok(Self::scan_for_identifier(&db, &peer_id)?.map(|(_, contact)| contact))
     }
 
-    /// Does `contact` answer to `identifier` (peer id or public key, case
-    /// insensitive, or the identity id derived from its public key)?
-    fn contact_answers_to(contact: &Contact, identifier: &str) -> bool {
-        if identifier.is_empty() {
-            return false;
-        }
-        contact.peer_id.eq_ignore_ascii_case(identifier)
-            || contact.public_key.eq_ignore_ascii_case(identifier)
-            || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
-                .is_some_and(|id| id.eq_ignore_ascii_case(identifier))
-    }
-
-    fn scan_for_identifier(
-        db: &Db,
-        identifier: &str,
-    ) -> Result<Option<(sled::IVec, Contact)>, crate::IronCoreError> {
-        let trimmed = identifier.trim();
-        for item in db.iter() {
-            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
-            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
-                if Self::contact_answers_to(&contact, trimmed) {
-                    return Ok(Some((key, contact)));
-                }
-            }
-        }
-        Ok(None)
-    }
-
     /// Remove a contact by peer ID, public key, or identity ID
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
@@ -471,6 +443,38 @@ impl ContactManager {
             }
         }
         Ok(recovered)
+    }
+}
+
+// Internal helpers: kept out of the `#[uniffi::export]` block (associated
+// functions without `self` are not exportable).
+impl ContactManager {
+    /// Does `contact` answer to `identifier` (peer id or public key, case
+    /// insensitive, or the identity id derived from its public key)?
+    fn contact_answers_to(contact: &Contact, identifier: &str) -> bool {
+        if identifier.is_empty() {
+            return false;
+        }
+        contact.peer_id.eq_ignore_ascii_case(identifier)
+            || contact.public_key.eq_ignore_ascii_case(identifier)
+            || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
+                .is_some_and(|id| id.eq_ignore_ascii_case(identifier))
+    }
+
+    fn scan_for_identifier(
+        db: &Db,
+        identifier: &str,
+    ) -> Result<Option<(sled::IVec, Contact)>, crate::IronCoreError> {
+        let trimmed = identifier.trim();
+        for item in db.iter() {
+            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if Self::contact_answers_to(&contact, trimmed) {
+                    return Ok(Some((key, contact)));
+                }
+            }
+        }
+        Ok(None)
     }
 }
 
