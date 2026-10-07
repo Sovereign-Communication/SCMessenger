@@ -1,13 +1,23 @@
 # Peer Seed Address Governance
 
 > **Status:** Current
-> **Last updated:** 2026-07-25
+> **Last updated:** 2026-10-06
 
 > Terminology note: "bootstrap node" survives only as a config-key name. It does
 > not denote a node role. There are no dedicated relays and no bootstrap tier --
 > there are only nodes, and every node is a full relay. See
 > `docs/BOOTSTRAP.md` for the joining model and `docs/TRANSPORT_ARCHITECTURE.md`
 > for the architecture.
+
+> [SUPERSEDED IN PART 2026-10-06] Operator decision for issue #469
+> (`docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`): the ONLY seed source is an
+> invite (QR or invite info). Static or operator-supplied seed lists -- the
+> `SC_BOOTSTRAP_NODES` variable (runtime and build-time), `config set
+> bootstrap_node_add`, and "supply one address manually" cold start -- are
+> superseded and scheduled for removal (tasks T4, T10). Sections below that
+> describe them stay for traceability until the removal lands. The invite
+> sections and the "no dedicated relays / every node is a full relay" model
+> remain current.
 
 ## Decision
 
