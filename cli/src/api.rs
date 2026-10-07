@@ -1721,22 +1721,27 @@ async fn handle_invite_create(
     State(ctx): State<Arc<ApiContext>>,
     AxumJson(request): AxumJson<InviteCreateRequest>,
 ) -> Result<AxumJson<InviteCreateResponse>, (StatusCode, String)> {
-    let mut addrs: Vec<String> = Vec::new();
-    for addr in ctx
+    let mut candidates: Vec<String> = ctx
         .swarm_handle
         .get_external_addresses()
         .await
         .unwrap_or_default()
         .into_iter()
-        .chain(
-            ctx.swarm_handle
-                .get_listeners()
-                .await
-                .unwrap_or_default()
-                .into_iter(),
-        )
-    {
-        let addr = addr.to_string();
+        .map(|a| match a.ip() {
+            std::net::IpAddr::V4(ip) => format!("/ip4/{}/tcp/{}", ip, a.port()),
+            std::net::IpAddr::V6(ip) => format!("/ip6/{}/tcp/{}", ip, a.port()),
+        })
+        .collect();
+    candidates.extend(
+        ctx.swarm_handle
+            .get_listeners()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| a.to_string()),
+    );
+    let mut addrs: Vec<String> = Vec::new();
+    for addr in candidates {
         if !addrs.contains(&addr) {
             addrs.push(addr);
         }
