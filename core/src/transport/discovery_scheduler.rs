@@ -1044,7 +1044,10 @@ mod tests {
     fn window_widens_with_unproven_resets_up_to_ceiling() {
         let (s, clock) = sched(TransportClass::Internet);
         let mut prev = 0;
-        for _ in 0..9 {
+        // Windows 500 .. 32000 then the 45000 ms ceiling is the eighth reset.
+        // Stop there: spacing the next reset a full ceiling apart is a quiet
+        // period, which deliberately forgives history (see the test below).
+        for _ in 0..8 {
             assert!(s.on_event(NetworkEvent::WifiChanged));
             let w = s.snapshot().reset_window_ms;
             assert!(w >= prev, "window must not shrink: {} < {}", w, prev);
