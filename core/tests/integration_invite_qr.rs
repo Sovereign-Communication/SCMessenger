@@ -11,6 +11,7 @@ const ADDR_B: &str = "/ip4/198.51.100.11/tcp/9002";
 
 fn core_with_identity() -> IronCore {
     let core = IronCore::new();
+    core.grant_consent();
     core.initialize_identity().expect("identity");
     core
 }
