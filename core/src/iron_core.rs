@@ -2514,12 +2514,13 @@ impl IronCore {
         &self,
     ) -> Result<crate::contacts_bridge::ContactManager, crate::IronCoreError> {
         let path = self.storage_path.clone().unwrap_or_default();
-        crate::contacts_bridge::ContactManager::new(path.clone())
-            .or_else(|_| crate::contacts_bridge::ContactManager::new(path))
-            .or_else(|e| {
-                tracing::error!("Failed to create contact manager: {:?}", e);
-                crate::contacts_bridge::ContactManager::new("".to_string())
-            })
+        // #413 review F1: `ContactManager::new` already retries lock
+        // contention for its own ~5 s budget; a second `.or_else` retry here
+        // doubled that (~10 s) for no benefit, so it was removed.
+        crate::contacts_bridge::ContactManager::new(path).or_else(|e| {
+            tracing::error!("Failed to create contact manager: {:?}", e);
+            crate::contacts_bridge::ContactManager::new("".to_string())
+        })
     }
 
     /// Return the federated nickname for a contact (the nickname advertised by the peer).
@@ -3304,6 +3305,40 @@ impl IronCore {
     /// delivered message as Failed.
     pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
 
+    /// #413 review F2: ceiling of the per-entry re-dispatch interval. The
+    /// interval grows with the entry's attempt count (see
+    /// [`egress_grace_secs`](Self::egress_grace_secs)) so a receipt that never
+    /// arrives cannot make the sweep re-send the same envelope every 120 s
+    /// forever; it never gives up either.
+    pub(crate) const OUTBOX_EGRESS_GRACE_MAX_SECS: u64 = 3600;
+
+    /// #413 review F2: sweep caps. At most this many entries are re-dispatched
+    /// for one peer, and across all peers, in a single sweep tick, so a large
+    /// backlog drains over several ticks instead of a burst of synchronous
+    /// store writes on the swarm event loop.
+    pub(crate) const OUTBOX_SWEEP_MAX_PER_PEER: usize = 16;
+    pub(crate) const OUTBOX_SWEEP_MAX_PER_TICK: usize = 64;
+
+    /// Grace window after the `attempt`-th swarm dispatch of `message_id`:
+    /// bounded exponential in the attempt count (`GRACE * 2^(attempt-1)`,
+    /// capped at `OUTBOX_EGRESS_GRACE_MAX_SECS`) minus a deterministic
+    /// per-entry jitter of up to 20% derived from the message id and attempt,
+    /// so entries stranded together do not all come due on the same tick.
+    /// The first dispatch is within `(0.8 * GRACE, GRACE]`.
+    pub(crate) fn egress_grace_secs(message_id: &str, attempt: u32) -> u64 {
+        let exp = attempt.saturating_sub(1).min(16);
+        let base = Self::OUTBOX_EGRESS_GRACE_SECS
+            .saturating_mul(1u64 << exp)
+            .min(Self::OUTBOX_EGRESS_GRACE_MAX_SECS);
+        // FNV-1a over (message id, attempt): stable, no RNG, no dependency.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in message_id.bytes().chain(attempt.to_le_bytes()) {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        base - (h % (base / 5 + 1))
+    }
+
     pub(crate) fn retry_outbox_message_now(&self, message_id: &str) -> bool {
         self.outbox.write().retry_now(message_id)
     }
@@ -3315,6 +3350,32 @@ impl IronCore {
         skip_flush: bool,
         egress: &mut dyn FnMut(&str, &[u8]) -> bool,
     ) {
+        self.flush_peer_with_egress_limited(peer_id, connected, skip_flush, usize::MAX, egress);
+    }
+
+    /// Bounded re-flush used by the periodic outbox sweep (#413 review F2):
+    /// drains and re-dispatches at most `max_messages` due entries for a
+    /// connected peer and returns how many were drained (the caller subtracts
+    /// it from its per-tick budget).
+    pub(crate) fn sweep_peer_outbox_with_egress(
+        &self,
+        peer_id: &str,
+        max_messages: usize,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
+    ) -> usize {
+        self.flush_peer_with_egress_limited(peer_id, true, false, max_messages, egress)
+    }
+
+    /// Shared flush body. `limit` caps how many due entries are drained
+    /// (`usize::MAX` for the reconnect gate). Returns the drained count.
+    fn flush_peer_with_egress_limited(
+        &self,
+        peer_id: &str,
+        connected: bool,
+        skip_flush: bool,
+        limit: usize,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
+    ) -> usize {
         if !connected || skip_flush {
             // R3-C1: an explicit skip (duplicate connect event for a
             // connection that already flushed, or the losing site of the
@@ -3328,8 +3389,9 @@ impl IronCore {
                 skip_flush = skip_flush,
                 "Flush skipped for this connection; entries remain in the outbox"
             );
-            return;
+            return 0;
         }
+        let mut drained_count = 0usize;
         if connected {
             tracing::info!(
                 event = "outbox_reconnect_detected",
@@ -3337,7 +3399,10 @@ impl IronCore {
                 "Peer identified; triggering outbox flush"
             );
 
-            let messages = self.outbox.write().flush_peer_messages(peer_id);
+            let messages = self
+                .outbox
+                .write()
+                .flush_peer_messages_limited(peer_id, limit);
             if messages.is_empty() {
                 tracing::debug!(
                     event = "outbox_flush_completed",
@@ -3345,8 +3410,9 @@ impl IronCore {
                     pending_count = 0,
                     "No pending messages to flush"
                 );
-                return;
+                return 0;
             }
+            drained_count = messages.len();
 
             tracing::info!(
                 event = "outbox_flush_started",
@@ -3403,7 +3469,10 @@ impl IronCore {
                                 .duration_since(web_time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
-                            msg.next_retry_at = Some(now_secs + Self::OUTBOX_EGRESS_GRACE_SECS);
+                            // #413 review F2: grows with attempts (bounded,
+                            // jittered per entry); first dispatch stays ~120 s.
+                            msg.next_retry_at =
+                                Some(now_secs + Self::egress_grace_secs(&msg_id, current_attempt));
                             let restore = msg.clone();
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
@@ -3503,6 +3572,7 @@ impl IronCore {
                 );
             }
         }
+        drained_count
     }
 }
 
@@ -5764,6 +5834,68 @@ mod tests {
             tm.is_peer_connected(b_bytes),
             "peer B must survive peer A's teardown"
         );
+    }
+
+    #[test]
+    fn egress_grace_grows_with_attempts_is_bounded_and_deterministic() {
+        let id = "grace-msg";
+        let mut prev_upper = 0;
+        for attempt in 1..=40u32 {
+            let g = IronCore::egress_grace_secs(id, attempt);
+            let base = (IronCore::OUTBOX_EGRESS_GRACE_SECS << attempt.saturating_sub(1).min(16))
+                .min(IronCore::OUTBOX_EGRESS_GRACE_MAX_SECS);
+            assert!(g <= base, "attempt {attempt}: {g} above base {base}");
+            assert!(g * 5 >= base * 4, "attempt {attempt}: jitter above 20%");
+            assert!(base >= prev_upper, "bound must not shrink");
+            prev_upper = base;
+            assert_eq!(g, IronCore::egress_grace_secs(id, attempt), "deterministic");
+        }
+        assert_eq!(prev_upper, IronCore::OUTBOX_EGRESS_GRACE_MAX_SECS);
+        assert!(IronCore::egress_grace_secs(id, 1) <= IronCore::OUTBOX_EGRESS_GRACE_SECS);
+        // Jitter actually differs per entry.
+        let distinct: std::collections::BTreeSet<u64> = (0..50)
+            .map(|i| IronCore::egress_grace_secs(&format!("m-{i}"), 6))
+            .collect();
+        assert!(distinct.len() > 5, "per-entry jitter must desynchronise");
+    }
+
+    #[test]
+    fn sweep_peer_outbox_caps_messages_per_call() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        for i in 0..10 {
+            core.prepare_message(
+                recipient.clone(),
+                format!("sweep-cap-{i}"),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        }
+        let mut first: Vec<String> = Vec::new();
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 3, &mut |id, _| {
+            first.push(id.to_string());
+            true
+        });
+        assert_eq!(drained, 3);
+        assert_eq!(first.len(), 3);
+        assert_eq!(core.outbox_count(), 10, "dispatch is not delivery");
+
+        // Dispatched entries are inside their grace window: the next capped
+        // sweep takes different entries, never re-sending the first three.
+        let mut second: Vec<String> = Vec::new();
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 3, &mut |id, _| {
+            second.push(id.to_string());
+            true
+        });
+        assert_eq!(drained, 3);
+        assert!(second.iter().all(|id| !first.contains(id)));
+
+        // A zero budget touches nothing.
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 0, &mut |_, _| true);
+        assert_eq!(drained, 0);
     }
 
     #[test]
