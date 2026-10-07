@@ -10709,12 +10709,12 @@ mod tests {
     use super::{
         addr_targets_self, build_mdns_dial_addr, build_routable_relay_addrs, classify_deny_cause,
         endpoint_transport_string, extract_ed25519_public_key_from_peer_id, extract_ip_component,
-        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
-        resolve_dial_target, select_drift_fallback_carrier,
-        should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
-        validate_delivery_convergence_marker_shape, verify_registration_message,
-        wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause, PendingCustodyDispatch,
-        PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
+        is_ledger_exchange_path_failure, outbound_circuit_relay, peer_is_blocked,
+        peer_is_trusted_contact, rearm_ledger_exchange_after_failure, resolve_dial_target,
+        select_drift_fallback_carrier, should_apply_delivery_convergence_marker,
+        target_peer_id_from_multiaddr, validate_delivery_convergence_marker_shape,
+        verify_registration_message, wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause,
+        PendingCustodyDispatch, PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
         RELAY_DUPLICATE_WINDOW_MS, RELAY_PEER_BUCKET_BURST_CAPACITY,
         RELAY_PEER_BUCKET_REFILL_PER_SEC,
     };
