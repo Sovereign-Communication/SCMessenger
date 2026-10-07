@@ -705,6 +705,17 @@ impl ContactManager {
             );
             Ok(Some(contact))
         } else {
+            // Contacts are filed under LOWERCASE hex. A 64-hex identifier in any
+            // other case (or with stray whitespace) is the same identity, so
+            // fold it once and retry; the folded form is a fixed point, which
+            // bounds the recursion.
+            let folded = peer_id.trim().to_lowercase();
+            if folded != peer_id
+                && folded.len() == 64
+                && folded.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return self.get(folded);
+            }
             // If not found by peer_id, try resolving as identity_id
             if let Ok(Some(public_key)) = self.resolve_identity_id(&peer_id) {
                 return self.get(public_key);
