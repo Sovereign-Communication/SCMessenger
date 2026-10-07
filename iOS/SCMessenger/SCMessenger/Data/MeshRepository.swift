@@ -328,7 +328,7 @@ final class MeshRepository {
         let nickname: String?
         let transport: MeshEventBus.TransportType
         let isFull: Bool
-        let isRelay: Bool
+        let isInfraNode: Bool
         let lastSeen: UInt64
     }
 
@@ -338,7 +338,7 @@ final class MeshRepository {
         var nickname: String?
         var routePeerId: String?
         var transport: MeshEventBus.TransportType
-        var isRelay: Bool
+        var isInfraNode: Bool
     }
 
     private struct IdentityEmissionSignature: Equatable {
@@ -1973,7 +1973,7 @@ final class MeshRepository {
                 nickname: discoveredNickname,
                 transport: .internet,
                 isFull: true,
-                isRelay: false,
+                isInfraNode: false,
                 lastSeen: UInt64(Date().timeIntervalSince1970)
             )
             updateDiscoveredPeer(canonicalPeerId, info: discoveryInfo)
@@ -2853,7 +2853,7 @@ final class MeshRepository {
                 nickname: selectAuthoritativeNickname(incoming: info.nickname, existing: existing.nickname),
                 transport: (info.transport == .internet || existing.transport == .internet) ? .internet : info.transport,
                 isFull: info.isFull || existing.isFull,
-                isRelay: info.isRelay || existing.isRelay,
+                isInfraNode: info.isInfraNode || existing.isInfraNode,
                 lastSeen: max(info.lastSeen, existing.lastSeen)
             )
         } else {
@@ -3010,7 +3010,7 @@ final class MeshRepository {
                 if existing.transport != .internet, info.transport == .internet {
                     existing.transport = info.transport
                 }
-                if info.isRelay { existing.isRelay = true }
+                if info.isInfraNode { existing.isInfraNode = true }
                 aggregates[aggregateKey] = existing
             } else {
                 aggregates[aggregateKey] = ReplayDiscoveredIdentity(
@@ -3019,7 +3019,7 @@ final class MeshRepository {
                     nickname: discoveredNickname,
                     routePeerId: routeCandidate,
                     transport: info.transport,
-                    isRelay: info.isRelay
+                    isInfraNode: info.isInfraNode
                 )
             }
         }
@@ -4131,7 +4131,7 @@ final class MeshRepository {
             return
         }
 
-        let isRelay = isBootstrapRelayPeer(peerId)
+        let isInfraNode = isBootstrapRelayPeer(peerId)
 
         if let transportIdentity = resolveTransportIdentity(libp2pPeerId: peerId) {
             let discoveredNickname = prepopulateDiscoveryNickname(
@@ -4150,7 +4150,7 @@ final class MeshRepository {
                 nickname: discoveredNickname,
                 transport: .internet,
                 isFull: true,
-                isRelay: isRelay,
+                isInfraNode: isInfraNode,
                 lastSeen: UInt64(Date().timeIntervalSince1970)
             )
             updateDiscoveredPeer(peerId, info: discoveryInfo)
@@ -4198,7 +4198,7 @@ final class MeshRepository {
                 nickname: nil,
                 transport: .internet,
                 isFull: false,
-                isRelay: isRelay,
+                isInfraNode: isInfraNode,
                 lastSeen: UInt64(Date().timeIntervalSince1970)
             )
             updateDiscoveredPeer(peerId, info: discoveryInfo)
@@ -4306,7 +4306,7 @@ final class MeshRepository {
                 nickname: nil,
                 transport: .internet,
                 isFull: false,
-                isRelay: true,
+                isInfraNode: true,
                 lastSeen: UInt64(Date().timeIntervalSince1970)
             )
             updateDiscoveredPeer(peerId, info: relayDiscovery)
@@ -4328,7 +4328,7 @@ final class MeshRepository {
                     nickname: discoveredNickname,
                     transport: mdnsLanPeers[trimmedPeerId] != nil ? .tcpMdns : .internet,
                     isFull: true,
-                    isRelay: isBootstrapRelayPeer(peerId),
+                    isInfraNode: isBootstrapRelayPeer(peerId),
                     lastSeen: UInt64(Date().timeIntervalSince1970)
                 )
                 updateDiscoveredPeer(peerId, info: discoveryInfo)
@@ -4358,7 +4358,7 @@ final class MeshRepository {
                     nickname: nil,
                     transport: .internet,
                     isFull: false,
-                    isRelay: isBootstrapRelayPeer(peerId),
+                    isInfraNode: isBootstrapRelayPeer(peerId),
                     lastSeen: UInt64(Date().timeIntervalSince1970)
                 )
                 updateDiscoveredPeer(peerId, info: discoveryInfo)
@@ -4529,7 +4529,7 @@ final class MeshRepository {
             nickname: discoveredNickname,
             transport: .ble,
             isFull: true,
-            isRelay: false,
+            isInfraNode: false,
             lastSeen: UInt64(Date().timeIntervalSince1970)
         )
         updateDiscoveredPeer(identityId, info: discoveryInfo)
@@ -5935,7 +5935,7 @@ final class MeshRepository {
     func isKnownRelay(_ peerId: String) -> Bool {
         if isBootstrapRelayPeer(peerId) { return true }
         guard let info = discoveredPeerMap[peerId] else { return false }
-        return info.isRelay && !info.isFull
+        return info.isInfraNode && !info.isFull
     }
 
     private func buildDialCandidatesForPeer(
@@ -6094,7 +6094,7 @@ final class MeshRepository {
         }
 
         // 2. Dynamically discovered headless/relay nodes
-        let dynamicRelays = discoveredPeerMap.filter { $0.value.isRelay && !$0.value.isFull && $0.key != targetPeerId }
+        let dynamicRelays = discoveredPeerMap.filter { $0.value.isInfraNode && !$0.value.isFull && $0.key != targetPeerId }
         for (relayPeerId, _) in dynamicRelays where isLibp2pPeerId(relayPeerId) {
             // If we have direct addresses for this relay, try using it
             let directAddrs = getDialHintsForRoutePeer(relayPeerId, includeRelayCircuits: false)

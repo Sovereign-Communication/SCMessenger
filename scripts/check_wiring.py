@@ -8,8 +8,9 @@ manifest components from being merged into main.
 Checks Performed:
   C1. Zero-caller declarations:
       Scans @Composable fun, Activity, Service, BroadcastReceiver, ViewModel,
-      dialog, and utility declarations under android/app/src/main/java. Reports
-      any declaration whose only reference is its own declaration.
+      dialog, utility, and -- in the advisory pass -- every plain function
+      under android/app/src/main/java. Reports any declaration whose only
+      reference is its own declaration.
       (Excludes @Preview annotations and test sources).
 
   C2. Nav route reachability:
@@ -34,10 +35,29 @@ Limitations & Edge Cases:
   - Tooling-only declarations (@Preview) and test code (src/test, src/androidTest)
     are intentionally excluded from reachability targets.
 
+Two passes, one exit code:
+  BLOCKING  -- the pre-widening declaration set (composables, screens,
+               components, /utils/ functions). Unchanged by the widening.
+  ADVISORY  -- every plain function in android/app/src/main, reported at WARN.
+               It exists because the blocking pass never inspected
+               service/, data/ or ui/viewmodels/ functions at all, which is how
+               decideCommand stayed unreferenced on the live seam while ~25
+               tests exercised it and this gate reported nothing.
+
+  Only ERROR findings fail the gate. The advisory pass is deliberately
+  isolated: it reports function findings only, so a dead function can never
+  cascade into failing the gate on the composables and components that depend
+  on it.
+
+  Promote the advisory scan to blocking with --method-findings=block once
+  wiring-audit/FINDINGS.md has been triaged.
+
 Usage:
   python scripts/check_wiring.py
   python scripts/check_wiring.py --json
   python scripts/check_wiring.py --root /path/to/repo
+  python scripts/check_wiring.py --method-findings=block   # promote the scan
+  python scripts/check_wiring.py --write-findings wiring-audit/FINDINGS.md
 """
 
 import argparse
@@ -73,6 +93,10 @@ class Finding:
     symbol: str
     reason: str
     chain: List[str] = field(default_factory=list)
+    # "ERROR" findings fail the gate; "WARN" findings are reported only.
+    # The widened dead-code scan (kind="Method") is WARN-first: it is
+    # advisory until its backlog has been triaged. See --method-findings.
+    severity: str = "ERROR"
 
 
 def strip_comments(source: str) -> str:
@@ -256,8 +280,17 @@ def check_nav_routes(
     return findings, registered_composables, registered_routes
 
 
-def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> List[Declaration]:
-    """Extract classes, objects, interfaces, composables, and utility methods."""
+def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str], method_scope: str = "legacy") -> List[Declaration]:
+    """Extract classes, objects, interfaces, composables, and functions.
+
+    method_scope selects how much plain-function coverage is collected:
+      "legacy"  -- only functions under /utils/ and FileLoggingTree, which is
+                   what this gate collected before the dead-function scan was
+                   widened. Used for the BLOCKING pass so its result is
+                   unchanged by the widening.
+      "widened" -- every non-composable function in android/app/src/main.
+                   Used for the ADVISORY pass.
+    """
     declarations: List[Declaration] = []
 
     for rel_p, raw in kt_files.items():
@@ -323,6 +356,15 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> 
                     ))
                     pending_class = cls_name
 
+            # `companion object { ... }` opens a scope whose members are still
+            # class members, not local functions. The class regex above does
+            # not match it (an object declaration must be followed by a name),
+            # so without this a companion's members are misread as locals by
+            # the brace-depth test -- which is exactly how decideCommand, a
+            # companion function, disappeared from the scan.
+            if re.search(r'\bcompanion\s+object\b', l_clean) and l_clean.count("{") > 0:
+                class_stack.append((class_stack[-1][0] if class_stack else "", current_depth + l_clean.count("{")))
+
             # Match function declaration
             m_fun = re.search(r'\bfun\s+(?:<[^>]+>\s+)?([A-Za-z0-9_]+)\s*\(', l_clean)
             if m_fun:
@@ -346,8 +388,19 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> 
                         is_nested=bool(parent_cls),
                         is_local=(fun_depth is not None and current_depth >= fun_depth)
                     ))
-                elif "/utils/" in rel_p or "FileLoggingTree" in rel_p:
-                    if not l_clean.strip().startswith("private ") and not l_clean.strip().startswith("override "):
+                else:
+                    # Every remaining non-composable function, in every main
+                    # source. This used to be restricted to "/utils/" and
+                    # FileLoggingTree, which left service/, data/ and
+                    # ui/viewmodels/ entirely invisible to the zero-caller
+                    # check -- the gap that let decideCommand sit on the live
+                    # seam with zero production callers while ~25 tests
+                    # exercised it and this gate stayed green.
+                    stripped = l_clean.strip()
+                    legacy_method = ("/utils/" in rel_p) or ("FileLoggingTree" in rel_p)
+                    if method_scope == "legacy" and not legacy_method:
+                        pass
+                    elif not stripped.startswith("private ") and not stripped.startswith("override "):
                         fqcn = f"{pkg}.{parent_cls}.{fun_name}" if parent_cls else f"{pkg}.{fun_name}"
                         declarations.append(Declaration(
                             name=fun_name,
@@ -357,8 +410,17 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> 
                             fqcn=fqcn,
                             container=parent_cls,
                             is_preview=False,
-                            is_nested=False,
-                            is_local=False
+                            is_nested=bool(parent_cls),
+                            # A function declared deeper than its enclosing
+                            # class is local to some enclosing function, not a
+                            # reachability target. Brace depth is used here
+                            # rather than the fun_depth heuristic the
+                            # Composable branch uses, because that heuristic
+                            # never engages for a signature spanning several
+                            # lines -- which reported DiagnosticsScreen's local
+                            # refreshLogs() as an unreferenced top-level
+                            # function despite three call sites in the same file.
+                            is_local=current_depth > (class_stack[-1][1] if class_stack else 0)
                         ))
 
             # Manage scopes and brace nesting
@@ -382,10 +444,363 @@ def extract_declarations(kt_files: Dict[str, str], kt_clean: Dict[str, str]) -> 
     return declarations
 
 
-def check_wiring(repo_root: str) -> Tuple[List[Finding], List[str]]:
-    """Execute complete wiring, route, manifest, and reachability gate."""
+def collect_scope_ranges(kt_clean: Dict[str, str]) -> Dict[str, List[Tuple[int, int, str]]]:
+    """Brace-depth ranges for every class AND function scope, in every file.
+
+    Reachability targets deliberately exclude `private` and `override`
+    declarations: nothing outside the class should call those, and being
+    called is not what makes them reachable. Excluding them from the
+    declaration set also made them invisible as SCOPES, which is a bug, not
+    a policy:
+
+      - MeshSyncWorkerEntryPoint.getMeshRepository was reported unreferenced
+        although MeshSyncWorker.doWork calls it, because the `override fun`
+        was not a tracked declaration, so the call was attributed to the
+        interface member above it and discarded as a self-reference.
+
+    Line proximity alone cannot model nesting. SmartTransportRouter has a
+    `data class TransportAttempt` declared INSIDE the function
+    `attemptDelivery`, so "nearest preceding declaration" picks the inner
+    class over the function that actually contains the line. Ranges are
+    therefore recorded with a start and an end, and a line is attributed to
+    the smallest range that contains it.
+
+    Returns {file: [(start_line, end_line, scope_fqcn), ...]}.
+    """
+    ranges: Dict[str, List[Tuple[int, int, str]]] = {}
+    for rel_p, clean in kt_clean.items():
+        pkg_match = re.search(r'package\s+([A-Za-z0-9_.]+)', clean)
+        pkg = pkg_match.group(1) if pkg_match else ""
+        lines = clean.splitlines()
+        found: List[Tuple[int, int, str]] = []
+        # (simple name, depth just past this scope's opening brace, start line, fqcn)
+        stack: List[Tuple[str, int, int, str]] = []
+        # A declaration whose opening brace is on a later line. `class MeshRepository
+        # @Inject constructor(` has none on its own line, and dropping it from the
+        # scope stack would strip the class name off every fqcn inside it, which
+        # breaks self-reference detection and silently marks live code dead.
+        pending: Optional[Tuple[str, int]] = None
+        depth = 0
+
+        def push(name: str, start_line: int, brace_depth: int) -> None:
+            owner = ".".join(s[0] for s in stack if s[0])
+            suffix = f"{owner}.{name}" if owner else name
+            fqcn = f"{pkg}.{suffix}" if pkg else suffix
+            stack.append((name, brace_depth, start_line, fqcn))
+
+        for idx, line in enumerate(lines):
+            line_no = idx + 1
+            opens = line.count("{")
+            m_class = re.search(
+                r'\b(class|object|interface)\s+([A-Za-z0-9_]+)(?:\s*<[^>]+>)?\s*(?:\([^)]*\))?\s*(?::\s*[^{]+)?',
+                line,
+            )
+            is_type = bool(
+                m_class
+                and "enum class" not in line
+                and "sealed class" not in line
+                and "sealed interface" not in line
+            )
+            is_companion = bool(re.search(r'\bcompanion\s+object\b', line))
+            m_fun = re.search(r'\bfun\s+(?:<[^>]+>\s+)?([A-Za-z0-9_]+)\s*\(', line)
+
+            declared: Optional[str] = None
+            if is_type and m_class:
+                declared = m_class.group(2)
+            elif is_companion:
+                declared = stack[-1][0] if stack else ""
+            elif m_fun:
+                declared = m_fun.group(1)
+
+            if declared is not None:
+                if opens > 0:
+                    push(declared, line_no, depth + opens)
+                elif pending is None:
+                    pending = (declared, line_no)
+            elif opens > 0 and pending is not None:
+                push(pending[0], pending[1], depth + opens)
+                pending = None
+
+            depth += opens - line.count("}")
+            while stack and depth < stack[-1][1]:
+                _, _, start, fqcn = stack.pop()
+                found.append((start, line_no, fqcn))
+
+        for _, _, start, fqcn in stack:
+            found.append((start, len(lines), fqcn))
+        ranges[rel_p] = found
+    return ranges
+
+
+def _is_self(caller: Tuple[str, int, str, int], d: Declaration) -> bool:
+    """True when this reference sits inside the referenced declaration itself.
+
+    A call is only a self-reference when the enclosing scope IS that
+    declaration's own body. When no function scope applies (enclosing scope
+    line 0) this falls back to comparing names, which is the historical rule.
+    """
+    if caller[3] == 0:
+        return caller[2] == d.fqcn
+    return caller[2] == d.fqcn and caller[3] == d.line
+
+
+def build_reference_graph(
+    declarations: List[Declaration],
+    kt_clean: Dict[str, str],
+    precise_scopes: bool,
+) -> Tuple[List[Declaration], Dict[str, List[Declaration]],
+           Dict[str, Set[Tuple[str, int, str, int]]]]:
+    """Build the name index and the caller map for one declaration set.
+
+    Extracted verbatim from analyze_declarations so the findings-document
+    generator can ask the SAME question the gate asks ("does this symbol
+    have an external caller?") instead of re-implementing reference
+    attribution. A second implementation could certify as wired a symbol
+    the gate still reports dead, which is the failure this audit exists to
+    remove.
+
+    Returns (active_declarations, decl_by_name, callers_map), where
+    callers_map maps a declaration's fqcn to the set of references to it
+    as (file, line, enclosing_fqcn, enclosing_scope_line).
+    """
+    active_declarations = [d for d in declarations if not d.is_preview and not d.is_local]
+    decl_by_name: Dict[str, List[Declaration]] = {}
+    for d in active_declarations:
+        decl_by_name.setdefault(d.name, []).append(d)
+
+    callers_map: Dict[str, Set[Tuple[str, int, str, int]]] = {d.fqcn: set() for d in active_declarations}
+
+    # Map references across all source files
+    decls_by_file: Dict[str, List[Declaration]] = {}
+    for d in active_declarations:
+        decls_by_file.setdefault(d.file, []).append(d)
+    for lst in decls_by_file.values():
+        lst.sort(key=lambda x: x.line)
+
+    scopes_by_file = collect_scope_ranges(kt_clean) if precise_scopes else {}
+
+    for rel_p, clean in kt_clean.items():
+        file_decls = decls_by_file.get(rel_p, [])
+        file_scopes = scopes_by_file.get(rel_p, [])
+
+        for line_idx, line_str in enumerate(clean.splitlines()):
+            line_no = line_idx + 1
+            trimmed = line_str.strip()
+            if not trimmed or trimmed.startswith("package ") or trimmed.startswith("import "):
+                continue
+
+            enclosing = None
+            for d in reversed(file_decls):
+                if d.line <= line_no:
+                    enclosing = d
+                    break
+            enclosing_fqcn = enclosing.fqcn if enclosing else f"__FILE__{rel_p}"
+
+            # A function scope that starts later than the innermost tracked
+            # declaration wins: without this, a reference inside an `override`
+            # or `private` body is attributed to whatever declaration precedes
+            # it, and is then discarded as a self-reference.
+            #
+            # With precise_scopes the attribution uses brace-depth RANGES, so
+            # nesting is modelled rather than approximated by line proximity:
+            # a class declared inside a function no longer masks the function
+            # that contains the line.
+            #
+            # The scope's START line is recorded alongside its name so a
+            # declaration is only treated as referring to itself when the
+            # reference really is inside its own body. Comparing names alone
+            # is wrong: an anonymous `object : Callback { override fun
+            # onStartSuccess() }` computes the same qualified name as the
+            # outer method it delegates to.
+            enclosing_scope_line = 0
+            if precise_scopes:
+                best = None
+                for start_line, end_line, scope_fqcn in file_scopes:
+                    if start_line <= line_no <= end_line:
+                        span = end_line - start_line
+                        if best is None or span < best[0]:
+                            best = (span, start_line, scope_fqcn)
+                if best is not None:
+                    enclosing_scope_line = best[1]
+                    enclosing_fqcn = best[2]
+
+            tokens = set(re.findall(r'\b[A-Za-z0-9_]+\b', line_str))
+            for tok in tokens:
+                if tok in decl_by_name:
+                    for target_d in decl_by_name[tok]:
+                        if target_d.file == rel_p and target_d.line == line_no:
+                            continue
+                        callers_map[target_d.fqcn].add((rel_p, line_no, enclosing_fqcn, enclosing_scope_line))
+
+
+    return active_declarations, decl_by_name, callers_map
+
+
+def analyze_declarations(
+    declarations: List[Declaration],
+    kt_files: Dict[str, str],
+    kt_clean: Dict[str, str],
+    registered_composables: Set[str],
+    manifest_entries: Set[str],
+    method_severity: str,
+    keep_kinds: Optional[Set[str]] = None,
+    skip_live_container: bool = True,
+    precise_scopes: bool = False,
+) -> Tuple[List[Finding], Set[str], Set[str]]:
+    """Build the caller map and run C1/C3/C4 over one declaration set.
+
+    keep_kinds restricts which declaration kinds are REPORTED. Propagation
+    always considers every declaration, so a function referenced only by a
+    dead composable is still correctly found; keep_kinds only decides what
+    the caller of this function is allowed to see.
+
+    skip_live_container keeps the historical exemption that ignores a nested
+    member whose enclosing class is itself reachable. That exemption is
+    sensible for a blocking gate -- a public method on a live service is not
+    dead just because nothing inside the module calls it -- but it also
+    means a genuinely dead function inside a live class is never reported.
+    The advisory pass turns it off (skip_live_container=False), which is what
+    makes decideCommand detectable at all.
+
+    precise_scopes makes the reference map attribute a line to the innermost
+    FUNCTION, including `override` and `private` ones that are deliberately
+    not reachability targets. The legacy pass leaves it off so its output is
+    unchanged.
+
+    Returns (findings, reported_dead, live_set).
+    """
+
+    def emit(findings: List[Finding], d: Declaration, finding: Finding) -> None:
+        if keep_kinds is None or d.kind in keep_kinds:
+            findings.append(finding)
+
+    active_declarations, decl_by_name, callers_map = build_reference_graph(
+        declarations, kt_clean, precise_scopes
+    )
+    findings: List[Finding] = []
+
+    # Check Manifest Reachability (C3)
+    manifest_dead: Set[str] = set()
+    for d in active_declarations:
+        if d.kind in ["Activity", "Service", "BroadcastReceiver"]:
+            in_manifest = (d.fqcn in manifest_entries) or (d.name in manifest_entries)
+            if not in_manifest:
+                manifest_dead.add(d.fqcn)
+                emit(findings, d, Finding(
+                    file=d.file,
+                    line=d.line,
+                    kind="C3_MANIFEST_MISSING",
+                    symbol=d.name,
+                    reason=f"{d.kind} '{d.name}' declared in source but has no corresponding entry in AndroidManifest.xml",
+                    severity="ERROR",
+                ))
+
+    # Compute Root Live Entry Points
+    live_set: Set[str] = set()
+    for d in active_declarations:
+        if d.fqcn in manifest_entries or d.name in manifest_entries:
+            live_set.add(d.fqcn)
+        if d.file.endswith("AppModule.kt") or d.name in ["MeshApplication", "AppModule", "MainActivity", "MeshApp"]:
+            live_set.add(d.fqcn)
+        if d.kind in ["Composable", "Dialog"] and d.name in registered_composables:
+            live_set.add(d.fqcn)
+        if d.name in ["OnboardingScreen", "MeshBottomBar"] and "MeshApp.kt" in d.file:
+            live_set.add(d.fqcn)
+
+    forward_map: Dict[str, Set[str]] = {}
+    for callee_fqcn, callers in callers_map.items():
+        for _, _, caller_fqcn, _ in callers:
+            forward_map.setdefault(caller_fqcn, set()).add(callee_fqcn)
+
+    queue = list(live_set)
+    while queue:
+        curr = queue.pop(0)
+        for callee in forward_map.get(curr, set()):
+            if callee not in live_set and callee not in manifest_dead:
+                live_set.add(callee)
+                queue.append(callee)
+
+    # Check Zero Callers (C1)
+    target_kinds = {"Composable", "Dialog", "ViewModel", "Activity", "Service", "BroadcastReceiver", "Utility", "Method"}
+    reported_dead: Set[str] = set(manifest_dead)
+
+    for d in active_declarations:
+        if d.fqcn in reported_dead:
+            continue
+        if d.kind not in target_kinds:
+            continue
+        if skip_live_container and d.is_nested and d.container:
+            container_fqcn = f"{d.fqcn.rsplit('.', 1)[0]}"
+            if container_fqcn in live_set or any(c.fqcn == container_fqcn and c.fqcn in live_set for c in active_declarations):
+                continue
+
+        if d.fqcn not in live_set:
+            external_callers = [c for c in callers_map[d.fqcn] if not _is_self(c, d)]
+            if len(external_callers) == 0:
+                reported_dead.add(d.fqcn)
+                sym_name = d.name if d.kind != "Method" else (f"{d.container}.{d.name}" if d.container else d.name)
+                emit(findings, d, Finding(
+                    file=d.file,
+                    line=d.line,
+                    kind="C1_ZERO_CALLERS",
+                    symbol=sym_name,
+                    reason=f"{d.kind} '{sym_name}' has zero callers across the codebase",
+                    severity=method_severity if d.kind == "Method" else "ERROR",
+                ))
+
+    # Check Transitive Death (C4)
+    changed = True
+    while changed:
+        changed = False
+        for d in active_declarations:
+            if d.fqcn in reported_dead or d.fqcn in live_set:
+                continue
+            if d.kind not in target_kinds:
+                continue
+            if skip_live_container and d.is_nested and d.container:
+                if d.fqcn.rsplit('.', 1)[0] in live_set:
+                    continue
+
+            external_callers = [c for c in callers_map[d.fqcn] if not _is_self(c, d)]
+            if len(external_callers) > 0:
+                if all(c[2] in reported_dead for c in external_callers):
+                    reported_dead.add(d.fqcn)
+                    changed = True
+                    chain_names = sorted(list(set(c[2].split(".")[-1] for c in external_callers)))
+                    sym_name = d.name if d.kind != "Method" else (f"{d.container}.{d.name}" if d.container else d.name)
+                    emit(findings, d, Finding(
+                        file=d.file,
+                        line=d.line,
+                        kind="C4_TRANSITIVE_DEAD",
+                        symbol=sym_name,
+                        reason=f"{d.kind} '{sym_name}' is referenced only by dead declarations: {', '.join(chain_names)}",
+                        chain=chain_names,
+                        severity=method_severity if d.kind == "Method" else "ERROR",
+                    ))
+
+    return findings, reported_dead, live_set
+
+
+def check_wiring(repo_root: str, block_methods: bool = False) -> Tuple[List[Finding], List[str]]:
+    """Execute complete wiring, route, manifest, and reachability gate.
+
+    block_methods controls whether the widened dead-function scan (kind
+    "Method") is promoted from advisory to blocking. It defaults to False:
+    the scan reports, the gate does not fail on it, and promoting it later is
+    a one-word change rather than a second implementation.
+
+    Two passes run over the same sources:
+
+      1. BLOCKING -- the pre-widening declaration set (composables, screens,
+         components, /utils/ functions). Its result is unchanged by the
+         dead-function widening, so this gate cannot start failing on code it
+         never used to inspect.
+      2. ADVISORY -- every function in android/app/src/main. It runs over the
+         widened graph so transitive reasoning is correct, but it REPORTS only
+         function-kind findings. That isolation is deliberate: a dead function
+         must not cascade into failing the gate on its dependants.
+    """
     app_dir = os.path.join(repo_root, "android", "app", "src", "main")
-    src_dir = os.path.join(app_dir, "java")
     manifest_path = os.path.join(app_dir, "AndroidManifest.xml")
 
     excluded_info = [
@@ -399,17 +814,7 @@ def check_wiring(repo_root: str) -> Tuple[List[Finding], List[str]]:
     manifest_entries = parse_manifest(manifest_path)
 
     # 2. Read all Kotlin sources
-    kt_files: Dict[str, str] = {}
-    kt_clean: Dict[str, str] = {}
-    for r, _, fs in os.walk(src_dir):
-        for f in fs:
-            if f.endswith(".kt"):
-                p = os.path.join(r, f)
-                rel_p = os.path.relpath(p, start=repo_root).replace("\\", "/")
-                with open(p, "r", encoding="utf-8") as fh:
-                    raw = fh.read()
-                kt_files[rel_p] = raw
-                kt_clean[rel_p] = strip_comments(raw)
+    kt_files, kt_clean = load_kotlin_corpus(repo_root)
 
     # 3. Nav Route Reachability (C2)
     mesh_app_rel = "android/app/src/main/java/com/scmessenger/android/ui/MeshApp.kt"
@@ -423,169 +828,447 @@ def check_wiring(repo_root: str) -> Tuple[List[Finding], List[str]]:
         findings.extend(nav_findings)
         registered_composables.update(reg_composables)
 
-    # 4. Extract declarations and build caller reference map
-    declarations = extract_declarations(kt_files, kt_clean)
-    active_declarations = [d for d in declarations if not d.is_preview and not d.is_local]
-    decl_by_name: Dict[str, List[Declaration]] = {}
-    for d in active_declarations:
-        decl_by_name.setdefault(d.name, []).append(d)
+    # 4. BLOCKING pass: the pre-widening declaration set.
+    legacy_declarations = extract_declarations(kt_files, kt_clean, method_scope="legacy")
+    legacy_findings, _, _ = analyze_declarations(
+        legacy_declarations,
+        kt_files,
+        kt_clean,
+        registered_composables,
+        manifest_entries,
+        method_severity="ERROR",
+        keep_kinds=None,
+    )
+    findings.extend(legacy_findings)
 
-    callers_map: Dict[str, Set[Tuple[str, int, str]]] = {d.fqcn: set() for d in active_declarations}
-
-    # Map references across all source files
-    for rel_p, clean in kt_clean.items():
-        lines = clean.splitlines()
-        file_decls = [d for d in active_declarations if d.file == rel_p]
-        file_decls.sort(key=lambda x: x.line)
-
-        for line_idx, line_str in enumerate(lines):
-            line_no = line_idx + 1
-            trimmed = line_str.strip()
-            if not trimmed or trimmed.startswith("package ") or trimmed.startswith("import "):
-                continue
-
-            enclosing = None
-            for d in reversed(file_decls):
-                if d.line <= line_no:
-                    enclosing = d
-                    break
-            enclosing_fqcn = enclosing.fqcn if enclosing else f"__FILE__{rel_p}"
-
-            tokens = set(re.findall(r'\b[A-Za-z0-9_]+\b', line_str))
-            for tok in tokens:
-                if tok in decl_by_name:
-                    for target_d in decl_by_name[tok]:
-                        if target_d.file == rel_p and target_d.line == line_no:
-                            continue
-                        callers_map[target_d.fqcn].add((rel_p, line_no, enclosing_fqcn))
-
-    # 5. Check Manifest Reachability (C3)
-    manifest_dead: Set[str] = set()
-    for d in active_declarations:
-        if d.kind in ["Activity", "Service", "BroadcastReceiver"]:
-            in_manifest = (d.fqcn in manifest_entries) or (d.name in manifest_entries)
-            if not in_manifest:
-                findings.append(Finding(
-                    file=d.file,
-                    line=d.line,
-                    kind="C3_MANIFEST_MISSING",
-                    symbol=d.name,
-                    reason=f"{d.kind} '{d.name}' declared in source but has no corresponding entry in AndroidManifest.xml"
-                ))
-                manifest_dead.add(d.fqcn)
-
-    # 6. Compute Root Live Entry Points
-    live_set: Set[str] = set()
-
-    for d in active_declarations:
-        # Framework Manifest components
-        if d.fqcn in manifest_entries or d.name in manifest_entries:
-            live_set.add(d.fqcn)
-
-        # DI Modules & App Roots
-        if d.file.endswith("AppModule.kt") or d.name in ["MeshApplication", "AppModule", "MainActivity", "MeshApp"]:
-            live_set.add(d.fqcn)
-
-        # Live NavHost Registered Composables
-        if d.kind in ["Composable", "Dialog"] and d.name in registered_composables:
-            live_set.add(d.fqcn)
-
-        # Direct UI branches in MeshApp (e.g. OnboardingScreen, MeshBottomBar)
-        if d.name in ["OnboardingScreen", "MeshBottomBar"] and "MeshApp.kt" in d.file:
-            live_set.add(d.fqcn)
-
-    # Propagate live reachability forward
-    forward_map: Dict[str, Set[str]] = {}
-    for callee_fqcn, callers in callers_map.items():
-        for _, _, caller_fqcn in callers:
-            forward_map.setdefault(caller_fqcn, set()).add(callee_fqcn)
-
-    queue = list(live_set)
-    while queue:
-        curr = queue.pop(0)
-        for callee in forward_map.get(curr, set()):
-            if callee not in live_set and callee not in manifest_dead:
-                live_set.add(callee)
-                queue.append(callee)
-
-    # 7. Check Zero Callers (C1)
-    target_kinds = {"Composable", "Dialog", "ViewModel", "Activity", "Service", "BroadcastReceiver", "Utility", "Method"}
-    reported_dead: Set[str] = set(manifest_dead)
-
-    for d in active_declarations:
-        if d.fqcn in reported_dead:
-            continue
-        if d.kind not in target_kinds:
-            continue
-        if d.is_nested and d.container:
-            container_fqcn = f"{d.fqcn.rsplit('.', 1)[0]}"
-            if container_fqcn in live_set or any(c.fqcn == container_fqcn and c.fqcn in live_set for c in active_declarations):
-                continue
-
-        if d.fqcn not in live_set:
-            callers = callers_map[d.fqcn]
-            external_callers = [c for c in callers if c[2] != d.fqcn]
-
-            if len(external_callers) == 0:
-                reported_dead.add(d.fqcn)
-                sym_name = d.name if d.kind != "Method" else (f"{d.container}.{d.name}" if d.container else d.name)
-                findings.append(Finding(
-                    file=d.file,
-                    line=d.line,
-                    kind="C1_ZERO_CALLERS",
-                    symbol=sym_name,
-                    reason=f"{d.kind} '{sym_name}' has zero callers across the codebase"
-                ))
-
-    # 8. Check Transitive Death (C4)
-    changed = True
-    while changed:
-        changed = False
-        for d in active_declarations:
-            if d.fqcn in reported_dead or d.fqcn in live_set:
-                continue
-            if d.kind not in target_kinds:
-                continue
-            if d.is_nested and d.container:
-                container_fqcn = f"{d.fqcn.rsplit('.', 1)[0]}"
-                if container_fqcn in live_set:
-                    continue
-
-            callers = callers_map[d.fqcn]
-            external_callers = [c for c in callers if c[2] != d.fqcn]
-
-            if len(external_callers) > 0:
-                all_callers_dead = all(c[2] in reported_dead for c in external_callers)
-                if all_callers_dead:
-                    reported_dead.add(d.fqcn)
-                    changed = True
-                    chain_names = sorted(list(set(c[2].split(".")[-1] for c in external_callers)))
-                    sym_name = d.name if d.kind != "Method" else (f"{d.container}.{d.name}" if d.container else d.name)
-                    findings.append(Finding(
-                        file=d.file,
-                        line=d.line,
-                        kind="C4_TRANSITIVE_DEAD",
-                        symbol=sym_name,
-                        reason=f"{d.kind} '{sym_name}' is referenced only by dead declarations: {', '.join(chain_names)}",
-                        chain=chain_names
-                    ))
+    # 5. ADVISORY pass: every function in android/app/src/main.
+    method_severity = "ERROR" if block_methods else "WARN"
+    widened_declarations = extract_declarations(kt_files, kt_clean, method_scope="widened")
+    method_findings, _, _ = analyze_declarations(
+        widened_declarations,
+        kt_files,
+        kt_clean,
+        registered_composables,
+        manifest_entries,
+        method_severity=method_severity,
+        keep_kinds={"Method"},
+        # A function inside a reachable class is exactly the shape that hid
+        # decideCommand, so the advisory pass does not honour the
+        # live-container exemption.
+        skip_live_container=False,
+        # And it attributes references to the innermost function, including
+        # override/private ones, so a call from inside an override body is not
+        # mistaken for a self-reference.
+        precise_scopes=True,
+    )
+    findings.extend(method_findings)
 
     return findings, excluded_info
+
+
+TRIAGE_SCHEMA_VERSION = 1
+
+CLASSIFICATIONS = ("unwired", "dead-removed", "detector-false-positive",
+                 "deliberately-public", "collateral-removed")
+
+# Classifications that correspond to a finding reported by the widened scan.
+FINDING_CLASSES = ("unwired", "dead-removed", "detector-false-positive", "deliberately-public")
+
+
+def load_kotlin_corpus(repo_root: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Read every Kotlin file under android/app/src/main as (raw, comment-stripped)."""
+    src_dir = os.path.join(repo_root, "android", "app", "src", "main", "java")
+    kt_files: Dict[str, str] = {}
+    kt_clean: Dict[str, str] = {}
+    for r, _, fs in os.walk(src_dir):
+        for f in fs:
+            if f.endswith(".kt"):
+                p = os.path.join(r, f)
+                rel_p = os.path.relpath(p, start=repo_root).replace("\\", "/")
+                with open(p, "r", encoding="utf-8") as fh:
+                    raw = fh.read()
+                kt_files[rel_p] = raw
+                kt_clean[rel_p] = strip_comments(raw)
+    return kt_files, kt_clean
+
+
+def _advisory_evidence(repo_root: str):
+    """Run the advisory pass; return (declarations, external callers keyed by fqcn)."""
+    kt_files, kt_clean = load_kotlin_corpus(repo_root)
+    declarations = extract_declarations(kt_files, kt_clean, method_scope="widened")
+    active, _, callers = build_reference_graph(declarations, kt_clean, True)
+    external: Dict[str, List[Tuple[str, int]]] = {}
+    for d in active:
+        external[d.fqcn] = sorted(
+            (c[0], c[1]) for c in callers.get(d.fqcn, set()) if not _is_self(c, d)
+        )
+    return active, external
+
+
+def _all_kotlin_code(repo_root: str) -> Tuple[str, int]:
+    """Concatenate every Kotlin source in main+test+androidTest, comments stripped.
+
+    Comments are stripped because the absence proof is about CODE references: a
+    KDoc line that still names a deleted symbol is documentation drift, not a
+    caller, and must not make a correct deletion look unverified.
+    """
+    chunks = []
+    count = 0
+    for variant in ("main", "test", "androidTest"):
+        src_dir = os.path.join(repo_root, "android", "app", "src", variant, "java")
+        for r, _, fs in os.walk(src_dir):
+            for f in fs:
+                if f.endswith(".kt"):
+                    with open(os.path.join(r, f), "r", encoding="utf-8") as fh:
+                        chunks.append(strip_comments(fh.read()))
+                    count += 1
+    return "\n".join(chunks), count
+
+
+def _resolve(active: List[Declaration], symbol: str) -> Optional[Declaration]:
+    """Find the declaration a disposition names.
+
+    Triage records the readable `Container.name` form; fqcn is fully qualified,
+    so match on the dotted suffix.
+    """
+    for d in active:
+        if d.fqcn == symbol or d.fqcn.endswith("." + symbol):
+            return d
+    return None
+
+
+def verify_dispositions(
+    repo_root: str,
+    dispositions: List[dict],
+    live_findings: List[Finding],
+    reported_total: int = 0,
+) -> Tuple[List[dict], List[str]]:
+    """Re-derive the evidence for every disposition against the live tree.
+
+    Returns (rows, drift_errors). Each row carries the machine-checked evidence
+    that the rendered document quotes, so a claim in the document is only ever
+    printed because a check in this function just confirmed it.
+    """
+    active, external = _advisory_evidence(repo_root)
+    corpus_text, corpus_files = _all_kotlin_code(repo_root)
+    reported = {f.symbol for f in live_findings if f.kind == "C1_ZERO_CALLERS"}
+
+    rows: List[dict] = []
+    errors: List[str] = []
+
+    for entry in dispositions:
+        symbol = entry["symbol"]
+        classification = entry["classification"]
+        if classification not in CLASSIFICATIONS:
+            errors.append("[ERROR] %s: unknown classification %r" % (symbol, classification))
+            continue
+
+        row = {
+            "symbol": symbol,
+            "classification": classification,
+            "rationale": entry.get("rationale", ""),
+            "root_cause": entry.get("root_cause", ""),
+            "file": entry.get("file", ""),
+        }
+
+        if classification == "unwired":
+            if symbol not in reported:
+                errors.append(
+                    "[STALE] %s is classified 'unwired' but the scan does not report it. "
+                    "It has been wired or deleted -- update wiring-audit/triage.json." % symbol
+                )
+                continue
+            d = _resolve(active, symbol)
+            if d is not None and external.get(d.fqcn):
+                errors.append(
+                    "[STALE] %s is classified 'unwired' but now has %d external caller(s)."
+                    % (symbol, len(external[d.fqcn]))
+                )
+                continue
+            row["evidence"] = "reported by the scan; 0 external callers"
+            rows.append(row)
+
+        elif classification in ("dead-removed", "collateral-removed"):
+            bare = symbol.split(".")[-1]
+            hits = re.findall(r"\b%s\b" % re.escape(bare), corpus_text)
+            if hits:
+                errors.append(
+                    "[STALE] %s is classified %r but %s still occurs %d time(s) "
+                    "across %d Kotlin files." % (symbol, classification, bare, len(hits), corpus_files)
+                )
+                continue
+            row["evidence"] = "0 code references across %d Kotlin files (comments stripped)" % corpus_files
+            rows.append(row)
+
+        else:
+            d = _resolve(active, symbol)
+            if d is None:
+                errors.append(
+                    "[STALE] %s is classified %r but is not declared anywhere in "
+                    "android/app/src/main." % (symbol, classification)
+                )
+                continue
+            callers_here = external.get(d.fqcn, [])
+            if classification == "detector-false-positive" and not callers_here:
+                errors.append(
+                    "[STALE] %s is classified 'detector-false-positive' but the scan now "
+                    "finds no external caller for it." % symbol
+                )
+                continue
+            row["declaration"] = "%s:%d" % (d.file, d.line)
+            row["callers"] = callers_here
+            if callers_here:
+                where = ", ".join("%s:%d" % (c[0], c[1]) for c in callers_here)
+                row["evidence"] = "called from %s" % where
+            else:
+                row["evidence"] = "exemption recorded in triage.json"
+            rows.append(row)
+
+    unclassified = sorted(reported - {r["symbol"] for r in rows})
+    for sym in unclassified:
+        errors.append(
+            "[UNCLASSIFIED] the scan reports %s but wiring-audit/triage.json has no "
+            "disposition for it. Classify it before regenerating." % sym
+        )
+
+    accounted = sum(1 for r in rows if r["classification"] in FINDING_CLASSES)
+    if reported_total and accounted != reported_total:
+        errors.append(
+            "[ACCOUNTING] the dispositions account for %d findings but #437 reported %d. "
+            "Every finding needs exactly one disposition, or the document would "
+            "misstate the backlog." % (accounted, reported_total)
+        )
+
+    return rows, errors
+
+
+def _md(text: str) -> str:
+    return text.replace("|", r"\|")
+
+
+def render_findings_markdown(triage: dict, rows: List[dict], command: str) -> str:
+    """Render wiring-audit/FINDINGS.md from the scan plus the committed triage."""
+    out: List[str] = []
+    w = out.append
+    scan = triage.get("scan", {})
+    by_class = {c: [r for r in rows if r["classification"] == c] for c in CLASSIFICATIONS}
+    unwired = by_class["unwired"]
+    fps = by_class["detector-false-positive"]
+    pub = by_class["deliberately-public"]
+    removed = by_class["dead-removed"]
+    total = scan.get("reported", 0)
+    collateral = by_class["collateral-removed"]
+
+    w("# Wiring Audit - Dead-Function Scan")
+    w("")
+    w("**Generated by:** `%s`" % command)
+    w("")
+    w("Do not edit this file by hand. The tables come from a live run of that")
+    w("command; the per-finding judgements come from `wiring-audit/triage.json`,")
+    w("which is committed and read by the same command. Regenerating re-derives")
+    w("every evidence claim below and FAILS if the scan reports a finding that")
+    w("triage.json does not classify, so the two cannot drift apart.")
+    w("")
+    w("**Base commit:** `%s` (merge of #438), triaged on top of the #437 scan."
+      % scan.get("base", "?"))
+    w("")
+    w("**Gate impact:** none. The scan stays `--method-findings=warn`. Only ERROR")
+    w("findings fail the gate, and the blocking pass output is byte-identical to #437.")
+    w("")
+
+    w("## Outcome")
+    w("")
+    w("| | count |")
+    w("|---|---|")
+    w("| Findings reported by #437 | %d |" % total)
+    w("| Detector false positives, fixed in the detector | %d |" % len(fps))
+    w("| Findings exempted instead of fixed | %d |" % len(pub))
+    w("| Collaterals removed with them (not findings) | %d |" % len(collateral))
+    w("| Genuinely dead declarations removed | %d |" % len(removed))
+    w("| Remaining, genuinely unwired | %d |" % len(unwired))
+    w("")
+    w("The backlog is not zero, and it should not be. The remaining %d are"
+      % len(unwired))
+    w("**unwired features** -- not dead code, and not detector noise. Each has a")
+    w("KDoc stating an intended caller that does not exist. They stay flagged,")
+    w("because they are real defects of a different kind.")
+    w("")
+
+    w("## Remaining findings - UNWIRED, not dead")
+    w("")
+    w("| Symbol | Location | Evidence (re-derived on every run) | Why it is not dead code |")
+    w("|---|---|---|---|")
+    for r in sorted(unwired, key=lambda x: x["symbol"]):
+        w("| `%s` | `%s` | %s | %s |"
+          % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+    w("")
+    w("Deleting these would discard working implementations of intended behaviour.")
+    w("Wiring them is new behaviour and out of scope for a triage pass. Each needs")
+    w("a product decision: wire it, or delete it along with its test.")
+    w("")
+
+    if collateral:
+        w("## Collaterals removed alongside a dead declaration")
+        w("")
+        w("These were never findings. Each existed only to serve a declaration")
+        w("removed above, so deleting that declaration orphaned them. Listed")
+        w("separately so they do not inflate the finding arithmetic above.")
+        w("")
+        w("| Symbol | File | Evidence (re-derived on every run) | Note |")
+        w("|---|---|---|---|")
+        for r in sorted(collateral, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+    if removed:
+        w("## Removed as genuinely dead")
+        w("")
+        w("Zero references in `android/app/src/main`, `src/test` and `src/androidTest`.")
+        w("The evidence column is re-derived by word-boundary search over every")
+        w("Kotlin source root on every regeneration, so a symbol that came back would")
+        w("fail the build rather than sit in this table.")
+        w("")
+        w("| Declaration | File | Evidence (re-derived on every run) | Note |")
+        w("|---|---|---|---|")
+        for r in sorted(removed, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["file"] or "-", _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+
+    w("## Detector false positives - per-finding evidence")
+    w("")
+    w("This is the evidence for the \"no detector exemptions were needed\" claim.")
+    w("Every symbol below was reported dead by the widened scan and is in fact")
+    w("live. The generator asks the SAME reference graph the gate asks and prints")
+    w("the real call site it finds, so the claim is re-checked on every run rather")
+    w("than asserted. If one of these ever loses its caller, regeneration fails")
+    w("instead of leaving a stale line here.")
+    w("")
+    w("| False positive | Declared at | Caller(s) found by the gate's reference graph | Root cause |")
+    w("|---|---|---|---|")
+    for r in sorted(fps, key=lambda x: x["symbol"]):
+        w("| `%s` | `%s` | %s | %s |"
+          % (r["symbol"], r["declaration"], _md(r["evidence"]), _md(r.get("root_cause", ""))))
+    w("")
+    if pub:
+        w("### Findings exempted instead of fixed")
+        w("")
+        w("| Symbol | Declared at | Evidence | Rationale |")
+        w("|---|---|---|---|")
+        for r in sorted(pub, key=lambda x: x["symbol"]):
+            w("| `%s` | `%s` | %s | %s |"
+              % (r["symbol"], r["declaration"], _md(r["evidence"]), _md(r["rationale"])))
+        w("")
+
+    w("## Root causes")
+    w("")
+    for i, rc in enumerate(triage.get("root_causes", []), start=1):
+        w("%d. **%s**" % (i, rc["title"]))
+        w("")
+        for para in rc["body"]:
+            w(para)
+            w("")
+    if triage.get("self_detection_note"):
+        w(triage["self_detection_note"])
+        w("")
+
+    w("## Checks performed before classifying anything")
+    w("")
+    for chk in triage.get("pre_classification_checks", []):
+        w("- %s" % chk["claim"])
+    w("")
+    w("## Promotion")
+    w("")
+    w(triage.get("promotion", ""))
+    w("")
+    return "\n".join(out)
+
+
+def _write_findings(repo_root: str, target: str, triage_path: str, findings: List[Finding]) -> int:
+    """Regenerate wiring-audit/FINDINGS.md from a live scan plus committed triage.
+
+    Refuses to write when the scan and triage.json disagree, so the document can
+    never quietly stop describing the code it audits.
+    """
+    rel_target = os.path.relpath(os.path.abspath(target), repo_root).replace("\\", "/")
+    try:
+        with open(triage_path, "r", encoding="utf-8") as fh:
+            triage = json.load(fh)
+    except (IOError, ValueError) as exc:
+        print("[ERROR] cannot read triage data %s: %s" % (triage_path, exc))
+        return 2
+    if triage.get("schema_version") != TRIAGE_SCHEMA_VERSION:
+        print("[ERROR] %s: unsupported schema_version %r (expected %d)"
+              % (triage_path, triage.get("schema_version"), TRIAGE_SCHEMA_VERSION))
+        return 2
+    rows, errors = verify_dispositions(
+        repo_root, triage.get("dispositions", []), findings,
+        reported_total=triage.get("scan", {}).get("reported", 0),
+    )
+    if errors:
+        for e in errors:
+            print(e)
+        print("\n[FAIL] %d triage problem(s). %s was NOT rewritten; the document "
+              "would have lied about the scan." % (len(errors), rel_target))
+        return 2
+    document = triage.get("document", "wiring-audit/FINDINGS.md")
+    command = "python scripts/check_wiring.py --write-findings %s" % document
+    markdown = render_findings_markdown(triage, rows, command)
+    with open(target, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(markdown)
+    print("[OK] Wrote %s (%d dispositions re-verified against the tree)"
+          % (rel_target, len(rows)))
+    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="SCMessenger Android Wiring & Reachability Gate (AGENTS.md Rule 16)")
     parser.add_argument("--root", default=os.getcwd(), help="Repository root directory (default: current directory)")
     parser.add_argument("--json", action="store_true", help="Output findings in JSON format for CI consumption")
+    parser.add_argument(
+        "--method-findings",
+        choices=["warn", "block"],
+        default="warn",
+        help=(
+            "Severity of the widened dead-function scan (kind=Method). "
+            "'warn' (default) reports every hit but does not fail the gate; "
+            "'block' promotes them to errors once the backlog is triaged."
+        ),
+    )
+    parser.add_argument(
+        "--write-findings",
+        metavar="PATH",
+        help=(
+            "Regenerate the wiring-audit document from this run plus the committed "
+            "triage data, instead of printing findings. Refuses to write (exit 2) if "
+            "the scan reports a finding that triage does not classify."
+        ),
+    )
+    parser.add_argument(
+        "--triage",
+        default=os.path.join("wiring-audit", "triage.json"),
+        help="Per-finding dispositions read by --write-findings (default: wiring-audit/triage.json)",
+    )
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.root)
-    findings, exclusions = check_wiring(repo_root)
+    block_methods = args.method_findings == "block"
+    findings, exclusions = check_wiring(repo_root, block_methods=block_methods)
+
+    if args.write_findings:
+        triage_path = args.triage if os.path.isabs(args.triage) else os.path.join(repo_root, args.triage)
+        return _write_findings(repo_root, args.write_findings, triage_path, findings)
+
+    errors = [f for f in findings if f.severity == "ERROR"]
+    warnings = [f for f in findings if f.severity != "ERROR"]
 
     if args.json:
         payload = {
-            "status": "PASS" if not findings else "FAIL",
+            "status": "PASS" if not errors else "FAIL",
             "findings_count": len(findings),
+            "error_count": len(errors),
+            "warn_count": len(warnings),
+            "method_scan": args.method_findings,
             "exclusions": exclusions,
             "findings": [asdict(f) for f in findings]
         }
@@ -595,17 +1278,27 @@ def main() -> int:
         print("Exclusions:")
         for excl in exclusions:
             print(f"  [INFO] {excl}")
+        print(f"Dead-function scan: {args.method_findings}"
+              + ("  (advisory; see wiring-audit/FINDINGS.md to triage)"
+                 if args.method_findings == "warn" else "  (blocking)"))
 
-        if not findings:
-            print("\n[OK] All components, composables, routes, and utilities are correctly wired.")
-        else:
-            print(f"\n[FAIL] Found {len(findings)} unreachable or miswired items:\n")
+        if errors:
+            print(f"\n[FAIL] Found {len(errors)} unreachable or miswired items:\n")
             # AGENTS.md Rule 15: Print EVERY hit, no truncation
-            for f in findings:
+            for f in errors:
+                chain_str = f" [chain: {' -> '.join(f.chain)}]" if f.chain else ""
+                print(f"[{f.kind}] {f.file}:{f.line} - {f.symbol}\n       Reason: {f.reason}{chain_str}")
+        else:
+            print("\n[OK] All components, composables, routes, and utilities are correctly wired.")
+
+        if warnings:
+            print(f"\n[WARN] {len(warnings)} unreferenced function(s) reported by the "
+                  f"widened dead-function scan. These do NOT fail the gate yet.\n")
+            for f in warnings:
                 chain_str = f" [chain: {' -> '.join(f.chain)}]" if f.chain else ""
                 print(f"[{f.kind}] {f.file}:{f.line} - {f.symbol}\n       Reason: {f.reason}{chain_str}")
 
-    return 1 if findings else 0
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

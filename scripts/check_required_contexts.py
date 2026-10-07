@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Enforce the branch-protection contract for required status contexts.
 
-Branch protection on main is STRICT and requires four contexts:
+Branch protection on main is STRICT and requires five contexts:
 
-    Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest)
+    Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest),
+    Handoff ownership scope
 
 A required context that stops reporting blocks every future merge, silently: the
 PR just never becomes mergeable. This fails when a provider of one of those
@@ -19,6 +20,8 @@ FAILS OPEN: on push, on manual dispatch, when the diff cannot be computed, and
 whenever a changed path is not recognised -- a gate that fails closed is a check
 that cannot fail. The gate's own bash is extracted and run inside a scratch
 git repository whose diff is exactly the fixture's changed-path set.
+`.github/actions/detect-docs-only` gets the same treatment, because it
+short-circuits REQUIRED checks: code renamed into docs/ must not read as docs-only.
 
 Parsing uses a REAL YAML parser and prints which one, because a line-oriented
 reader that guesses at the format is how an earlier revision of this check BOTH
@@ -50,8 +53,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 GATE_ACTION = REPO_ROOT / ".github" / "actions" / "detect-platform-change" / "action.yml"
+DOCS_ONLY_ACTION = REPO_ROOT / ".github" / "actions" / "detect-docs-only" / "action.yml"
 
-REQUIRED_CONTEXTS = ("Repository Hygiene Checks", "Lint", "Rust Linting", "Test (ubuntu-latest)")
+# Mirrors the required status checks on main's branch protection (strict). Re-read it with
+# `gh api repos/<owner>/<repo>/branches/main/protection/required_status_checks` before changing this.
+REQUIRED_CONTEXTS = ("Repository Hygiene Checks", "Lint", "Rust Linting", "Test (ubuntu-latest)",
+                     "Handoff ownership scope")
 PR_TRIGGERS = ("pull_request", "pull_request_target")  # both report on an ordinary PR
 DEFAULT_PR_TYPES = ("opened", "synchronize", "reopened")
 
@@ -298,9 +305,44 @@ GATE_SCENARIOS = (
     ("ios-only diff", "pull_request",
      ["iOS/SCMessenger/Views/ChatView.swift"], False,
      {"ios_relevant": "true", "android_relevant": "false"}),
+    # Regression scenarios for the platform gate (each one reproduced a real false negative):
+    # a diff larger than the pipe buffer made `printf | grep -q` exit 141 under pipefail, which
+    # read as "no match" and turned a genuine Android change into android_relevant=false.
+    ("large android diff (exceeds the pipe buffer)", "pull_request",
+     [f"android/app/src/main/java/com/scmessenger/android/generated/File{index:04d}.kt"
+      for index in range(3000)], False,
+     {"ios_relevant": "false", "android_relevant": "true", "rust_relevant": "false"}),
+    # Rename detection reports only the NEW path, so a file moved out of android/ into docs/
+    # looked inert; the gate must see the old path too.
+    ("rename out of android/", "pull_request", [], False,
+     {"ios_relevant": "false", "android_relevant": "true"},
+     (("android/app/src/main/java/com/scmessenger/android/Moved.kt", "docs/Moved.md"),)),
+    # cli/, wasm/ and desktop_bridge/ SOURCES are Android- and iOS-irrelevant, but both builds run cargo
+    # at the workspace root, which resolves every member's manifest.
+    ("workspace member manifest", "pull_request", ["cli/Cargo.toml"], False,
+     {"ios_relevant": "true", "android_relevant": "true", "rust_relevant": "true"}),
+    ("workspace member source", "pull_request", ["cli/src/main.rs"], False,
+     {"ios_relevant": "false", "android_relevant": "false", "rust_relevant": "true"}),
 )
 
-GIT_IDENTITY = ("-c", "user.email=gate-harness@example.invalid",
+# detect-docs-only: same tuple shape; the only output is is_docs_only. It short-circuits the REQUIRED
+# Lint, Rust Linting and Test checks, so a false "true" ships unverified code past them.
+DOCS_ONLY_SCENARIOS = (
+    ("docs-only: push to main", "push", None, False, {"is_docs_only": "false"}),
+    ("docs-only: markdown, docs/ and HANDOFF/ only", "pull_request", ["docs/guide.md", "HANDOFF/note.md"],
+     False, {"is_docs_only": "true"}),
+    ("docs-only: a source file changed", "pull_request", ["core/src/lib.rs"], False, {"is_docs_only": "false"}),
+    ("docs-only: diff cannot be computed", "pull_request", None, True, {"is_docs_only": "false"}),
+    # Rename detection reports only the NEW path, so code moved into docs/ read as documentation-only.
+    ("docs-only: code renamed into docs/", "pull_request", [], False, {"is_docs_only": "false"},
+     (("core/src/crypto/keys.rs", "docs/keys.md"),)),
+    # The control: a rename that stays inside docs/ is still documentation-only, so the fix does not
+    # simply answer false for every rename.
+    ("docs-only: rename within docs/", "pull_request", [], False, {"is_docs_only": "true"},
+     (("docs/old.md", "docs/new.md"),)),
+)
+
+GIT_IDENTITY =("-c", "user.email=gate-harness@example.invalid",
                 "-c", "user.name=gate-harness",
                 "-c", "commit.gpgsign=false",
                 "-c", "core.autocrlf=false")
@@ -315,8 +357,8 @@ def scratch_git(repo, *args):
                           capture_output=True, text=True, timeout=60, check=True)
 
 
-def make_scratch_repo(root, paths):
-    """A real repository whose second commit changes exactly `paths`.
+def make_scratch_repo(root, paths, renames=()):
+    """A real repository whose second commit changes exactly `paths` and moves each (old, new) in `renames`.
 
     The gate reads its changed-path set from git itself, so a real diff is the
     only fixture that exercises the classifier the way production does. A git
@@ -331,6 +373,11 @@ def make_scratch_repo(root, paths):
     repo = root / "repo"
     repo.mkdir(parents=True)
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    for old, _new in renames:
+        source = repo / old
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("a file that will be renamed, long enough for rename detection to pair it\n" * 4,
+                          encoding="utf-8")
     scratch_git(repo, "init", "-q")
     scratch_git(repo, "add", "-A")
     scratch_git(repo, "commit", "-qm", "base")
@@ -338,24 +385,31 @@ def make_scratch_repo(root, paths):
         target = repo / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture\n", encoding="utf-8")
+    for old, new in renames:
+        destination = repo / new
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        scratch_git(repo, "mv", old, new)
     scratch_git(repo, "add", "-A")
     # --allow-empty: the push/dispatch and uncomputable scenarios name no
     # changed paths, and their verdict comes from the trigger, not the diff.
     scratch_git(repo, "commit", "-qm", "changed", "--allow-empty")
     base = scratch_git(repo, "rev-parse", "HEAD~1").stdout.strip()
-    observed = sorted(scratch_git(repo, "diff", "--name-only", base, "HEAD").stdout.split())
+    # --no-renames: report both sides of a move, the same way the gate itself must read the diff.
+    observed = sorted(scratch_git(repo, "diff", "--name-only", "--no-renames", base, "HEAD").stdout.split())
     return repo, base, observed
 
 
-def run_gate_scenarios(script_text, declared_outputs):
+def run_gate_scenarios(script_text, declared_outputs, scenarios=GATE_SCENARIOS):
     harness_root = REPO_ROOT / "tmp"
     harness_root.mkdir(exist_ok=True)
     findings, results = [], []
 
-    for label, event, changed, diff_fails, expected in GATE_SCENARIOS:
+    for label, event, changed, diff_fails, expected, *extra in scenarios:
+        renames = extra[0] if extra else ()
         workdir = Path(tempfile.mkdtemp(prefix="gate-harness-", dir=str(harness_root)))
-        fixture_paths = sorted(changed or [])
-        repo, base_sha, observed = make_scratch_repo(workdir, fixture_paths)
+        # What git must report for this scenario: the added paths plus both sides of every move.
+        fixture_paths = sorted(list(changed or []) + [side for pair in renames for side in pair])
+        repo, base_sha, observed = make_scratch_repo(workdir, sorted(changed or []), renames)
         if observed != fixture_paths:
             findings.append(
                 f"gate scenario '{label}': the scratch repository does not produce the diff it "
@@ -422,6 +476,16 @@ def check_gate():
         return ["could not extract the gate script from the action, so its fail-open behaviour "
                 "is unverified"], []
     return run_gate_scenarios(script_text, declared)
+
+
+def check_docs_only():
+    if not DOCS_ONLY_ACTION.exists():
+        return [f"{DOCS_ONLY_ACTION.relative_to(REPO_ROOT)} is missing"], []
+    script_text = extract_gate_script(DOCS_ONLY_ACTION.read_text(encoding="utf-8"))
+    if script_text is None:
+        return ["could not extract the docs-only script from the action, so its behaviour is "
+                "unverified"], []
+    return run_gate_scenarios(script_text, ["is_docs_only"], DOCS_ONLY_SCENARIOS)
 
 
 # --- self-test: the shapes that broke the previous revision ------------------
@@ -548,7 +612,9 @@ def main(argv=None):
         print(f"[INFO] required context '{context}' provided by {where}")
 
     gate_findings, gate_results = check_gate()
-    findings.extend(gate_findings)
+    docs_findings, docs_results = check_docs_only()
+    findings.extend(gate_findings + docs_findings)
+    gate_results = gate_results + docs_results
     print(f"[INFO] workflows scanned: {scanned}; gate scenarios run: {len(gate_results)}")
     for label, event, emitted, code in gate_results:
         rendered = " ".join(f"{key}={value}" for key, value in sorted(emitted.items())) or "no outputs"

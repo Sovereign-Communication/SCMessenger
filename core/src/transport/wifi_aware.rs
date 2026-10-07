@@ -153,10 +153,20 @@ pub struct DiscoveredPeer {
 // PLATFORM BRIDGE TRAIT
 // ============================================================================
 
+// `#[async_trait]` 0.1.91 emits `#[must_use]` on each desugared method whose
+// return type is already `#[must_use]`, so clippy's `double_must_use` fires once
+// per async method -- 7 here, 6 in WifiDirectPlatformBridge. The attribute is
+// generated: there is no `#[must_use]` in this file to remove, and clippy's
+// own `help: remove must_use` points at the macro, not at anything we wrote.
+// Scoped to this trait on purpose. A crate-level allow would also silence
+// genuine `double_must_use` findings on hand-written code, and pinning the
+// toolchain to hide it would disable every future lint at once.
+// Ref: the Lint / Rust Linting CI jobs, 13 errors, both traits.
 /// Platform-specific WiFi Aware API abstraction
 ///
 /// Implementers provide actual WiFi Aware API calls for their platform.
 /// This is typically implemented by platform-specific code (e.g., iOS/Android bindings).
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WifiAwarePlatformBridge: Send + Sync {
     /// Check if WiFi Aware is available on this device
@@ -234,6 +244,9 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(self.available)
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock of WifiAwarePlatformBridge;
+    // MockWifiAwareBridge is a fixed available/unavailable stub and does not
+    // model per-call arguments.
     async fn publish_service(
         &self,
         service_name: &str,
@@ -246,6 +259,7 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     async fn subscribe_to_services(
         &self,
         service_name: &str,
@@ -266,6 +280,7 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     async fn create_data_path(
         &self,
         peer_id: &str,
@@ -280,14 +295,17 @@ impl WifiAwarePlatformBridge for MockWifiAwareBridge {
         Ok(())
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_service_discovered(
         &self,
         _callback: Box<dyn Fn(String, Vec<u8>, i32) + Send + Sync>,
     ) {
     }
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
 
+    // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `publish_service` above.
     fn set_on_data_path_confirmed(&self, _callback: Box<dyn Fn(String, SocketAddr) + Send + Sync>) {
     }
 }

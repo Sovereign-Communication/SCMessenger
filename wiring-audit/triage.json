@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "document": "wiring-audit/FINDINGS.md",
+  "regenerate_with": "python scripts/check_wiring.py --write-findings wiring-audit/FINDINGS.md",
+  "scan": {
+    "base": "2bf9a46d",
+    "reported": 33,
+    "note": "33 = the #437 baseline of 32 (28 C1_ZERO_CALLERS + 4 C4_TRANSITIVE_DEAD) plus 1 added by integrate/train-20261004: MeshRepository.importSeedAddresses, an unwired parity seam the train's own source comment admits has no call site (\"No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1\"). Every one has exactly one disposition below, and the generator fails if that stops being true."
+  },
+  "dispositions": [
+    {
+      "symbol": "MeshSyncWorkerEntryPoint.getMeshRepository",
+      "classification": "detector-false-positive",
+      "file": "android/app/src/main/java/com/scmessenger/android/service/MeshSyncWorker.kt",
+      "rationale": "Hilt @EntryPoint accessor.",
+      "root_cause": "1 - override/private functions were invisible as scopes - doWork is an override, so it was never a tracked scope and the call inside it was discarded as a self-reference."
+    },
+    {
+      "symbol": "MeshRepository.getMeshService",
+      "classification": "detector-false-positive",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "Reached only through the entry point accessor above.",
+      "root_cause": "1 - override/private functions were invisible as scopes - once getMeshRepository was mis-called dead, this became C4 transitively dead through it."
+    },
+    {
+      "symbol": "AnrWatchdog.isMainThreadResponsive",
+      "classification": "detector-false-positive",
+      "file": "android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt",
+      "rationale": "Called while building the ANR diagnostics string.",
+      "root_cause": "1 - override/private functions were invisible as scopes - buildAnrDiagnostics is private, so the call was attributed to the nearest preceding tracked declaration and lost."
+    },
+    {
+      "symbol": "SmartTransportRouter.getPreferredTransport",
+      "classification": "detector-false-positive",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/SmartTransportRouter.kt",
+      "rationale": "Called while choosing a transport for a delivery attempt.",
+      "root_cause": "2 - line proximity cannot model nesting - attemptDelivery declares data class TransportAttempt inside its own body, which masked the enclosing function."
+    },
+    {
+      "symbol": "GhostIdentityGate.shouldRenderAsNode",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/GhostIdentityGate.kt",
+      "rationale": "Documented as a UI convenience (never let a ghost be online) but no UI calls it. GhostIdentityGateTest calls it directly, so the code is exercised while the app never reaches it - the decideCommand shape: tests green, feature absent."
+    },
+    {
+      "symbol": "TransportManager.attemptEscalation",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt",
+      "rationale": "KDoc says 'Called when a peer is discovered on BLE'. No such call site exists, so BLE-to-WiFi escalation never runs. The implementation is intact and self-contained."
+    },
+    {
+      "symbol": "BleScanner.onTransportPause",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/ble/BleScanner.kt",
+      "rationale": "KDoc says 'Called when the app is backgrounded or the user explicitly pauses BLE'. No call site exists. BleScannerTest covers it directly, so BLE pause-on-background is unwired."
+    },
+    {
+      "symbol": "ChatViewModel.getRetryDelayForAttempt",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ChatViewModel.kt",
+      "rationale": "KDoc says 'for display in message retry timing'. No UI reads it."
+    },
+    {
+      "symbol": "MainViewModel.consumeRequestsInboxNav",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt",
+      "rationale": "Sibling consumeChatNav() IS called from the UI. The requests-inbox equivalent has no caller, so that navigation target is never consumed."
+    },
+    {
+      "symbol": "MeshRepository.testLedgerRelayConnectivity",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic helper, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.signData",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "crypto passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.verifySignature",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "crypto passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getDeviceId",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "device-management passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getSeniorityTimestamp",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "device-management passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getRegistrationState",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "device-management passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.exportLogs",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "logging passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.recordConnection",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "ledger passthrough, zero refs. recordConnectionFailure IS called and was kept"
+    },
+    {
+      "symbol": "MeshRepository.getLedgerSummary",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getServiceStateName",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getDiscoveredPeerCount",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getPendingOutboxCount",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.getMissingRuntimePermissions",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "diagnostic passthrough, zero refs"
+    },
+    {
+      "symbol": "MeshRepository.unsubscribeTopic",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "its only caller was the deleted TopicManager.unsubscribe"
+    },
+    {
+      "symbol": "TopicManager.unsubscribe",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/TopicManager.kt",
+      "rationale": "zero refs; it was the only caller of MeshRepository.unsubscribeTopic"
+    },
+    {
+      "symbol": "IdentityCreationCoordinator.isBackupAvailable",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/IdentityCreationCoordinator.kt",
+      "rationale": "zero refs"
+    },
+    {
+      "symbol": "OnAnrDetected",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt",
+      "rationale": "interface declared, never implemented or referenced anywhere; reported as OnAnrDetected.onAnr"
+    },
+    {
+      "symbol": "AnrWatchdog.getTotalAnrEvents",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt",
+      "rationale": "diagnostic accessor, zero refs; the backing field is still used and was kept"
+    },
+    {
+      "symbol": "AnrEvent.toJson",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/service/PerformanceMonitor.kt",
+      "rationale": "hand-rolled JSON, zero refs; the AnrEvent class is used and was kept"
+    },
+    {
+      "symbol": "WifiAwareTransport.encodePortTlv",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
+      "rationale": "TLV codec, zero refs"
+    },
+    {
+      "symbol": "WifiAwareTransport.decodePortTlv",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
+      "rationale": "TLV codec, zero refs"
+    },
+    {
+      "symbol": "MainViewModel.clearIdentityError",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt",
+      "rationale": "zero refs"
+    },
+    {
+      "symbol": "SettingsViewModel.resetSettingsToDefault",
+      "classification": "dead-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt",
+      "rationale": "zero refs"
+    },
+    {
+      "symbol": "TLV_TYPE_PORT",
+      "classification": "collateral-removed",
+      "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
+      "rationale": "orphaned once its only two users were deleted"
+    },
+    {
+      "symbol": "MeshRepository.importSeedAddresses",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+      "rationale": "Added by the train as an explicit parity seam and the source says so: \"No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.\" MeshRepositorySeedImportTest calls it directly, so the code is exercised while the app never reaches it. iOS calls the same-named function from JoinMeshView.swift:168; Android's JoinMeshScreen.kt does not. This is the decideCommand shape: tests green, feature absent."
+    }
+  ],
+  "root_causes": [
+    {
+      "title": "`override` and `private` functions were invisible as scopes.",
+      "body": [
+        "They are deliberately not reachability targets, so they are not collected -",
+        "but the reference map also used them to decide which scope a line sits in. A",
+        "call inside an `override` or `private` body was attributed to the nearest",
+        "preceding tracked declaration and then discarded as a self-reference.",
+        "",
+        "Fix: `collect_scope_ranges` records brace-depth ranges for every class AND",
+        "function, including the untracked ones, and a line is attributed to the",
+        "smallest range containing it."
+      ]
+    },
+    {
+      "title": "Line proximity cannot model nesting.",
+      "body": [
+        "`SmartTransportRouter` declares `data class TransportAttempt` *inside* the",
+        "function `attemptDelivery`, so \"nearest preceding declaration\" picked the",
+        "inner class for lines the function actually contains."
+      ]
+    },
+    {
+      "title": "A class whose opening brace is on a later line was dropped.",
+      "body": [
+        "`open class MeshRepository(` (line 55) and `class AnrWatchdog(` (line 29)",
+        "have no opening brace on their own line, so the class never entered the scope",
+        "stack and every fqcn inside it lost the class name. That turned live calls",
+        "into apparent external callers and mis-scored whole classes.",
+        "",
+        "Fix: the declaration is deferred and pushed when its brace appears, matching",
+        "the original extractor's `pending_class` handling.",
+        "",
+        "This one was caught by re-checking every resolution against the source rather",
+        "than trusting the detector, after a first attempt at the fix silently",
+        "mis-scored live methods."
+      ]
+    }
+  ],
+  "self_detection_note": "Self-detection also had to stop comparing names alone. An anonymous\n`object : Callback { override fun onStartSuccess() }` computes the same\nqualified name as the outer method it delegates to, so `this@Outer.m()` would\nlook recursive. The scope's start line is compared instead.",
+  "pre_classification_checks": [
+    {
+      "claim": "`src/test` and `src/androidTest` are outside the reference corpus, so no test caller can make a function look wired to production."
+    },
+    {
+      "claim": "Zero `.java` sources under `android/`, so there is no Java caller the scan misses."
+    },
+    {
+      "claim": "No reflective string invocation of any flagged symbol."
+    },
+    {
+      "claim": "No flagged symbol is an `override`, an implemented interface member, an `@EntryPoint` accessor, or a serialization hook - so none of them qualifies for a detector exemption. Every exemption route was available and none was needed. The false-positive table above is the per-finding proof, re-derived on each run."
+    },
+    {
+      "claim": "The detector scans `android/app/src/main` only. `android/shared/` and `shared/` are outside the corpus. Checked explicitly: none of the 32 findings was referenced from those roots. Recorded as a known limitation rather than silently ignored."
+    }
+  ],
+  "promotion": "Still `--method-findings=warn`, deliberately. The remaining findings need product decisions, not a policy change: each is either a feature that should be wired or code that should go. Once those are resolved, promoting is a one-word change."
+}

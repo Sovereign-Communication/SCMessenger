@@ -20,7 +20,7 @@ from orchestration_contract import (
     ContractError, load_manifest, protected_paths, requires_delivery_review,
     valid_transition,
 )
-from orchestration_completion_gate import run_completion_gate
+from orchestration_completion_gate import CompletionGateError, run_completion_gate
 from orchestration_worktree import create as create_worktree
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -519,6 +519,32 @@ def is_in_scope(files, allowed):
     return all(path.replace("\\", "/") in normalized_allowed for path in files)
 
 
+# The judges the completion gate runs. They execute from the same tree that a worker patch and the
+# task's verify_gate were just applied to, so they must be byte-identical to the base commit; otherwise
+# a patch (or the gate command itself) could rewrite a judge and forge a PASSED record. A task that
+# legitimately changes one of these files therefore cannot be completed by this kernel: a change to the
+# judge needs an independent review, not a self-judgement by the modified judge.
+# build_lock.py is on the list because it runs the authoritative mechanical gate whose exit code the
+# completion gate then trusts. The list is a bounded allow-list, NOT an isolation boundary: it does not
+# cover a new file that shadows a stdlib module on sys.path[0], index flags that hide an edit from
+# `git diff`, or the JEV evaluator itself (vendor/sovereign-harness or HARNESS_REPO, both outside this
+# repository). Closing those means running the judges from a pinned, separate checkout; until then the
+# task's file scope and the independent review that protected paths require are the remaining controls.
+COMPLETION_JUDGE_FILES = (
+    "scripts/harness_gate.py", "scripts/jev_canonical_check.py", "scripts/local_harness.py",
+    "scripts/orchestration_completion_gate.py", "scripts/orchestrate_strict.py", "scripts/build_lock.py",
+    "orchestration/manifest.yaml",
+)
+
+
+def judge_integrity_violations(controller_root, base_sha):
+    """Judge files that differ from base_sha (working tree and index), or a marker if that cannot be proven."""
+    changed = run(["git", "diff", "--name-only", str(base_sha), "--", *COMPLETION_JUDGE_FILES], cwd=controller_root)
+    if changed.returncode:
+        return ["<cannot prove the judge scripts match the base commit>"]
+    return [line.strip() for line in changed.stdout.splitlines() if line.strip()]
+
+
 def dispatch(task, spec, prompt_file, verify_gate, worktree):
     locked_gate = f"python3 {shlex.quote(str(SCRIPT_DIR / 'build_lock.py'))} --run {shlex.quote(verify_gate)}"
     command = [
@@ -635,6 +661,11 @@ def complete_integration(manifest, state_dir, task_id, controller_root):
                            escalation_reason="authoritative integration gate failed",
                            authoritative_gate=mechanical_gate)
     try:
+        violations = judge_integrity_violations(controller_root, state["base_sha"])
+        if violations:
+            raise CompletionGateError(
+                "completion judges differ from the base commit (a patch or the verify gate rewrote them): "
+                + ", ".join(violations))
         completion_gate = run_completion_gate(
             state,
             state_dir,

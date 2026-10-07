@@ -5,6 +5,21 @@
 # Runs the docker/docker-compose.test.yml suite (Rust workspace tests, Android
 # unit tests, cross-container integration tests, NAT simulation) on CI.
 #
+# NON-BLOCKING STATUS (v0.4.0-alpha.1 / SHIP_PLAN S1-4)
+# ---------------------------------------------------
+# Per CTO verdict, this suite is intentionally NON-BLOCKING for the v0.4.0 tag:
+#   - Root cause: docker/docker-compose.test.yml runs gen_kotlin against a
+#     --release cdylib whose UniFFI metadata is stripped by compiler optimization,
+#     causing KSP compilation to fail on error.NonExistentClass in the container.
+#   - Rationale: The suite is a 45-90 minute multi-arch matrix that duplicates
+#     coverage mobile.yml already provides faster, and Docker is not on the
+#     Android delivery path for this release.
+#   - The suite continues to run on push to main and report all artifacts and
+#     logs, with continue-on-error: true on the failing Android test execution step.
+#   - Follow-up: Issue #155 (https://github.com/Sovereign-Communication/SCMessenger/issues/155)
+#     tracks the real fix (retaining debuginfo in docker-compose.test.yml) to
+#     restore blocking status post-v0.4.0.
+#
 # WHY THIS FILE LOOKS THE WAY IT DOES
 # -----------------------------------
 # Every run before 2026-07-25 was cancelled by its own timeout-minutes, never
@@ -139,7 +154,7 @@ jobs:
             run --rm rust-core-test
 
       - name: Upload Rust test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: rust-test-results
@@ -216,12 +231,22 @@ jobs:
             android-gradle-cargo-${{ runner.os }}-
 
       - name: Run Android tests
+        # NON-BLOCKING FOR v0.4.0 (SHIP_PLAN S1-4, Issue #155):
+        # Fails during :app:kspDebugKotlin with error.NonExistentClass because
+        # bindings are generated from a stripped release cdylib. mobile.yml
+        # provides primary Android CI coverage. Tracked in Issue #155.
+        continue-on-error: true
         working-directory: docker
         run: |
           set -euo pipefail
           docker image inspect "${{ steps.image.outputs.name }}" > /dev/null
+          # ANDROID_ABI_FILTERS=none makes targetList in android/app/build.gradle
+          # empty, so the preBuild -> buildRustAndroid dependency resolves to
+          # nothing instead of four serial cross-compiles that cost 22 minutes of
+          # this job. The same four compiles are still enforced, in parallel, by the
+          # android-abi-compiles matrix below. Nothing is dropped.
           docker compose -f docker-compose.test.yml --profile test \
-            run --rm android-unit-test
+            run --rm -e ANDROID_ABI_FILTERS=none android-unit-test
 
       - name: Save Gradle and Cargo dependencies cache
         uses: actions/cache/save@v4
@@ -234,13 +259,95 @@ jobs:
           key: ${{ steps.gradle-cargo-cache.outputs.cache-primary-key }}
 
       - name: Upload Android test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: android-test-results
           path: docker/test-results/android/
           retention-days: 7
           if-no-files-found: ignore
+
+  # ============================================================================
+  # Android Rust cross-compile gate (arm64-v8a / armeabi-v7a / x86 / x86_64)
+  #
+  # These four builds used to run serially inside the Android Unit Tests job,
+  # behind preBuild -> buildRustAndroid, where they cost 22 minutes of wall time.
+  # Measured on run 37170308786 (2026-10-04): Arm64 8.8m, Armv7 4.4m, X86 4.5m,
+  # X86_64 4.5m. Nothing that job runs consumes the output - the JVM unit tests
+  # reporting there never load the native library, which android/app/src/test/
+  # README.md states outright: tests requiring initialization of the native Rust
+  # libuniffi_api library are currently @Ignored and "do not currently run in CI
+  # or Docker". So these are a COMPILE-INTEGRITY gate, not a test gate, and they
+  # belong in a job where they run concurrently and a failure names the ABI.
+  #
+  # android/app/build.gradle already honours -PabiFilters / ANDROID_ABI_FILTERS
+  # (targetList, around line 432), and the buildRustAndroid aggregate task depends
+  # on nothing but those filtered targets. Invoking that single task directly
+  # therefore compiles exactly one ABI without also pulling in the host cargo
+  # build, UniFFI binding generation, or any Kotlin compilation.
+  #
+  # fail-fast is off deliberately: four independent ABIs, and knowing that three
+  # still build while one does not is the whole diagnostic value.
+  # ============================================================================
+  android-abi-compiles:
+    name: Android ABI Compile (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86, x86_64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          set -euo pipefail
+          echo "[INFO] Disk usage before cleanup:"
+          df -h
+          echo "[INFO] Removing unnecessary files..."
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          echo "[INFO] Disk usage after cleanup:"
+          df -h
+
+      - name: Resolve Compose image name
+        id: image
+        working-directory: docker
+        run: |
+          set -euo pipefail
+          NAME="$(docker compose -f docker-compose.test.yml --profile test config --images android-unit-test 2>/dev/null | head -n1 || true)"
+          if [ -z "$NAME" ]; then
+            NAME="${COMPOSE_PROJECT_NAME}-android-unit-test"
+          fi
+          echo "[INFO] Compose expects image: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build Android test image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.android-test
+          tags: ${{ steps.image.outputs.name }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=android-test-image
+          cache-to: type=gha,mode=max,scope=android-test-image
+
+      - name: Cross-compile scmessenger-core for ${{ matrix.abi }}
+        working-directory: docker
+        run: |
+          set -euo pipefail
+          docker image inspect "${{ steps.image.outputs.name }}" > /dev/null
+          docker compose -f docker-compose.test.yml --profile test \
+            run --rm android-unit-test \
+            bash -c "cd /workspace/android && ./gradlew buildRustAndroid --no-daemon --stacktrace -PabiFilters=${{ matrix.abi }}"
 
   # ============================================================================
   # Cross-container integration tests (mock relay + two mock clients)
@@ -367,7 +474,7 @@ jobs:
           docker compose -f docker-compose.test.yml --profile test down
 
       - name: Upload integration test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: integration-test-results
@@ -442,7 +549,7 @@ jobs:
           ./run-all-tests.sh --verbose
 
       - name: Upload all test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: full-test-results
@@ -505,7 +612,7 @@ jobs:
           ./run-all-tests.sh --integration-only --with-nat --verbose
 
       - name: Upload NAT test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nat-test-results

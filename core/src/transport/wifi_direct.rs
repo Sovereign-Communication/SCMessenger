@@ -70,6 +70,16 @@ pub fn compute_group_owner_intent(is_charging: bool, battery_pct: u8) -> i32 {
     }
 }
 
+// `#[async_trait]` 0.1.91 emits `#[must_use]` on each desugared method whose
+// return type is already `#[must_use]`, so clippy's `double_must_use` fires once
+// per async method -- 7 here, 6 in WifiDirectPlatformBridge. The attribute is
+// generated: there is no `#[must_use]` in this file to remove, and clippy's
+// own `help: remove must_use` points at the macro, not at anything we wrote.
+// Scoped to this trait on purpose. A crate-level allow would also silence
+// genuine `double_must_use` findings on hand-written code, and pinning the
+// toolchain to hide it would disable every future lint at once.
+// Ref: the Lint / Rust Linting CI jobs, 13 errors, both traits.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WifiDirectPlatformBridge: Send + Sync {
     async fn is_available(&self) -> Result<bool, WifiDirectError>;
@@ -209,6 +219,12 @@ impl WifiDirectPlatformBridge for PlatformWifiDirectBridge {
     fn set_on_connection_info(&self, callback: Box<dyn Fn(GroupInfo) + Send + Sync>) {
         *self.on_connection_info.lock() = Some(callback);
     }
+    // PERIMETER-ALLOW-UNDERSCORE: WiFi Direct data does not arrive via a
+    // discrete message callback on this bridge -- the GO/client link is a
+    // direct TCP dial instead (see HANDOFF/plans/P1-15_transport_matrix_audit.md
+    // and HANDOFF/plans/P1-17_windows_wifi_direct_design.md, both already
+    // documenting this as a deliberate no-op, not a gap). `PlatformWifiDirectBridge`
+    // has no `on_message_received` field to store it in.
     fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
 }
 
@@ -374,6 +390,9 @@ mod tests {
         async fn stop_discovery(&self) -> Result<(), WifiDirectError> {
             Ok(())
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock of WifiDirectPlatformBridge;
+        // MockWifiDirectBridge is a fixed available/unavailable stub and does
+        // not model per-call arguments.
         async fn connect(&self, _device_address: &str) -> Result<(), WifiDirectError> {
             if self.available {
                 Ok(())
@@ -381,6 +400,7 @@ mod tests {
                 Err(WifiDirectError::Unavailable)
             }
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         async fn create_group(&self, _group_name: &str) -> Result<(), WifiDirectError> {
             if self.available {
                 Ok(())
@@ -391,8 +411,11 @@ mod tests {
         async fn remove_group(&self) -> Result<(), WifiDirectError> {
             Ok(())
         }
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_peers_changed(&self, _callback: Box<dyn Fn(Vec<WifiDirectPeer>) + Send + Sync>) {}
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_connection_info(&self, _callback: Box<dyn Fn(GroupInfo) + Send + Sync>) {}
+        // PERIMETER-ALLOW-UNDERSCORE: test-only mock, see `connect` above.
         fn set_on_message_received(&self, _callback: Box<dyn Fn(String, Vec<u8>) + Send + Sync>) {}
     }
 

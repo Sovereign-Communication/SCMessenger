@@ -329,6 +329,7 @@ impl scmessenger_core::CoreDelegate for TestReceiptDelegate {
 fn test_receipt_roundtrip_flips_state() {
     let alice = make_node();
     let bob = make_node();
+    let eve = make_node();
 
     // Register delegate on Alice
     let receipts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -354,14 +355,33 @@ fn test_receipt_roundtrip_flips_state() {
         .receive_message(prepared.envelope_data)
         .expect("receive_message must succeed");
 
-    // 3. Bob prepares an encrypted receipt envelope for Alice
+    // Eve cannot acknowledge Bob's message either before or after transport
+    // ACK; Bob's authenticated receipt remains valid after the ACK.
+    let alice_key = pubkey(&alice);
+    let bob_key = pubkey(&bob);
+    for (phase, acknowledge_first, still_queued) in
+        [("queued", false, true), ("post-ACK", true, false)]
+    {
+        if acknowledge_first {
+            assert!(alice.mark_message_sent(prepared.message_id.clone()));
+        }
+        let eve_receipt = eve
+            .prepare_receipt(alice_key.clone(), received_msg.id.clone())
+            .expect("Eve must prepare a receipt");
+        alice
+            .receive_message(eve_receipt)
+            .expect("Alice must decrypt Eve's receipt");
+        assert_eq!(
+            alice.outbox_contains_for_recipient(&bob_key, &prepared.message_id),
+            still_queued,
+            "Eve's {phase} receipt must not alter Bob's retry state"
+        );
+        assert!(receipts.lock().unwrap().is_empty());
+    }
+
     let receipt_envelope = bob
-        .prepare_receipt(pubkey(&alice), received_msg.id.clone())
+        .prepare_receipt(alice_key, received_msg.id.clone())
         .expect("prepare_receipt must succeed");
-    assert!(
-        alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
-        "the original message must be pending before its delivery receipt arrives"
-    );
 
     // 4. Alice receives Bob's receipt envelope
     let received_receipt = alice
@@ -439,8 +459,8 @@ fn test_receipt_roundtrip_flips_state() {
         "Receipt status must be Delivered"
     );
     assert!(
-        !alice.outbox_contains_for_recipient(&pubkey(&bob), &prepared.message_id),
-        "a Delivered receipt must clear the matching sender outbox entry"
+        !alice.outbox_contains_for_recipient(&bob_key, &prepared.message_id),
+        "a Delivered receipt must leave no sender retry state"
     );
 }
 
@@ -530,5 +550,92 @@ fn test_history_conversation_coalesces_pubkey_and_identity_flavors() {
             .expect("conversation by identity_id after removal must not error")
             .is_empty(),
         "D4: removal by either flavor must empty the thread"
+    );
+}
+
+// ============================================================================
+// WP4 -- delivery truth: a crypto refusal can never read as "delivered"
+// ============================================================================
+
+/// The 2026-08-30 operator report -- "I'm failing to send a message ... but the
+/// old ID still says delivered" -- is a delivery-truth defect, not a crypto
+/// defect: the refusal itself was correct, and the lie was downstream of it.
+/// `test_envelope_signature_verification` above already proves the refusal.
+/// This pins the downstream half: a refused envelope must leave NO state that
+/// any surface could render as delivered. That means no inbox entry, no history
+/// record, no receipt, and no `on_message_received` callback -- the callback is
+/// what the CLI turns into a delivery ACK, so a refusal that still raised it
+/// would recreate the exact reported disconnect.
+#[test]
+fn wp4_refused_envelope_leaves_no_delivery_state() {
+    let alice = make_node();
+    let bob = make_node();
+
+    let received_callback = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let receipts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    bob.set_delegate(Some(Box::new(TestReceiptDelegate {
+        receipts: std::sync::Arc::clone(&receipts),
+        generic_messages: std::sync::Arc::clone(&received_callback),
+    })));
+
+    let mut prepared = alice
+        .prepare_message(
+            pubkey(&bob),
+            "this must never read as delivered".to_string(),
+            MessageType::Text,
+            None,
+        )
+        .expect("prepare_message must succeed");
+    let tamper_index = prepared.envelope_data.len() / 2;
+    prepared.envelope_data[tamper_index] ^= 0xFF;
+
+    let outcome = bob.receive_message(prepared.envelope_data);
+    assert!(
+        outcome.is_err(),
+        "a tampered envelope must be refused (AEAD authentication failure)"
+    );
+
+    assert_eq!(
+        bob.inbox_count(),
+        0,
+        "a refused envelope must not enter the inbox"
+    );
+    assert_eq!(
+        bob.history_store_manager().count(),
+        0,
+        "a refused envelope must not enter message history"
+    );
+    assert_eq!(
+        *received_callback.lock().unwrap(),
+        0,
+        "a refused envelope must not raise the callback that becomes a delivery ACK"
+    );
+    assert!(
+        receipts.lock().unwrap().is_empty(),
+        "a refused envelope must not produce a receipt"
+    );
+
+    // Positive control: the same pair, untampered, DOES produce that state. Without
+    // it the assertions above would also pass if the delegate wiring were simply
+    // broken, which is the difference between a test and a tautology.
+    let control = alice
+        .prepare_message(
+            pubkey(&bob),
+            "control delivery".to_string(),
+            MessageType::Text,
+            None,
+        )
+        .expect("prepare_message must succeed");
+    bob.receive_message(control.envelope_data)
+        .expect("the untampered envelope must be accepted");
+    assert_eq!(
+        *received_callback.lock().unwrap(),
+        1,
+        "control: an accepted envelope raises the message callback exactly once"
+    );
+    assert_eq!(
+        bob.history_store_manager().count(),
+        1,
+        "control: an accepted envelope enters message history"
     );
 }

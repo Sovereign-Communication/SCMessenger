@@ -1,8 +1,66 @@
 # CTO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+Repository: scmessenger
+
 Status: Active
-Last updated: 2026-09-21T08:00Z (SESSION CLOSE — Freebuff transition canonical; /CTO load order updated)
-Entry point: `/CTO`. **Execution authority:** `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`.
+Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
+Entry point: `/CTO`. Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
+
+# ===== RESUME HERE (2026-09-30, Codex takeover) =====
+
+The Codex handoff is a record, not authorization. Section 0 takes precedence over
+older statements in that handoff. The previous Freebuff transition and the
+historical resume points below remain as records; do not use their PR, fleet,
+or release snapshots as current status.
+
+- At checkout creation, the isolated takeover worktree was at
+  `10f5642ea94cb6398f72ee60d3703aed26e9428d` (merge of #420); the
+  orchestrator then verified live `main` at that SHA. This is a historical
+  takeover-start snapshot. Recheck the remote immediately before any
+  outward-facing action.
+- The September 29 handoff records the operator's v0.4.0/v0.5.0 unification
+  and merge train. Follow its section 0 and section 6 order, one PR at a
+  time, while preserving the existing plan's gates and operator decisions.
+  Re-read the exact PR head, scope, checks, reviews, and merge state before
+  each action; the handoff's earlier table is historical.
+- The handoff records #421 as the 64-connection stopgap. The orchestrator's
+  cap-16 update to #421 is at head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`. At approximately
+  2026-09-30T01:21Z, #421 remained OPEN with no reviews; its new CI run was
+  queued or in progress. The physical cell test and independent Rule-8/A2
+  review of the exact head remain pending. PR #422 merged into `main` at
+  2026-09-30T01:17:49Z; the resulting `main` commit is
+  `064deb2d72cef8b293e182927ffa5119b6f2ae6f`.
+- The September 29 operator instruction is CI-only verification: no local
+  builds. Complete CI and the recorded review gates before claiming any car
+  done. No new v0.4.0/v0.5.0 release or three-node/BLE PASS is established
+  by this update. Re-derive Windows, AWS cloud node, and Pixel state before
+  making a live claim or deploying.
+- The handoff records that Claude stood down and that the primary checkout
+  contains unowned WIP. Preserve that work. The Codex takeover proceeds in
+  an isolated worktree. Do not delete or commit primary-checkout WIP until
+  its ownership and remote durability are established.
+
+# ===== END RESUME 2026-09-30 =====
+
+> **READ BEFORE USING ANY AWS ADDRESS IN THIS FILE (SHIP_PLAN G5).**
+> This is an append-only log, so its dated entries are preserved exactly as
+> written. Four of them cite `54.226.67.101` -- that instance was **replaced
+> around 2026-09-13** and the address is dead (issue I-02, fixed by PR #259).
+> Those entries describe what was observed then, not a reachable node now.
+>
+> Resolve the live address at use time with `scripts/aws_node_ip.sh` (single
+> source of truth: `$SCM_AWS_HOST`, else the EC2 API by the `scm-always-on-node`
+> tag; it never falls back to a hardcoded value). `HANDOFF/gpt/AWS_RELAY_CURRENT_ADDRESS.md`
+> carries the most recent recorded snapshot. Do not copy an address out of this
+> log.
 
 # ===== HARNESS LANE UPDATE (2026-09-22, Claude Code on the Harness repo — append-only note) =====
 
@@ -3273,6 +3331,37 @@ it; it is there because someone already paid for that lesson.
 
 ---
 
+## 2026-09-16 — 7-day merge plan + CI reference (workahead rollout audit)
+
+Base: origin/main 1e2fb747. 16 PRs audited (opened 2026-09-09..2026-09-16).
+
+- `#288` cannot serve as-is: predates the other 15, claims none,
+  6 direct file overlaps, BLOCKED with 11 pending + 0 reviews.
+  It becomes the carrier only after its children land.
+- Phase order:
+
+| Phase | PRs |
+|---|---|
+| 0 anytime | #283 -> main |
+| 1 into feat | #290 -> #291 -> #294 -> #293 -> #296 -> #297, HOLD #292/#295 |
+| 2 refresh | #288 -> main |
+| 3 main stack | #289, then rollout #298 -> #299 -> #300 -> #302 -> #301 |
+
+- HOLD #292 (docs-only) and #295 (docs-only + contradicts #291 gate).
+- Docs-only follow-ups after #298: #299 JoinMesh call-site,
+  #302 accept-side; #301 needs exact v0.4.0 asset URL post-D2.
+- Coordination notes posted 2026-09-16 on #288, #294, #296, #297.
+- Details: `HANDOFF/MERGE_PLAN_2026-09-16.md`.
+- CI resume sheet: `HANDOFF/CI_CHECK_REFERENCE_2026-09-16.md`
+  (docs-only stays cheap: Docs/lint/label only).
+- Re-verify later same day — see `HANDOFF/MERGE_PLAN_2026-09-16.md`
+  `## Re-verify 2026-09-16 (later same day) — deltas`: #292/#295 no
+  longer docs-only (code landed, #295 failing JVM tests, #291
+  contradiction stands); #289 failures cleared, fresh run pending;
+  rollout #299/#300/#302/#301 red under fix, #298 clean so far;
+  zero approvals on all 16 PRs — assign reviewers; feat head
+  b8f069a6->93408dbb docs-only, no rebase pressure; #303 still
+  draft+UNMERGED, 12 pass/6 pending.
 ## 2026-09-16 — Pre-v0.4.0 Shadow Audit, Remediation Merge Train & Work-Ahead Coordination
 
 Base: `origin/feat/v040-multi-transport-store-forward` (PR #288) / `origin/main` 1e2fb747.

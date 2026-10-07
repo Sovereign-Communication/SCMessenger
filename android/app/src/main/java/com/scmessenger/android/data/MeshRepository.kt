@@ -84,6 +84,7 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
+        const val MAX_SEEDS_PER_IMPORT = 16
 
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
@@ -826,8 +827,10 @@ open class MeshRepository(
     private val _discoveredPeers = MutableStateFlow<Map<String, PeerDiscoveryInfo>>(emptyMap())
     open val discoveredPeers: StateFlow<Map<String, PeerDiscoveryInfo>> = _discoveredPeers.asStateFlow()
 
-    // UNIFICATION_V2: All nodes are relays — isRelay retained for backward compat but no longer distinguishes.
-    // Every node is a full relay; the field is now always false in UI terms (no "infrastructure" category).
+    // UNIFICATION_V2 / naming rule A-2: every node relays, so nothing here questions
+    // whether a node relays. `isInfraNode` records only that a peer is infrastructure --
+    // a bootstrap/infra agent or a circuit middle-hop. The role noun is `node`, not `relay`,
+    // which is why this field carries the role noun `node` (operator-confirmed, 2026-10-01).
     data class PeerDiscoveryInfo(
         val peerId: String,          // Key (libp2p or canonical)
         val publicKey: String?,      // Extracted from PeerId or from identity beacon
@@ -836,7 +839,7 @@ open class MeshRepository(
         val libp2pPeerId: String? = null, // Libp2p peer ID for routing
         val transport: com.scmessenger.android.service.TransportType,
         val isFull: Boolean,         // True if peer identity is authenticated
-        val isRelay: Boolean = false,
+        val isInfraNode: Boolean = false,
         val lastSeen: ULong = System.currentTimeMillis().toULong() / 1000u,
         // NODE-TRANSPORT-VIS-001: every transport this node is known to speak,
         // derived from listen addrs / ledger multiaddrs / contact routing hints.
@@ -1618,45 +1621,6 @@ open class MeshRepository(
     // MESH SERVICE LIFECYCLE
     // ========================================================================
 
-    // ANR FIX: Add network connectivity test to diagnose ledger relay failures
-    fun testLedgerRelayConnectivity(): Boolean {
-        return try {
-            // Test connectivity to addresses from ledger instead of static bootstrap
-            val ledgerAddresses = ledgerManager?.getPreferredRelays(3u) ?: emptyList()
-            if (ledgerAddresses.isEmpty()) {
-                Timber.w("Network connectivity test: No preferred relays in ledger")
-                return false
-            }
-
-            ledgerAddresses.any { relay ->
-                try {
-                    // Extract IP and port from multiaddr
-                    val multiaddr = relay.multiaddr ?: return@any false
-                    val parts = multiaddr.split("/")
-                    val ipIndex = parts.indexOf("ip4")
-                    val tcpIndex = parts.indexOf("tcp")
-                    if (ipIndex < 0 || tcpIndex < 0 || ipIndex + 1 >= parts.size || tcpIndex + 1 >= parts.size) {
-                        return@any false
-                    }
-
-                    val ip = parts[ipIndex + 1]
-                    val port = parts[tcpIndex + 1].toIntOrNull() ?: return@any false
-
-                    val socket = java.net.Socket()
-                    socket.connect(java.net.InetSocketAddress(ip, port), 3000)
-                    socket.close()
-                    Timber.d("Network connectivity test: $ip:$port reachable (ledger relay)")
-                    true
-                } catch (e: Exception) {
-                    Timber.w("Network connectivity test: ${relay.multiaddr} unreachable - ${e.message}")
-                    false
-                }
-            }
-        } catch (e: Exception) {
-            Timber.w("Network connectivity test failed: ${e.message}")
-            false
-        }
-    }
 
     /**
      * Start the mesh service with the given configuration.
@@ -1743,7 +1707,7 @@ open class MeshRepository(
                             return@launch
                         }
 
-                        val isRelay = isBootstrapRelayPeer(peerId)
+                        val isInfraNode = isBootstrapRelayPeer(peerId)
 
                         val transportIdentity = resolveTransportIdentity(peerId)
                         val extractedKey = try { ironCore?.extractPublicKeyFromPeerId(peerId) } catch (_: Exception) { null }
@@ -1770,11 +1734,11 @@ open class MeshRepository(
                             localNickname = transportIdentity?.localNickname,
                             libp2pPeerId = peerId,
                             transport = com.scmessenger.android.service.TransportType.INTERNET, // Default for swarm
-                            isFull = !isRelay && (
+                            isFull = !isInfraNode && (
                                 transportIdentity != null ||
                                     !extractedKey.isNullOrBlank()
                                 ),
-                            isRelay = isRelay,
+                            isInfraNode = isInfraNode,
                             lastSeen = System.currentTimeMillis().toULong() / 1000u,
                             transports = parseTransportsFromMultiaddrs(relayHints)
                         )
@@ -1803,7 +1767,7 @@ open class MeshRepository(
                                 knownPublicKey = transportIdentity.publicKey
                             )
                             // Don't auto-create contacts for relay peers - they are infrastructure, not user contacts
-                            if (!isRelay) {
+                            if (!isInfraNode) {
                                 upsertFederatedContact(
                                     canonicalPeerId = transportIdentity.canonicalPeerId,
                                     publicKey = transportIdentity.publicKey,
@@ -1821,7 +1785,7 @@ open class MeshRepository(
                             }
                             try { contactManager?.updateLastSeen(transportIdentity.canonicalPeerId) } catch (_: Exception) { }
                             try { contactManager?.updateLastSeen(peerId) } catch (_: Exception) { }
-                            if (!isRelay && relayHints.isNotEmpty()) {
+                            if (!isInfraNode && relayHints.isNotEmpty()) {
                                 connectToPeer(peerId, relayHints)
                             }
                         }
@@ -1944,7 +1908,7 @@ open class MeshRepository(
                                 libp2pPeerId = peerId,
                                 transport = peerTransportType,
                                 isFull = transportIdentity != null,
-                                isRelay = isInfraRelay,
+                                isInfraNode = isInfraRelay,
                                 lastSeen = System.currentTimeMillis().toULong() / 1000u,
                                 transports = parseTransportsFromMultiaddrs(listenAddrs)
                             )
@@ -3782,7 +3746,7 @@ open class MeshRepository(
                             info.transport
                         },
                         isFull = info.isFull || existing.isFull,
-                        isRelay = info.isRelay || existing.isRelay || isRelayHop(info.peerId) || isRelayHop(existing.peerId),
+                        isInfraNode = info.isInfraNode || existing.isInfraNode || isRelayHop(info.peerId) || isRelayHop(existing.peerId),
                         lastSeen = maxOf(info.lastSeen, existing.lastSeen),
                         transports = info.transports + existing.transports
                     )
@@ -3849,7 +3813,7 @@ open class MeshRepository(
                         info.copy(
                             nickname = authoritative,
                             localNickname = contactLocal ?: info.localNickname,
-                            isRelay = info.isRelay || isRelayHop(info.peerId) || isKnownRelay(info.peerId)
+                            isInfraNode = info.isInfraNode || isRelayHop(info.peerId) || isKnownRelay(info.peerId)
                         )
                     } else if (contactLocal != null && contactLocal != info.localNickname) {
                         info.copy(localNickname = contactLocal)
@@ -5185,54 +5149,19 @@ open class MeshRepository(
     // CRYPTO UTILITIES
     // ========================================================================
 
-    fun signData(data: ByteArray): uniffi.api.SignatureResult? {
-        ensureServiceInitializedFireAndForget()
-        return try {
-            ironCore?.signData(data)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to sign data")
-            null
-        }
-    }
 
-    fun verifySignature(data: ByteArray, signature: ByteArray, publicKeyHex: String): Boolean {
-        ensureServiceInitializedFireAndForget()
-        return try {
-            ironCore?.verifySignature(data, signature, publicKeyHex) ?: false
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to verify signature")
-            false
-        }
-    }
 
     // ========================================================================
     // WS13 DEVICE MANAGEMENT
     // ========================================================================
 
-    fun getDeviceId(): String? {
-        return ironCore?.getDeviceId()
-    }
 
-    fun getSeniorityTimestamp(): ULong? {
-        return ironCore?.getSeniorityTimestamp()
-    }
 
-    fun getRegistrationState(identityId: String): uniffi.api.RegistrationStateInfo? {
-        return ironCore?.getRegistrationState(identityId)
-    }
 
     // ========================================================================
     // LOGGING
     // ========================================================================
 
-    fun exportLogs(): String? {
-        return try {
-            ironCore?.exportLogs()
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to export logs")
-            null
-        }
-    }
 
     // ========================================================================
     // QUEUE COUNTS
@@ -6139,7 +6068,7 @@ open class MeshRepository(
      *
      * v0.4.0: there are no dedicated relays -- every node is a full relay -- and
      * no hardcoded node address. The candidate comes from the ledger, matching
-     * the pattern in getPreferredRelay()/testLedgerRelayConnectivity(). A fresh
+     * the pattern in getPreferredRelay(). A fresh
      * install has an empty ledger and legitimately has no candidate here until
      * it learns a peer via invite/QR or LAN discovery (mDNS/BLE); that is the
      * intended cold-start behavior, not a bug, so we just log and return.
@@ -6723,9 +6652,6 @@ open class MeshRepository(
     // LEDGER
     // ========================================================================
 
-    fun recordConnection(multiaddr: String, peerId: String) {
-        ledgerManager?.recordConnection(multiaddr, peerId)
-    }
 
     fun recordConnectionFailure(multiaddr: String, detail: String? = null) {
         // D3c fix: the ledger failure counter is a near-permanent statistic
@@ -6748,6 +6674,46 @@ open class MeshRepository(
             return
         }
         ledgerManager?.recordFailure(multiaddr)
+    }
+
+    /**
+     * Persist bootstrap addresses learned from an invite or QR join bundle.
+     *
+     * Android parity with iOS MeshRepository.importSeedAddresses: seeds remain
+     * lower-confidence until an active transport session identifies the peer,
+     * but they must survive this screen and app launch via the ledger.
+     *
+     * No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.
+     * Additive only: existing flows never call this, null ledger returns 0.
+     */
+    open fun importSeedAddresses(addresses: List<String>): Int {
+        val seeds = addresses
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .take(MAX_SEEDS_PER_IMPORT)
+            .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
+            .toList()
+        if (seeds.isEmpty()) {
+            return 0
+        }
+        return try {
+            val added = importSeedsToLedger(seeds)
+            Timber.i("Ledger: imported $added bootstrap seed(s) from join bundle")
+            added.toInt()
+        } catch (e: Exception) {
+            Timber.w(e, "Ledger: failed to import bootstrap seeds")
+            0
+        }
+    }
+
+    protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
+        val manager = ledgerManager
+        if (manager == null) {
+            Timber.w("Ledger: cannot import seeds - ledgerManager not initialized")
+            return 0u
+        }
+        return manager.importSeedEntries(seeds)
     }
 
     /**
@@ -7107,7 +7073,7 @@ open class MeshRepository(
                         else
                             com.scmessenger.android.service.TransportType.INTERNET,
                         isFull = true,
-                        isRelay = false,
+                        isInfraNode = false,
                         lastSeen = contact.lastSeen ?: 0uL,
                         transports = transports
                     )
@@ -7159,7 +7125,7 @@ open class MeshRepository(
                         else
                             com.scmessenger.android.service.TransportType.INTERNET,
                         isFull = false,
-                        isRelay = isKnownRelay(rawPeerId) || isRelayHop(rawPeerId),
+                        isInfraNode = isKnownRelay(rawPeerId) || isRelayHop(rawPeerId),
                         lastSeen = entry.lastSeen ?: 0uL,
                         transports = transports
                     )
@@ -7173,8 +7139,8 @@ open class MeshRepository(
             for (hopId in relayHops) {
                 if (seeded.containsKey(hopId)) {
                     val cur = seeded[hopId]!!
-                    if (!cur.isRelay) {
-                        seeded[hopId] = cur.copy(isRelay = true, isFull = cur.isFull && !isRelayHop(hopId))
+                    if (!cur.isInfraNode) {
+                        seeded[hopId] = cur.copy(isInfraNode = true, isFull = cur.isFull && !isRelayHop(hopId))
                     }
                 } else {
                     // Create offline placeholder for the hop itself; its own lastSeen is the most recent
@@ -7192,7 +7158,7 @@ open class MeshRepository(
                         libp2pPeerId = hopId,
                         transport = com.scmessenger.android.service.TransportType.INTERNET,
                         isFull = false,
-                        isRelay = true,
+                        isInfraNode = true,
                         lastSeen = hopLastSeen,
                         transports = hopTransports
                     )
@@ -7216,7 +7182,7 @@ open class MeshRepository(
                                 nickname = mergedNick,
                                 localNickname = mergedLocal,
                                 transports = live.transports + info.transports,
-                                isRelay = live.isRelay || info.isRelay || isRelayHop(key),
+                                isInfraNode = live.isInfraNode || info.isInfraNode || isRelayHop(key),
                                 lastSeen = maxOf(live.lastSeen, info.lastSeen)
                             )
                         }
@@ -7396,9 +7362,6 @@ open class MeshRepository(
         return ledgerManager?.allKnownTopics() ?: emptyList()
     }
 
-    fun getLedgerSummary(): String {
-        return ledgerManager?.summary() ?: "Ledger not available"
-    }
 
     fun getConnectionPathState(): uniffi.api.ConnectionPathState {
         return try {
@@ -7418,17 +7381,8 @@ open class MeshRepository(
         }
     }
 
-    fun getServiceStateName(): String {
-        return meshService?.getState()?.name ?: "STOPPED"
-    }
 
-    fun getDiscoveredPeerCount(): Int {
-        return _discoveredPeers.value.size
-    }
 
-    fun getPendingOutboxCount(): Int {
-        return loadPendingOutbox().size
-    }
 
     fun getPendingDeliverySnapshot(messageId: String): PendingDeliveryInfo? {
         if (messageId.isBlank()) return null
@@ -7453,11 +7407,6 @@ open class MeshRepository(
             ?.terminalFailureCode
     }
 
-    fun getMissingRuntimePermissions(): List<String> {
-        return Permissions.required.filter { permission ->
-            ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
-        }
-    }
 
     /**
      * ANR FIX (P0_ANDROID_017): Export diagnostics asynchronously to avoid Main thread I/O.
@@ -7914,15 +7863,6 @@ open class MeshRepository(
         }
     }
 
-    fun unsubscribeTopic(topic: String) {
-        repoScope.launch {
-            try {
-                swarmBridge?.unsubscribeTopic(topic)
-            } catch (e: Exception) {
-                Timber.w("unsubscribeTopic failed for $topic: ${e.message}")
-            }
-        }
-    }
 
     fun publishTopic(topic: String, data: ByteArray) {
         repoScope.launch {
@@ -8572,22 +8512,22 @@ open class MeshRepository(
         // state within the cellular window.
         if (networkDetector.isCellularNetwork && publicRelayRoutes.isNotEmpty() && !localAcked) {
             val firstRelay = publicRelayRoutes.first()
-            val relayPeer = firstRelay.first
-            val relayAddrs = publicRelayRoutes.filter { it.first == relayPeer }.map { it.second }.distinct()
+            val routePeer = firstRelay.first
+            val relayAddrs = publicRelayRoutes.filter { it.first == routePeer }.map { it.second }.distinct()
             Timber.i(
-                "CELL-ROUTE-AWS-001d: pre-pass dial relay=$relayPeer addrs=${relayAddrs.size} ctx=$attemptContext"
+                "CELL-ROUTE-AWS-001d: pre-pass dial relay=$routePeer addrs=${relayAddrs.size} ctx=$attemptContext"
             )
             logDeliveryAttempt(
                 messageId = traceMessageId,
                 medium = "core",
                 phase = "cellular_pre_pass",
                 outcome = "attempt",
-                detail = "ctx=$attemptContext route=$relayPeer addrs=${relayAddrs.size}"
+                detail = "ctx=$attemptContext route=$routePeer addrs=${relayAddrs.size}"
             )
             try {
-                connectToPeer(relayPeer, relayAddrs)
+                connectToPeer(routePeer, relayAddrs)
                 // 001d: longer connect wait — cellular RTT + CGNAT handshake.
-                val connected = awaitPeerConnection(relayPeer, timeoutMs = 8000L)
+                val connected = awaitPeerConnection(routePeer, timeoutMs = 8000L)
                 if (connected) {
                     // 001d: retry sendMessageStatus up to 3 times with backoff.
                     // "Delivery pending retry" means the swarm accepted the send
@@ -8596,7 +8536,7 @@ open class MeshRepository(
                     var acked = false
                     for (attempt in 1..3) {
                         sendErr = bridge.sendMessageStatus(
-                            relayPeer,
+                            routePeer,
                             encryptedData,
                             recipientIdentityId,
                             intendedDeviceId
@@ -8610,7 +8550,7 @@ open class MeshRepository(
                             medium = "core",
                             phase = "cellular_pre_pass",
                             outcome = if (attempt < 3) "retry" else "failed",
-                            detail = "ctx=$attemptContext route=$relayPeer attempt=$attempt reason=$sendErr"
+                            detail = "ctx=$attemptContext route=$routePeer attempt=$attempt reason=$sendErr"
                         )
                         if (attempt < 3) {
                             kotlinx.coroutines.delay(1500L * attempt)
@@ -8623,17 +8563,17 @@ open class MeshRepository(
                             try {
                                 val rec = historyManager?.get(traceMessageId ?: "")
                                 if (rec?.delivered == true || rec?.status == uniffi.api.MessageStatus.DELIVERED) {
-                                    Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass receipt via $relayPeer")
+                                    Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass receipt via $routePeer")
                                     logDeliveryAttempt(
                                         messageId = traceMessageId,
                                         medium = "core",
                                         phase = "cellular_pre_pass",
                                         outcome = "success",
-                                        detail = "ctx=$attemptContext route=$relayPeer receipt=delivered"
+                                        detail = "ctx=$attemptContext route=$routePeer receipt=delivered"
                                     )
                                     return DeliveryAttemptResult(
                                         acked = true,
-                                        routePeerId = relayPeer,
+                                        routePeerId = routePeer,
                                         coreSwarmAcked = true
                                     )
                                 }
@@ -8642,17 +8582,17 @@ open class MeshRepository(
                         }
                         // Transport ACK but no receipt yet — still treat as acked
                         // so the durable outbox can wait for the receipt window.
-                        Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass transport ACK via $relayPeer (receipt pending)")
+                        Timber.i("[OK] CELL-ROUTE-AWS-001d cellular pre-pass transport ACK via $routePeer (receipt pending)")
                         logDeliveryAttempt(
                             messageId = traceMessageId,
                             medium = "core",
                             phase = "cellular_pre_pass",
                             outcome = "success",
-                            detail = "ctx=$attemptContext route=$relayPeer receipt=pending"
+                            detail = "ctx=$attemptContext route=$routePeer receipt=pending"
                         )
                         return DeliveryAttemptResult(
                             acked = true,
-                            routePeerId = relayPeer,
+                            routePeerId = routePeer,
                             coreSwarmAcked = true
                         )
                     }
@@ -8661,7 +8601,7 @@ open class MeshRepository(
                         medium = "core",
                         phase = "cellular_pre_pass",
                         outcome = "failed",
-                        detail = "ctx=$attemptContext route=$relayPeer reason=$sendErr"
+                        detail = "ctx=$attemptContext route=$routePeer reason=$sendErr"
                     )
                 } else {
                     logDeliveryAttempt(
@@ -8669,7 +8609,7 @@ open class MeshRepository(
                         medium = "core",
                         phase = "cellular_pre_pass",
                         outcome = "failed",
-                        detail = "ctx=$attemptContext route=$relayPeer reason=connect_timeout"
+                        detail = "ctx=$attemptContext route=$routePeer reason=connect_timeout"
                     )
                 }
             } catch (ex: Exception) {
@@ -10089,10 +10029,10 @@ open class MeshRepository(
         Timber.d("resolveTransportIdentity called for: $libp2pPeerId")
 
         // Relay peers should not have user-visible transport identities
-        val isRelay = isBootstrapRelayPeer(libp2pPeerId)
-        Timber.d("  isBootstrapRelayPeer check: $isRelay")
+        val isInfraNode = isBootstrapRelayPeer(libp2pPeerId)
+        Timber.d("  isBootstrapRelayPeer check: $isInfraNode")
 
-        if (isRelay) {
+        if (isInfraNode) {
             Timber.d("  → Filtering relay peer from transport identity resolution")
             return null
         }
@@ -10938,7 +10878,7 @@ open class MeshRepository(
     }
 
     // UNIFICATION: contact-gated messaging + promiscuous relay mesh perfection.
-    // All nodes relay for anyone (isRelay unified), but only contacts may send messages.
+    // All nodes relay for anyone (relay itself is unconditional), but only contacts may send messages.
     // This helper is the single source of truth for "is this peer a known contact?"
     // Used by sendMessage guard and inbound friend-request pairing logic. Verbose logs
     // aid Android/Windows/Ubuntu pairing verification (peerId, transport, isKnownContact).
@@ -11028,7 +10968,7 @@ open class MeshRepository(
         }
         // 2. Peers the discovery layer has already identified as relays.
         _discoveredPeers.value.values
-            .filter { it.isRelay }
+            .filter { it.isInfraNode }
             .forEach { info ->
                 ids.add(info.peerId)
                 info.libp2pPeerId?.let { ids.add(it) }
