@@ -162,6 +162,7 @@ mod tests {
 
     fn core() -> IronCore {
         let core = IronCore::new();
+        core.grant_consent();
         core.initialize_identity().expect("identity");
         core
     }
