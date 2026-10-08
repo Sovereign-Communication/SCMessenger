@@ -1,0 +1,45 @@
+2026-09-29T21:00:04.999701Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2069
+2026-09-29T21:00:05.951977Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:00:05.962723Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:01:04.999746Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2069
+2026-09-29T21:01:07.988922Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:01:08.000190Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:01:10.295543Z DEBUG scmessenger_cli::seed_dial: [SEED-DIAL] peers=1 -- connected; re-check in 120s
+2026-09-29T21:02:05.004910Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2069
+2026-09-29T21:02:08.005977Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:02:08.016704Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:02:50.165055Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
+2026-09-29T21:02:50.169151Z DEBUG scmessenger_core::transport::swarm: Started core ledger exchange with newly connected peer 12D3KooWFixtureAndroidPhone0000000000000000000
+2026-09-29T21:02:50.188904Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAndroidPhone0000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAndroidPhone0000000000000000000, protocols: 15, discoverable_addrs: 32
+2026-09-29T21:02:50.204397Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
+2026-09-29T21:02:50.206864Z  INFO scmessenger_core::transport::swarm: Ledger exchange from 12D3KooWFixtureAndroidPhone0000000000000000000: offered 0 peer entries (v1, allowed=true)
+2026-09-29T21:02:50.207513Z DEBUG scmessenger_core::transport::swarm: Ledger exchange reply to 12D3KooWFixtureAndroidPhone0000000000000000000: sending 1 peer entries
+2026-09-29T21:02:50.226484Z  INFO scmessenger_core::transport::swarm: Ledger exchange response from 12D3KooWFixtureAndroidPhone0000000000000000000: they learned 0 new peers, sent 1 back
+2026-09-29T21:03:04.995245Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2081
+2026-09-29T21:03:08.015990Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 24
+2026-09-29T21:03:08.025162Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:03:10.304887Z DEBUG scmessenger_cli::seed_dial: [SEED-DIAL] peers=2 -- connected; re-check in 120s
+2026-09-29T21:03:50.524202Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAndroidPhone0000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAndroidPhone0000000000000000000, protocols: 16, discoverable_addrs: 35
+2026-09-29T21:03:50.550330Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
+2026-09-29T21:03:55.937433Z DEBUG scmessenger_core::transport::swarm: Ledger exchange with 12D3KooWFixtureAndroidPhone0000000000000000000 re-armed after outbound failure: Connection was closed before a response was received
+2026-09-29T21:04:04.999992Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2087
+2026-09-29T21:04:08.153401Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:04:08.167260Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:05:04.994803Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2087
+2026-09-29T21:05:10.317933Z DEBUG scmessenger_cli::seed_dial: [SEED-DIAL] peers=1 -- connected; re-check in 120s
+2026-09-29T21:06:04.827022Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:06:04.834494Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:06:04.997680Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2087
+2026-09-29T21:06:42.016101Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
+2026-09-29T21:06:42.017514Z DEBUG scmessenger_core::transport::swarm: Started core ledger exchange with newly connected peer 12D3KooWFixtureAndroidPhone0000000000000000000
+2026-09-29T21:06:42.057936Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAndroidPhone0000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAndroidPhone0000000000000000000, protocols: 16, discoverable_addrs: 32
+2026-09-29T21:06:42.075585Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
+2026-09-29T21:06:42.076774Z  INFO scmessenger_core::transport::swarm: Ledger exchange from 12D3KooWFixtureAndroidPhone0000000000000000000: offered 0 peer entries (v1, allowed=true)
+2026-09-29T21:06:42.076920Z DEBUG scmessenger_core::transport::swarm: Ledger exchange reply to 12D3KooWFixtureAndroidPhone0000000000000000000: sending 1 peer entries
+2026-09-29T21:06:42.100011Z  INFO scmessenger_core::transport::swarm: Ledger exchange response from 12D3KooWFixtureAndroidPhone0000000000000000000: they learned 0 new peers, sent 1 back
+2026-09-29T21:07:05.004435Z  INFO scmessenger_core::transport::swarm: Relay custody audit log count: 2087
+2026-09-29T21:07:05.018649Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23
+2026-09-29T21:07:05.027518Z DEBUG scmessenger_core::transport::manager: Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet
+2026-09-29T21:07:10.330326Z DEBUG scmessenger_cli::seed_dial: [SEED-DIAL] peers=2 -- connected; re-check in 120s
+2026-09-29T21:07:42.071847Z  INFO scmessenger_core::transport::swarm: Identified peer 12D3KooWFixtureAndroidPhone0000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAndroidPhone0000000000000000000, protocols: 16, discoverable_addrs: 33
+2026-09-29T21:07:42.088126Z DEBUG scmessenger_core::transport::manager: Connection established to [e2, 6e, b3, 8e, 4f, 60, 5a, 0] via Internet
