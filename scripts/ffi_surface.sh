@@ -57,7 +57,11 @@ fi
 EXIT_CODE=0
 
 if [[ -n "$KT_FILE" ]]; then
-    CURRENT_KT=$(extract_kotlin_symbols "$KT_FILE")
+    # NOTE: `|| true` is load-bearing. The extractor's grep pipeline exits 1
+    # when zero symbols match; under `set -euo pipefail` that would kill the
+    # script right here, silently, before the empty-snapshot guard below can
+    # fire. Swallowing the status lets the -z check report loudly instead.
+    CURRENT_KT=$(extract_kotlin_symbols "$KT_FILE" || true)
     if $UPDATE; then
         if [[ -z "$CURRENT_KT" ]]; then
             # Empty extraction means the binding file is present but broken or
@@ -94,7 +98,7 @@ else
 fi
 
 if [[ -n "$SWIFT_FILE" ]]; then
-    CURRENT_SWIFT=$(extract_swift_symbols "$SWIFT_FILE")
+    CURRENT_SWIFT=$(extract_swift_symbols "$SWIFT_FILE" || true)
     if $UPDATE; then
         if [[ -z "$CURRENT_SWIFT" ]]; then
             echo "[FAIL] Refusing to write Swift snapshot: no symbols extracted from $SWIFT_FILE"
