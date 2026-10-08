@@ -792,7 +792,10 @@ impl MeshService {
         // when the device is on cellular, because LAN addresses are not
         // dialable over cellular. Cloned here like every other field the
         // spawned thread needs; read live (not snapshotted) at each site so a
-        // network change mid-session takes effect.
+        // network change mid-session takes effect. Both use sites are
+        // `not(wasm32)`-gated, so the clone is too (avoids an unused-variable
+        // warning on the wasm32 target).
+        #[cfg(not(target_arch = "wasm32"))]
         let device_state = self.device_state.clone();
 
         // TCP-listener-zombie fix: the OS socket bind happens asynchronously
