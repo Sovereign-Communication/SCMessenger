@@ -153,7 +153,7 @@ pub fn log_peer_counts(counts: &HashMap<&'static str, usize>, unclassified: usiz
     let mut kinds: Vec<&'static str> = known.iter().map(|(k, _)| *k).collect();
     for k in counts.keys() {
         if !kinds.contains(k) {
-            kinds.push(k);
+            kinds.push(*k);
         }
     }
     kinds.sort_unstable();
