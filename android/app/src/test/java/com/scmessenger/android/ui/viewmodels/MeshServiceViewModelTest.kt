@@ -3,6 +3,7 @@ package com.scmessenger.android.ui.viewmodels
 import android.content.Context
 import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.data.PreferencesRepository
+import com.scmessenger.android.service.MeshForegroundService
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -85,6 +86,38 @@ class MeshServiceViewModelTest {
 
         // Then
         assertTrue(isRunning)
+    }
+
+    @Test
+    fun `toggle during STARTING sends stop instead of becoming a no-op`() = runTest {
+        val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STARTING)
+        every { mockMeshRepository.serviceState } returns stateFlow
+        viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
+
+        viewModel.toggleService()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(exactly = 1) {
+            mockContext.startService(match {
+                it.action == MeshForegroundService.ACTION_STOP
+            })
+        }
+    }
+
+    @Test
+    fun `toggle during STOPPING sends explicit start instead of becoming a no-op`() = runTest {
+        val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STOPPING)
+        every { mockMeshRepository.serviceState } returns stateFlow
+        viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
+
+        viewModel.toggleService()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(exactly = 1) {
+            mockContext.startForegroundService(match {
+                it.action == MeshForegroundService.ACTION_START
+            })
+        }
     }
 
     @Test
