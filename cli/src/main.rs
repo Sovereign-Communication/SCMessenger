@@ -4978,9 +4978,8 @@ async fn cmd_discovery(action: DiscoveryAction) -> Result<()> {
         DiscoveryAction::Peers => {
             let peers = api::get_discovery_peers().await?;
             println!("{}", "Locally Discovered Peers".bold());
-            if peers.is_empty() {
-                println!("  {}", "No peers discovered via local transports.".dimmed());
-            } else {
+            // #469 T9: no absence message; an empty list prints only the header.
+            if !peers.is_empty() {
                 for peer in peers {
                     println!(
                         "  • {} ({})",
