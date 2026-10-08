@@ -835,14 +835,96 @@ fn reflection_reply_is_usable(addr: &SocketAddr) -> bool {
     !addr.ip().is_unspecified() && addr.port() != 0
 }
 
+/// Text form of [`reflection_reply_is_usable`]; unparseable replies are unusable.
+fn reflection_reply_text_is_usable(text: &str) -> bool {
+    text.parse::<SocketAddr>()
+        .map(|a| reflection_reply_is_usable(&a))
+        .unwrap_or(false)
+}
+
+/// Requester-side bound on one address-reflection round trip: the protocol's
+/// own request timeout plus a margin for command queueing. Event-driven
+/// failure handling normally resolves first; this is the backstop so a caller
+/// can always proceed to the next reflector.
+const ADDRESS_REFLECTION_REPLY_BOUND: Duration =
+    Duration::from_secs(super::behaviour::ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS + 5);
+
+/// Remove a pending reflection entry and release its waiter with `Err`.
+/// No-op when the entry is already gone.
+async fn fail_pending_reflection<K: Eq + Hash>(
+    pending: &mut HashMap<K, mpsc::Sender<Result<String, String>>>,
+    key: &K,
+    reason: String,
+) {
+    if let Some(reply_tx) = pending.remove(key) {
+        let _ = reply_tx.send(Err(reason)).await;
+    }
+}
+
+/// Await one reflection reply, bounded. Closed channel and timeout are both
+/// errors so callers move on to the next reflector.
+async fn await_reflection_reply(
+    reply_rx: &mut mpsc::Receiver<Result<String, String>>,
+    bound: Duration,
+) -> Result<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let received = tokio::time::timeout(bound, reply_rx.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("Address reflection timed out"))?;
+    // WASM has no tokio timer; the protocol-level OutboundFailure releases us.
+    #[cfg(target_arch = "wasm32")]
+    let received = {
+        let _ = bound;
+        reply_rx.recv().await
+    };
+    received
+        .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))?
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 /// How long a different-port address-only dial to an already-connected
 /// private-LAN host is suppressed after one such dial was allowed.
 #[cfg(not(target_arch = "wasm32"))]
 const SAME_HOST_NEW_PORT_COOLDOWN: Duration = Duration::from_secs(300);
 
-/// Bound on the same-host probe cooldown ledger (pruned when exceeded).
+/// Hard bound on the same-host probe cooldown ledger: when full, expired
+/// entries are pruned and, if that frees nothing, the oldest entry is evicted.
 #[cfg(not(target_arch = "wasm32"))]
 const SAME_HOST_COOLDOWN_MAX_ENTRIES: usize = 1024;
+
+/// Per-host cap on distinct different-port dials allowed per
+/// `SAME_HOST_NEW_PORT_COOLDOWN` window (Rule-8 nit: the limit used to be
+/// per (ip, port) only, so many peer-supplied ports on one LAN host each got a
+/// dial).
+#[cfg(not(target_arch = "wasm32"))]
+const SAME_HOST_MAX_PORTS_PER_WINDOW: usize = 8;
+
+/// Marker carried by every `skipped:` reason that is genuine evidence the
+/// target is already reachable (exact socket or peer id connected). The
+/// mobile bridge maps these to `Ok(())` and every other skip to the typed
+/// `IronCoreError::DialSkipped`.
+pub const DIAL_SKIP_CONNECTED_MARKER: &str = "respond over existing link";
+
+/// Skip reason: exact ip:port of a live direct connection.
+#[cfg(not(target_arch = "wasm32"))]
+const SKIP_REASON_EXACT_SOCKET: &str =
+    "exact socket already connected -- respond over existing link";
+
+/// Skip reason: different-port probe of a connected LAN host, rate-limited.
+/// Carries NO connectivity evidence for the probed port.
+#[cfg(not(target_arch = "wasm32"))]
+const SKIP_REASON_HOST_RATE_LIMITED: &str =
+    "host already has a live link; different-port probe rate-limited";
+
+/// Why an address-only dial was suppressed.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostSkip {
+    /// Exact socket already connected (genuine connectivity evidence).
+    ExactSocket,
+    /// Different port on a connected LAN host, rate-limited (no evidence).
+    RateLimited,
+}
 
 /// Ledger of (ip, port) address-only dials allowed to an already-connected
 /// private-LAN host, used to keep unknown ports dialable at a slow cadence.
@@ -908,35 +990,47 @@ fn addr_host_already_connected(
     endpoints: &[(std::net::IpAddr, u16)],
     ledger: &mut SameHostProbeLedger,
     now: Instant,
-) -> bool {
+) -> Option<HostSkip> {
     if addr
         .iter()
         .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
     {
-        return false;
+        return None;
     }
-    let Some((ip, _, port)) = addr_ip_socket(addr) else {
-        return false;
-    };
+    let (ip, _, port) = addr_ip_socket(addr)?;
     if ip.is_loopback() || ip.is_unspecified() {
-        return false;
+        return None;
     }
     if endpoints.contains(&(ip, port)) {
-        return true;
+        return Some(HostSkip::ExactSocket);
     }
     if !is_lan_scope_ip(ip) || !endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
-        return false;
+        return None;
     }
-    if let Some(last) = ledger.get(&(ip, port)) {
-        if now.saturating_duration_since(*last) < SAME_HOST_NEW_PORT_COOLDOWN {
-            return true;
-        }
+    let fresh = |t: &Instant| now.saturating_duration_since(*t) < SAME_HOST_NEW_PORT_COOLDOWN;
+    if ledger.get(&(ip, port)).is_some_and(fresh) {
+        return Some(HostSkip::RateLimited);
+    }
+    // Per-host cap on distinct ports dialed within the window.
+    let host_ports = ledger
+        .iter()
+        .filter(|((l_ip, _), t)| *l_ip == ip && fresh(t))
+        .count();
+    if host_ports >= SAME_HOST_MAX_PORTS_PER_WINDOW {
+        return Some(HostSkip::RateLimited);
     }
     if ledger.len() >= SAME_HOST_COOLDOWN_MAX_ENTRIES {
-        ledger.retain(|_, t| now.saturating_duration_since(*t) < SAME_HOST_NEW_PORT_COOLDOWN);
+        ledger.retain(|_, t| fresh(t));
+        // Hard bound: if every entry is still fresh, evict the oldest.
+        while ledger.len() >= SAME_HOST_COOLDOWN_MAX_ENTRIES {
+            let Some(oldest) = ledger.iter().min_by_key(|(_, t)| **t).map(|(k, _)| *k) else {
+                break;
+            };
+            ledger.remove(&oldest);
+        }
     }
     ledger.insert((ip, port), now);
-    false
+    None
 }
 
 /// Skip reason for an ADDRESS-ONLY dial (no peer id requested or embedded)
@@ -973,12 +1067,14 @@ fn address_only_dial_skip_reason(
         return None;
     }
     let endpoints = connected_direct_endpoints(tracker);
-    if !endpoints.is_empty()
-        && addr_host_already_connected(addr, &endpoints, ledger, Instant::now())
-    {
-        return Some("host already connected -- respond over existing link");
+    if endpoints.is_empty() {
+        return None;
     }
-    None
+    match addr_host_already_connected(addr, &endpoints, ledger, Instant::now()) {
+        Some(HostSkip::ExactSocket) => Some(SKIP_REASON_EXACT_SOCKET),
+        Some(HostSkip::RateLimited) => Some(SKIP_REASON_HOST_RATE_LIMITED),
+        None => None,
+    }
 }
 
 /// Direct port-ladder synthesis is only valid before a relay circuit marker.
@@ -3419,11 +3515,7 @@ impl SwarmHandle {
             .await
             .map_err(|_| anyhow::anyhow!("Swarm task not running"))?;
 
-        reply_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))?
-            .map_err(|e| anyhow::anyhow!(e))
+        await_reflection_reply(&mut reply_rx, ADDRESS_REFLECTION_REPLY_BOUND).await
     }
 
     /// Dial a peer at a multiaddress
@@ -5497,6 +5589,18 @@ pub async fn start_swarm_with_config(
                                             sync_external_address(&mut swarm, &address_observer, &bound_addresses);
                                         }
 
+                                        if !reflection_reply_text_is_usable(&response.observed_address) {
+                                            // Old-node placeholder (0.0.0.0:0): fail the
+                                            // requester so it moves to the next reflector
+                                            // and never records it as a detected address.
+                                            fail_pending_reflection(
+                                                &mut pending_reflections,
+                                                &request_id,
+                                                "unusable reflection reply".to_string(),
+                                            ).await;
+                                            continue;
+                                        }
+
                                         if let Some(reply_tx) = pending_reflections.remove(&request_id) {
                                             let _ = reply_tx.send(Ok(response.observed_address.clone())).await;
                                         }
@@ -5507,6 +5611,20 @@ pub async fn start_swarm_with_config(
                                         }).await;
                                     }
                                 }
+                            }
+                            SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(
+                                request_response::Event::OutboundFailure { peer, request_id, error, .. }
+                            )) => {
+                                // The responder refused (dropped channel for a circuit
+                                // or unknown connection), timed out, or the connection
+                                // closed. Release the requester immediately.
+                                tracing::debug!("Address reflection to {} failed: {}", peer, error);
+                                fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string()).await;
+                            }
+                            SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(
+                                request_response::Event::InboundFailure { peer, error, .. }
+                            )) => {
+                                tracing::debug!("Address reflection inbound from {} failed: {}", peer, error);
                             }
 
                             SwarmEvent::Behaviour(
@@ -9599,6 +9717,14 @@ pub async fn start_swarm_with_config(
                                             {
                                                 address_observer.record_observation(peer, observed_addr);
                                             }
+                                            if !reflection_reply_text_is_usable(&response.observed_address) {
+                                                fail_pending_reflection(
+                                                    &mut pending_reflections,
+                                                    &request_id,
+                                                    "unusable reflection reply".to_string(),
+                                                ).await;
+                                                continue;
+                                            }
                                             if let Some(reply_tx) = pending_reflections.remove(&request_id) {
                                                 let _ = reply_tx.send(Ok(response.observed_address.clone())).await;
                                             }
@@ -9609,9 +9735,7 @@ pub async fn start_swarm_with_config(
                                         }
                                     },
                                     request_response::Event::OutboundFailure { request_id, error, .. } => {
-                                        if let Some(reply_tx) = pending_reflections.remove(&request_id) {
-                                            let _ = reply_tx.send(Err(error.to_string())).await;
-                                        }
+                                        fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string()).await;
                                     }
                                     _ => {}
                                 }
@@ -10934,12 +11058,127 @@ mod tests {
         // After the cooldown the port is dialable again.
         let eps = super::connected_direct_endpoints(&tracker);
         let later = web_time::Instant::now() + super::SAME_HOST_NEW_PORT_COOLDOWN;
-        assert!(!super::addr_host_already_connected(
+        assert!(super::addr_host_already_connected(
             &"/ip4/192.168.0.121/tcp/9002".parse().unwrap(),
             &eps,
             &mut ledger,
             later
-        ));
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn skip_reasons_distinguish_connectivity_evidence_from_neutral_skips() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        let mut ledger = super::SameHostProbeLedger::new();
+        let reason = |addr: &str, ledger: &mut super::SameHostProbeLedger| {
+            super::address_only_dial_skip_reason(
+                &addr.parse().unwrap(),
+                None,
+                false,
+                &tracker,
+                ledger,
+            )
+        };
+        // Exact socket: genuine evidence (carries the marker).
+        let exact = reason("/ip4/192.168.0.121/tcp/9001", &mut ledger).unwrap();
+        assert!(exact.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+        // Rate-limited different-port probe: no evidence (no marker).
+        assert!(reason("/ip4/192.168.0.121/tcp/9002", &mut ledger).is_none());
+        let limited = reason("/ip4/192.168.0.121/tcp/9002", &mut ledger).unwrap();
+        assert!(!limited.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+    }
+
+    #[test]
+    fn per_host_port_cap_limits_distinct_ports_per_window() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        let mut ledger = super::SameHostProbeLedger::new();
+        let mut allowed = 0usize;
+        for port in 9100..9140u16 {
+            if !skip(
+                &tracker,
+                &mut ledger,
+                &format!("/ip4/192.168.0.121/tcp/{port}"),
+            ) {
+                allowed += 1;
+            }
+        }
+        assert_eq!(allowed, super::SAME_HOST_MAX_PORTS_PER_WINDOW);
+        // A different LAN host has its own budget.
+        let tracker2 = tracker_with(&[
+            ("a", "/ip4/192.168.0.121/tcp/9001"),
+            ("b", "/ip4/192.168.0.122/tcp/9001"),
+        ]);
+        assert!(!skip(&tracker2, &mut ledger, "/ip4/192.168.0.122/tcp/9200"));
+    }
+
+    #[test]
+    fn probe_ledger_bound_is_hard_when_all_entries_are_fresh() {
+        let tracker = tracker_with(&[("a", "/ip4/10.0.0.1/tcp/9001")]);
+        let eps = super::connected_direct_endpoints(&tracker);
+        let mut ledger = super::SameHostProbeLedger::new();
+        let now = web_time::Instant::now();
+        // Fill with fresh entries for unrelated hosts.
+        for i in 0..super::SAME_HOST_COOLDOWN_MAX_ENTRIES {
+            let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                10,
+                1,
+                (i / 250) as u8,
+                (i % 250) as u8,
+            ));
+            ledger.insert((ip, 9000), now);
+        }
+        assert_eq!(ledger.len(), super::SAME_HOST_COOLDOWN_MAX_ENTRIES);
+        assert!(super::addr_host_already_connected(
+            &"/ip4/10.0.0.1/tcp/9002".parse().unwrap(),
+            &eps,
+            &mut ledger,
+            now
+        )
+        .is_none());
+        assert!(ledger.len() <= super::SAME_HOST_COOLDOWN_MAX_ENTRIES);
+        assert!(ledger.contains_key(&(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            9002
+        )));
+    }
+
+    #[tokio::test]
+    async fn refused_reflection_failure_releases_waiter_and_cleans_pending() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut pending: HashMap<u64, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        pending.insert(7, tx);
+        super::fail_pending_reflection(&mut pending, &7, "refused".to_string()).await;
+        assert!(pending.is_empty());
+        let res = super::await_reflection_reply(&mut rx, Duration::from_secs(2)).await;
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("refused"));
+        // Idempotent for an already-removed entry.
+        super::fail_pending_reflection(&mut pending, &7, "again".to_string()).await;
+    }
+
+    #[tokio::test]
+    async fn reflection_wait_is_bounded_when_no_event_ever_arrives() {
+        // Sender kept alive and never used: only the timeout can release us.
+        let (_tx, mut rx) = tokio::sync::mpsc::channel::<Result<String, String>>(1);
+        let started = web_time::Instant::now();
+        let res = super::await_reflection_reply(&mut rx, Duration::from_millis(50)).await;
+        assert!(res.is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            super::ADDRESS_REFLECTION_REPLY_BOUND
+                > Duration::from_secs(
+                    super::super::behaviour::ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS
+                )
+        );
+    }
+
+    #[test]
+    fn placeholder_reflection_text_is_unusable() {
+        assert!(!super::reflection_reply_text_is_usable("0.0.0.0:0"));
+        assert!(!super::reflection_reply_text_is_usable("garbage"));
+        assert!(super::reflection_reply_text_is_usable("203.0.113.7:9001"));
     }
 
     #[test]

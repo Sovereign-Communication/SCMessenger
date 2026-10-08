@@ -1,17 +1,17 @@
 package com.scmessenger.android.data
 
+import uniffi.api.IronCoreException
+
 /**
- * The core swarm guard answers a dial it deliberately did not dispatch
- * (target is self / peer already connected / our own address / host already
- * connected) with an error whose message starts with "skipped:". That is
- * neither a success nor a failure: callers must not book backoff, circuit
- * breaker failures, or dead-marking against it.
+ * The core dial guard reports a dial it deliberately did not dispatch
+ * (target is self / our own address / rate-limited probe) as the typed
+ * [IronCoreException.DialSkipped]. That is neither a success nor a failure
+ * and carries NO connectivity evidence: callers must not book failures,
+ * backoff, dead-marking, recordSuccess or a Connected state against it.
+ *
+ * An already-connected skip (exact socket / peer id) is returned by the core
+ * as a normal success, so it never reaches this type.
  */
 object DialSkip {
-    private const val PREFIX = "skipped:"
-
-    fun isSkipped(error: Throwable): Boolean = isSkippedMessage(error.message)
-
-    fun isSkippedMessage(message: String?): Boolean =
-        message?.trimStart()?.startsWith(PREFIX, ignoreCase = true) == true
+    fun isSkipped(error: Throwable): Boolean = error is IronCoreException.DialSkipped
 }

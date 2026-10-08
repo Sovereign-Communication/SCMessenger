@@ -71,6 +71,12 @@ pub enum IronCoreError {
     IoError,
     #[error("Onion routing disabled")]
     OnionRoutingDisabled,
+    /// The core dial guard deliberately did not dispatch the dial (target is
+    /// self, our own address, or a rate-limited probe). Not a connectivity
+    /// failure and not evidence of connectivity: callers must book no failure,
+    /// no backoff, no success.
+    #[error("Dial skipped")]
+    DialSkipped,
 }
 
 pub use crypto::{decrypt_message, encrypt_message};

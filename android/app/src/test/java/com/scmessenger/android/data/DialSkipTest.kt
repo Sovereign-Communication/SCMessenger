@@ -3,19 +3,20 @@ package com.scmessenger.android.data
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import uniffi.api.IronCoreException
 
 class DialSkipTest {
     @Test
-    fun skippedPrefixIsNeutral() {
-        assertTrue(DialSkip.isSkipped(Exception("skipped: host already connected -- respond over existing link")))
-        assertTrue(DialSkip.isSkipped(RuntimeException("  Skipped: target is self (local peer id)")))
+    fun typedDialSkippedIsNeutral() {
+        assertTrue(DialSkip.isSkipped(IronCoreException.DialSkipped("Dial skipped")))
     }
 
     @Test
     fun realFailuresAreNotSkips() {
-        assertFalse(DialSkip.isSkipped(Exception("Network error")))
-        assertFalse(DialSkip.isSkipped(Exception("marked as dead, skipped: later")))
+        assertFalse(DialSkip.isSkipped(IronCoreException.NetworkException("Network error")))
+        assertFalse(DialSkip.isSkipped(IronCoreException.DialSelf("Dial self")))
+        // A message that merely looks like a skip is no longer treated as one.
+        assertFalse(DialSkip.isSkipped(Exception("skipped: target is self")))
         assertFalse(DialSkip.isSkipped(Exception()))
-        assertFalse(DialSkip.isSkippedMessage(null))
     }
 }
