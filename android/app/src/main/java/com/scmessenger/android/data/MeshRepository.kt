@@ -3942,7 +3942,44 @@ open class MeshRepository(
         wifiTransportManager?.startDiscovery()
     }
 
-    private suspend fun initializeAndStartSwarm() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /**
+     * Serializes swarm starts. initializeAndStartSwarm has many triggers
+     * (startMeshService, permission grant, identity creation, setNickname,
+     * network recovery); fired concurrently they each entered the FFI start
+     * while the first had not yet installed its handle (3 swarm starts in the
+     * first 14 s after launch, 3-node run 2026-10-08). Callers now queue here
+     * and the gate turns every redundant one into a no-op.
+     */
+    private val swarmStartMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Whether the last successful swarm start already had a local identity. */
+    @Volatile
+    private var swarmStartedWithIdentity: Boolean? = null
+
+    private suspend fun initializeAndStartSwarm() {
+        swarmStartMutex.withLock {
+            val identityNow = try {
+                !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
+            } catch (e: Exception) {
+                false
+            }
+            if (!SwarmStartGate.shouldStart(
+                    bridgePresent = swarmBridge != null,
+                    startedWithIdentity = swarmStartedWithIdentity,
+                    identityNow = identityNow
+                )
+            ) {
+                Timber.d("Swarm already started; skipping redundant start trigger")
+                return
+            }
+            initializeAndStartSwarmLocked()
+            if (swarmBridge != null) {
+                swarmStartedWithIdentity = identityNow
+            }
+        }
+    }
+
+    private suspend fun initializeAndStartSwarmLocked() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val settings = loadSettings()
         if (!settings.internetEnabled) {
             Timber.d("Swarm/Internet disabled in settings")
