@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the oldest line is dropped rather than blocking the UI.
  */
 class FileLoggingTree(context: Context) : Timber.Tree() {
-    private val MAX_LOG_LINES = 10000
+    private val deduper = LogDeduper()
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
     // Thread-safe immutable date formatter (minSdk 26).
     // G8: ISO-8601 with year and UTC offset (e.g. 2026-10-07T14:03:09.123+02:00;
@@ -82,6 +82,15 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 android.util.Log.ASSERT -> "A"
                 else -> "U"
             }
+            val decision = deduper.evaluate(priority, message, System.currentTimeMillis())
+            if (!decision.emit) return
+            decision.summary?.let { summary ->
+                val summaryLine = "$timestamp I/${tag ?: "Mesh"}: $summary\n"
+                if (!writeQueue.offer(LogEntry(summaryLine, null))) {
+                    writeQueue.poll()
+                    writeQueue.offer(LogEntry(summaryLine, null))
+                }
+            }
             val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
             // Drop oldest rather than block the caller (main) on a full queue.
             if (!writeQueue.offer(LogEntry(logLine, t))) {
@@ -118,7 +127,7 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                     }
                 }
 
-                if (estimatedFileBytes > 100 * 1024) {
+                if (estimatedFileBytes > MAX_FILE_BYTES) {
                     truncateLogFile()
                     estimatedFileBytes = 0L
                 }
@@ -136,7 +145,7 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         try {
             android.util.Log.d("FileLoggingTree", "Truncating log file: $logFile")
             // Consolidate logs: .4 -> .5, .3 -> .4, etc.
-            for (i in 4 downTo 1) {
+            for (i in MAX_HISTORY_FILES - 1 downTo 1) {
                 val current = File(logFile.parent, "${logFile.name}.$i")
                 val next = File(logFile.parent, "${logFile.name}.${i + 1}")
                 if (current.exists()) {
@@ -153,5 +162,15 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         } catch (e: Exception) {
             android.util.Log.e("FileLoggingTree", "Error truncating log file", e)
         }
+    }
+
+    companion object {
+        /**
+         * Rotation sizing: 5 files (current + 4 history) x 2 MB = 10 MB cap.
+         * With the [LogDeduper] spam limits this retains >= 24 h of normal
+         * operation (the previous 100 KB x 5 rotated about once a minute).
+         */
+        const val MAX_FILE_BYTES: Long = 2L * 1024 * 1024
+        const val MAX_HISTORY_FILES = 4
     }
 }

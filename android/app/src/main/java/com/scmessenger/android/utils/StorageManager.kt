@@ -12,7 +12,7 @@ import java.io.File
 object StorageManager {
     private const val TAG = "StorageManager"
     const val CRITICAL_STORAGE_THRESHOLD_MB = 500L
-    private const val LOG_MAX_HISTORY = 5
+    private const val LOG_MAX_HISTORY = FileLoggingTree.MAX_HISTORY_FILES
     private const val NOISY_STORAGE_THRESHOLD_BYTES = 100 * 1024 * 1024L // 100MB
 
     // Critical files that must be protected from pruning
