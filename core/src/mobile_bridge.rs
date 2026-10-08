@@ -7223,14 +7223,14 @@ mod tests {
             "peer-ok".to_string(),
             vec![0u8; crate::message::codec::MAX_MESSAGE_SIZE + 1],
         );
-        let stats = service.get_stats();
+        let stats = service.stats.lock().clone();
         assert_eq!(stats.peers_discovered, 0);
         assert_eq!(stats.bytes_transferred, 0);
 
         // Control: a well-formed discovery and frame are counted.
         service.on_peer_discovered("peer-ok".to_string());
         service.on_data_received("peer-ok".to_string(), vec![1, 2, 3]);
-        let stats = service.get_stats();
+        let stats = service.stats.lock().clone();
         assert_eq!(stats.peers_discovered, 1);
         assert_eq!(stats.bytes_transferred, 3);
     }
