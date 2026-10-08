@@ -365,7 +365,7 @@ fn build_seed_dial_candidates(
             &mut seen,
             my_addrs,
             mode,
-            DnsPolicy::AllowLocallyConfigured,
+            DnsPolicy::Reject,
         );
     }
 
