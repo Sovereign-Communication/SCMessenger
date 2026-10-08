@@ -7910,21 +7910,30 @@ open class MeshRepository(
                     // #469 T8: cadence comes from the core scheduler (aggressive
                     // after any network event, decaying, never stopping); an
                     // event wakes this wait immediately.
-                    discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
+                    awaitLedgerTick()
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Timber.w(e, "Pending outbox retry loop error")
-                    try {
-                        discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
-                    } catch (inner: kotlinx.coroutines.CancellationException) {
-                        throw inner
-                    } catch (inner: Exception) {
-                        // Scheduler unavailable: yield briefly rather than spin.
-                        kotlinx.coroutines.yield()
-                    }
+                    awaitLedgerTick()
                 }
             }
+        }
+    }
+
+    /**
+     * Wait for the scheduler's next ledger-lane attempt. If the native
+     * scheduler cannot be loaded (JVM unit tests) the loop still yields a
+     * bounded pause instead of spinning or dying.
+     */
+    private suspend fun awaitLedgerTick() {
+        try {
+            discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Timber.w(e, "Discovery scheduler unavailable; bounded fallback pause")
+            kotlinx.coroutines.delay(1_000L)
         }
     }
 
