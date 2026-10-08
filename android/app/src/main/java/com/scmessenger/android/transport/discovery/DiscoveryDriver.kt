@@ -86,10 +86,6 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
         listeners.add(listener)
     }
 
-    fun removeListener(listener: Listener) {
-        listeners.remove(listener)
-    }
-
     /** Report a platform event. Returns the lanes that were reset. */
     fun onEvent(event: DiscoveryEventKind): Set<DiscoveryLane> {
         val reset = policy.onEvent(event)
@@ -142,9 +138,4 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
 
     override fun cadenceFor(lane: DiscoveryLane): ScanCadence =
         ScanCadence { policy.nextDelayMs(lane) }
-
-    /** Wake a lane's waiting loop without touching the scheduler. */
-    fun wakeNow(lane: DiscoveryLane) {
-        wake[lane]?.trySend(Unit)
-    }
 }

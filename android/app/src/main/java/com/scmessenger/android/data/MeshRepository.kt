@@ -549,12 +549,9 @@ open class MeshRepository(
     // #469 T7/T8: event-driven discovery. The scheduler policy lives in core
     // (Rust); this driver feeds it platform events and wakes scan loops.
     // Lazy so JVM unit tests that never touch discovery never load the native
-    // library; override createDiscoveryPolicy() to inject a fake.
-    protected open fun createDiscoveryPolicy(): com.scmessenger.android.transport.discovery.DiscoveryPolicy =
-        com.scmessenger.android.transport.discovery.CoreDiscoveryPolicy()
-
+    // library.
     val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver by lazy {
-        com.scmessenger.android.transport.discovery.DiscoveryDriver(createDiscoveryPolicy()).also { driver ->
+        com.scmessenger.android.transport.discovery.DiscoveryDriver(com.scmessenger.android.transport.discovery.CoreDiscoveryPolicy()).also { driver ->
             driver.addListener { _, lanes -> applyDiscoveryReset(lanes) }
         }
     }
@@ -3282,7 +3279,8 @@ open class MeshRepository(
 
         // BLE Scanner: Feeds discovered peers to MeshService and handles GATT connections
         if (bleScanner == null) {
-            val bleCadence = discoveryDriver.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.BLE)
+            // Scheduler unavailable (JVM tests) -> null cadence -> legacy fixed duty cycle.
+            val bleCadence = runCatching { discoveryDriver.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.BLE) }.getOrNull()
             bleScanner = com.scmessenger.android.transport.ble.BleScanner(
                 context,
                 cadence = bleCadence,
@@ -6637,7 +6635,7 @@ open class MeshRepository(
                     dialAddrs = report.dialAddrs
                 )
             },
-            dial = { addr -> dial(addr) },
+            dial = { addr -> dialPeer(addr) },
             classify = ::classifyInviteError,
             onRedeemed = {
                 reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.INVITE_REDEEMED)
