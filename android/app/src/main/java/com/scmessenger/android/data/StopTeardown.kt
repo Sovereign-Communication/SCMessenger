@@ -202,6 +202,10 @@ internal object ServiceStopSequence {
             kotlin.runCatching { stopSelf() }
                 .onFailure { log("stop_self failed err=${it.javaClass.simpleName}") }
             log("complete ms=${nowMs() - startedAt} repository=${if (repositoryOk) "ok" else "degraded"}")
+            // Release the scope. Cancelling does not interrupt a blocked native
+            // call (nothing can), but it ends the coroutine bookkeeping so the
+            // scope and its jobs are not retained after the stop has finished.
+            detached.cancel()
         }
         return repositoryOk
     }
