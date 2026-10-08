@@ -41,8 +41,7 @@ class TestMarkerTable(unittest.TestCase):
             self.assertNotIn(m.name, names)
             names.add(m.name)
         not_in_code = [m.name for m in markers.MARKERS if m.src.startswith("NOT-IN-CODE")]
-        self.assertEqual(sorted(not_in_code), ["custody_accept_proposed", "ledger_address_learned_proposed",
-                                               "legacy_msg_rx"])
+        self.assertEqual(sorted(not_in_code), ["legacy_msg_rx"])
 
     def test_transport_ack_markers_never_score(self):
         for m in markers.MARKERS:
@@ -339,6 +338,148 @@ class TestDecideAndExit(unittest.TestCase):
         v = report.decide([{"msg_id": "a", "status": "VERIFIED", "missing": [], "contradictions": []}], [],
                           ["aws"], ["aws"], required_msg_ids=["zzz"])
         self.assertEqual(v["exit_code"], 2)
+
+
+class TestObservabilityMarkers(unittest.TestCase):
+    def _ev(self, node, text):
+        return parse.parse_text(node, f"{node}.log", synth.win(1, text) + "\n", 2026, 0)
+
+    def test_transport_marker_with_and_without_peer_count(self):
+        e = self._ev("windows", "[TRANSPORT] kind=ble state=unavailable detail=no_adapter")
+        self.assertEqual(e[0]["event"], "transport_status")
+        self.assertEqual(e[0]["detail"]["tkind"], "ble")
+        self.assertEqual(e[0]["detail"]["state"], "unavailable")
+        self.assertEqual(e[0]["detail"]["reason"], "no_adapter")
+        self.assertNotIn("peers", e[0]["detail"])
+        e = self._ev("aws", "[TRANSPORT] kind=quic state=connected peers=3 detail=periodic_total_3")
+        self.assertEqual(e[0]["detail"]["peers"], "3")
+
+    def test_routing_marker(self):
+        e = self._ev("android", "[ROUTING] peer_seen peer=abcdef0123456789 source=ble")
+        self.assertEqual(e[0]["event"], "routing_peer_seen")
+        self.assertEqual(e[0]["peer"], "abcdef0123456789")
+        self.assertEqual(e[0]["detail"]["source"], "ble")
+
+    def test_rx_markers_feed_receiver_legs(self):
+        e = self._ev("windows", "rx_decrypt msg=m1 from=abcdef0123456789 type=text result=ok")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"], e[0]["detail"]["kind"]), ("rx_decrypted", "m1", "text"))
+        e = self._ev("windows", "rx_history msg=m1 from=abcdef0123456789 result=ok dup=false hidden=false")
+        self.assertEqual(e[0]["event"], "rx_history")
+        e = self._ev("windows", "rx_history msg=m1 from=abcdef0123456789 result=failed dup=false hidden=false")
+        self.assertEqual(e[0]["event"], "rx_history_failed")
+
+    def test_rx_drop_and_mesh_stop(self):
+        e = self._ev("android", "[RX-DROP] msg=m9 stage=decode reason=bad_sig")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"], e[0]["detail"]["stage"], e[0]["detail"]["reason"]),
+                         ("rx_drop", "m9", "decode", "bad_sig"))
+        e = self._ev("android", "[MESH-STOP] swarm_shutdown timeout ms=5000")
+        self.assertEqual((e[0]["event"], e[0]["detail"]["phase"], e[0]["detail"]["result"], e[0]["detail"]["ms"]),
+                         ("mesh_stop", "swarm_shutdown", "timeout", "5000"))
+        e = self._ev("android", "[MESH-STOP] complete")
+        self.assertEqual(e[0]["detail"]["phase"], "complete")
+
+    def test_custody_and_ledger_markers_are_in_code_now(self):
+        e = self._ev("aws", "custody_accept msg=m5 from=aaaa1111bbbb2222 dest=cccc3333dddd4444")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"]), ("relay_custody_accept", "m5"))
+        e = self._ev("windows", "ledger_address_learned peer=aaaa1111bbbb2222 via=ledger_exchange:cccc3333dddd4444 "
+                                "addr=/ip4/1.2.3.4/tcp/9001")
+        self.assertEqual(e[0]["detail"]["via"], "ledger_exchange:cccc3333dddd4444")
+
+    def test_explicit_ledger_via_prefix_resolves_to_node(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andj(
+            35, f"ledger_address_learned peer={synth.AWS_ID[:16]} via=ledger_exchange:{synth.WIN_ID[:16]} "
+                f"addr={synth.AWS_ADDR}"))
+        ev = events_for(lines)
+        skew = correlate.estimate_skew(ev, synth.IDS, ["aws", "windows", "android"])
+        learned = correlate.ledger_learning(ev, synth.IDS, skew)
+        hit = [x for x in learned if x["evidence"] == "explicit"]
+        self.assertTrue(hit and hit[0]["via"] == "windows" and hit[0]["learned"] == "aws", hit)
+
+    def test_transport_table_marks_silent_kinds_and_tracks_changes(self):
+        lines = synth.connect_lines()
+        lines["windows"] += [
+            synth.win(2, "[TRANSPORT] kind=ble state=unavailable detail=no_adapter"),
+            synth.win(3, "[TRANSPORT] kind=tcp4 state=listening detail=listen_port_9001"),
+            synth.win(4, "[TRANSPORT] kind=tcp4 state=connected peers=2 detail=periodic_total_2_unclassified_0"),
+            synth.win(5, "[TRANSPORT] kind=tcp4 state=error detail=listener_failed"),
+        ]
+        ev = events_for(lines)
+        tab = correlate.transport_availability(ev, ["aws", "windows", "android"])
+        self.assertEqual(tab["windows"]["ble"]["state"], "unavailable")
+        self.assertEqual(tab["windows"]["ble"]["detail"], "no adapter")
+        self.assertEqual(tab["windows"]["tcp4"]["state"], "error")
+        self.assertEqual(tab["windows"]["tcp4"]["max_peers"], 2)
+        self.assertEqual(tab["windows"]["tcp4"]["changes"], 2)
+        self.assertEqual(tab["aws"]["ble"]["state"], "no-marker")
+        self.assertEqual(tab["android"]["cellular"]["state"], "no-marker")
+
+    def test_rx_drop_becomes_note_not_status(self):
+        lines = synth.merge(synth.connect_lines(), synth.msg_lines())
+        lines["windows"].append(synth.win(80.5, "[RX-DROP] msg=m-partial stage=decode reason=bad_sig"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-partial"]["status"], "PARTIAL")
+        self.assertTrue(any("rx_drop on windows stage=decode" in n for n in by["m-partial"]["notes"]))
+
+    def test_explicit_rx_legs_verify_a_message(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andlog(
+            60.0, "delivery_state msg=m-x state=pending detail=message_prepared_local_history_written"))
+        lines["windows"] += [
+            synth.win(60.3, f"rx_decrypt msg=m-x from={synth.AND_ID[:16]} type=text result=ok"),
+            synth.win(60.4, f"rx_history msg=m-x from={synth.AND_ID[:16]} result=ok dup=false hidden=false"),
+        ]
+        lines["android"].append(synth.andlog(60.9, "[RECEIPT-RX] Received from core: msg=m-x status=delivered"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-x"]["status"], "VERIFIED", by["m-x"])
+
+    def test_failed_history_write_is_not_the_history_leg(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andlog(
+            60.0, "delivery_state msg=m-y state=pending detail=message_prepared_local_history_written"))
+        lines["windows"] += [
+            synth.win(60.3, f"rx_decrypt msg=m-y from={synth.AND_ID[:16]} type=text result=ok"),
+            synth.win(60.4, f"rx_history msg=m-y from={synth.AND_ID[:16]} result=failed dup=false hidden=false"),
+        ]
+        lines["android"].append(synth.andlog(60.9, "[RECEIPT-RX] Received from core: msg=m-y status=delivered"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-y"]["status"], "PARTIAL")
+        self.assertIn("history", by["m-y"]["missing"])
+
+    def test_mesh_stop_summary_flags_timeout(self):
+        lines = synth.connect_lines()
+        lines["android"] += [
+            synth.andlog(50, "[MESH-STOP] requested"),
+            synth.andlog(51, "[MESH-STOP] swarm_shutdown ok ms=40"),
+            synth.andlog(52, "[MESH-STOP] rust_stop timeout ms=5000"),
+            synth.andlog(53, "[MESH-STOP] complete"),
+        ]
+        ev = events_for(lines)
+        ds = correlate.drop_and_stop_summary(ev, ["aws", "windows", "android"])
+        self.assertFalse(ds["mesh_stop"]["android"]["clean"])
+        self.assertEqual(len(ds["mesh_stop"]["android"]["sequence"]), 4)
+        self.assertIsNone(ds["mesh_stop"]["windows"]["clean"])
+
+    def test_verdict_md_has_transport_table_and_default_ports(self):
+        self.assertIn(":9876/", cli.build_parser().get_default("win_diag_url"))
+        lines = synth.merge(synth.connect_lines(), synth.msg_lines())
+        lines["windows"].append(synth.win(2, "[TRANSPORT] kind=ble state=unavailable detail=no_D-Bus"))
+        lines["android"].append(synth.andlog(2, "[TRANSPORT] kind=cellular state=connected detail=validated_internet"))
+        import shutil
+        src, root = tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, src, True)
+        self.addCleanup(shutil.rmtree, root, True)
+        synth.build(src, lines)
+        cli.run(["--from-dir", src, "--repo-root", root, "--run-id", "tx1"], out=io.StringIO())
+        md = None
+        for dp, dn, fn in os.walk(os.path.join(root, "tmp", "evidence")):
+            if "verdict.md" in fn:
+                with open(os.path.join(dp, "verdict.md"), encoding="utf-8") as fh:
+                    md = fh.read()
+        self.assertIn("## Transport availability per node", md)
+        self.assertIn("unavailable (no D-Bus)", md)
+        self.assertIn("connected (validated internet)", md)
+        self.assertIn("NO-MARKER", md)
 
 
 class FakeRunner:

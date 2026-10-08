@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--adb-serial", help="adb serial, ip:port for wireless ADB (default: only attached device)")
     src.add_argument("--windows", action="store_true", help="collect local Windows CLI node logs")
     src.add_argument("--win-log-dir", help=r"default %%LOCALAPPDATA%%\scmessenger\logs")
-    src.add_argument("--win-diag-url", default="http://localhost:9001/api/diagnostics")
+    src.add_argument("--win-diag-url", default="http://localhost:9876/api/diagnostics")
     src.add_argument("--aws", action="store_true", help="collect AWS relay over ssh (read-only)")
     src.add_argument("--aws-host", help="host/IP (or env SCM_AWS_HOST); never stored, IP is ephemeral")
     src.add_argument("--aws-user", help="ssh user (or env SCM_AWS_USER, default ubuntu)")
@@ -119,9 +119,13 @@ def run(argv: Optional[List[str]] = None, runner: collectors.Runner = collectors
                        if not x.startswith(("--aws-host", "--aws-key", "--aws-user"))],
               "scenario": a.scenario, "tol_s": a.tol_s, "max_skew_s": a.max_skew_s,
               "android_tz_offset_min": a.android_tz_offset_min, "strict_markers": a.strict_markers}
+    transports = correlate.transport_availability(events, sorted({*nodes, *(e['node'] for e in events)}))
+    routing = correlate.routing_summary(events, nodes)
+    drops_stops = correlate.drop_and_stop_summary(events, nodes)
     report.write_run(run_dir, run_id=run_id, repo_root=a.repo_root, params=params, collected=collected,
                      events=events, ids=ids, id_warnings=id_warn, skew=skew, messages=messages, steps=steps,
-                     ledger=ledger, verdict=verdict, corroboration=corroboration)
+                     ledger=ledger, verdict=verdict, corroboration=corroboration,
+                     transports=transports, routing=routing, drops_stops=drops_stops)
     print(f"[{'OK' if verdict['exit_code'] == 0 else 'INFO'}] verdict={verdict['overall']} exit={verdict['exit_code']}", file=out)
     print(f"[INFO] evidence: {run_dir}", file=out)
     for w in id_warn:

@@ -226,6 +226,15 @@ def classify_messages(events: Sequence[dict], skew: dict, ids: Dict[str, str],
         evs = sorted(evs, key=lambda e: (adjusted(e, skew).timestamp() if adjusted(e, skew) else float("inf"),
                                          e["src_line"]))
         out.append(_classify_one(msg_id, evs, skew, ids, tol_s, relay_nodes, cover))
+    drops: Dict[str, List[dict]] = defaultdict(list)
+    for e in events:
+        if e["event"] == "rx_drop" and e["msg_id"]:
+            drops[e["msg_id"]].append(e)
+    for res in out:
+        for d in drops.get(res["msg_id"], []):
+            res["notes"].append(
+                f"rx_drop on {d['node']} stage={d['detail'].get('stage')} "
+                f"reason={d['detail'].get('reason')} ({d['src_line']})")
     return out
 
 
@@ -378,9 +387,10 @@ def ledger_learning(events: Sequence[dict], ids: Dict[str, str], skew: dict) -> 
     nodes = sorted(ids)
     for e in events:
         if e["event"] == "ledger_address_learned":
-            via = node_of_peer(e["detail"].get("via"), ids)
+            via_raw = str(e["detail"].get("via", ""))
+            via = node_of_peer(via_raw.rsplit(":", 1)[-1], ids) or node_of_peer(via_raw, ids)
             learned = node_of_peer(e["peer"], ids)
-            out.append({"learner": e["node"], "via": via or e["detail"].get("via"),
+            out.append({"learner": e["node"], "via": via or via_raw,
                         "learned": learned or e["peer"], "evidence": "explicit", "line": e["src_line"]})
 
     def tm(e):
@@ -414,3 +424,87 @@ def ledger_learning(events: Sequence[dict], ids: Dict[str, str], skew: dict) -> 
 def _addr_peer(e: dict) -> Optional[str]:
     addr = str(e["detail"].get("addr", ""))
     return addr.rsplit("/p2p/", 1)[1] if "/p2p/" in addr else None
+
+
+# ------------------------------------------------- transport availability ---
+TRANSPORT_KINDS = ("tcp4", "tcp6", "quic", "relay", "dcutr", "mdns", "ble",
+                   "wifi_direct", "wifi_aware", "cellular")
+
+
+def _human(reason: Optional[str]) -> str:
+    return (reason or "").replace("_", " ")
+
+
+def transport_availability(events: Sequence[dict], nodes: Sequence[str]) -> dict:
+    """Per node, per transport kind: last logged state/detail, number of state
+    changes, max connected-peer count seen, and the timestamp of the last
+    marker. A kind with no `[TRANSPORT]` marker at all is reported as
+    state="no-marker": the node's log does not say, which is itself a finding
+    (the build predates the marker or the transport never initialised)."""
+    table: Dict[str, Dict[str, dict]] = {n: {} for n in nodes}
+    tev = [e for e in events if e["event"] == "transport_status"]
+    tev.sort(key=lambda e: (e.get("ts_utc") or "", e["src_line"]))
+    for e in tev:
+        node, kind = e["node"], e["detail"].get("tkind")
+        if kind not in TRANSPORT_KINDS:
+            continue
+        row = table.setdefault(node, {}).setdefault(
+            kind, {"state": None, "detail": "", "changes": 0, "max_peers": None,
+                   "last_ts": None, "src_line": None, "markers": 0})
+        peers = e["detail"].get("peers")
+        row["markers"] += 1
+        if peers is not None:
+            n = int(peers)
+            row["max_peers"] = n if row["max_peers"] is None else max(row["max_peers"], n)
+            if row["state"] is None:  # periodic count before any state line
+                row["state"] = e["detail"].get("state")
+            continue  # a periodic count is not a state change
+        state, detail = e["detail"].get("state"), _human(e["detail"].get("reason"))
+        if (state, detail) != (row["state"], row["detail"]):
+            row["changes"] += 1
+        row["state"], row["detail"] = state, detail
+        row["last_ts"], row["src_line"] = e.get("ts_utc"), e["src_line"]
+    for node in table:
+        for kind in TRANSPORT_KINDS:
+            table[node].setdefault(kind, {"state": "no-marker", "detail": "", "changes": 0,
+                                          "max_peers": None, "last_ts": None, "src_line": None,
+                                          "markers": 0})
+    return table
+
+
+def routing_summary(events: Sequence[dict], nodes: Sequence[str]) -> dict:
+    """[ROUTING] peer_seen counts per node and per source transport."""
+    out: Dict[str, dict] = {n: {"events": 0, "peers": set(), "sources": defaultdict(int)} for n in nodes}
+    for e in events:
+        if e["event"] != "routing_peer_seen":
+            continue
+        o = out.setdefault(e["node"], {"events": 0, "peers": set(), "sources": defaultdict(int)})
+        o["events"] += 1
+        if e["peer"]:
+            o["peers"].add(e["peer"])
+        o["sources"][str(e["detail"].get("source"))] += 1
+    return {n: {"events": o["events"], "distinct_peers": len(o["peers"]),
+                "sources": dict(sorted(o["sources"].items()))} for n, o in out.items()}
+
+
+def drop_and_stop_summary(events: Sequence[dict], nodes: Sequence[str]) -> dict:
+    """[RX-DROP] counts by stage/reason and [MESH-STOP] sequences, per node."""
+    drops: Dict[str, Dict[str, int]] = {n: defaultdict(int) for n in nodes}
+    stops: Dict[str, List[dict]] = {n: [] for n in nodes}
+    for e in sorted(events, key=lambda x: (x.get("ts_utc") or "", x["src_line"])):
+        if e["event"] == "rx_drop":
+            key = f"{e['detail'].get('stage')}/{e['detail'].get('reason')}"
+            drops.setdefault(e["node"], defaultdict(int))[key] += 1
+        elif e["event"] == "mesh_stop":
+            stops.setdefault(e["node"], []).append(
+                {"phase": e["detail"].get("phase"), "result": e["detail"].get("result"),
+                 "ms": e["detail"].get("ms"), "ts": e.get("ts_utc"), "src_line": e["src_line"]})
+    stop_summary = {}
+    for n, seq in stops.items():
+        if not seq:
+            stop_summary[n] = {"sequence": [], "clean": None}
+            continue
+        phases = [x["phase"] for x in seq]
+        timed_out = any(x["result"] == "timeout" for x in seq)
+        stop_summary[n] = {"sequence": seq, "clean": ("complete" in phases) and not timed_out}
+    return {"rx_drops": {n: dict(d) for n, d in drops.items()}, "mesh_stop": stop_summary}

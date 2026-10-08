@@ -27,6 +27,10 @@ Event vocabulary used by the correlator:
   invite_imported      join-bundle / invite seeds imported
   ledger_*             ledger exchange lifecycle (see ledger section)
   custody_audit        relay custody audit counter line
+  routing_peer_seen    [ROUTING] peer_seen (routing engine fed a sighting)
+  transport_status     [TRANSPORT] kind/state/detail (+ peers=N periodic)
+  rx_drop              [RX-DROP] receiver dropped a message (stage/reason)
+  mesh_stop            [MESH-STOP] stop sequence phases
 """
 from __future__ import annotations
 
@@ -164,19 +168,60 @@ MARKERS: List[Marker] = [
     _m("ledger_self_rejected", "ledger_self_entry_rejected",
        r"refusing a shared ledger row that claims our own identity",
        "core/src/store/ledger_entry.rs:2200"),
-    _m("ledger_address_learned_proposed", "ledger_address_learned",
+    _m("ledger_address_learned", "ledger_address_learned",
        r"ledger_address_learned peer=(?P<peer>\S+) via=(?P<via>\S+) addr=(?P<addr>\S+)",
-       "NOT-IN-CODE (proposed gap G1)",
-       note="explicit proof a node learned <peer>'s address from <via>'s ledger"),
+       "core/src/store/ledger_entry.rs:merge_shared_entries_via (format: core/src/message_events.rs)",
+       note="explicit proof a node learned <peer>'s address; via=ledger_exchange:<source peer16> "
+            "from the CLI path, via=unknown from legacy callers"),
 
     # ---- relay custody -----------------------------------------------------
     _m("custody_audit_count", "custody_audit",
        r"Relay custody audit log count: (?P<n>\d+)",
        "core/src/transport/swarm.rs:4750"),
-    _m("custody_accept_proposed", "relay_custody_accept",
+    _m("custody_accept", "relay_custody_accept",
        r"custody_accept msg=(?P<msg>\S+) from=(?P<peer>\S+) dest=(?P<dest>\S+)",
-       "NOT-IN-CODE (proposed gap G4)",
-       note="core/src/store/relay_custody.rs:816/832/839 accept custody but log no message id"),
+       "core/src/store/relay_custody.rs:900 (format: core/src/message_events.rs)",
+       note="relay accepted custody of a message; msg id is sanitized and length-capped"),
+
+    # ---- receiver legs (core, both CLI/AWS and Android via IronCore) -------
+    _m("core_rx_decrypt", "rx_decrypted",
+       r"rx_decrypt msg=(?P<msg>\S+) from=(?P<peer>\S+) type=(?P<kind>\S+) result=ok",
+       "core/src/iron_core.rs:3910 (format: core/src/message_events.rs fmt_rx_decrypt)",
+       note="explicit receiver decrypt leg"),
+    _m("core_rx_history_ok", "rx_history",
+       r"rx_history msg=(?P<msg>\S+) from=(?P<peer>\S+) result=ok dup=(?P<dup>\S+) hidden=(?P<hidden>\S+)",
+       "core/src/iron_core.rs:4118 (format: core/src/message_events.rs fmt_rx_history)",
+       note="durable history write succeeded (or message already stored, dup=true)"),
+    _m("core_rx_history_failed", "rx_history_failed",
+       r"rx_history msg=(?P<msg>\S+) from=(?P<peer>\S+) result=failed dup=(?P<dup>\S+) hidden=(?P<hidden>\S+)",
+       "core/src/iron_core.rs:4118",
+       note="history write FAILED: never counts as the history leg"),
+
+    # ---- observability markers (this change + sibling agent PRs) -----------
+    _m("routing_peer_seen", "routing_peer_seen",
+       r"\[ROUTING\] peer_seen peer=(?P<peer>\S+) source=(?P<source>\S+)",
+       "core/src/iron_core.rs:routing_peer_seen (format: core/src/message_events.rs fmt_routing_peer_seen)",
+       evidence=False, note="routing engine was told a peer was seen on a transport; rate limited per peer"),
+    _m("transport_status", "transport_status",
+       r"\[TRANSPORT\] kind=(?P<tkind>\S+) state=(?P<state>\S+)(?: peers=(?P<peers>\d+))? detail=(?P<reason>\S+)",
+       "cli/src/transport_status.rs; android/.../transport/TransportStatus.kt; "
+       "core/src/message_events.rs fmt_transport_status",
+       evidence=False,
+       note="per-transport availability on start/change + connected-peer counts every 5 min"),
+    _m("rx_drop", "rx_drop",
+       r"\[RX-DROP\] msg=(?P<msg>\S+) stage=(?P<stage>\S+) reason=(?P<reason>\S+)",
+       "sibling agent PR (format: [RX-DROP] msg=<id> stage=<stage> reason=<r>)",
+       evidence=False, note="receiver dropped an inbound message; explains a PARTIAL"),
+    _m("mesh_stop", "mesh_stop",
+       r"\[MESH-STOP\] (?P<phase>requested|swarm_shutdown|rust_stop|foreground_removed|complete)"
+       r"(?: (?P<result>ok|timeout))?(?: ms=(?P<ms>\d+))?",
+       "sibling agent PR (requested|swarm_shutdown ok|timeout ms=|rust_stop ok|timeout ms=|foreground_removed|complete)",
+       evidence=False, note="mesh stop sequence; a timeout phase means the stop was not clean"),
+    _m("invite_imported_marker", "invite_imported",
+       r"\[INVITE\] imported source=(?P<source>\S+)(?: (?P<fields>.*))?$",
+       "android/.../ui/join/JoinMeshScreen.kt (join_bundle); android/.../data/MeshRepository.kt importSeedAddresses (seed_import)",
+       note="Android invite redeemed: counts only. The CLI/FFI invite redeem path is #486/#501 and "
+            "is not on main yet, so it has no marker"),
 ]
 
 # kinds of identity-envelope traffic that are metadata, not user chat; the
