@@ -23,8 +23,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 class FileLoggingTree(context: Context) : Timber.Tree() {
     private val MAX_LOG_LINES = 10000
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
-    // Thread-safe immutable date formatter (minSdk 26)
-    private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    // Thread-safe immutable date formatter (minSdk 26).
+    // G8: ISO-8601 with year and UTC offset (e.g. 2026-10-07T14:03:09.123+02:00;
+    // "Z" for UTC) so multi-device logs can be merged on one timeline.
+    private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
         .withZone(ZoneId.systemDefault())
     // Guard against recursion (Timber -> FileLoggingTree -> Timber -> ...)
     private val isLogging = ThreadLocal.withInitial { false }

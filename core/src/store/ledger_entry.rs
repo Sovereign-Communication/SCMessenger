@@ -199,7 +199,7 @@ pub const MAX_SEED_LEDGER_ENTRIES: usize = 16;
 
 /// Maximum number of [`LedgerEntry`] records retained in the in-memory ledger.
 /// New-insert paths evict the least-useful entry before exceeding this cap.
-const MAX_LEDGER_ENTRIES: usize = 1024;
+pub const MAX_LEDGER_ENTRIES: usize = 1024;
 
 const MAX_LEN_MULTIADDR: usize = 512;
 const MAX_LEN_PEER_ID: usize = 128;
@@ -2279,6 +2279,18 @@ impl LedgerManager {
                         label: None,
                     });
                     added += 1;
+                    // G1 (store part): proof this node learned an address from a
+                    // peer ledger. `via` is not plumbed into the store (it needs a
+                    // transport-side change), so it is "unknown" for now.
+                    tracing::info!(
+                        event = "ledger_address_learned",
+                        "{}",
+                        crate::message_events::fmt_ledger_address_learned(
+                            shared.last_peer_id.as_deref().unwrap_or("unknown"),
+                            "unknown",
+                            &stripped
+                        )
+                    );
                 }
                 (*ledger).clone()
             };

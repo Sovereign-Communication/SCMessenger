@@ -11,6 +11,7 @@ same change that touches reality.
 |---|---|
 | [CI_PRIMARY_BUILD.md](CI_PRIMARY_BUILD.md) | Verifying any change; deciding local vs CI; reclaiming after a failover build |
 | [CI_APK_TO_PHONE.md](CI_APK_TO_PHONE.md) | Getting the latest CI-built Android APK onto the operator's Pixel |
+| [TRI_NODE_VERIFY.md](TRI_NODE_VERIFY.md) | Scoring a Pixel / Windows / AWS run from logs (receiver decrypt + history + receipt) |
 
 Related canonical rules: `docs/rules/BUILD_AND_CI.md` (build doctrine),
 `docs/rules/FREEBUFF.md` (lane authority incl. commit/push),
