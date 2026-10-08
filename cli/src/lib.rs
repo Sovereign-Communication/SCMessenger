@@ -11,6 +11,7 @@ pub mod ble_mesh;
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
+pub mod invite;
 pub mod ledger;
 pub mod seed_dial;
 pub mod server;

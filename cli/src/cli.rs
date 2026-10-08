@@ -130,6 +130,44 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parse_invite_create() {
+        let cli = Cli::parse_from([
+            "scm", "invite", "create", "--ttl", "3600", "--qr", "ascii", "--out", "i.txt",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Commands::Invite {
+                action: crate::invite::InviteAction::Create {
+                    ttl: 3600,
+                    qr: Some(crate::invite::QrFormat::Ascii),
+                    out: Some(_)
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn test_cli_parse_invite_join() {
+        let cli = Cli::parse_from(["scm", "invite", "join", "SCI1:abc"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Invite {
+                action: crate::invite::InviteAction::Join { invite: Some(ref i), file: None }
+            } if i == "SCI1:abc"
+        ));
+        let cli = Cli::parse_from(["scm", "invite", "join", "--file", "i.txt"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Invite {
+                action: crate::invite::InviteAction::Join {
+                    invite: None,
+                    file: Some(_)
+                }
+            }
+        ));
+    }
+
+    #[test]
     fn test_cli_parse_block_delete() {
         let cli = Cli::parse_from(["scm", "block", "delete", "test-peer-id"]);
         assert!(
@@ -247,6 +285,11 @@ pub enum Commands {
     Swarm {
         #[command(subcommand)]
         action: SwarmAction,
+    },
+    /// Create or redeem a signed SCI1 invite (the only bootstrap source)
+    Invite {
+        #[command(subcommand)]
+        action: crate::invite::InviteAction,
     },
     /// Manage local network discovery (mDNS, BLE, WiFi-Aware)
     Discovery {

@@ -60,6 +60,14 @@ dictionary SignatureResult {
     string public_key_hex;
 };
 
+dictionary RedeemReport {
+    string inviter_id;
+    string? inviter_peer_id;
+    u32 addresses_offered;
+    u32 addresses_imported;
+    sequence<string> dial_addrs;
+};
+
 dictionary TtlConfig {
     u64 expires_in_seconds;
 };
