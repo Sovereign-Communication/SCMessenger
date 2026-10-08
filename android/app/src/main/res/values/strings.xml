@@ -241,7 +241,6 @@
     <string name="dashboard_label_uptime">Uptime</string>
     <string name="dashboard_label_data_transferred">Data Transferred</string>
     <string name="dashboard_section_discovered">Discovered Nodes</string>
-    <string name="dashboard_empty_state_discovered">No nodes discovered yet</string>
     <string name="dashboard_status_active">Mesh Active</string>
     <string name="dashboard_status_stopped">Mesh Stopped</string>
     <string name="dashboard_label_state_format">State: %1$s</string>
@@ -310,8 +309,7 @@
 
     <!-- Peer List Screen -->
     <string name="peer_list_title">Connected Peers</string>
-    <string name="peer_list_no_peers">No peers connected</string>
-    <string name="peer_list_no_peers_description">Start the mesh service to discover peers</string>
+    <string name="peer_list_discovering">Discovering nodes</string>
     <string name="peer_list_count_format_singular">%1$d peer connected</string>
     <string name="peer_list_count_format_plural">%1$d peers connected</string>
     <string name="peer_list_status_online">Online</string>
@@ -449,7 +447,7 @@
     <string name="add_contact_nearby_title">Nearby Discovery</string>
     <string name="add_contact_nearby_description">Find peers broadcasting on this network via BLE, Wi-Fi, mDNS, or TCP.</string>
     <string name="add_contact_nearby_searching">Searching for nearby peers on this network…</string>
-    <string name="add_contact_nearby_empty">No nearby peers found</string>
+    <string name="add_contact_nearby_empty">Searching for nearby nodes</string>
     <string name="add_contact_nearby_rescan">Rescan</string>
     <string name="add_contact_nearby_rescan_content_description">Rescan for nearby peers, including any you previously dismissed</string>
     <string name="add_contact_nearby_add_button">Add</string>
