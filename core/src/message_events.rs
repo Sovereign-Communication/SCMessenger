@@ -232,6 +232,76 @@ pub fn fmt_ledger_address_learned(peer: &str, via: &str, addr: &str) -> String {
     )
 }
 
+/// `[ROUTING] peer_seen peer=<short> source=<transport>` -- emitted (rate
+/// limited per peer by the caller) when the routing engine is told a peer was
+/// seen on a transport. `source` is attacker-influenced (it arrives over the
+/// FFI from platform glue), so it is sanitized and length-capped.
+pub fn fmt_routing_peer_seen(peer: &str, source: &str) -> String {
+    format!(
+        "[ROUTING] peer_seen peer={} source={}",
+        short_peer(peer),
+        sanitize_log_field(source, 32)
+    )
+}
+
+/// Canonical transport kinds allowed in `[TRANSPORT] kind=...`.
+pub const TRANSPORT_KINDS: &[&str] = &[
+    "tcp4",
+    "tcp6",
+    "quic",
+    "relay",
+    "dcutr",
+    "mdns",
+    "ble",
+    "wifi_direct",
+    "wifi_aware",
+    "cellular",
+];
+
+/// Canonical transport states allowed in `[TRANSPORT] ... state=...`.
+pub const TRANSPORT_STATES: &[&str] = &[
+    "unavailable",
+    "available",
+    "listening",
+    "connected",
+    "error",
+];
+
+/// `[TRANSPORT] kind=<kind> state=<state> [peers=<n>] detail=<reason>`.
+///
+/// `kind` and `state` must be members of [`TRANSPORT_KINDS`] /
+/// [`TRANSPORT_STATES`]; anything else is rendered as `kind=invalid` /
+/// `state=error` so a caller bug can never inject free text into the
+/// grammar. `detail` is sanitized (whitespace and `=` become `_`) and capped.
+pub fn fmt_transport_status(kind: &str, state: &str, peers: Option<usize>, detail: &str) -> String {
+    let kind = if TRANSPORT_KINDS.contains(&kind) {
+        kind
+    } else {
+        "invalid"
+    };
+    let state = if TRANSPORT_STATES.contains(&state) {
+        state
+    } else {
+        "error"
+    };
+    let detail = if detail.is_empty() { "none" } else { detail };
+    match peers {
+        Some(n) => format!(
+            "[TRANSPORT] kind={} state={} peers={} detail={}",
+            kind,
+            state,
+            n,
+            sanitize_log_field(detail, MAX_DETAIL_CHARS)
+        ),
+        None => format!(
+            "[TRANSPORT] kind={} state={} detail={}",
+            kind,
+            state,
+            sanitize_log_field(detail, MAX_DETAIL_CHARS)
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +362,39 @@ mod tests {
             fmt_ledger_address_learned("p", "unknown", "/ip4/1.2.3.4/tcp/9"),
             "ledger_address_learned peer=p via=unknown addr=/ip4/1.2.3.4/tcp/9"
         );
+    }
+
+    #[test]
+    fn routing_and_transport_markers_are_single_line_and_closed_grammar() {
+        let l = fmt_routing_peer_seen(
+            "abc
+from=x",
+            "ble
+rx_history msg=1",
+        );
+        assert_eq!(l.lines().count(), 1);
+        assert_eq!(l.matches('=').count(), 2);
+        assert!(l.starts_with("[ROUTING] peer_seen peer="));
+
+        assert_eq!(
+            fmt_transport_status("ble", "unavailable", None, "no adapter"),
+            "[TRANSPORT] kind=ble state=unavailable detail=no_adapter"
+        );
+        assert_eq!(
+            fmt_transport_status("quic", "connected", Some(3), "periodic"),
+            "[TRANSPORT] kind=quic state=connected peers=3 detail=periodic"
+        );
+        let bad = fmt_transport_status(
+            "evil
+kind",
+            "up",
+            None,
+            "x=1
+y",
+        );
+        assert_eq!(bad.lines().count(), 1);
+        assert!(bad.contains("kind=invalid state=error"));
+        assert_eq!(bad.matches('=').count(), 3);
     }
 
     #[test]

@@ -15,6 +15,7 @@ mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
+mod transport_status;
 mod watchdog;
 
 #[cfg(target_os = "windows")]
@@ -2672,11 +2673,14 @@ async fn cmd_start(
     // concurrent diagnostic probe can trigger a btleplug completion panic.
     // Keep the probe on Windows/Linux, where the existing startup behavior is
     // safe and remains useful for adapter diagnostics.
-    if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
-    }
+    // Per-transport availability markers (`[TRANSPORT] kind=...`), BLE probe
+    // included, plus the periodic connected-peer counts.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
 
     // Subscribe to any topics from the ledger
     for topic in known_topics {
@@ -3161,7 +3165,10 @@ async fn cmd_start(
                             // LEDGER EXCHANGE: Received peer list from a connected peer
                             SwarmEvent::LedgerReceived { from_peer, entries } => {
                                 let mut l = ledger_rx.lock().await;
-                                let new_count = l.merge_shared_entries(&entries);
+                                let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
 
                                 if new_count > 0 {
                                     println!(
@@ -3512,6 +3519,10 @@ async fn cmd_start(
                             }
                             SwarmEvent::ListeningOn(addr) => {
                                 println!("{} Listening on {}", "[OK]".green(), addr);
+                                transport_status::on_listening(&addr.to_string());
+                            }
+                            SwarmEvent::ListenerFailed { error, .. } => {
+                                transport_status::on_listener_failed(&error);
                             }
                             _ => {}
                         }
@@ -4286,10 +4297,13 @@ async fn cmd_relay(
 
     // The BLE central task is the sole CoreBluetooth manager owner on macOS;
     // do not start a second probe worker in the headless startup path.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
     if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
         let core_ble = Arc::clone(&core_arc);
         let ui_ble = ui_broadcast.clone();
         tokio::spawn(async move {
@@ -4471,7 +4485,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::LedgerReceived { from_peer, entries } => {
                         let mut l = ledger_rx.lock().await;
-                        let new_count = l.merge_shared_entries(&entries);
+                        let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
                         if new_count > 0 {
                             tracing::info!("Learned {} new peers from {}", new_count, from_peer);
                             // The core store persists its own updates.
@@ -4662,6 +4679,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::ListeningOn(addr) => {
                         tracing::info!("Listening on {}", addr);
+                        transport_status::on_listening(&addr.to_string());
+                    }
+                    SwarmEvent::ListenerFailed { error, .. } => {
+                        transport_status::on_listener_failed(&error);
                     }
                     _ => {}
                 }

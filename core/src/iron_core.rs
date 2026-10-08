@@ -130,6 +130,50 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
     }
 }
 
+/// Minimum spacing between `[ROUTING] peer_seen` log lines for the same peer.
+/// The first sighting always logs; later ones at most once per interval, so a
+/// chatty transport cannot flood the diagnostics log.
+const ROUTING_PEER_SEEN_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Hard cap on tracked peers. Only peers that already passed
+/// `validate_routing_peer_id` reach the limiter, but the map is still
+/// bounded: when full, entries older than the interval are dropped, and if
+/// that frees nothing the line is simply not logged.
+const ROUTING_PEER_SEEN_LOG_MAX_PEERS: usize = 1024;
+
+fn routing_peer_seen_limiter(
+) -> &'static Mutex<std::collections::HashMap<[u8; 32], std::time::Instant>> {
+    static LIMITER: std::sync::OnceLock<
+        Mutex<std::collections::HashMap<[u8; 32], std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    LIMITER.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// True when a `[ROUTING] peer_seen` line for `peer` is due at `now`.
+fn routing_peer_seen_log_due(peer: &[u8; 32], now: std::time::Instant) -> bool {
+    let mut map = routing_peer_seen_limiter().lock();
+    routing_peer_seen_log_due_in(&mut map, peer, now)
+}
+
+fn routing_peer_seen_log_due_in(
+    map: &mut std::collections::HashMap<[u8; 32], std::time::Instant>,
+    peer: &[u8; 32],
+    now: std::time::Instant,
+) -> bool {
+    if let Some(last) = map.get(peer) {
+        if now.saturating_duration_since(*last) < ROUTING_PEER_SEEN_LOG_INTERVAL {
+            return false;
+        }
+    } else if map.len() >= ROUTING_PEER_SEEN_LOG_MAX_PEERS {
+        map.retain(|_, last| now.saturating_duration_since(*last) < ROUTING_PEER_SEEN_LOG_INTERVAL);
+        if map.len() >= ROUTING_PEER_SEEN_LOG_MAX_PEERS {
+            return false;
+        }
+    }
+    map.insert(*peer, now);
+    true
+}
+
 /// Longest raw peer-id string `routing_peer_seen` will even attempt to parse
 /// (a 32-byte id is 64 hex chars; allows prefixes and libp2p base58 forms).
 const MAX_ROUTING_PEER_ID_STR_LEN: usize = 128;
@@ -2873,6 +2917,13 @@ impl IronCore {
         let Some(peer_id) = validate_routing_peer_id("routing_peer_seen", &peer_id_hex) else {
             return;
         };
+        if routing_peer_seen_log_due(&peer_id, std::time::Instant::now()) {
+            tracing::info!(
+                event = "routing_peer_seen",
+                "{}",
+                crate::message_events::fmt_routing_peer_seen(&hex::encode(peer_id), &transport)
+            );
+        }
         if let Some(engine) = self.routing_engine.write().as_mut() {
             engine.peer_seen(peer_id, parse_transport_type(&transport));
         }
@@ -6194,6 +6245,33 @@ mod tests {
         assert!(after > before);
         assert!(core.get_forwarding_capability("ble"));
         assert!(!core.get_forwarding_capability("tcp"));
+    }
+
+    #[test]
+    fn routing_peer_seen_log_is_rate_limited_per_peer() {
+        let mut map = std::collections::HashMap::new();
+        let t0 = std::time::Instant::now();
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        assert!(routing_peer_seen_log_due_in(&mut map, &a, t0));
+        assert!(!routing_peer_seen_log_due_in(&mut map, &a, t0));
+        assert!(routing_peer_seen_log_due_in(&mut map, &b, t0));
+        let later = t0 + ROUTING_PEER_SEEN_LOG_INTERVAL + std::time::Duration::from_secs(1);
+        assert!(routing_peer_seen_log_due_in(&mut map, &a, later));
+    }
+
+    #[test]
+    fn routing_peer_seen_log_map_is_bounded() {
+        let mut map = std::collections::HashMap::new();
+        let t0 = std::time::Instant::now();
+        for i in 0..ROUTING_PEER_SEEN_LOG_MAX_PEERS {
+            let mut p = [0u8; 32];
+            p[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
+            assert!(routing_peer_seen_log_due_in(&mut map, &p, t0));
+        }
+        let extra = [0xFFu8; 32];
+        assert!(!routing_peer_seen_log_due_in(&mut map, &extra, t0));
+        assert_eq!(map.len(), ROUTING_PEER_SEEN_LOG_MAX_PEERS);
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod seed_dial;
 pub mod server;
 pub mod transport_api;
 pub mod transport_bridge;
+pub mod transport_status;
 pub mod watchdog;
 
 #[cfg(target_os = "windows")]
