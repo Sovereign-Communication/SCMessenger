@@ -78,9 +78,10 @@ fn corrupted_relayed_frame_is_a_loud_error_not_silent_success() {
     let prepared = alice
         .prepare_message(pubkey(&bob), "x".to_string(), MessageType::Text, None)
         .expect("prepare_message must succeed");
+    // Truncation is a deterministic decode failure (a single flipped byte
+    // can land in an unauthenticated field and still parse).
     let mut bad = prepared.envelope_data;
-    let last = bad.len() - 1;
-    bad[last] ^= 0xFF;
+    bad.truncate(bad.len() / 2);
     assert!(bob.receive_message(bad).is_err());
     assert!(bob.receive_message(Vec::new()).is_err());
 }
