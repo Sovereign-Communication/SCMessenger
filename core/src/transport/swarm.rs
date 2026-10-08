@@ -4863,6 +4863,11 @@ pub async fn start_swarm_with_config(
                                         };
                                         if sender_blocked {
                                             tracing::warn!("Blocked peer {} attempted to send message", peer);
+                                            crate::message_events::log_rx_drop(
+                                                "unknown",
+                                                "swarm_ingress",
+                                                "sender_blocked_or_core_unavailable",
+                                            );
                                             let _ = swarm.behaviour_mut().messaging.send_response(
                                                 channel,
                                                 Libp2pMessageResponse { accepted: false, error: Some("blocked".to_string()) },
@@ -5020,11 +5025,19 @@ pub async fn start_swarm_with_config(
                                         }
                                         }
 
-                                        // Received a message from a peer
-                                        let _ = event_tx.send(SwarmEvent2::MessageReceived {
+                                        // Received a message from a peer. A failed send means
+                                        // the bridge receiver is gone: the frame would be
+                                        // acked as accepted yet never processed, so log it.
+                                        if event_tx.send(SwarmEvent2::MessageReceived {
                                             peer_id: peer,
                                             envelope_data: envelope_payload,
-                                        }).await;
+                                        }).await.is_err() {
+                                            crate::message_events::log_rx_drop(
+                                                "unknown",
+                                                "swarm_to_bridge",
+                                                "event_channel_closed",
+                                            );
+                                        }
 
                                         // Send acceptance response
                                         let _ = swarm.behaviour_mut().messaging.send_response(
