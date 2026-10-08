@@ -3695,7 +3695,41 @@ impl IronCore {
         keys.to_libp2p_keypair()
             .map_err(|_| IronCoreError::CryptoError)
     }
+    /// Best-effort message id for drop diagnostics: the Drift header carries
+    /// the id in clear, so a frame that fails later (verify/decrypt) can still
+    /// be attributed. Returns "unknown" for non-Drift or undecodable frames.
+    fn peek_envelope_message_id(envelope_data: &[u8]) -> String {
+        if envelope_data.first() == Some(&crate::drift::DRIFT_VERSION) {
+            if let Ok(env) = crate::drift::DriftEnvelope::from_bytes(envelope_data) {
+                return uuid::Uuid::from_bytes(env.message_id).to_string();
+            }
+        }
+        "unknown".to_string()
+    }
+
+    /// Process one inbound envelope. Every `Err` return is a drop: it is
+    /// logged at INFO as `[RX-DROP] msg=<id> stage=<stage> reason=<reason>`
+    /// so inbound loss is never silent.
     pub fn receive_message(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
+        let len = envelope_data.len();
+        let peeked_id = Self::peek_envelope_message_id(&envelope_data);
+        let result = self.receive_message_inner(envelope_data);
+        if let Err(e) = &result {
+            let reason = match e {
+                IronCoreError::Blocked => "sender_blocked".to_string(),
+                IronCoreError::NotInitialized => "core_not_initialized".to_string(),
+                other => format!("{:?}", other),
+            };
+            crate::message_events::log_rx_drop(
+                &peeked_id,
+                "receive_message",
+                &format!("{}_len{}", reason, len),
+            );
+        }
+        result
+    }
+
+    fn receive_message_inner(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
         // Hoist sender public key and local identity id out of the ratchet
         // block below so they remain in scope for downstream inbox / audit
         // handling.

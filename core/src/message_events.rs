@@ -212,6 +212,43 @@ pub fn fmt_ledger_address_learned(peer: &str, via: &str, addr: &str) -> String {
     )
 }
 
+/// Maximum characters of a message id kept in an `[RX-DROP]` marker.
+const MAX_DROP_ID_CHARS: usize = 64;
+
+/// Reduce an untrusted id/reason fragment to `[A-Za-z0-9_.:-]` and bound its
+/// length so a hostile envelope cannot inject log lines or spaces into the
+/// stable `[RX-DROP]` marker.
+fn sanitize_drop_field(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+        .take(MAX_DROP_ID_CHARS)
+        .collect();
+    if cleaned.is_empty() {
+        "unknown".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// RX-DROP: `[RX-DROP] msg=<id> stage=<stage> reason=<reason>`
+///
+/// Emitted at INFO for every inbound frame that is discarded before it is
+/// persisted, so a silently dropped message is always attributable.
+pub fn fmt_rx_drop(msg_id: &str, stage: &str, reason: &str) -> String {
+    format!(
+        "[RX-DROP] msg={} stage={} reason={}",
+        sanitize_drop_field(msg_id),
+        sanitize_drop_field(stage),
+        sanitize_drop_field(reason)
+    )
+}
+
+/// Log an inbound drop at INFO using the stable [`fmt_rx_drop`] format.
+pub fn log_rx_drop(msg_id: &str, stage: &str, reason: &str) {
+    tracing::info!("{}", fmt_rx_drop(msg_id, stage, reason));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +308,20 @@ mod tests {
             .into_iter()
             .any(|(id, _)| id.len() == MAX_ID_CHARS);
         assert!(found);
+    }
+
+    #[test]
+    fn rx_drop_marker_is_stable_and_sanitized() {
+        assert_eq!(
+            fmt_rx_drop("5e7b311b-ef47", "receive", "decrypt_failed"),
+            "[RX-DROP] msg=5e7b311b-ef47 stage=receive reason=decrypt_failed"
+        );
+        let hostile = fmt_rx_drop("id\n[RX-DROP] msg=evil", "st age", "");
+        assert!(!hostile.contains('\n'));
+        assert_eq!(hostile.matches("msg=").count(), 1);
+        assert!(hostile.ends_with("reason=unknown"));
+        let long = fmt_rx_drop(&"a".repeat(500), "s", "r");
+        assert!(long.len() < 200);
     }
 
     #[test]

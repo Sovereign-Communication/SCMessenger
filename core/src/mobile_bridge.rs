@@ -974,7 +974,19 @@ impl MeshService {
 
                                                                         let mut s = stats_clone.lock();
                                                                         s.messages_relayed += 1;
+                                                                    } else {
+                                                                        crate::message_events::log_rx_drop(
+                                                                            &msg.id,
+                                                                            "onion_relay",
+                                                                            "next_hop_key_invalid",
+                                                                        );
                                                                     }
+                                                                } else {
+                                                                    crate::message_events::log_rx_drop(
+                                                                        &msg.id,
+                                                                        "onion_relay",
+                                                                        "next_hop_not_hex",
+                                                                    );
                                                                 }
                                                             } else {
                                                                 tracing::info!(
@@ -1008,6 +1020,11 @@ impl MeshService {
                                                         }
                                                     }
                                                 } else {
+                                                    crate::message_events::log_rx_drop(
+                                                        "unknown",
+                                                        "bridge_dispatch",
+                                                        "core_not_initialized",
+                                                    );
                                                     eprintln!(
                                                         "[IronCore] [ERROR] receive_message SKIPPED from {}: core not initialized",
                                                         peer_id
@@ -1072,15 +1089,22 @@ impl MeshService {
                                                         })
                                                 };
                                                 if let Some(request) = registration_request {
-                                                    if let Err(err) =
-                                                        handle.register_identity(peer_id, request).await
-                                                    {
-                                                        tracing::warn!(
-                                                            "Failed to register local identity with {}: {:?}",
-                                                            peer_id,
-                                                            err
-                                                        );
-                                                    }
+                                                    // MUST NOT be awaited inline: this loop is the sole
+                                                    // consumer of the swarm event channel, and a
+                                                    // registration round trip to a slow or silent
+                                                    // peer stalled it for minutes. While stalled,
+                                                    // every inbound MessageReceived queued behind it
+                                                    // (Pixel 2026-10-08: Drift Data frames from the
+                                                    // swarm never reached receive_message). Detach it
+                                                    // with a hard timeout.
+                                                    let reg_handle = handle.clone();
+                                                    spawn_bounded_registration(
+                                                        peer_id.to_string(),
+                                                        REGISTRATION_ATTEMPT_TIMEOUT,
+                                                        async move {
+                                                            reg_handle.register_identity(peer_id, request).await
+                                                        },
+                                                    );
                                                 }
                                                 tracing::info!(
                                                     "Peer identified via Swarm: {} (agent: {})",
@@ -3199,6 +3223,33 @@ pub struct HistoryStats {
 /// reachable only by pubkey queries (residual, matches the core store's
 /// behavior). `filter_identity_id` is precomputed once per query (Ed25519
 /// curve validation + blake3), never per record.
+/// Upper bound for one background identity-registration attempt.
+const REGISTRATION_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Run a registration round trip off the swarm-event drain loop, bounded by
+/// `timeout`, logging (never propagating) any failure. Returns immediately.
+fn spawn_bounded_registration<F, E>(peer: String, timeout: std::time::Duration, fut: F)
+where
+    F: std::future::Future<Output = Result<(), E>> + Send + 'static,
+    E: fmt::Debug,
+{
+    tokio::spawn(async move {
+        match tokio::time::timeout(timeout, fut).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::warn!("Failed to register local identity with {}: {:?}", peer, err);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "Registration with {} timed out after {:?}; continuing",
+                    peer,
+                    timeout
+                );
+            }
+        }
+    });
+}
+
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
@@ -4402,6 +4453,44 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_registration_does_not_block_event_drain() {
+        // Models the drain loop: event 1 triggers a registration that never
+        // completes; event 2 (an inbound message) must still be processed.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(8);
+        tx.send(1).await.expect("send 1");
+        tx.send(2).await.expect("send 2");
+        let mut processed = Vec::new();
+        for _ in 0..2 {
+            let ev = rx.recv().await.expect("event");
+            if ev == 1 {
+                super::spawn_bounded_registration(
+                    "peer-stall".to_string(),
+                    std::time::Duration::from_millis(50),
+                    std::future::pending::<Result<(), String>>(),
+                );
+            }
+            processed.push(ev);
+        }
+        assert_eq!(processed, vec![1, 2]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bounded_registration_runs_detached_and_reports_errors() {
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = done.clone();
+        super::spawn_bounded_registration(
+            "peer-err".to_string(),
+            std::time::Duration::from_secs(5),
+            async move {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err::<(), _>("rejected".to_string())
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
