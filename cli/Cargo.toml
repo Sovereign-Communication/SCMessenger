@@ -52,6 +52,9 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 btleplug = { version = "0.11", default-features = false }
 qrcode = { version = "0.14", default-features = false }
+# Local interface enumeration for the seed-dial interface-change monitor (#469 T6);
+# same version as scmessenger-core, already in the lock.
+if-addrs = "0.15"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = [
@@ -60,7 +63,18 @@ windows = { version = "0.61.3", features = [
     "Devices_Bluetooth_GenericAttributeProfile",
     "Foundation",
     "Storage_Streams",
+    # #469 F2/F3: IP-address change notifications and power status.
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_System_Power",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Minimal NETLINK_ROUTE socket for network-change notifications (#469 F2);
+# already in the lock.
+libc = "0.2"
 
 [lints]
 workspace = true
