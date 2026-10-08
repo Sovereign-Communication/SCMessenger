@@ -11089,7 +11089,7 @@ open class MeshRepository(
         // is the LAN/external host we are already using.
         val peerCount = meshService?.getStats()?.peersDiscovered?.toInt() ?: 0
         return peerCount > 0 &&
-            (host.startsWith("192.168.") || host.startsWith("10.") || host == "18.234.62.247")
+            (host.startsWith("192.168.") || host.startsWith("10."))
     }
 
     /**

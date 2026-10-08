@@ -4288,9 +4288,9 @@ impl IronCore {
             .unwrap_or_default()
     }
 
-    /// Get fallback relay addresses from the bootstrap manager: the
-    /// hardcoded `CORE_BOOTSTRAP_NODES` plus any environment-variable
-    /// overrides, available immediately without needing live swarm events.
+    /// Get fallback relay addresses from the bootstrap manager: candidates
+    /// added at runtime from the ledger (no static or env-supplied seeds),
+    /// available immediately without needing live swarm events.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn get_fallback_relays(&self) -> Vec<libp2p::Multiaddr> {
         self.relay_bootstrap_manager

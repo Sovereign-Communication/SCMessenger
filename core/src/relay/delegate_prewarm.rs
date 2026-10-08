@@ -26,8 +26,6 @@ pub struct DelegateInfo {
     pub reliability_score: f64,
     /// Last time we confirmed this delegate is available
     pub last_confirmed: Instant,
-    /// Whether this is a headless node (more reliable)
-    pub is_headless: bool,
     /// Maximum number of peers this delegate can handle
     pub max_peers: usize,
     /// Current number of peers connected to this delegate
@@ -36,13 +34,12 @@ pub struct DelegateInfo {
 
 impl DelegateInfo {
     /// Create a new delegate info
-    pub fn new(peer_id: PeerId, multiaddr: String, is_headless: bool) -> Self {
+    pub fn new(peer_id: PeerId, multiaddr: String) -> Self {
         DelegateInfo {
             peer_id,
             multiaddr,
             reliability_score: 0.8, // Default reliability
             last_confirmed: Instant::now(),
-            is_headless,
             max_peers: 100,
             current_peers: 0,
         }
@@ -60,11 +57,12 @@ impl DelegateInfo {
         self.current_peers < self.max_peers
     }
 
-    /// Calculate delegate score for selection
+    /// Calculate delegate score for selection.
+    ///
+    /// Purely behavioural: every node is an equal relay, so there is no
+    /// node-class bonus. The score is the locally measured reliability.
     pub fn score(&self) -> f64 {
-        // Headless nodes get a bonus
-        let headless_bonus = if self.is_headless { 0.2 } else { 0.0 };
-        self.reliability_score + headless_bonus
+        self.reliability_score
     }
 }
 
@@ -343,22 +341,18 @@ impl std::fmt::Display for DelegatePrewarmStats {
 mod tests {
     use super::*;
 
-    fn create_test_delegate(id: u8, is_headless: bool) -> DelegateInfo {
+    fn create_test_delegate(id: u8) -> DelegateInfo {
         // Create a test peer ID using libp2p's test utilities
         use libp2p::identity::Keypair;
         let keypair = Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
-        DelegateInfo::new(
-            peer_id,
-            format!("/ip4/127.0.0.1/tcp/{}", 10000 + id as u16),
-            is_headless,
-        )
+        DelegateInfo::new(peer_id, format!("/ip4/127.0.0.1/tcp/{}", 10000 + id as u16))
     }
 
     #[test]
     fn test_delegate_creation() {
-        let delegate = create_test_delegate(1, true);
-        assert!(delegate.is_headless);
+        let delegate = create_test_delegate(1);
+        assert!((delegate.score() - delegate.reliability_score).abs() < f64::EPSILON);
         assert!(delegate.has_capacity());
     }
 
@@ -367,13 +361,31 @@ mod tests {
         let mut manager = DelegatePrewarmManager::with_defaults();
 
         // Add some delegates
-        manager.add_delegate(create_test_delegate(1, true));
-        manager.add_delegate(create_test_delegate(2, false));
-        manager.add_delegate(create_test_delegate(3, true));
+        manager.add_delegate(create_test_delegate(1));
+        manager.add_delegate(create_test_delegate(2));
+        manager.add_delegate(create_test_delegate(3));
 
-        // Select best delegates (should prefer headless)
+        // Select best delegates
         let best = manager.select_best_delegates(2);
         assert_eq!(best.len(), 2);
+    }
+
+    #[test]
+    fn test_delegate_score_is_purely_behavioural() {
+        // No node-class bonus: score equals measured reliability.
+        let mut a = create_test_delegate(1);
+        let mut b = create_test_delegate(2);
+        a.update(0.9, 0);
+        b.update(0.4, 0);
+        assert!((a.score() - 0.9).abs() < f64::EPSILON);
+        assert!((b.score() - 0.4).abs() < f64::EPSILON);
+
+        // Selection follows measured reliability only.
+        let best_id = a.peer_id;
+        let mut manager = DelegatePrewarmManager::with_defaults();
+        manager.add_delegate(b);
+        manager.add_delegate(a);
+        assert_eq!(manager.select_best_delegates(1), vec![best_id]);
     }
 
     #[test]
@@ -381,7 +393,7 @@ mod tests {
         let mut manager = DelegatePrewarmManager::with_defaults();
 
         // Add a delegate
-        let delegate = create_test_delegate(1, true);
+        let delegate = create_test_delegate(1);
         manager.add_delegate(delegate);
 
         // Pre-warm for background
@@ -399,8 +411,8 @@ mod tests {
         let mut manager = DelegatePrewarmManager::with_defaults();
 
         // Add a delegate and create a connection
-        let delegate_id = create_test_delegate(1, true).peer_id;
-        manager.add_delegate(create_test_delegate(1, true));
+        let delegate_id = create_test_delegate(1).peer_id;
+        manager.add_delegate(create_test_delegate(1));
         manager
             .warm_connections
             .insert(delegate_id, WarmConnection::new(delegate_id));
@@ -416,8 +428,8 @@ mod tests {
         let mut manager = DelegatePrewarmManager::with_defaults();
 
         // Add delegates
-        manager.add_delegate(create_test_delegate(1, true));
-        manager.add_delegate(create_test_delegate(2, false));
+        manager.add_delegate(create_test_delegate(1));
+        manager.add_delegate(create_test_delegate(2));
 
         let stats = manager.stats();
         assert_eq!(stats.active_connections, 0); // No connections yet
