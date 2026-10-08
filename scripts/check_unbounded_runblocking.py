@@ -27,6 +27,15 @@ If an unbounded wait is genuinely correct, say so in the diff:
 The marker must be inside the call, so it is visible to the reviewer reading the
 call, and the reason travels with it.
 
+Blocking FFI stop calls
+-----------------------
+``runBlocking`` is not the only way to wedge a stop: ``meshService.stop()`` and
+``ironCore.stop()`` are synchronous Rust FFI calls that can block for as long as
+the core does. A direct call to either, or to ``swarmBridge.shutdown()``, from
+the Android sources is a finding unless it goes through ``StopTeardown``
+(``stopBlocking`` / ``shutdownSwarm``), which bounds it. A direct call is allowed
+only with ``unbounded-ffi-stop-ok: <reason>`` on the same line.
+
 Exit codes: 0 clean, 1 finding.
 """
 
@@ -43,6 +52,12 @@ OPT_OUT_MARKER = "unbounded-runblocking-ok"
 TIMEOUT_FUNCS = ("withTimeout", "withTimeoutOrNull")
 
 CALL_RE = re.compile(r"\brunBlocking\b")
+
+# Direct (unbounded) calls on the receivers that wrap blocking Rust FFI.
+FFI_STOP_RE = re.compile(
+    r"\b(?:meshService|ironCore|swarmBridge)\s*\??\s*\.\s*(?:stop|shutdown)\s*\("
+)
+FFI_OPT_OUT_MARKER = "unbounded-ffi-stop-ok"
 
 
 def strip_comments_and_strings(source: str) -> str:
@@ -174,6 +189,28 @@ def check_file(path: Path) -> List[str]:
     return findings
 
 
+def check_ffi_stop_calls(path: Path) -> List[str]:
+    """Flag direct blocking-FFI stop/shutdown calls that bypass StopTeardown."""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    clean = strip_comments_and_strings(raw)
+    raw_lines = raw.splitlines()
+    findings: List[str] = []
+    for match in FFI_STOP_RE.finditer(clean):
+        line_no = clean.count("\n", 0, match.start()) + 1
+        if FFI_OPT_OUT_MARKER in raw_lines[line_no - 1]:
+            continue
+        try:
+            display = path.relative_to(ROOT).as_posix()
+        except ValueError:
+            display = path.as_posix()
+        call = match.group(0).rstrip("(").strip()
+        findings.append(
+            "{0}:{1}: direct blocking FFI call '{2}' (route it through "
+            "StopTeardown.stopBlocking/shutdownSwarm)".format(display, line_no, call)
+        )
+    return findings
+
+
 def main() -> int:
     if not SCAN_DIR.exists():
         print("[WARNING] {0} does not exist; nothing to check".format(SCAN_DIR))
@@ -184,16 +221,20 @@ def main() -> int:
     findings: List[str] = []
     for path in files:
         findings.extend(check_file(path))
+        findings.extend(check_ffi_stop_calls(path))
     if findings:
         for finding in findings:
             print("[FAIL] {0}".format(finding))
         print(
-            "[FAIL] {0} unbounded runBlocking call(s). Bound the body with "
-            "withTimeout/withTimeoutOrNull, or justify with a "
-            "'// {1}: <reason>' marker inside the call.".format(len(findings), OPT_OUT_MARKER)
+            "[FAIL] {0} unbounded stop-path call(s). Bound runBlocking bodies with "
+            "withTimeout/withTimeoutOrNull (or justify with a '// {1}: <reason>' "
+            "marker inside the call); route FFI stop/shutdown calls through "
+            "StopTeardown (or mark '// {2}: <reason>').".format(
+                len(findings), OPT_OUT_MARKER, FFI_OPT_OUT_MARKER
+            )
         )
         return 1
-    print("[OK] every runBlocking call in the Android main sources is bounded")
+    print("[OK] every runBlocking call and FFI stop call in the Android main sources is bounded")
     return 0
 
 
