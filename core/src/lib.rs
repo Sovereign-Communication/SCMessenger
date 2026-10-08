@@ -10,6 +10,8 @@ pub mod abuse;
 pub mod blocked_bridge;
 pub mod contacts_bridge;
 pub mod crypto;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod discovery_bridge;
 pub mod drift;
 pub mod dspy;
 pub mod error;
