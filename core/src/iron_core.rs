@@ -1237,6 +1237,20 @@ impl IronCore {
             None,
         );
 
+        // G6: sender-side marker, same line shape as Android's delivery_state.
+        crate::message_events::record(
+            &message_id,
+            crate::message_events::MessageEventKind::Sent,
+            true,
+        );
+        tracing::info!(
+            "{}",
+            crate::message_events::fmt_delivery_state_pending(
+                &message_id,
+                "core_envelope_prepared"
+            )
+        );
+
         Ok(crate::PreparedMessage {
             message_id,
             envelope_data,
@@ -3828,6 +3842,24 @@ impl IronCore {
                     IronCoreError::CryptoError
                 })?;
 
+        // G2: explicit decrypt marker (id + truncated sender only; no content).
+        {
+            let kind = match message.message_type {
+                crate::MessageType::Text => "text",
+                crate::MessageType::Receipt => "receipt",
+                _ => "other",
+            };
+            crate::message_events::record(
+                &message.id,
+                crate::message_events::MessageEventKind::Decrypt,
+                true,
+            );
+            tracing::info!(
+                "{}",
+                crate::message_events::fmt_rx_decrypt(&message.id, &canonical_peer_id, kind)
+            );
+        }
+
         // Also check device-specific blocks using the sender's last known device ID
         // Try the authenticated public key and its canonical identity_id; first
         // hit wins. A contact read error must fail closed rather than becoming
@@ -3942,6 +3974,11 @@ impl IronCore {
                     };
 
                     if authorized {
+                        crate::message_events::record(
+                            &receipt.message_id,
+                            crate::message_events::MessageEventKind::Receipt,
+                            true,
+                        );
                         let status = match receipt.status {
                             crate::DeliveryStatus::Sent => "Sent",
                             crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read => {
@@ -3981,9 +4018,10 @@ impl IronCore {
             .duration_since(web_time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        {
+        let duplicate = {
             let mut inbox = self.inbox.write();
-            if !inbox.is_duplicate(&message.id) {
+            let duplicate = inbox.is_duplicate(&message.id);
+            if !duplicate {
                 inbox.receive(ReceivedMessage {
                     version: 1,
                     message_id: message.id.clone(),
@@ -3993,7 +4031,8 @@ impl IronCore {
                     sender_public_key_hex: Some(hex::encode(&sender_pubkey)),
                 });
             }
-        }
+            duplicate
+        };
 
         let content = String::from_utf8(message.payload.clone()).unwrap_or_default();
         // Ordering fix (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK): this store's row is
@@ -4007,7 +4046,7 @@ impl IronCore {
             .duration_since(web_time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = self.history_manager.add(MessageRecord {
+        let history_result = self.history_manager.add(MessageRecord {
             id: message.id.clone(),
             direction: MessageDirection::Received,
             peer_id: canonical_peer_id.clone(),
@@ -4017,6 +4056,26 @@ impl IronCore {
             delivered: true,
             hidden: any_blocked,
         });
+        // G3: history-write result (receiver-side durable-write evidence).
+        {
+            let ok = history_result.is_ok();
+            crate::message_events::record(
+                &message.id,
+                crate::message_events::MessageEventKind::History,
+                ok,
+            );
+            let line = crate::message_events::fmt_rx_history(
+                &message.id,
+                &canonical_peer_id,
+                ok,
+                duplicate,
+                any_blocked,
+            );
+            match &history_result {
+                Ok(()) => tracing::info!("{}", line),
+                Err(e) => tracing::error!("{} error={:?}", line, e),
+            }
+        }
 
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
