@@ -2481,7 +2481,8 @@ open class MeshRepository(
                             null
                         }
                         if (existingRecord?.direction == uniffi.api.MessageDirection.RECEIVED) {
-                            Timber.d("Duplicate inbound message $messageId from $senderId; acknowledging without re-emitting UI")
+                            Timber.i("Duplicate inbound message $messageId from $senderId; acknowledging without re-emitting UI")
+                            Timber.i("rx_history msg=$messageId from=${canonicalPeerId.take(16)} result=ok dup=true hidden=false")
                             sendDeliveryReceiptAsync(
                                 senderPublicKeyHex = senderPublicKeyHex,
                                 messageId = messageId,
@@ -2515,7 +2516,16 @@ open class MeshRepository(
                             status = uniffi.api.MessageStatus.DELIVERED,
                             hidden = false
                         )
-                        historyManager?.add(record)
+                        // G3: log the history-write result (success or failure) with the
+                        // message id; ids only, never content. Failure is rethrown so the
+                        // existing error handling is unchanged.
+                        try {
+                            historyManager?.add(record)
+                            Timber.i("rx_history msg=$messageId from=${canonicalPeerId.take(16)} result=ok dup=false hidden=false")
+                        } catch (e: Exception) {
+                            Timber.e("rx_history msg=$messageId from=${canonicalPeerId.take(16)} result=failed dup=false hidden=false error=${e.javaClass.simpleName}")
+                            throw e
+                        }
                         logDeliveryAttempt(
                             messageId = messageId,
                             medium = "core",
@@ -2971,7 +2981,7 @@ open class MeshRepository(
                             outcome = "acked",
                             detail = "ctx=receipt_send sender=$senderId attempt=$attempt"
                         )
-                        Timber.d("Targeted delivery receipt sent for $normalizedMessageId to $senderId")
+                        Timber.i("Targeted delivery receipt sent for $normalizedMessageId to $senderId")
                         return@launch
                     }
 
