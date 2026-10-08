@@ -3499,7 +3499,7 @@ async fn cmd_start(
                                                 println!("\n{} Delivered: {}", "[OK][OK]".green(), short_id);
                                                 print!("> ");
                                                 let _ = std::io::Write::flush(&mut std::io::stdout());
-                                                tracing::debug!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
+                                                tracing::info!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
 
                                                 // Mark the message as delivered in history
                                                 if let Err(e) = history_rx.mark_delivered(receipt.message_id.clone()) {
