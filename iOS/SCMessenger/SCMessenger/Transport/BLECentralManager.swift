@@ -36,6 +36,7 @@ final class BLECentralManager: NSObject {
     private var scanTimer: Timer?
     private var isScanning: Bool = false
     private var pendingScanOnReady: Bool = false  // P3: Defer scan until BLE is poweredOn
+    private var lastReportedCentralState: CBManagerState = .unknown
 
     // Write queue (mirrors Android BleGattClient pattern - CRITICAL)
     private var writeInProgress: [UUID: Bool] = [:]
@@ -295,14 +296,36 @@ final class BLECentralManager: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.scanTimer?.invalidate()
-            self.scanTimer = Timer.scheduledTimer(withTimeInterval: self.scanInterval, repeats: true) { [weak self] _ in
-                self?.performScanCycle()
-            }
-            if let scanTimer = self.scanTimer {
-                RunLoop.main.add(scanTimer, forMode: .common)
-            }
             self.performScanCycle() // Start immediately
+            self.armNextScanCycle()
         }
+    }
+
+    /// #469 T8: the pause before the next scan cycle comes from the core
+    /// discovery scheduler (aggressive after an event, decaying, never
+    /// stopping). `scanInterval` is only the fallback when the repository
+    /// is gone.
+    private func armNextScanCycle() {
+        scanTimer?.invalidate()
+        let delay: TimeInterval = meshRepository?.discoveryDelaySeconds(.ble) ?? scanInterval
+        logger.info("[DISCOVERY] transport=ble next scan cycle in \(delay)s")
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            self?.performScanCycle()
+            self?.armNextScanCycle()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scanTimer = timer
+    }
+
+    /// The scheduler reset the BLE transport (Bluetooth on, app foreground,
+    /// network change, ...): scan now instead of waiting out a decayed pause.
+    func onDiscoveryReset() {
+        guard centralManager.state == .poweredOn else {
+            pendingScanOnReady = true
+            return
+        }
+        if isScanning { stopScan() }
+        scheduleDutyCycle()
     }
 
     private func performScanCycle() {
@@ -360,6 +383,15 @@ final class BLECentralManager: NSObject {
 extension BLECentralManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         logger.info("Central manager state: \(central.state.rawValue)")
+        // #469 T7: every Bluetooth state transition is a discovery event.
+        if central.state != lastReportedCentralState {
+            lastReportedCentralState = central.state
+            if central.state == .poweredOn {
+                meshRepository?.reportDiscoveryEvent(.bleOn)
+            } else if central.state == .poweredOff {
+                meshRepository?.reportDiscoveryEvent(.bleOff)
+            }
+        }
         if central.state == .poweredOn {
             // P3: If startScanning() was called before BLE was ready, start now
             if pendingScanOnReady {

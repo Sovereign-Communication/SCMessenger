@@ -8,6 +8,7 @@
 import SwiftUI
 import VisionKit
 import Vision
+import CoreImage.CIFilterBuiltins
 
 @MainActor
 struct JoinMeshView: View {
@@ -19,6 +20,10 @@ struct JoinMeshView: View {
     @State private var autoSubscribe: Bool = true
     @State private var error: String?
     @State private var showingQrScanner: Bool = false
+    @State private var statusMessage: String?
+    @State private var isRedeeming: Bool = false
+    @State private var myInvite: String?
+    @State private var inviteUnavailable: Bool = false
 
     private var canUseQrScanner: Bool {
         if #available(iOS 16.0, *) {
@@ -38,13 +43,51 @@ struct JoinMeshView: View {
                     Toggle("Auto-subscribe to messages", isOn: $autoSubscribe)
                 }
 
-                Section("Join via QR") {
-                    Button("Scan Join Bundle QR") {
+                Section("Join with an invite") {
+                    Button("Scan Invite QR") {
                         showingQrScanner = true
                     }
-                    .disabled(!canUseQrScanner)
+                    .disabled(!canUseQrScanner || isRedeeming)
+                    Button("Paste invite") {
+                        redeemInvite(UIPasteboard.general.string)
+                    }
+                    .disabled(isRedeeming)
                     if !canUseQrScanner {
-                        Text("QR scanning is unavailable on this device. Use manual join.")
+                        Text("QR scanning is unavailable on this device. Paste the invite instead.")
+                            .font(Theme.bodySmall)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let statusMessage = statusMessage {
+                        Text(statusMessage)
+                            .font(Theme.bodySmall)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Invite someone") {
+                    Button("Show my invite") {
+                        showMyInvite()
+                    }
+                    if let invite = myInvite {
+                        if let image = Self.qrImage(for: invite) {
+                            Image(uiImage: image)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity, minHeight: 220)
+                                .accessibilityLabel("QR code for your SCMessenger invite")
+                        }
+                        Button("Copy invite") {
+                            UIPasteboard.general.string = invite
+                        }
+                        ShareLink(item: invite) {
+                            Text("Share invite")
+                        }
+                        Text("Another device can scan this code to join through you. It expires in one hour.")
+                            .font(Theme.bodySmall)
+                            .foregroundStyle(.secondary)
+                    } else if inviteUnavailable {
+                        Text("This node has no reachable address yet. Discovery is still running; try again shortly.")
                             .font(Theme.bodySmall)
                             .foregroundStyle(.secondary)
                     }
@@ -106,7 +149,7 @@ struct JoinMeshView: View {
                     QRCodeScannerSheetInline(
                         onScan: { payload in
                             showingQrScanner = false
-                            joinFromBundle(payload)
+                            redeemInvite(payload)
                         },
                         onFailure: { message in
                             error = message
@@ -143,42 +186,47 @@ struct JoinMeshView: View {
         }
     }
 
-    private func joinFromBundle(_ raw: String) {
-        struct JoinBundle: Decodable {
-            // swiftlint:disable:next identifier_name
-            let bootstrap_peers: [String]
-            let topics: [String]
-        }
-
-        guard let data = raw.data(using: .utf8),
-              let bundle = try? JSONDecoder().decode(JoinBundle.self, from: data) else {
-            error = "Invalid join bundle QR data"
-            return
-        }
-
-        if bundle.bootstrap_peers.isEmpty {
-            error = "Join bundle has no bootstrap peers"
-            return
-        }
-
+    /// Redeem a signed `SCI1:` invite through core (replaces the unsigned JSON
+    /// join bundle). A seed that cannot be dialed yet is not a failure: the
+    /// scheduler keeps retrying it.
+    private func redeemInvite(_ raw: String?) {
+        isRedeeming = true
+        error = nil
+        statusMessage = "Verifying invite..."
         Task {
-            // Keep the bootstrap path durable. Seeds remain unproven until
-            // transport Identify confirms the peer, but they must be
-            // available on the next app launch.
-            _ = repository.importSeedAddresses(bundle.bootstrap_peers)
-
-            for addr in bundle.bootstrap_peers {
-                await repository.connectToPeer("", addresses: [addr])
-            }
-
-            for topic in bundle.topics {
-                do {
-                    try await topicManager?.subscribe(to: topic)
-                } catch {
-                    self.error = "Failed subscribing to topic \(topic): \(error.localizedDescription)"
-                }
+            let outcome = await repository.redeemInvite(raw)
+            isRedeeming = false
+            switch outcome {
+            case let .success(_, imported, _):
+                statusMessage = "Invite accepted. \(imported) nodes added. Connecting now; discovery keeps going in the background."
+            case let .failure(reason):
+                statusMessage = nil
+                error = reason.userMessage
             }
         }
+    }
+
+    private func showMyInvite() {
+        myInvite = nil
+        inviteUnavailable = false
+        Task {
+            if let invite = await repository.createInvite() {
+                myInvite = invite
+            } else {
+                inviteUnavailable = true
+            }
+        }
+    }
+
+    private static func qrImage(for text: String) -> UIImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "L"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }
 

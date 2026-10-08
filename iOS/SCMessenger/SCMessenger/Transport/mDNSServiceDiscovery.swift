@@ -38,6 +38,10 @@ final class mDNSServiceDiscovery: NSObject {
     /// The caller can construct a peer-specific multiaddr and dial via SwarmBridge.
     var onLanPeerResolved: ((String, String, Int32) -> Void)?
 
+    /// #469 T8: seconds until the next browse retry after a failure, from the
+    /// core scheduler. Returns nil when no scheduler is available (no retry).
+    var retryDelayProvider: (() -> TimeInterval?)?
+
     init(meshRepository: MeshRepository?) {
         self.meshRepository = meshRepository
         super.init()
@@ -59,6 +63,14 @@ final class mDNSServiceDiscovery: NSObject {
             return browser
         }
         isBrowsing = true
+    }
+
+    /// The scheduler reset the LAN transport (Wi-Fi changed, app foreground,
+    /// ...): drop the browse session bound to the old network and start fresh.
+    func restartBrowsing() {
+        logger.info("[DISCOVERY] transport=lan reset: restarting mDNS browsing")
+        stopBrowsing()
+        startBrowsing()
     }
 
     func stopBrowsing() {
@@ -174,6 +186,13 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         logger.error("mDNS browser failed: \(errorDict)")
         isBrowsing = false
+        // Never give up: retry on the scheduler's cadence.
+        if let delay = retryDelayProvider?() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self, !self.isBrowsing else { return }
+                self.startBrowsing()
+            }
+        }
     }
 }
 

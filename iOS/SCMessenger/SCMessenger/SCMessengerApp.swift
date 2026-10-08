@@ -103,6 +103,8 @@ struct SCMessengerApp: App {
 
     private func handleEnteringForeground() {
         meshRepository.setNotificationAppInForeground(true)
+        // #469 T7: returning to the foreground resets discovery to aggressive.
+        meshRepository.reportDiscoveryEvent(.appForeground)
         backgroundService?.onEnteringForeground()
         refreshOnboardingGate()
     }
