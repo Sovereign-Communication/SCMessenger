@@ -320,6 +320,24 @@ impl ConnectionTracker {
             .collect()
     }
 
+    /// Extract the socket of an identify-OBSERVED address, refusing relayed
+    /// forms. When a peer sees us through a relay circuit, the observed
+    /// address is `/ip4/<RELAY>/tcp/<port>/p2p/<relay>/p2p-circuit`: its
+    /// ip/port name the RELAY's socket, not ours. `extract_socket_addr`
+    /// ignores the circuit marker and would hand the relay's endpoint to the
+    /// AddressObserver as our own external address (3-node run 2026-10-08:
+    /// AWS 18.234.62.247:9001 became "our" external addr, so every dial to
+    /// AWS was skipped as a self-dial).
+    pub fn extract_direct_observed_socket_addr(addr: &Multiaddr) -> Option<SocketAddr> {
+        if addr
+            .iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+        {
+            return None;
+        }
+        Self::extract_socket_addr(addr)
+    }
+
     /// Extract SocketAddr from a Multiaddr (best effort)
     pub fn extract_socket_addr(addr: &Multiaddr) -> Option<SocketAddr> {
         use libp2p::multiaddr::Protocol;
@@ -507,6 +525,20 @@ mod tests {
         assert_eq!(
             observer.primary_external_address(),
             Some("203.0.113.5:9001".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn observed_circuit_address_is_not_a_direct_socket() {
+        let relayed: Multiaddr =
+            "/ip4/18.234.62.247/tcp/9001/p2p/12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31/p2p-circuit"
+                .parse()
+                .unwrap();
+        assert!(ConnectionTracker::extract_direct_observed_socket_addr(&relayed).is_none());
+        let direct: Multiaddr = "/ip4/147.81.41.188/tcp/9001".parse().unwrap();
+        assert_eq!(
+            ConnectionTracker::extract_direct_observed_socket_addr(&direct),
+            Some("147.81.41.188:9001".parse().unwrap())
         );
     }
 

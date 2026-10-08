@@ -813,6 +813,71 @@ fn dial_skip_reason(
     None
 }
 
+/// IPs of hosts we hold a live DIRECT (non-circuit) connection to. Loopback
+/// and unspecified hosts are excluded: several distinct local nodes can share
+/// them, so an IP match proves nothing there.
+#[cfg(not(target_arch = "wasm32"))]
+fn connected_direct_hosts(tracker: &ConnectionTracker) -> Vec<std::net::IpAddr> {
+    let mut hosts = Vec::new();
+    for conn in tracker.all_connections() {
+        if conn
+            .remote_addr
+            .iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+        {
+            continue;
+        }
+        if let Some((ip, _, _)) = addr_ip_socket(&conn.remote_addr) {
+            if !ip.is_loopback() && !ip.is_unspecified() && !hosts.contains(&ip) {
+                hosts.push(ip);
+            }
+        }
+    }
+    hosts
+}
+
+/// Does `addr` name a direct socket on a host we are already connected to?
+/// Circuit addresses are never matched (their IP is the relay's).
+fn addr_host_already_connected(addr: &Multiaddr, connected_hosts: &[std::net::IpAddr]) -> bool {
+    if addr
+        .iter()
+        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return false;
+    }
+    match addr_ip_socket(addr) {
+        Some((ip, _, _)) => !ip.is_loopback() && connected_hosts.contains(&ip),
+        None => false,
+    }
+}
+
+/// Skip reason for an ADDRESS-ONLY dial (no peer id requested or embedded)
+/// whose host we are already connected to. Address-only dials (LAN subnet
+/// probe, mDNS without a peer id) cannot use the peer-id connected check in
+/// `dial_skip_reason`, so every probe sweep re-opened parallel connections to
+/// an already-connected host on each of its ports (3-node run 2026-10-08:
+/// >100 Pixel->Windows connects, Windows denying inbound at "limit 16
+/// reached"). Kept separate from `dial_skip_reason` so the peer-id rules stay
+/// in one place.
+fn address_only_dial_skip_reason(
+    addr: &Multiaddr,
+    requested_peer_id: Option<PeerId>,
+    trusted: bool,
+    connected_hosts: &[std::net::IpAddr],
+) -> Option<&'static str> {
+    let has_embedded_peer = addr
+        .iter()
+        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
+    if !trusted
+        && requested_peer_id.is_none()
+        && !has_embedded_peer
+        && addr_host_already_connected(addr, connected_hosts)
+    {
+        return Some("host already connected -- respond over existing link");
+    }
+    None
+}
+
 /// Direct port-ladder synthesis is only valid before a relay circuit marker.
 /// Once `/p2p-circuit` is present, appending another transport component after
 /// it produces an invalid multiaddr (`.../p2p-circuit/tcp/...`) and libp2p
@@ -6561,7 +6626,7 @@ pub async fn start_swarm_with_config(
                                 // as seen by this peer. This gives mobile layers a stable
                                 // "what the network sees" signal for publishing connection hints.
                                 if let Some(observed_addr) =
-                                    ConnectionTracker::extract_socket_addr(&info.observed_addr)
+                                    ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
                                 {
                                     address_observer.record_observation(peer_id, observed_addr);
                                     tracing::info!(
@@ -7956,6 +8021,17 @@ pub async fn start_swarm_with_config(
                                 tracing::debug!("Dialing {} (synthesizing port ladder if applicable)", addr);
                                 let is_direct = is_direct_dial_addr(&addr);
 
+                                if let Some(reason) = address_only_dial_skip_reason(
+                                    &addr,
+                                    requested_peer_id,
+                                    trusted,
+                                    &connected_direct_hosts(&connection_tracker),
+                                ) {
+                                    tracing::info!("[DIAL-SKIP] {}: {}", addr, reason);
+                                    let _ = reply.send(Err(format!("skipped: {}", reason))).await;
+                                    continue;
+                                }
+
                                 let target_peer_id = match resolve_dial_target(&addr, requested_peer_id) {
                                     Ok(peer_id) => peer_id,
                                     Err(error) => {
@@ -7964,7 +8040,12 @@ pub async fn start_swarm_with_config(
                                     }
                                 };
                                 if let Some(reason) =
-                                    dial_skip_reason(&swarm, &addr, target_peer_id, trusted)
+                                    dial_skip_reason(
+                                        &swarm,
+                                        &addr,
+                                        target_peer_id,
+                                        trusted,
+                                    )
                                 {
                                     tracing::info!(
                                         "[DIAL-SKIP] {}: {} (target {:?})",
@@ -9844,7 +9925,7 @@ pub async fn start_swarm_with_config(
                                 // (The earlier dialed_peers set was removed
                                 // entirely -- see the wasm loop declarations.)
                                 if let Some(observed_addr) =
-                                    ConnectionTracker::extract_socket_addr(&info.observed_addr)
+                                    ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
                                 {
                                     // WASM: diagnostics-only observation recording.
                                     // No external-address promotion exists in the
@@ -10660,6 +10741,54 @@ mod tests {
         );
         assert_eq!(extract_ip_component("/dns4/host.example/tcp/1"), None);
         assert_eq!(extract_ip_component("garbage"), None);
+    }
+
+    #[test]
+    fn address_only_dial_to_connected_host_is_skipped_on_any_port() {
+        let mut tracker = crate::transport::observation::ConnectionTracker::new();
+        let peer = PeerId::random();
+        tracker.add_connection(
+            peer,
+            "/ip4/192.168.0.121/tcp/9001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "c1".to_string(),
+        );
+        // Relayed and loopback connections never register a host.
+        tracker.add_connection(
+            PeerId::random(),
+            "/ip4/18.234.62.247/tcp/9001/p2p-circuit".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "c2".to_string(),
+        );
+        tracker.add_connection(
+            PeerId::random(),
+            "/ip4/127.0.0.1/tcp/9001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "c3".to_string(),
+        );
+        let hosts = super::connected_direct_hosts(&tracker);
+        assert_eq!(hosts.len(), 1);
+        for a in [
+            "/ip4/192.168.0.121/tcp/443",
+            "/ip4/192.168.0.121/tcp/9001",
+            "/ip4/192.168.0.121/tcp/80",
+        ] {
+            assert!(super::addr_host_already_connected(
+                &a.parse().unwrap(),
+                &hosts
+            ));
+        }
+        // A different host, a loopback target, and a circuit target stay dialable.
+        for a in [
+            "/ip4/192.168.0.122/tcp/9001",
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/192.168.0.121/tcp/9001/p2p-circuit",
+        ] {
+            assert!(!super::addr_host_already_connected(
+                &a.parse().unwrap(),
+                &hosts
+            ));
+        }
     }
 
     #[test]
