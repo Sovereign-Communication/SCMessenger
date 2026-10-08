@@ -86,11 +86,24 @@ class SubnetProbe(
      * immediate libp2p dial to the same ip:port can be rejected by the OS
      * (observed against the Windows CLI daemon). 500ms lets it clear.
      */
-    private val dialDelayMs: Long = 500L
+    private val dialDelayMs: Long = 500L,
+    /**
+     * #469 T8: delay source from the core discovery scheduler. When set it
+     * replaces the fixed [scanIntervalMs] between sweeps.
+     */
+    private val cadence: com.scmessenger.android.transport.discovery.ScanCadence? = null
 ) {
     @Volatile private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var sweepJob: Job? = null
+
+    // Wakes the inter-sweep wait when the scheduler resets the LAN lane.
+    private val wakeSignal = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+
+    /** Core scheduler reset the LAN lane: sweep now instead of waiting out the decay. */
+    fun triggerNow() {
+        wakeSignal.trySend(Unit)
+    }
 
     // Track (host,port) tuples we've already reported within this lifetime
     // so we don't spam the dialer. The dialer has its own backoff; this is
@@ -122,7 +135,13 @@ class SubnetProbe(
                     Timber.w(t, "SubnetProbe sweep failed")
                 }
                 if (!isRunning) break
-                delay(scanIntervalMs)
+                val c = cadence
+                if (c == null) {
+                    delay(scanIntervalMs)
+                } else {
+                    val waitMs = c.nextDelayMs().coerceAtLeast(1L)
+                    kotlinx.coroutines.withTimeoutOrNull(waitMs) { wakeSignal.receive() }
+                }
             }
         }
     }

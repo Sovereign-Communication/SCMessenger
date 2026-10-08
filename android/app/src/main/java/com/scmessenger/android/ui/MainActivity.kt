@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // #469 T3: invite shared into the app (cold start)
+        handleInviteIntent(intent)
+
         // Handle deep links for cold start
         intent?.let {
             when (it.action) {
@@ -353,6 +356,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         Timber.d("MainActivity resumed")
         platformBridge.notifyForeground()
+        // #469 T7: returning to the foreground resets discovery to aggressive.
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            meshRepository.reportDiscoveryEvent(
+                com.scmessenger.android.transport.discovery.DiscoveryEventKind.APP_FOREGROUND
+            )
+        }
         checkPermissions()
         if (meshRepository.hasRequiredRuntimePermissions()) {
             // HANG-MAIN-001: onResume is main-thread. Do not touch repository
@@ -403,8 +412,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * #469 T3: a signed `SCI1:` invite shared as text (ACTION_SEND) or opened
+     * through a `sci1:` view intent is handed to the join screen.
+     */
+    private fun handleInviteIntent(intent: Intent?) {
+        val shared = when (intent?.action) {
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_VIEW -> intent.dataString
+            else -> null
+        }
+        mainViewModel.offerInvite(shared)
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        handleInviteIntent(intent)
         intent?.let {
             when (it.action) {
                 Intent.ACTION_VIEW -> {

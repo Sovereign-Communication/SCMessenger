@@ -83,7 +83,7 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
-        const val MAX_SEEDS_PER_IMPORT = 16
+        const val DEFAULT_INVITE_TTL_SECS: ULong = 3600UL
 
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
@@ -545,6 +545,22 @@ open class MeshRepository(
 
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
     private val networkDetector = NetworkDetector(context)
+
+    // #469 T7/T8: event-driven discovery. The scheduler policy lives in core
+    // (Rust); this driver feeds it platform events and wakes scan loops.
+    // Lazy so JVM unit tests that never touch discovery never load the native
+    // library; override createDiscoveryPolicy() to inject a fake.
+    protected open fun createDiscoveryPolicy(): com.scmessenger.android.transport.discovery.DiscoveryPolicy =
+        com.scmessenger.android.transport.discovery.CoreDiscoveryPolicy()
+
+    val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver by lazy {
+        com.scmessenger.android.transport.discovery.DiscoveryDriver(createDiscoveryPolicy()).also { driver ->
+            driver.addListener { _, lanes -> applyDiscoveryReset(lanes) }
+        }
+    }
+    private val radioStateReceiver = com.scmessenger.android.transport.discovery.RadioStateReceiver { event ->
+        reportDiscoveryEvent(event)
+    }
     // P0_ANDROID_007: Diagnostics reporter for connectivity analysis
     private val diagnosticsReporter = com.scmessenger.android.network.DiagnosticsReporter(
         context,
@@ -1333,6 +1349,9 @@ open class MeshRepository(
                 meshService?.onWifiDirectConnectionInfo(peerId, groupOwnerIp, isGroupOwner)
             }
         )
+        // #469 T8: LAN discovery cadence comes from the core scheduler.
+        runCatching { transportManager?.discoveryCadences = discoveryDriver }
+            .onFailure { Timber.w(it, "Discovery cadence unavailable; LAN uses legacy fixed intervals") }
     }
 
     /**
@@ -1642,8 +1661,11 @@ open class MeshRepository(
             Timber.i("TopicManager initialized for gossipsub topic management")
 
             // P0_NETWORK_001: Start network detection for cellular-aware fallback
+            networkDetector.onDiscoveryEvent = { event -> reportDiscoveryEvent(event) }
             networkDetector.startMonitoring()
             Timber.i("NetworkDetector started — cellular-aware transport fallback active")
+            // #469 T7: Bluetooth / Wi-Fi radio state as discovery events.
+            radioStateReceiver.register(context)
 
             // P0_NETWORK_001: Watch for network type changes and re-bootstrap
             startNetworkChangeWatch()
@@ -3260,8 +3282,11 @@ open class MeshRepository(
 
         // BLE Scanner: Feeds discovered peers to MeshService and handles GATT connections
         if (bleScanner == null) {
+            val bleCadence = discoveryDriver.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.BLE)
             bleScanner = com.scmessenger.android.transport.ble.BleScanner(
                 context,
+                cadence = bleCadence,
+                backoffStrategy = com.scmessenger.android.transport.ble.BleBackoffStrategy(cadence = bleCadence),
                 onPeerDiscovered = { peerId ->
                     noteBleRouteObservation(peerId = peerId, bleAddress = peerId, source = "scan")
                     meshService?.onPeerDiscovered(peerId)
@@ -4251,6 +4276,7 @@ open class MeshRepository(
         synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
         networkDetector.stopMonitoring()
+        radioStateReceiver.unregister()
         pendingOutboxRetryJob?.cancel()
         pendingOutboxRetryJob = null
         coverTrafficJob?.cancel()
@@ -6587,44 +6613,92 @@ open class MeshRepository(
         ledgerManager?.recordFailure(multiaddr)
     }
 
+    // ------------------------------------------------------------------
+    // #469 T3: signed SCI1 invites (replaces the unsigned JSON join bundle)
+    // ------------------------------------------------------------------
+
     /**
-     * Persist bootstrap addresses learned from an invite or QR join bundle.
-     *
-     * Android parity with iOS MeshRepository.importSeedAddresses: seeds remain
-     * lower-confidence until an active transport session identifies the peer,
-     * but they must survive this screen and app launch via the ledger.
-     *
-     * No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.
-     * Additive only: existing flows never call this, null ledger returns 0.
+     * Redeem a signed `SCI1:` invite from a QR scan, pasted text, or a shared
+     * message. Core verifies the Ed25519 signature and imports the seed
+     * ledger as unproven entries; the returned addresses are dialed through
+     * the normal dial path, and an InviteRedeemed event puts every discovery
+     * lane into its aggressive phase.
      */
-    open fun importSeedAddresses(addresses: List<String>): Int {
-        val seeds = addresses
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .take(MAX_SEEDS_PER_IMPORT)
-            .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
-            .toList()
-        if (seeds.isEmpty()) {
-            return 0
-        }
+    suspend fun redeemInvite(raw: String?): InviteRedeemResult {
+        val flow = InviteRedeemFlow(
+            redeem = { token ->
+                val core = ironCore ?: throw IllegalStateException("core not initialized")
+                val report = core.redeemInviteQr(token)
+                InviteReport(
+                    inviterId = report.inviterId,
+                    inviterPeerId = report.inviterPeerId,
+                    addressesOffered = report.addressesOffered.toInt(),
+                    addressesImported = report.addressesImported.toInt(),
+                    dialAddrs = report.dialAddrs
+                )
+            },
+            dial = { addr -> dial(addr) },
+            classify = ::classifyInviteError,
+            onRedeemed = {
+                reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.INVITE_REDEEMED)
+            }
+        )
+        return flow.run(raw)
+    }
+
+    internal fun classifyInviteError(e: Throwable): InviteFailure = when (e) {
+        is uniffi.api.IronCoreException.InvalidInput -> InviteFailure.INVALID
+        is uniffi.api.IronCoreException.CryptoException -> InviteFailure.BAD_SIGNATURE
+        is uniffi.api.IronCoreException.NotInitialized -> InviteFailure.NO_IDENTITY
+        is IllegalStateException -> InviteFailure.NO_IDENTITY
+        else -> InviteFailure.UNKNOWN
+    }
+
+    /**
+     * Mint a signed `SCI1:` invite from this node's reachable addresses.
+     * Returns the string to render as a QR code and offer for copy/share, or
+     * null when the node has no dialable address yet or no identity.
+     */
+    fun createInvite(ttlSecs: ULong = DEFAULT_INVITE_TTL_SECS): String? {
+        val core = ironCore ?: return null
+        val addrs = (getExternalAddresses() + getListeningAddresses()).distinct()
         return try {
-            val added = importSeedsToLedger(seeds)
-            Timber.i("Ledger: imported $added bootstrap seed(s) from join bundle")
-            added.toInt()
+            core.createInviteQr(addrs, ttlSecs)
         } catch (e: Exception) {
-            Timber.w(e, "Ledger: failed to import bootstrap seeds")
-            0
+            Timber.w(e, "Invite creation failed")
+            null
         }
     }
 
-    protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
-        val manager = ledgerManager
-        if (manager == null) {
-            Timber.w("Ledger: cannot import seeds - ledgerManager not initialized")
-            return 0u
+    // ------------------------------------------------------------------
+    // #469 T7/T8: discovery events and scheduler resets
+    // ------------------------------------------------------------------
+
+    /** Report a platform event to the core discovery scheduler. */
+    open fun reportDiscoveryEvent(event: com.scmessenger.android.transport.discovery.DiscoveryEventKind) {
+        try {
+            discoveryDriver.onEvent(event)
+        } catch (e: Throwable) {
+            // Never let a scheduler fault break a platform callback.
+            Timber.w(e, "Discovery event %s could not be delivered", event)
         }
-        return manager.importSeedEntries(seeds)
+    }
+
+    /** Wake the scan loops whose lane the scheduler just reset to aggressive. */
+    private fun applyDiscoveryReset(lanes: Set<com.scmessenger.android.transport.discovery.DiscoveryLane>) {
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER in lanes) {
+            // Failure history and spacing gates describe the OLD network
+            // state; clear them so the woken loop can dial at once.
+            nextBootstrapAttemptMs = 0L
+            lastRelayBootstrapDialMs = 0L
+            consecutiveBootstrapFailures = 0
+        }
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.BLE in lanes) {
+            bleScanner?.onDiscoveryReset()
+        }
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.LAN in lanes) {
+            transportManager?.onLanDiscoveryReset()
+        }
     }
 
     /**
@@ -7833,12 +7907,22 @@ open class MeshRepository(
                     primeRelayBootstrapConnections()
 
                     flushPendingOutbox("periodic")
-                    kotlinx.coroutines.delay(8000)
+                    // #469 T8: cadence comes from the core scheduler (aggressive
+                    // after any network event, decaying, never stopping); an
+                    // event wakes this wait immediately.
+                    discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Timber.w(e, "Pending outbox retry loop error")
-                    kotlinx.coroutines.delay(5000)
+                    try {
+                        discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
+                    } catch (inner: kotlinx.coroutines.CancellationException) {
+                        throw inner
+                    } catch (inner: Exception) {
+                        // Scheduler unavailable: yield briefly rather than spin.
+                        kotlinx.coroutines.yield()
+                    }
                 }
             }
         }
