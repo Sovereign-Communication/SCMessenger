@@ -242,6 +242,11 @@ android {
                 // still unknown, and this is the diagnostic: the last "started" line
                 // before the timeout names the test that blocks. Without it the log
                 // ends mid-task with no indication of where.
+                // Pass staged native cdylib location to JNA so JVM unit tests find scmessenger_core.dll / .so / .dylib
+                def stagedDir = file('../../core/target/staged-cdylib').absolutePath
+                def targetReleaseDir = file('../../target/release').absolutePath
+                systemProperty 'jna.library.path', "${stagedDir};${targetReleaseDir}"
+
                 testLogging {
                     events 'started', 'passed', 'failed', 'skipped'
                     showStandardStreams = true
