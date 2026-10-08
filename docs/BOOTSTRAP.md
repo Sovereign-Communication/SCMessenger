@@ -1,81 +1,88 @@
-# Joining the Mesh: Peer Discovery and Node Addresses
+# Joining the Mesh: Invites, Ledger Gossip and Discovery
 
 Status: Current
-Last updated: 2026-07-25
+Last updated: 2026-10-07
 
-> Scope note: this document replaces the former "Bootstrap Node Configuration"
-> guidance, which described a privileged tier of shipped bootstrap nodes. That
-> tier does not exist. Canonical architecture reference:
-> `docs/TRANSPORT_ARCHITECTURE.md`. Governance/trust reference:
-> `docs/BOOTSTRAP_GOVERNANCE.md`. Operating a well-connected node:
+> Scope note: this document describes the decided join model for issue #469
+> (`docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`, operator decisions 2026-10-06).
+> Canonical architecture reference: `docs/TRANSPORT_ARCHITECTURE.md`.
+> Governance/trust reference: `docs/BOOTSTRAP_GOVERNANCE.md`. Node model:
+> `docs/rules/NODE_MODEL.md`. Operating an always-on node:
 > `docs/RELAY_OPERATOR_GUIDE.md`.
 
-## [Current] The Model in One Paragraph
+> [INFO] Implementation status. The invite machinery (`InviteToken`,
+> `SeedLedgerEntry`, `import_seed_entries`) exists in core. FFI/CLI/mobile
+> wiring (T1-T3), removal of static seed intake (T4, #485), the discovery
+> scheduler (T5-T8) and infra changes (T10) are tracked in the decision record.
+> Until T4 lands the legacy static-seed mechanisms still exist in code; they are
+> documented only in the superseded section at the end of this file and must not
+> be used or relied on.
 
-SCMessenger has no dedicated relays and no bootstrap node role. There are only
-**nodes**, and **every node is a full relay**. Every build -- desktop, mobile,
-headless -- starts both a libp2p relay server and a relay client
-unconditionally (`core/src/transport/behaviour.rs`, field `relay_server`, plus
-`.with_relay_client(...)` in every swarm build path), and every SCMessenger peer
-advertises itself as a relay in its libp2p `identify` agent string. A node with
-a public address is not a special class of node; it is an ordinary node that
-happens to be reachable.
+## The Model in One Paragraph
 
-Peers are learned two ways:
+There are only **nodes**. Every node is a full relay and is functionally
+identical for transport; the only distinction is whether an identity is loaded.
+Nothing is static: no shipped addresses, no seed list, no environment variable,
+no config key, no node class. A node that is always on (for example an AWS host)
+is an ordinary node that earns a good reputation through uptime and recency and
+therefore tends to become predominant for store-and-forward -- by behaviour,
+never by flag. Say "always-on node", never "bootstrap node".
 
-1. **Local discovery** -- mDNS on the LAN, plus BLE, Wi-Fi Aware / Wi-Fi Direct
-   on Android, and Multipeer on iOS. No configuration, no internet.
-2. **Ledger exchange** -- the `/sc/ledger-exchange/1.0.0` protocol. Nodes gossip
-   the peer records they already know to the peers they are connected to. This
-   is what replaced static bootstrap lists for learning about *remote* peers.
+## How a Node Joins
 
-Kademlia DHT lookups, libp2p `identify`, and peer broadcast also contribute once
-a node has at least one live connection. None of these require a privileged
-entry node.
+1. **Invite (QR or pasted info)** -- the only seed source. Any node can mint a
+   `SCI1:` invite; the invitee redeems it (signature verified), which imports a
+   small signed seed ledger of bare multiaddrs as unproven entries.
+2. **Local discovery** -- mDNS/LAN, BLE, Wi-Fi Aware/Direct (Android), Multipeer
+   (iOS). No configuration, no internet, no invite needed on a shared LAN or in
+   Bluetooth range.
+3. **Ledger gossip** -- once one connection exists, nodes exchange peer records
+   over `/sc/ledger-exchange/1.0.0`. An exchanged pair reaches the DHT only when
+   `ledger_verified_pair` holds (address locally dialed and bound to that peer
+   id); wire data is never promoted without a successful local dial.
+4. **Routing planning** -- discovery after first contact feeds the mycorrhizal
+   routing layers (`core/src/routing/`, `docs/NATURE_INSPIRED_MESH_PHILOSOPHY.md`);
+   there is no external directory.
 
-## [Current] There Are No Shipped Default Addresses
+A stock build starts with an empty ledger and logs
+`[DISCOVERY] cold: awaiting invite or LAN/BLE` (T4). The UI never shows a
+"no network peers" message; the existing node indicators are the only
+connectivity presentation and show an active/probing state when nothing is
+connected.
 
-All compiled-in address lists are empty, by design:
+## Reputation and Predominance
 
-| Location | Constant / field | Value |
-|----------|------------------|-------|
-| `core/src/transport/bootstrap.rs` | `CORE_BOOTSTRAP_NODES` | `&[]` |
-| `cli/src/bootstrap.rs` | `DEFAULT_BOOTSTRAP_NODES` | `&[]` |
-| `cli/src/config.rs` | `bootstrap_nodes` config default | empty |
+Which known node is preferred is decided by observed behaviour only:
 
-The Rust core and the CLI contain no hardcoded routable IP addresses. Any node
-address in a running install got there because a **user or operator supplied
-it**. The project does not accept contributed addresses into a shipped default
-list, and there is no PR process for doing so.
+- `LedgerManager::get_preferred_relays` -- failure count ascending, then
+  `last_seen` descending.
+- `core/src/transport/reputation.rs` -- 0-100 score with decay.
+- `core/src/transport/relay_health.rs` `priority_score` -- uptime 0.4,
+  latency 0.3, stability 0.3. The `headless_bonus` node-class term is scheduled
+  for removal (T11); scoring must use behaviour only.
 
-The remaining `bootstrap_*` names in code and config are historical vocabulary
-for one thing only: *the optional list of peer addresses to dial on startup
-before any peers are known*. Treat "bootstrap node" in config keys as
-"user-supplied seed peer address", not as a node role.
+## Event-Driven Discovery (no give-up, no fixed ceiling)
 
-## [Current] Cold Start: The Only Case That Needs Manual Input
+Retry is dynamic and event-driven (decision record section 6). One scheduler
+per transport class (`ble`, `lan`, `ledger_dial`):
 
-A node needs exactly one reachable peer address, once, and only when **both** of
-these are true:
+- Any affecting event (BLE on/off, Wi-Fi/cellular/LAN change, app foreground,
+  invite redeemed, ledger received, peer lost) resets that transport to an
+  aggressive floor interval and fires an immediate attempt.
+- Without events the interval decays by a growth factor in [1.5, 2.0] with full
+  jitter, reset whenever a new peer is added.
+- There is no give-up state and no literal ceiling: the ceiling is computed from
+  observed peer density and power state, so an isolated, charging node keeps
+  probing at a short steady interval instead of going quiet.
+- Log contract: `[DISCOVERY] event=<kind> transport=<ble|lan|ledger>
+  phase=<aggressive|decay> interval_ms=<n> attempt=<n> peers=<n>`.
+- Per-candidate dial eligibility remains with `DialPolicyManager`; the
+  scheduler decides when to sweep.
 
-- its ledger is empty (first run, or data directory wiped), and
-- there are no peers on its local network to find via mDNS/BLE/Wi-Fi.
+The former fixed `5/15/45/120s` ladder (`cli/src/seed_dial.rs`) is superseded by
+this scheduler (T5, T6).
 
-In that case the user supplies one address. After that first connection the node
-receives peer records over ledger exchange, persists them, and no longer depends
-on the address it started from:
-
-- CLI ledger: `<data_dir>/peers.json` (`cli/src/ledger.rs`)
-- Core/mobile ledger: `ledger.json` via `LedgerManager`
-  (`core/src/store/ledger_entry.rs`)
-
-Entries are added from `PeerIdentified` and `LedgerReceived` events and shared
-outward via `to_shared_entries()` / `share_ledger()`.
-
-On a LAN -- two laptops on the same Wi-Fi, a phone and a desktop in the same
-room -- no address is needed at all. Start both and they find each other.
-
-## [Current] Invites Carry a Seed Ledger -- Routing Only, No Identity
+## Invites Carry a Seed Ledger -- Routing Only, No Identity
 
 An invite token (`core/src/relay/invite.rs`, `InviteToken`) carries a
 `seed_ledger`: a snapshot of the inviter's connection ledger, with the
@@ -129,7 +136,142 @@ through `seed_addresses()` until a real connection promotes them. An existing
 ledger entry is never touched by seed data -- counters, `last_seen` and any
 known peer id are all left exactly as they are.
 
-## [Current] Supplying a Seed Peer Address
+## Running an Always-On Node
+
+Any node with a stable public address is easy to reach and, through uptime,
+tends to earn reputation. It holds no special role and appears in invites like
+any other node. Requirements:
+
+1. Stable public IP or DNS name
+2. Inbound TCP/UDP open on the P2P port (9001 by default; 9000 for the
+   WebSocket/API interface)
+3. Persistent data directory, so the PeerId stays stable across restarts
+4. Reasonable uptime
+
+Read the node's own identity and addresses:
+
+```bash
+# Docker
+docker exec scmessenger scm identity
+
+# Native
+scmessenger-cli identity
+```
+
+Full operational guidance -- systemd unit, cloud firewall rules, health checks,
+monitoring -- is in `docs/RELAY_OPERATOR_GUIDE.md`.
+
+Redundancy across a few geographically separate always-on nodes is advice for
+your own deployment, not a project-wide tier; there is no list to enroll in.
+
+## What a Relaying Node Can and Cannot See
+
+Every node relays, so this applies to every node, not to a special class:
+
+- **Cannot** read message contents -- everything is end-to-end encrypted.
+- **Cannot** impersonate a peer -- identities are cryptographic.
+- **Can** observe transport metadata: which PeerIds connected, message sizes,
+  timing.
+- **Can** misbehave -- refuse circuits, or gossip junk peer records over ledger
+  exchange. Mitigation is structural: multiple independent paths, reputation
+  tracking on relay performance, and no node being load-bearing for entry.
+- **Publicly reachable nodes attract DDoS.** Mitigate with rate limits,
+  connection caps, and the relay budget cap (`max_relay_budget` in settings,
+  applied via `set_relay_budget`).
+
+## Verifying Peer Discovery
+
+```bash
+# Watch discovery with verbose logging
+RUST_LOG=debug scmessenger-cli start
+
+# Connection state
+scmessenger-cli status
+```
+
+The persisted ledger is the real evidence: `peers.json` (CLI) or `ledger.json`
+(core/mobile) should grow across sessions, and ledger exchange log lines
+(`Ledger exchange response from <peer>: they learned <x> new peers`) should
+appear after the first connection. Score on receiver-side persisted entries,
+not on transport acknowledgements.
+
+## Troubleshooting
+
+- **Nothing connects on a LAN.** Desktop mDNS degrades to disabled in containers
+  and cloud VMs without multicast; on Android platform `NsdManager` discovery is
+  used. Confirm both hosts share an L2 segment and client isolation on the
+  access point is off (guest Wi-Fi commonly blocks peer-to-peer traffic).
+- **Isolated node with an empty ledger.** Expected: redeem an invite or come
+  into LAN/BLE range. The scheduler keeps probing; there is no give-up.
+- **A redeemed invite does not connect.** The addresses may be stale, the port
+  closed inbound, or the invite expired. Mint a fresh one.
+- **Our own node is unreachable from outside.** Open inbound on the P2P port
+  (9001) and API port (9000). A node behind strict NAT still participates
+  through relay circuits provided by peers it can reach; it just cannot accept
+  inbound dials.
+- **PeerId changed after restart.** The data directory was not persisted; the
+  network keypair lives there and must survive restarts.
+
+---
+
+**Key point:** the mesh has no entry tier and nothing static. Every node relays;
+the only seed is an invite; peers propagate by ledger gossip and local
+discovery; reputation decides predominance.
+
+---
+
+# Superseded Content (historical record)
+
+[SUPERSEDED 2026-10-06] Everything below describes the pre-decision static-seed
+model. It is retained as a record of earlier decisions and is not guidance.
+Superseded by `docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`; the mechanisms are
+removed by T4 (#485) and T10. `SC_BOOTSTRAP_NODES`, `config set
+bootstrap_node_add`, the mobile JSON join bundle, build-time seeding and
+user-supplied cold-start addresses must not be used.
+
+## [Superseded] There Are No Shipped Default Addresses
+
+All compiled-in address lists are empty, by design:
+
+| Location | Constant / field | Value |
+|----------|------------------|-------|
+| `core/src/transport/bootstrap.rs` | `CORE_BOOTSTRAP_NODES` | `&[]` |
+| `cli/src/bootstrap.rs` | `DEFAULT_BOOTSTRAP_NODES` | `&[]` |
+| `cli/src/config.rs` | `bootstrap_nodes` config default | empty |
+
+The Rust core and the CLI contain no hardcoded routable IP addresses. Any node
+address in a running install got there because a **user or operator supplied
+it**. The project does not accept contributed addresses into a shipped default
+list, and there is no PR process for doing so.
+
+The remaining `bootstrap_*` names in code and config are historical vocabulary
+for one thing only: *the optional list of peer addresses to dial on startup
+before any peers are known*. Treat "bootstrap node" in config keys as
+"user-supplied seed peer address", not as a node role.
+
+## [Superseded] Cold Start: The Only Case That Needs Manual Input
+
+A node needs exactly one reachable peer address, once, and only when **both** of
+these are true:
+
+- its ledger is empty (first run, or data directory wiped), and
+- there are no peers on its local network to find via mDNS/BLE/Wi-Fi.
+
+In that case the user supplies one address. After that first connection the node
+receives peer records over ledger exchange, persists them, and no longer depends
+on the address it started from:
+
+- CLI ledger: `<data_dir>/peers.json` (`cli/src/ledger.rs`)
+- Core/mobile ledger: `ledger.json` via `LedgerManager`
+  (`core/src/store/ledger_entry.rs`)
+
+Entries are added from `PeerIdentified` and `LedgerReceived` events and shared
+outward via `to_shared_entries()` / `share_ledger()`.
+
+On a LAN -- two laptops on the same Wi-Fi, a phone and a desktop in the same
+room -- no address is needed at all. Start both and they find each other.
+
+## [Superseded] Supplying a Seed Peer Address
 
 Address format is a libp2p multiaddr:
 
@@ -142,7 +284,7 @@ Its operator can read them off that node with `scm identity` and the node's own
 "Listening on" log lines. Never copy an address out of documentation -- addresses
 are deployment-specific and there are no project-operated ones to copy.
 
-### [Current] CLI
+### [Superseded] CLI
 
 The `config` subcommand takes `set` / `get` / `list` only
 (`cli/src/cli.rs`, `ConfigAction`). Seed addresses are managed through `set`
@@ -166,7 +308,7 @@ scmessenger-cli config list
 > Use the `config set bootstrap_node_add` / `config set bootstrap_node_remove`
 > forms above.
 
-### [Current] Environment Variable
+### [Superseded] Environment Variable
 
 The only environment variable the code reads is **`SC_BOOTSTRAP_NODES`**
 (`cli/src/bootstrap.rs`, `core/src/transport/bootstrap.rs`). It takes a
@@ -191,7 +333,7 @@ docker run -d \
 > unprefixed name; that is a known defect in those files, not a second supported
 > spelling. Always use `SC_BOOTSTRAP_NODES`.
 
-### [Current] Mobile
+### [Superseded] Mobile
 
 Android and iOS discover peers on the local network with no configuration. For
 internet reachability, the Join Mesh flow ingests a join bundle by QR scan
@@ -199,7 +341,7 @@ internet reachability, the Join Mesh flow ingests a join bundle by QR scan
 "Scan QR Code"). The bundle carries the seed peer addresses, so the address is
 still user-supplied -- it is just transported as a QR code rather than typed.
 
-### [Current] Private Networks: Build-Time Seeding
+### [Superseded] Private Networks: Build-Time Seeding
 
 For a closed deployment you can compile a seed list in, via the same variable
 read through `option_env!` at build time (`cli/src/bootstrap.rs`):
@@ -216,140 +358,3 @@ docker build \
 
 This is for private networks, test infrastructure, and regional deployments you
 control. It is not a mechanism for adding addresses to public builds.
-
-## [Current] Running a Reachable Node
-
-Any node with a stable public address helps others cold-start -- not because it
-holds a special role, but because it is easy to reach. Requirements:
-
-1. Stable public IP or DNS name
-2. Inbound TCP/UDP open on the P2P port (9001 by default; 9000 for the
-   WebSocket/API interface)
-3. Persistent data directory, so the PeerId stays stable across restarts
-4. Reasonable uptime
-
-Read the node's own identity and addresses:
-
-```bash
-# Docker
-docker exec scmessenger scm identity
-
-# Native
-scmessenger-cli identity
-```
-
-Full operational guidance -- systemd unit, cloud firewall rules, health checks,
-monitoring -- is in `docs/RELAY_OPERATOR_GUIDE.md`.
-
-Sensible topology for a deployment you run: a couple of geographically separate
-reachable nodes so a single outage does not isolate new joiners, across more than
-one hosting provider. This is redundancy advice for *your* infrastructure. It is
-not a project-wide bootstrap tier, and there is no list to enroll in.
-
-## [Current] What a Relaying Node Can and Cannot See
-
-Every node relays, so this applies to every node, not to a special class:
-
-- **Cannot** read message contents -- everything is end-to-end encrypted.
-- **Cannot** impersonate a peer -- identities are cryptographic.
-- **Can** observe transport metadata: which PeerIds connected, message sizes,
-  timing.
-- **Can** misbehave -- refuse circuits, or gossip junk peer records over ledger
-  exchange. Mitigation is structural: multiple independent paths, reputation
-  tracking on relay performance, and no node being load-bearing for entry.
-- **Publicly reachable nodes attract DDoS.** Mitigate with rate limits,
-  connection caps, and the relay budget cap (`max_relay_budget` in settings,
-  applied via `set_relay_budget`).
-
-## [Current] Verifying Peer Discovery
-
-```bash
-# What seed addresses does this install have?
-scmessenger-cli config get bootstrap_nodes
-
-# Full config dump
-scmessenger-cli config list
-
-# Watch discovery with verbose logging
-RUST_LOG=debug scmessenger-cli start
-
-# Peer count and connection state
-scmessenger-cli status
-```
-
-The persisted ledger is the real evidence that discovery is working. Check that
-`peers.json` (CLI) or `ledger.json` (core/mobile) is growing in the data
-directory across sessions.
-
-## [Current] Troubleshooting
-
-### Peer count stays at 0 on a LAN
-
-On desktop, libp2p mDNS should just work; it degrades gracefully to disabled in
-containers and cloud VMs without multicast. On Android the libp2p mDNS behaviour
-is compiled out and platform `NsdManager` discovery is used instead. Check:
-
-```bash
-# Are we listening at all?
-scmessenger-cli status
-docker logs scmessenger | grep "Listening on"
-```
-
-Then confirm the two hosts are on the same L2 segment and that mDNS/UDP 5353 is
-not blocked by a client-isolation setting on the access point. Guest Wi-Fi
-networks commonly block peer-to-peer traffic entirely.
-
-### Peer count stays at 0 with no local peers and an empty ledger
-
-Expected. This is the cold-start case -- supply one seed peer address (see
-above). There is no shipped default to fall back on, so a node in this state
-stays at 0 until a user provides an address or a local peer appears.
-
-### A supplied seed address does not connect
-
-```bash
-# Reachability
-nc -zv <NODE_IP> 9001
-
-# Format check -- must be /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>
-scmessenger-cli config get bootstrap_nodes
-
-# Firewall
-# Linux: sudo ufw status
-# macOS: /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
-```
-
-Causes, in order of likelihood: the address is stale (the operator's IP or
-PeerId changed), the port is not open inbound on the remote host, or the
-multiaddr is malformed.
-
-### Our own node is unreachable from outside
-
-```bash
-# From a different machine
-nc -zv <YOUR_PUBLIC_IP> 9001
-```
-
-Open inbound on both ports. GCP example:
-
-```bash
-gcloud compute firewall-rules create allow-scmessenger \
-  --allow tcp:9000,tcp:9001,udp:9001 \
-  --direction=INGRESS
-```
-
-A node behind strict NAT with no UPnP can still participate: it reaches others
-through relay circuits provided by whichever peers it can reach. It just cannot
-serve as an entry point for anyone else.
-
-### PeerId changed after a restart
-
-The data directory was not persisted. In Docker, check the volume mount; the
-network keypair lives under the data directory and must survive restarts, or
-every previously-shared ledger entry pointing at this node goes stale.
-
----
-
-**Key point:** the mesh has no entry tier. Every node relays; peers propagate by
-ledger exchange and local discovery; the single manual step is one user-supplied
-address on a cold start with no neighbours.

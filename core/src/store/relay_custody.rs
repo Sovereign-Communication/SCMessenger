@@ -888,6 +888,21 @@ impl RelayCustodyStore {
         self.put_message(&message)?;
         let reason = legacy_reason.unwrap_or("custody_accepted");
         self.record_transition(&message, None, CustodyState::Accepted, reason)?;
+        // G4: custody accepted, now attributable to a message id (id + truncated
+        // peer ids only; never the envelope).
+        crate::message_events::record(
+            &message.relay_message_id,
+            crate::message_events::MessageEventKind::Custody,
+            true,
+        );
+        tracing::info!(
+            "{}",
+            crate::message_events::fmt_custody_accept(
+                &message.relay_message_id,
+                &message.source_peer_id,
+                &message.destination_peer_id
+            )
+        );
         Ok(message)
     }
 
