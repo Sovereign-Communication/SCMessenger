@@ -15,6 +15,7 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.scmessenger.android.R
+import com.scmessenger.android.data.ServiceStopSequence
 import com.scmessenger.android.ui.MainActivity
 import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.utils.displayName
@@ -548,32 +549,33 @@ class MeshForegroundService : Service() {
             cancelLifecycleObservers()
             releaseWakeLock()
 
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { meshRepository.stopMeshService() }
-                    .onFailure { Timber.e(it, "Error while stopping mesh repository") }
-            }
-
-            isRunning = false
-            // The user-stop latch is deliberately NOT set here. decideCommand
-            // set it synchronously when this STOP was registered, and this
-            // coroutine may run long after a newer ACTION_START cleared it --
-            // re-asserting it during teardown would strand a mesh the user
-            // explicitly asked to start.
-            connectedPeers.clear()
-            messagesRelayed.set(0)
-            anrWatchdog.stop()
-            performanceMonitor.recordServiceStop()
-            serviceHealthMonitor.stopMonitoring()
-
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { platformBridge.cleanup() }
-                    .onFailure { Timber.w(it, "Platform bridge cleanup failed during stop") }
-            }
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            // Do not let teardown stop a newer START delivery that is already
-            // queued behind this lifecycle operation.
-            stopSelfResult(startId)
+            // STOP-TEARDOWN-TIMEOUT-001: the repository stop and platform cleanup
+            // are bounded here too (the repository bounds its own FFI waits, but
+            // the lifecycle monitor itself can be held by a wedged start), and
+            // stopForeground/stopSelf run regardless of how they end. The
+            // sequence lives in ServiceStopSequence so a JVM test can drive it
+            // with a repository stop that never returns.
+            ServiceStopSequence.run(
+                repositoryStop = { meshRepository.stopMeshService() },
+                localTeardown = {
+                    isRunning = false
+                    // The user-stop latch is deliberately NOT set here.
+                    // decideCommand set it synchronously when this STOP was
+                    // registered, and this coroutine may run long after a newer
+                    // ACTION_START cleared it -- re-asserting it during teardown
+                    // would strand a mesh the user explicitly asked to start.
+                    connectedPeers.clear()
+                    messagesRelayed.set(0)
+                    anrWatchdog.stop()
+                    performanceMonitor.recordServiceStop()
+                    serviceHealthMonitor.stopMonitoring()
+                },
+                platformCleanup = { platformBridge.cleanup() },
+                removeForeground = { stopForeground(STOP_FOREGROUND_REMOVE) },
+                // Do not let teardown stop a newer START delivery that is already
+                // queued behind this lifecycle operation.
+                stopSelf = { stopSelfResult(startId) }
+            )
         } finally {
             clearStopRequestIfCurrent(requestId)
         }
