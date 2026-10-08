@@ -116,7 +116,7 @@ not "off".
 
 | Marker | Emitted by | Meaning |
 |---|---|---|
-| `[TRANSPORT] kind=<tcp4\|tcp6\|quic\|relay\|dcutr\|mdns\|ble\|wifi_direct\|wifi_aware\|cellular> state=<unavailable\|available\|listening\|connected\|error> [peers=<n>] detail=<reason>` | CLI/AWS `cli/src/transport_status.rs`; Android `transport/TransportStatus*.kt` | State at startup and on every change; `peers=` lines are the connected-peer count per transport every 5 min. `detail` spaces become `_`. BLE reasons include `no adapter`, `no D-Bus`, `adapter off`, `permission ... not granted`. |
+| `[TRANSPORT] kind=<tcp4\|tcp6\|quic|circuit|dcutr\|relay\|dcutr\|mdns\|ble\|wifi_direct\|wifi_aware\|cellular> state=<unavailable\|available\|listening\|connected\|error> [peers=<n>] detail=<reason>` | CLI/AWS `cli/src/transport_status.rs`; Android `transport/TransportStatus*.kt` | State at startup and on every change; `peers=` lines are the connected-peer count per transport every 5 min. `detail` spaces become `_`. BLE reasons include `no adapter`, `no D-Bus`, `adapter off`, `permission ... not granted`. |
 | `[ROUTING] peer_seen peer=<short> source=<transport>` | `core/src/iron_core.rs routing_peer_seen` | The routing engine was fed a sighting. First per peer, then at most every 5 min. |
 | `ledger_address_learned peer=<id> via=<ledger_exchange:peer16\|unknown> addr=<multiaddr>` | `core/src/store/ledger_entry.rs merge_shared_entries_via` | A node learned `peer`'s address from `via`'s ledger. The CLI now passes the source peer. |
 | `rx_decrypt` / `rx_history` / `custody_accept` | `core/src/message_events.rs` | Receiver decrypt, durable history (`result=ok\|failed`), relay custody. Scored legs; a failed history write is NOT the history leg. |

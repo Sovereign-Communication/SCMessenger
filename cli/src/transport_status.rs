@@ -62,7 +62,7 @@ pub fn set_state(kind: &str, state: &str, detail: &str) -> bool {
 /// IP transport (e.g. a bare /p2p/ id).
 pub fn classify_multiaddr(addr: &str) -> Option<&'static str> {
     if addr.contains("/p2p-circuit") {
-        return Some("relay");
+        return Some("circuit");
     }
     if addr.contains("/quic") {
         return Some("quic");
@@ -189,9 +189,9 @@ pub fn spawn(
     // `listening` only when a quic listener actually binds (on_listening).
     set_state("quic", "unavailable", "no quic listener bound yet");
     set_state(
-        "relay",
+        "circuit",
         "available",
-        "relay client+server behaviours compiled in",
+        "circuit client+server behaviours compiled in",
     );
     set_state("dcutr", "available", "dcutr behaviour compiled in");
     if enable_mdns {
@@ -253,7 +253,7 @@ mod tests {
         );
         assert_eq!(
             classify_multiaddr("/ip4/1.2.3.4/tcp/9001/p2p/12D3Koo/p2p-circuit"),
-            Some("relay")
+            Some("circuit")
         );
         assert_eq!(classify_multiaddr("/p2p/12D3Koo"), None);
     }

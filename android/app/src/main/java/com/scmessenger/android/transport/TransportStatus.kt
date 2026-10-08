@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object TransportStatus {
     val KINDS = setOf(
-        "tcp4", "tcp6", "quic", "relay", "dcutr", "mdns",
+        "tcp4", "tcp6", "quic", "circuit", "dcutr", "mdns",
         "ble", "wifi_direct", "wifi_aware", "cellular",
     )
     val STATES = setOf("unavailable", "available", "listening", "connected", "error")
@@ -59,7 +59,7 @@ object TransportStatus {
 
     /** Classify a listener / peer multiaddr into a transport kind, or null. */
     fun classifyMultiaddr(addr: String): String? = when {
-        addr.contains("/p2p-circuit") -> "relay"
+        addr.contains("/p2p-circuit") -> "circuit"
         addr.contains("/quic") -> "quic"
         (addr.contains("/tcp/") || addr.contains("/ws")) &&
             (addr.startsWith("/ip6/") || addr.startsWith("/dns6/")) -> "tcp6"
@@ -82,7 +82,7 @@ object TransportStatus {
                 report(kind, "unavailable", "no_swarm_listener")
             }
         }
-        if ("relay" in kinds) report("relay", "listening", "circuit_listener") else report("relay", "available", "no_circuit_listener_yet")
+        if ("circuit" in kinds) report("circuit", "listening", "circuit_listener") else report("circuit", "available", "no_circuit_listener_yet")
         report("dcutr", "available", "behaviour_compiled_in")
     }
 }

@@ -243,7 +243,7 @@ class TransportStatusMonitor(
         }
         // Swarm peers cannot be attributed to tcp4/tcp6/quic/relay from the FFI
         // peer list; report the total once under the first listening IP kind.
-        val ipKind = listOf("quic", "tcp4", "tcp6", "relay")
+        val ipKind = listOf("quic", "tcp4", "tcp6", "circuit")
             .firstOrNull { TransportStatus.lastState(it) == "listening" }
         if (ipKind != null) {
             TransportStatus.reportPeerCount(ipKind, "connected", swarm.coerceAtLeast(0), "periodic swarm_total_unattributed")

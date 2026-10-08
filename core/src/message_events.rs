@@ -249,7 +249,7 @@ pub const TRANSPORT_KINDS: &[&str] = &[
     "tcp4",
     "tcp6",
     "quic",
-    "relay",
+    "circuit",
     "dcutr",
     "mdns",
     "ble",

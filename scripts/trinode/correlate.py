@@ -427,7 +427,7 @@ def _addr_peer(e: dict) -> Optional[str]:
 
 
 # ------------------------------------------------- transport availability ---
-TRANSPORT_KINDS = ("tcp4", "tcp6", "quic", "relay", "dcutr", "mdns", "ble",
+TRANSPORT_KINDS = ("tcp4", "tcp6", "quic", "circuit", "dcutr", "mdns", "ble",
                    "wifi_direct", "wifi_aware", "cellular")
 
 

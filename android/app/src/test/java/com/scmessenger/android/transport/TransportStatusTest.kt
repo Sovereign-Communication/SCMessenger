@@ -33,7 +33,7 @@ class TransportStatusTest {
         assertEquals("tcp4", TransportStatus.classifyMultiaddr("/ip4/10.0.0.2/tcp/9001"))
         assertEquals("tcp6", TransportStatus.classifyMultiaddr("/ip6/fe80::1/tcp/9001"))
         assertEquals("quic", TransportStatus.classifyMultiaddr("/ip4/10.0.0.2/udp/9001/quic-v1"))
-        assertEquals("relay", TransportStatus.classifyMultiaddr("/ip4/1.2.3.4/tcp/9001/p2p/X/p2p-circuit"))
+        assertEquals("circuit", TransportStatus.classifyMultiaddr("/ip4/1.2.3.4/tcp/9001/p2p/X/p2p-circuit"))
         assertNull(TransportStatus.classifyMultiaddr("/p2p/X"))
     }
 }
