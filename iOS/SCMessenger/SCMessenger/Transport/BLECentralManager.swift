@@ -307,7 +307,13 @@ final class BLECentralManager: NSObject {
     /// is gone.
     private func armNextScanCycle() {
         scanTimer?.invalidate()
-        let delay: TimeInterval = meshRepository?.discoveryDelaySeconds(.ble) ?? scanInterval
+        // Always entered on the main thread (main-queue dispatch or a timer
+        // on RunLoop.main), which is MeshRepository's actor.
+        let repository = meshRepository
+        let fallback = scanInterval
+        let delay: TimeInterval = MainActor.assumeIsolated {
+            repository?.discoveryDelaySeconds(.ble) ?? fallback
+        }
         logger.info("[DISCOVERY] transport=ble next scan cycle in \(delay)s")
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             self?.performScanCycle()
@@ -387,9 +393,11 @@ extension BLECentralManager: CBCentralManagerDelegate {
         if central.state != lastReportedCentralState {
             lastReportedCentralState = central.state
             if central.state == .poweredOn {
-                meshRepository?.reportDiscoveryEvent(.bleOn)
+                let repository = meshRepository
+                DispatchQueue.main.async { repository?.reportDiscoveryEvent(.bleOn) }
             } else if central.state == .poweredOff {
-                meshRepository?.reportDiscoveryEvent(.bleOff)
+                let repository = meshRepository
+                DispatchQueue.main.async { repository?.reportDiscoveryEvent(.bleOff) }
             }
         }
         if central.state == .poweredOn {
