@@ -3958,10 +3958,17 @@ open class MeshRepository(
 
     private suspend fun initializeAndStartSwarm() {
         swarmStartMutex.withLock {
+            var identityKnown = true
             val identityNow = try {
                 !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
             } catch (e: Exception) {
-                false
+                // Unknown, not "absent": assuming absent would silently miss a
+                // headless -> full upgrade until some later trigger. Assume an
+                // identity may exist so the gate re-allows the upgrade start; a
+                // persistently failing read therefore retries on each trigger.
+                identityKnown = false
+                Timber.w(e, "Swarm start gate: identity read failed; treating as possibly present")
+                true
             }
             if (!SwarmStartGate.shouldStart(
                     bridgePresent = swarmBridge != null,
@@ -3972,9 +3979,16 @@ open class MeshRepository(
                 Timber.d("Swarm already started; skipping redundant start trigger")
                 return
             }
+            // Non-reentrant Mutex: nothing in initializeAndStartSwarmLocked may
+            // call initializeAndStartSwarm synchronously. Audited: it only calls
+            // ensureLocalIdentityFederation, startSwarm/getSwarmBridge FFI,
+            // dial(), and repoScope.launch'ed helpers (separate coroutines that
+            // would merely queue on this mutex).
             initializeAndStartSwarmLocked()
             if (swarmBridge != null) {
-                swarmStartedWithIdentity = identityNow
+                // An unknown identity read records "started without identity"
+                // so the next trigger retries the upgrade.
+                swarmStartedWithIdentity = identityKnown && identityNow
             }
         }
     }
@@ -6021,6 +6035,13 @@ open class MeshRepository(
             swarmBridge?.dial(multiaddr)
             Timber.i("Dialed $multiaddr via SwarmBridge")
         } catch (e: Exception) {
+            if (DialSkip.isSkipped(e)) {
+                // Deliberate non-dispatch by the core guard: neither success
+                // nor failure, so no error log and no rethrow (callers book
+                // backoff/dead-marking on a throw).
+                Timber.d("Dial to $multiaddr skipped by core guard: ${e.message}")
+                return
+            }
             Timber.e(e, "Failed to dial $multiaddr")
             throw e
         }
@@ -11211,6 +11232,13 @@ open class MeshRepository(
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
             } catch (e: Exception) {
+                if (DialSkip.isSkipped(e)) {
+                    // Core guard declined to dispatch: no reachability
+                    // evidence either way, so no breaker/metrics failure.
+                    Timber.d("Bootstrap dial skipped by core guard for %s: %s", addr, e.message)
+                    anyBreakerBlocked = true
+                    continue
+                }
                 // P1_ANDROID_013: Record failure metrics directly without triggering
                 // enhanceNetworkErrorLogging for each failure. The fallback protocol
                 // is now handled by the racing bootstrap, not per-dial error logging.
@@ -11399,6 +11427,10 @@ open class MeshRepository(
                             Timber.i("Bootstrap connected: %s", addr)
                             BootstrapAttempt.Success(addr)
                         } catch (e: Exception) {
+                            if (DialSkip.isSkipped(e)) {
+                                Timber.d("Bootstrap race dial skipped by core guard for $addr: ${e.message}")
+                                return@async BootstrapAttempt.Failure(addr, "skipped")
+                            }
                             // P1_ANDROID_013: Record failure metrics directly without triggering
                             // enhanceNetworkErrorLogging, which would cascade into fallback protocol
                             val detail = classifyBootstrapError(e, addr)

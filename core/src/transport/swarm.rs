@@ -813,12 +813,62 @@ fn dial_skip_reason(
     None
 }
 
-/// IPs of hosts we hold a live DIRECT (non-circuit) connection to. Loopback
-/// and unspecified hosts are excluded: several distinct local nodes can share
-/// them, so an IP match proves nothing there.
+/// Socket to reflect back to an address-reflection requester: the requester's
+/// DIRECT remote socket only. A connection whose remote address carries
+/// `/p2p-circuit` names the forwarding node's ip:port, not the requester's, so
+/// it yields `None` (the caller refuses the request rather than reply with a
+/// bogus address).
+fn reflection_requester_socket(
+    tracker: &ConnectionTracker,
+    peer: &PeerId,
+    connection_id: &str,
+) -> Option<SocketAddr> {
+    tracker
+        .get_connection_by_id(peer, connection_id)
+        .and_then(|conn| ConnectionTracker::extract_direct_observed_socket_addr(&conn.remote_addr))
+}
+
+/// Requester-side guard for an address-reflection reply: an unspecified IP or
+/// port 0 is a placeholder from a responder that could not resolve a direct
+/// socket and must never reach the AddressObserver.
+fn reflection_reply_is_usable(addr: &SocketAddr) -> bool {
+    !addr.ip().is_unspecified() && addr.port() != 0
+}
+
+/// How long a different-port address-only dial to an already-connected
+/// private-LAN host is suppressed after one such dial was allowed.
 #[cfg(not(target_arch = "wasm32"))]
-fn connected_direct_hosts(tracker: &ConnectionTracker) -> Vec<std::net::IpAddr> {
-    let mut hosts = Vec::new();
+const SAME_HOST_NEW_PORT_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Bound on the same-host probe cooldown ledger (pruned when exceeded).
+#[cfg(not(target_arch = "wasm32"))]
+const SAME_HOST_COOLDOWN_MAX_ENTRIES: usize = 1024;
+
+/// Ledger of (ip, port) address-only dials allowed to an already-connected
+/// private-LAN host, used to keep unknown ports dialable at a slow cadence.
+#[cfg(not(target_arch = "wasm32"))]
+type SameHostProbeLedger = HashMap<(std::net::IpAddr, u16), Instant>;
+
+/// Private (RFC1918), link-local, or unique-local addresses: the ranges where
+/// the LAN subnet probe operates. Public IPs can be shared by several hosts
+/// behind one NAT, so an IP match proves nothing there.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_lan_scope_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// (ip, port) remote endpoints of our live DIRECT (non-circuit) connections.
+/// Loopback and unspecified hosts are excluded: several distinct local nodes
+/// can share them, so an IP match proves nothing there.
+#[cfg(not(target_arch = "wasm32"))]
+fn connected_direct_endpoints(tracker: &ConnectionTracker) -> Vec<(std::net::IpAddr, u16)> {
+    let mut endpoints = Vec::new();
     for conn in tracker.all_connections() {
         if conn
             .remote_addr
@@ -827,51 +877,104 @@ fn connected_direct_hosts(tracker: &ConnectionTracker) -> Vec<std::net::IpAddr> 
         {
             continue;
         }
-        if let Some((ip, _, _)) = addr_ip_socket(&conn.remote_addr) {
-            if !ip.is_loopback() && !ip.is_unspecified() && !hosts.contains(&ip) {
-                hosts.push(ip);
+        if let Some((ip, _, port)) = addr_ip_socket(&conn.remote_addr) {
+            if !ip.is_loopback() && !ip.is_unspecified() && !endpoints.contains(&(ip, port)) {
+                endpoints.push((ip, port));
             }
         }
     }
-    hosts
+    endpoints
 }
 
-/// Does `addr` name a direct socket on a host we are already connected to?
-/// Circuit addresses are never matched (their IP is the relay's).
-fn addr_host_already_connected(addr: &Multiaddr, connected_hosts: &[std::net::IpAddr]) -> bool {
+/// Should an address-only dial to `addr` be suppressed because we are already
+/// connected to that socket/host? Design (Rule-8 review of #513, finding 2):
+///
+/// * Exact (ip, port) of a live direct connection's remote endpoint: always
+///   suppressed. This is the Windows-flood fix: the Pixel's subnet probe kept
+///   re-dialing the very socket it was already connected to.
+/// * Same private/link-local/ULA host but a DIFFERENT port: this may be a
+///   second node on that machine (two CLI nodes on 9001/9002), so it is NOT
+///   suppressed outright; one dial per (ip, port) is allowed per
+///   `SAME_HOST_NEW_PORT_COOLDOWN`, so a probe ladder cannot re-open parallel
+///   connections every sweep while distinct nodes stay discoverable.
+/// * Public IPs: exact socket only (several hosts can share one NAT address).
+/// * Circuit and loopback targets: never matched.
+///
+/// Inbound connections record the peer's ephemeral source port, so they
+/// only ever match through the different-port (rate-limited) arm.
+#[cfg(not(target_arch = "wasm32"))]
+fn addr_host_already_connected(
+    addr: &Multiaddr,
+    endpoints: &[(std::net::IpAddr, u16)],
+    ledger: &mut SameHostProbeLedger,
+    now: Instant,
+) -> bool {
     if addr
         .iter()
         .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
     {
         return false;
     }
-    match addr_ip_socket(addr) {
-        Some((ip, _, _)) => !ip.is_loopback() && connected_hosts.contains(&ip),
-        None => false,
+    let Some((ip, _, port)) = addr_ip_socket(addr) else {
+        return false;
+    };
+    if ip.is_loopback() || ip.is_unspecified() {
+        return false;
     }
+    if endpoints.contains(&(ip, port)) {
+        return true;
+    }
+    if !is_lan_scope_ip(ip) || !endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
+        return false;
+    }
+    if let Some(last) = ledger.get(&(ip, port)) {
+        if now.saturating_duration_since(*last) < SAME_HOST_NEW_PORT_COOLDOWN {
+            return true;
+        }
+    }
+    if ledger.len() >= SAME_HOST_COOLDOWN_MAX_ENTRIES {
+        ledger.retain(|_, t| now.saturating_duration_since(*t) < SAME_HOST_NEW_PORT_COOLDOWN);
+    }
+    ledger.insert((ip, port), now);
+    false
 }
 
 /// Skip reason for an ADDRESS-ONLY dial (no peer id requested or embedded)
-/// whose host we are already connected to. Address-only dials (LAN subnet
-/// probe, mDNS without a peer id) cannot use the peer-id connected check in
-/// `dial_skip_reason`, so every probe sweep re-opened parallel connections to
-/// an already-connected host on each of its ports (3-node run 2026-10-08:
-/// >100 Pixel->Windows connects, Windows denying inbound at "limit 16
-/// reached"). Kept separate from `dial_skip_reason` so the peer-id rules stay
-/// in one place.
+/// to a socket/host we are already connected to. Address-only dials (LAN
+/// subnet probe, mDNS without a peer id) cannot use the peer-id connected
+/// check in `dial_skip_reason`, so every probe sweep re-opened parallel
+/// connections to an already-connected host (3-node run 2026-10-08: >100
+/// Pixel->Windows connects, Windows denying inbound at "limit 16 reached").
+/// Kept separate from `dial_skip_reason` so the peer-id rules stay in one
+/// place. The connection scan runs only after the cheap guards, so dials with
+/// a peer id, trusted dials, and circuit/loopback targets never pay for it.
+#[cfg(not(target_arch = "wasm32"))]
 fn address_only_dial_skip_reason(
     addr: &Multiaddr,
     requested_peer_id: Option<PeerId>,
     trusted: bool,
-    connected_hosts: &[std::net::IpAddr],
+    tracker: &ConnectionTracker,
+    ledger: &mut SameHostProbeLedger,
 ) -> Option<&'static str> {
-    let has_embedded_peer = addr
-        .iter()
-        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
-    if !trusted
-        && requested_peer_id.is_none()
-        && !has_embedded_peer
-        && addr_host_already_connected(addr, connected_hosts)
+    if trusted || requested_peer_id.is_some() {
+        return None;
+    }
+    let mut circuit_or_peer = false;
+    for p in addr.iter() {
+        if matches!(
+            p,
+            libp2p::multiaddr::Protocol::P2p(_) | libp2p::multiaddr::Protocol::P2pCircuit
+        ) {
+            circuit_or_peer = true;
+            break;
+        }
+    }
+    if circuit_or_peer {
+        return None;
+    }
+    let endpoints = connected_direct_endpoints(tracker);
+    if !endpoints.is_empty()
+        && addr_host_already_connected(addr, &endpoints, ledger, Instant::now())
     {
         return Some("host already connected -- respond over existing link");
     }
@@ -4129,6 +4232,8 @@ pub async fn start_swarm_with_config(
 
         // Track connections and address observations (Phase 1 & 2)
         let mut connection_tracker = ConnectionTracker::new();
+        // Rate-limit ledger for different-port dials to already-connected LAN hosts.
+        let mut same_host_probe_ledger: SameHostProbeLedger = HashMap::new();
         let mut address_observer = AddressObserver::new();
 
         // Track successful relay reservations by ListenerId
@@ -5344,10 +5449,21 @@ pub async fn start_swarm_with_config(
                                             continue;
                                         }
                                         // Peer is requesting address reflection
-                                        let observed_addr = connection_tracker
-                                            .get_connection_by_id(&peer, &connection_id.to_string())
-                                            .and_then(|conn| ConnectionTracker::extract_socket_addr(&conn.remote_addr))
-                                            .unwrap_or_else(|| "0.0.0.0:0".parse().expect("static socket addr parse cannot fail"));
+                                        // D2: circuit-reached requesters have no direct
+                                        // socket we can reflect; refuse instead of
+                                        // handing back the forwarding node's ip:port.
+                                        let Some(observed_addr) = reflection_requester_socket(
+                                            &connection_tracker,
+                                            &peer,
+                                            &connection_id.to_string(),
+                                        ) else {
+                                            tracing::debug!(
+                                                "Address reflection from {} refused: no direct observed socket (circuit or unknown connection)",
+                                                peer
+                                            );
+                                            drop(channel);
+                                            continue;
+                                        };
 
                                         tracing::debug!("Observed address for {}: {}", peer, observed_addr);
 
@@ -5367,7 +5483,12 @@ pub async fn start_swarm_with_config(
                                         }
                                         tracing::info!("Address reflection from {}: {}", peer, response.observed_address);
 
-                                        if let Ok(observed_addr) = response.observed_address.parse::<SocketAddr>() {
+                                        if let Some(observed_addr) = response
+                                            .observed_address
+                                            .parse::<SocketAddr>()
+                                            .ok()
+                                            .filter(reflection_reply_is_usable)
+                                        {
                                             address_observer.record_observation(peer, observed_addr);
 
                                             if let Some(primary) = address_observer.primary_external_address() {
@@ -8025,7 +8146,8 @@ pub async fn start_swarm_with_config(
                                     &addr,
                                     requested_peer_id,
                                     trusted,
-                                    &connected_direct_hosts(&connection_tracker),
+                                    &connection_tracker,
+                                    &mut same_host_probe_ledger,
                                 ) {
                                     tracing::info!("[DIAL-SKIP] {}: {}", addr, reason);
                                     let _ = reply.send(Err(format!("skipped: {}", reason))).await;
@@ -8040,12 +8162,7 @@ pub async fn start_swarm_with_config(
                                     }
                                 };
                                 if let Some(reason) =
-                                    dial_skip_reason(
-                                        &swarm,
-                                        &addr,
-                                        target_peer_id,
-                                        trusted,
-                                    )
+                                    dial_skip_reason(&swarm, &addr, target_peer_id, trusted)
                                 {
                                     tracing::info!(
                                         "[DIAL-SKIP] {}: {} (target {:?})",
@@ -9447,10 +9564,18 @@ pub async fn start_swarm_with_config(
                                                 drop(channel);
                                                 continue;
                                             }
-                                            let observed_addr = connection_tracker
-                                                .get_connection_by_id(&peer, &connection_id.to_string())
-                                                .and_then(|conn| ConnectionTracker::extract_socket_addr(&conn.remote_addr))
-                                                .unwrap_or_else(|| "0.0.0.0:0".parse().expect("static socket addr parse cannot fail"));
+                                            let Some(observed_addr) = reflection_requester_socket(
+                                                &connection_tracker,
+                                                &peer,
+                                                &connection_id.to_string(),
+                                            ) else {
+                                                tracing::debug!(
+                                                    "Address reflection from {} refused (WASM): no direct observed socket",
+                                                    peer
+                                                );
+                                                drop(channel);
+                                                continue;
+                                            };
 
                                             let response = reflection_service.handle_request(request, observed_addr);
                                             let _ = swarm.behaviour_mut().address_reflection.send_response(channel, response);
@@ -9466,7 +9591,12 @@ pub async fn start_swarm_with_config(
                                                 }
                                                 continue;
                                             }
-                                            if let Ok(observed_addr) = response.observed_address.parse::<SocketAddr>() {
+                                            if let Some(observed_addr) = response
+                                                .observed_address
+                                                .parse::<SocketAddr>()
+                                                .ok()
+                                                .filter(reflection_reply_is_usable)
+                                            {
                                                 address_observer.record_observation(peer, observed_addr);
                                             }
                                             if let Some(reply_tx) = pending_reflections.remove(&request_id) {
@@ -10743,52 +10873,156 @@ mod tests {
         assert_eq!(extract_ip_component("garbage"), None);
     }
 
-    #[test]
-    fn address_only_dial_to_connected_host_is_skipped_on_any_port() {
+    fn tracker_with(conns: &[(&str, &str)]) -> crate::transport::observation::ConnectionTracker {
         let mut tracker = crate::transport::observation::ConnectionTracker::new();
-        let peer = PeerId::random();
-        tracker.add_connection(
-            peer,
-            "/ip4/192.168.0.121/tcp/9001".parse().unwrap(),
-            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
-            "c1".to_string(),
-        );
-        // Relayed and loopback connections never register a host.
-        tracker.add_connection(
-            PeerId::random(),
-            "/ip4/18.234.62.247/tcp/9001/p2p-circuit".parse().unwrap(),
-            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
-            "c2".to_string(),
-        );
-        tracker.add_connection(
-            PeerId::random(),
-            "/ip4/127.0.0.1/tcp/9001".parse().unwrap(),
-            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
-            "c3".to_string(),
-        );
-        let hosts = super::connected_direct_hosts(&tracker);
-        assert_eq!(hosts.len(), 1);
-        for a in [
-            "/ip4/192.168.0.121/tcp/443",
-            "/ip4/192.168.0.121/tcp/9001",
-            "/ip4/192.168.0.121/tcp/80",
-        ] {
-            assert!(super::addr_host_already_connected(
-                &a.parse().unwrap(),
-                &hosts
-            ));
+        for (i, (_, remote)) in conns.iter().enumerate() {
+            tracker.add_connection(
+                PeerId::random(),
+                remote.parse().unwrap(),
+                "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+                format!("c{i}"),
+            );
         }
-        // A different host, a loopback target, and a circuit target stay dialable.
+        tracker
+    }
+
+    fn skip(
+        tracker: &crate::transport::observation::ConnectionTracker,
+        ledger: &mut super::SameHostProbeLedger,
+        addr: &str,
+    ) -> bool {
+        super::address_only_dial_skip_reason(&addr.parse().unwrap(), None, false, tracker, ledger)
+            .is_some()
+    }
+
+    #[test]
+    fn address_only_dial_repeat_of_connected_socket_is_skipped() {
+        let tracker = tracker_with(&[
+            ("a", "/ip4/192.168.0.121/tcp/9001"),
+            ("b", "/ip4/18.234.62.247/tcp/9001/p2p-circuit"),
+            ("c", "/ip4/127.0.0.1/tcp/9001"),
+        ]);
+        let eps = super::connected_direct_endpoints(&tracker);
+        // Relayed and loopback connections never register an endpoint.
+        assert_eq!(eps.len(), 1);
+        let mut ledger = super::SameHostProbeLedger::new();
+        // Repeated probe of the connected port is always suppressed.
+        for _ in 0..3 {
+            assert!(skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9001"));
+        }
+        // Different host, loopback target, circuit target stay dialable.
         for a in [
             "/ip4/192.168.0.122/tcp/9001",
             "/ip4/127.0.0.1/tcp/9001",
             "/ip4/192.168.0.121/tcp/9001/p2p-circuit",
         ] {
-            assert!(!super::addr_host_already_connected(
-                &a.parse().unwrap(),
-                &hosts
-            ));
+            assert!(!skip(&tracker, &mut ledger, a), "{a}");
         }
+    }
+
+    #[test]
+    fn two_nodes_on_one_lan_host_stay_discoverable_at_slow_cadence() {
+        // Node A connected on 192.168.0.121:9001; node B listens on :9002.
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        let mut ledger = super::SameHostProbeLedger::new();
+        // First probe of a different port is NOT suppressed.
+        assert!(!skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9002"));
+        // An immediate re-probe of that same port is rate limited (flood fix).
+        assert!(skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9002"));
+        // A further new port is still dialable once.
+        assert!(!skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9003"));
+        // After the cooldown the port is dialable again.
+        let eps = super::connected_direct_endpoints(&tracker);
+        let later = web_time::Instant::now() + super::SAME_HOST_NEW_PORT_COOLDOWN;
+        assert!(!super::addr_host_already_connected(
+            &"/ip4/192.168.0.121/tcp/9002".parse().unwrap(),
+            &eps,
+            &mut ledger,
+            later
+        ));
+    }
+
+    #[test]
+    fn public_ip_different_port_is_not_suppressed() {
+        // Several port-forwarded hosts can share one public NAT address.
+        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
+        let mut ledger = super::SameHostProbeLedger::new();
+        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9002"));
+        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9002"));
+        assert!(skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9001"));
+        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.8/tcp/9001"));
+    }
+
+    #[test]
+    fn address_only_skip_ignores_peer_id_trusted_and_embedded_peer_dials() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        let mut ledger = super::SameHostProbeLedger::new();
+        let addr: Multiaddr = "/ip4/192.168.0.121/tcp/9001".parse().unwrap();
+        assert!(super::address_only_dial_skip_reason(
+            &addr,
+            Some(PeerId::random()),
+            false,
+            &tracker,
+            &mut ledger
+        )
+        .is_none());
+        assert!(
+            super::address_only_dial_skip_reason(&addr, None, true, &tracker, &mut ledger)
+                .is_none()
+        );
+        let with_peer: Multiaddr = format!("/ip4/192.168.0.121/tcp/9001/p2p/{}", PeerId::random())
+            .parse()
+            .unwrap();
+        assert!(super::address_only_dial_skip_reason(
+            &with_peer,
+            None,
+            false,
+            &tracker,
+            &mut ledger
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn reflection_refuses_circuit_requester_and_replies_with_direct_socket() {
+        use crate::transport::observation::ConnectionTracker;
+        let mut tracker = ConnectionTracker::new();
+        let direct = PeerId::random();
+        let relayed = PeerId::random();
+        tracker.add_connection(
+            direct,
+            "/ip4/198.51.100.4/tcp/4001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "d".to_string(),
+        );
+        tracker.add_connection(
+            relayed,
+            "/ip4/18.234.62.247/tcp/9001/p2p-circuit".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "r".to_string(),
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &direct, "d"),
+            Some("198.51.100.4:4001".parse().unwrap())
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &relayed, "r"),
+            None
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &direct, "nope"),
+            None
+        );
+        // Requester side drops placeholder replies.
+        assert!(!super::reflection_reply_is_usable(
+            &"0.0.0.0:0".parse().unwrap()
+        ));
+        assert!(!super::reflection_reply_is_usable(
+            &"1.2.3.4:0".parse().unwrap()
+        ));
+        assert!(super::reflection_reply_is_usable(
+            &"1.2.3.4:9001".parse().unwrap()
+        ));
     }
 
     #[test]

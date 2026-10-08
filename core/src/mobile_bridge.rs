@@ -3764,6 +3764,12 @@ fn get_global_runtime() -> tokio::runtime::Handle {
     handle
 }
 
+/// True when a swarm dial error string is the core guard's neutral
+/// `skipped:` reply (see `SwarmCommand::Dial` handling in the swarm loop).
+fn dial_error_is_skip(err: &str) -> bool {
+    err.trim_start().starts_with("skipped:")
+}
+
 #[uniffi::export]
 impl SwarmBridge {
     #[uniffi::constructor]
@@ -3918,7 +3924,20 @@ impl SwarmBridge {
         let addr =
             Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
 
-        handle.dial(addr).await.map_err(|e| {
+        let dial_result = handle.dial(addr).await;
+        // A "skipped:" reply is a deliberate non-dispatch by the swarm guard
+        // (target is self / peer already connected / our own address / host
+        // already connected). It is neither success nor failure: collapsing it
+        // into the generic NetworkError below would make mobile callers book
+        // backoff, breaker failures and dead-marking against a path that is in
+        // fact healthy. Report it as Ok -- no new connection was needed.
+        if let Err(e) = &dial_result {
+            if dial_error_is_skip(&e.to_string()) {
+                tracing::debug!("Dial skipped by swarm guard: {}", e);
+                return Ok(());
+            }
+        }
+        dial_result.map_err(|e| {
             let err_str = e.to_string().to_lowercase();
             if err_str.contains("dialing self") || err_str.contains("dialself") {
                 crate::IronCoreError::DialSelf
@@ -4405,6 +4424,18 @@ mod tests {
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
+
+    #[test]
+    fn dial_error_is_skip_matches_only_the_neutral_prefix() {
+        assert!(dial_error_is_skip(
+            "skipped: host already connected -- respond over existing link"
+        ));
+        assert!(dial_error_is_skip(
+            "skipped: target is self (local peer id)"
+        ));
+        assert!(!dial_error_is_skip("Dial failed: connection refused"));
+        assert!(!dial_error_is_skip("marked as dead, skipped: later"));
+    }
 
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests
