@@ -4481,7 +4481,7 @@ mod tests {
         for msg in [
             "skipped: target is self (local peer id)",
             "skipped: address is our own listener/external/interface addr -- self-dial",
-            "skipped: host already has a live link; different-port probe rate-limited",
+            "skipped: host already has a live direct link in this path class; different-port probe skipped",
         ] {
             assert!(
                 matches!(

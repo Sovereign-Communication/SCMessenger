@@ -882,23 +882,6 @@ async fn await_reflection_reply(
         .map_err(|e| anyhow::anyhow!(e))
 }
 
-/// How long a different-port address-only dial to an already-connected
-/// private-LAN host is suppressed after one such dial was allowed.
-#[cfg(not(target_arch = "wasm32"))]
-const SAME_HOST_NEW_PORT_COOLDOWN: Duration = Duration::from_secs(300);
-
-/// Hard bound on the same-host probe cooldown ledger: when full, expired
-/// entries are pruned and, if that frees nothing, the oldest entry is evicted.
-#[cfg(not(target_arch = "wasm32"))]
-const SAME_HOST_COOLDOWN_MAX_ENTRIES: usize = 1024;
-
-/// Per-host cap on distinct different-port dials allowed per
-/// `SAME_HOST_NEW_PORT_COOLDOWN` window (Rule-8 nit: the limit used to be
-/// per (ip, port) only, so many peer-supplied ports on one LAN host each got a
-/// dial).
-#[cfg(not(target_arch = "wasm32"))]
-const SAME_HOST_MAX_PORTS_PER_WINDOW: usize = 8;
-
 /// Marker carried by every `skipped:` reason that is genuine evidence the
 /// target is already reachable (exact socket or peer id connected). The
 /// mobile bridge maps these to `Ok(())` and every other skip to the typed
@@ -910,11 +893,12 @@ pub const DIAL_SKIP_CONNECTED_MARKER: &str = "respond over existing link";
 const SKIP_REASON_EXACT_SOCKET: &str =
     "exact socket already connected -- respond over existing link";
 
-/// Skip reason: different-port probe of a connected LAN host, rate-limited.
-/// Carries NO connectivity evidence for the probed port.
+/// Skip reason: different-port probe of a host we already hold a live direct
+/// link to in the same path class. Carries NO connectivity evidence for the
+/// probed port.
 #[cfg(not(target_arch = "wasm32"))]
-const SKIP_REASON_HOST_RATE_LIMITED: &str =
-    "host already has a live link; different-port probe rate-limited";
+const SKIP_REASON_PATH_CLASS_CONNECTED: &str =
+    "host already has a live direct link in this path class; different-port probe skipped";
 
 /// Why an address-only dial was suppressed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -922,14 +906,10 @@ const SKIP_REASON_HOST_RATE_LIMITED: &str =
 enum HostSkip {
     /// Exact socket already connected (genuine connectivity evidence).
     ExactSocket,
-    /// Different port on a connected LAN host, rate-limited (no evidence).
-    RateLimited,
+    /// Different port on a host we already hold a live direct link to in the
+    /// same path class (no evidence for the probed port).
+    PathClassConnected,
 }
-
-/// Ledger of (ip, port) address-only dials allowed to an already-connected
-/// private-LAN host, used to keep unknown ports dialable at a slow cadence.
-#[cfg(not(target_arch = "wasm32"))]
-type SameHostProbeLedger = HashMap<(std::net::IpAddr, u16), Instant>;
 
 /// Private (RFC1918), link-local, or unique-local addresses: the ranges where
 /// the LAN subnet probe operates. Public IPs can be shared by several hosts
@@ -968,28 +948,33 @@ fn connected_direct_endpoints(tracker: &ConnectionTracker) -> Vec<(std::net::IpA
     endpoints
 }
 
-/// Should an address-only dial to `addr` be suppressed because we are already
-/// connected to that socket/host? Design (Rule-8 review of #513, finding 2):
+/// Should an address-only dial to `addr` be suppressed because we already
+/// hold a live direct connection to that host in the same path class?
 ///
-/// * Exact (ip, port) of a live direct connection's remote endpoint: always
-///   suppressed. This is the Windows-flood fix: the Pixel's subnet probe kept
-///   re-dialing the very socket it was already connected to.
-/// * Same private/link-local/ULA host but a DIFFERENT port: this may be a
-///   second node on that machine (two CLI nodes on 9001/9002), so it is NOT
-///   suppressed outright; one dial per (ip, port) is allowed per
-///   `SAME_HOST_NEW_PORT_COOLDOWN`, so a probe ladder cannot re-open parallel
-///   connections every sweep while distinct nodes stay discoverable.
-/// * Public IPs: exact socket only (several hosts can share one NAT address).
-/// * Circuit and loopback targets: never matched.
+/// Path class = host + {LAN direct, WAN direct v4, WAN direct v6}; the class
+/// of an address is fully determined by its IP, and ports on one host
+/// collapse into one class. Circuit paths (via node X) are a different class
+/// and are never matched here (callers return early for `/p2p-circuit`).
 ///
-/// Inbound connections record the peer's ephemeral source port, so they
-/// only ever match through the different-port (rate-limited) arm.
+/// * Exact (ip, port) of a live direct connection: suppressed, and this is
+///   genuine connectivity evidence (the Windows-flood fix: the Pixel's
+///   subnet probe kept re-dialing the very socket it was connected to).
+/// * Same ip, different port: suppressed (neutral, no evidence). A 100-port
+///   probe of one connected host therefore yields no dials while the live
+///   link exists, and dials resume as soon as it closes.
+/// * Loopback and unspecified hosts are never matched.
+///
+/// Known limitation, accepted: an address-only probe cannot distinguish two
+/// different nodes on one host (e.g. CLI nodes on 9001 and 9002). That is
+/// acceptable because identify and mDNS carry peer ids, and peer-id-bearing
+/// dials bypass this check entirely.
+///
+/// There is no state here: the "table" is the live connection set itself, so
+/// it is bounded by live connections and entries vanish on ConnectionClosed.
 #[cfg(not(target_arch = "wasm32"))]
 fn addr_host_already_connected(
     addr: &Multiaddr,
     endpoints: &[(std::net::IpAddr, u16)],
-    ledger: &mut SameHostProbeLedger,
-    now: Instant,
 ) -> Option<HostSkip> {
     if addr
         .iter()
@@ -1004,32 +989,9 @@ fn addr_host_already_connected(
     if endpoints.contains(&(ip, port)) {
         return Some(HostSkip::ExactSocket);
     }
-    if !is_lan_scope_ip(ip) || !endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
-        return None;
+    if endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
+        return Some(HostSkip::PathClassConnected);
     }
-    let fresh = |t: &Instant| now.saturating_duration_since(*t) < SAME_HOST_NEW_PORT_COOLDOWN;
-    if ledger.get(&(ip, port)).is_some_and(fresh) {
-        return Some(HostSkip::RateLimited);
-    }
-    // Per-host cap on distinct ports dialed within the window.
-    let host_ports = ledger
-        .iter()
-        .filter(|((l_ip, _), t)| *l_ip == ip && fresh(t))
-        .count();
-    if host_ports >= SAME_HOST_MAX_PORTS_PER_WINDOW {
-        return Some(HostSkip::RateLimited);
-    }
-    if ledger.len() >= SAME_HOST_COOLDOWN_MAX_ENTRIES {
-        ledger.retain(|_, t| fresh(t));
-        // Hard bound: if every entry is still fresh, evict the oldest.
-        while ledger.len() >= SAME_HOST_COOLDOWN_MAX_ENTRIES {
-            let Some(oldest) = ledger.iter().min_by_key(|(_, t)| **t).map(|(k, _)| *k) else {
-                break;
-            };
-            ledger.remove(&oldest);
-        }
-    }
-    ledger.insert((ip, port), now);
     None
 }
 
@@ -1048,7 +1010,6 @@ fn address_only_dial_skip_reason(
     requested_peer_id: Option<PeerId>,
     trusted: bool,
     tracker: &ConnectionTracker,
-    ledger: &mut SameHostProbeLedger,
 ) -> Option<&'static str> {
     if trusted || requested_peer_id.is_some() {
         return None;
@@ -1070,9 +1031,9 @@ fn address_only_dial_skip_reason(
     if endpoints.is_empty() {
         return None;
     }
-    match addr_host_already_connected(addr, &endpoints, ledger, Instant::now()) {
+    match addr_host_already_connected(addr, &endpoints) {
         Some(HostSkip::ExactSocket) => Some(SKIP_REASON_EXACT_SOCKET),
-        Some(HostSkip::RateLimited) => Some(SKIP_REASON_HOST_RATE_LIMITED),
+        Some(HostSkip::PathClassConnected) => Some(SKIP_REASON_PATH_CLASS_CONNECTED),
         None => None,
     }
 }
@@ -4324,8 +4285,6 @@ pub async fn start_swarm_with_config(
 
         // Track connections and address observations (Phase 1 & 2)
         let mut connection_tracker = ConnectionTracker::new();
-        // Rate-limit ledger for different-port dials to already-connected LAN hosts.
-        let mut same_host_probe_ledger: SameHostProbeLedger = HashMap::new();
         let mut address_observer = AddressObserver::new();
 
         // Track successful relay reservations by ListenerId
@@ -8265,7 +8224,6 @@ pub async fn start_swarm_with_config(
                                     requested_peer_id,
                                     trusted,
                                     &connection_tracker,
-                                    &mut same_host_probe_ledger,
                                 ) {
                                     tracing::info!("[DIAL-SKIP] {}: {}", addr, reason);
                                     let _ = reply.send(Err(format!("skipped: {}", reason))).await;
@@ -11010,137 +10968,8 @@ mod tests {
         tracker
     }
 
-    fn skip(
-        tracker: &crate::transport::observation::ConnectionTracker,
-        ledger: &mut super::SameHostProbeLedger,
-        addr: &str,
-    ) -> bool {
-        super::address_only_dial_skip_reason(&addr.parse().unwrap(), None, false, tracker, ledger)
-            .is_some()
-    }
-
-    #[test]
-    fn address_only_dial_repeat_of_connected_socket_is_skipped() {
-        let tracker = tracker_with(&[
-            ("a", "/ip4/192.168.0.121/tcp/9001"),
-            ("b", "/ip4/18.234.62.247/tcp/9001/p2p-circuit"),
-            ("c", "/ip4/127.0.0.1/tcp/9001"),
-        ]);
-        let eps = super::connected_direct_endpoints(&tracker);
-        // Relayed and loopback connections never register an endpoint.
-        assert_eq!(eps.len(), 1);
-        let mut ledger = super::SameHostProbeLedger::new();
-        // Repeated probe of the connected port is always suppressed.
-        for _ in 0..3 {
-            assert!(skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9001"));
-        }
-        // Different host, loopback target, circuit target stay dialable.
-        for a in [
-            "/ip4/192.168.0.122/tcp/9001",
-            "/ip4/127.0.0.1/tcp/9001",
-            "/ip4/192.168.0.121/tcp/9001/p2p-circuit",
-        ] {
-            assert!(!skip(&tracker, &mut ledger, a), "{a}");
-        }
-    }
-
-    #[test]
-    fn two_nodes_on_one_lan_host_stay_discoverable_at_slow_cadence() {
-        // Node A connected on 192.168.0.121:9001; node B listens on :9002.
-        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
-        let mut ledger = super::SameHostProbeLedger::new();
-        // First probe of a different port is NOT suppressed.
-        assert!(!skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9002"));
-        // An immediate re-probe of that same port is rate limited (flood fix).
-        assert!(skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9002"));
-        // A further new port is still dialable once.
-        assert!(!skip(&tracker, &mut ledger, "/ip4/192.168.0.121/tcp/9003"));
-        // After the cooldown the port is dialable again.
-        let eps = super::connected_direct_endpoints(&tracker);
-        let later = web_time::Instant::now() + super::SAME_HOST_NEW_PORT_COOLDOWN;
-        assert!(super::addr_host_already_connected(
-            &"/ip4/192.168.0.121/tcp/9002".parse().unwrap(),
-            &eps,
-            &mut ledger,
-            later
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn skip_reasons_distinguish_connectivity_evidence_from_neutral_skips() {
-        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
-        let mut ledger = super::SameHostProbeLedger::new();
-        let reason = |addr: &str, ledger: &mut super::SameHostProbeLedger| {
-            super::address_only_dial_skip_reason(
-                &addr.parse().unwrap(),
-                None,
-                false,
-                &tracker,
-                ledger,
-            )
-        };
-        // Exact socket: genuine evidence (carries the marker).
-        let exact = reason("/ip4/192.168.0.121/tcp/9001", &mut ledger).unwrap();
-        assert!(exact.contains(super::DIAL_SKIP_CONNECTED_MARKER));
-        // Rate-limited different-port probe: no evidence (no marker).
-        assert!(reason("/ip4/192.168.0.121/tcp/9002", &mut ledger).is_none());
-        let limited = reason("/ip4/192.168.0.121/tcp/9002", &mut ledger).unwrap();
-        assert!(!limited.contains(super::DIAL_SKIP_CONNECTED_MARKER));
-    }
-
-    #[test]
-    fn per_host_port_cap_limits_distinct_ports_per_window() {
-        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
-        let mut ledger = super::SameHostProbeLedger::new();
-        let mut allowed = 0usize;
-        for port in 9100..9140u16 {
-            if !skip(
-                &tracker,
-                &mut ledger,
-                &format!("/ip4/192.168.0.121/tcp/{port}"),
-            ) {
-                allowed += 1;
-            }
-        }
-        assert_eq!(allowed, super::SAME_HOST_MAX_PORTS_PER_WINDOW);
-        // A different LAN host has its own budget.
-        let tracker2 = tracker_with(&[
-            ("a", "/ip4/192.168.0.121/tcp/9001"),
-            ("b", "/ip4/192.168.0.122/tcp/9001"),
-        ]);
-        assert!(!skip(&tracker2, &mut ledger, "/ip4/192.168.0.122/tcp/9200"));
-    }
-
-    #[test]
-    fn probe_ledger_bound_is_hard_when_all_entries_are_fresh() {
-        let tracker = tracker_with(&[("a", "/ip4/10.0.0.1/tcp/9001")]);
-        let eps = super::connected_direct_endpoints(&tracker);
-        let mut ledger = super::SameHostProbeLedger::new();
-        let now = web_time::Instant::now();
-        // Fill with fresh entries for unrelated hosts.
-        for i in 0..super::SAME_HOST_COOLDOWN_MAX_ENTRIES {
-            let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                10,
-                1,
-                (i / 250) as u8,
-                (i % 250) as u8,
-            ));
-            ledger.insert((ip, 9000), now);
-        }
-        assert_eq!(ledger.len(), super::SAME_HOST_COOLDOWN_MAX_ENTRIES);
-        assert!(super::addr_host_already_connected(
-            &"/ip4/10.0.0.1/tcp/9002".parse().unwrap(),
-            &eps,
-            &mut ledger,
-            now
-        )
-        .is_none());
-        assert!(ledger.len() <= super::SAME_HOST_COOLDOWN_MAX_ENTRIES);
-        assert!(ledger.contains_key(&(
-            std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
-            9002
-        )));
+    fn skip(tracker: &crate::transport::observation::ConnectionTracker, addr: &str) -> bool {
+        super::address_only_dial_skip_reason(&addr.parse().unwrap(), None, false, tracker).is_some()
     }
 
     #[tokio::test]
@@ -11176,6 +11005,74 @@ mod tests {
     }
 
     #[test]
+    fn exact_socket_is_skipped_with_evidence_and_other_classes_stay_dialable() {
+        let tracker = tracker_with(&[
+            ("a", "/ip4/192.168.0.121/tcp/9001"),
+            ("b", "/ip4/18.234.62.247/tcp/9001/p2p-circuit"),
+            ("c", "/ip4/127.0.0.1/tcp/9001"),
+        ]);
+        // Relayed and loopback connections never register an endpoint.
+        assert_eq!(super::connected_direct_endpoints(&tracker).len(), 1);
+        let reason = super::address_only_dial_skip_reason(
+            &"/ip4/192.168.0.121/tcp/9001".parse().unwrap(),
+            None,
+            false,
+            &tracker,
+        )
+        .unwrap();
+        assert!(reason.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+        for a in [
+            "/ip4/192.168.0.122/tcp/9001",
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/192.168.0.121/tcp/9001/p2p-circuit",
+        ] {
+            assert!(!skip(&tracker, a), "{a}");
+        }
+    }
+
+    #[test]
+    fn hundred_port_probe_of_connected_host_yields_no_dials() {
+        for host in ["192.168.0.121", "203.0.113.7"] {
+            let connected = format!("/ip4/{host}/tcp/9001");
+            let tracker = tracker_with(&[("a", connected.as_str())]);
+            let mut dials = 0usize;
+            for port in 9100..9200u16 {
+                if !skip(&tracker, &format!("/ip4/{host}/tcp/{port}")) {
+                    dials += 1;
+                }
+            }
+            assert_eq!(dials, 0, "{host}");
+            // Neutral (no connectivity evidence) for the probed port.
+            let r = super::address_only_dial_skip_reason(
+                &format!("/ip4/{host}/tcp/9100").parse().unwrap(),
+                None,
+                false,
+                &tracker,
+            )
+            .unwrap();
+            assert!(!r.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+        }
+    }
+
+    #[test]
+    fn probes_resume_when_the_live_link_closes() {
+        // No state is kept: with no live direct link to the host, every
+        // address-only probe is dialable again.
+        let empty = tracker_with(&[]);
+        assert!(!skip(&empty, "/ip4/192.168.0.121/tcp/9002"));
+        // Only a circuit path to the host: different class, still dialable.
+        let circuit_only = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001/p2p-circuit")]);
+        assert!(!skip(&circuit_only, "/ip4/192.168.0.121/tcp/9002"));
+    }
+
+    #[test]
+    fn different_host_on_same_public_ip_class_is_not_matched() {
+        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
+        assert!(!skip(&tracker, "/ip4/203.0.113.8/tcp/9001"));
+        assert!(skip(&tracker, "/ip4/203.0.113.7/tcp/9001"));
+    }
+
+    #[test]
     fn placeholder_reflection_text_is_unusable() {
         assert!(!super::reflection_reply_text_is_usable("0.0.0.0:0"));
         assert!(!super::reflection_reply_text_is_usable("garbage"));
@@ -11183,44 +11080,21 @@ mod tests {
     }
 
     #[test]
-    fn public_ip_different_port_is_not_suppressed() {
-        // Several port-forwarded hosts can share one public NAT address.
-        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
-        let mut ledger = super::SameHostProbeLedger::new();
-        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9002"));
-        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9002"));
-        assert!(skip(&tracker, &mut ledger, "/ip4/203.0.113.7/tcp/9001"));
-        assert!(!skip(&tracker, &mut ledger, "/ip4/203.0.113.8/tcp/9001"));
-    }
-
-    #[test]
     fn address_only_skip_ignores_peer_id_trusted_and_embedded_peer_dials() {
         let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
-        let mut ledger = super::SameHostProbeLedger::new();
         let addr: Multiaddr = "/ip4/192.168.0.121/tcp/9001".parse().unwrap();
         assert!(super::address_only_dial_skip_reason(
             &addr,
             Some(PeerId::random()),
             false,
-            &tracker,
-            &mut ledger
+            &tracker
         )
         .is_none());
-        assert!(
-            super::address_only_dial_skip_reason(&addr, None, true, &tracker, &mut ledger)
-                .is_none()
-        );
+        assert!(super::address_only_dial_skip_reason(&addr, None, true, &tracker).is_none());
         let with_peer: Multiaddr = format!("/ip4/192.168.0.121/tcp/9001/p2p/{}", PeerId::random())
             .parse()
             .unwrap();
-        assert!(super::address_only_dial_skip_reason(
-            &with_peer,
-            None,
-            false,
-            &tracker,
-            &mut ledger
-        )
-        .is_none());
+        assert!(super::address_only_dial_skip_reason(&with_peer, None, false, &tracker).is_none());
     }
 
     #[test]
