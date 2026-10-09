@@ -2407,7 +2407,10 @@ impl IronCore {
 
     pub fn perform_maintenance(&self) -> Result<(), IronCoreError> {
         // Remove expired outbox messages older than 7 days
-        let removed = self.outbox.write().remove_expired(604800);
+        let removed = self
+            .outbox
+            .write()
+            .remove_expired(crate::store::outbox::MESSAGE_RETENTION_SECS);
         tracing::info!("Maintenance removed {} expired outbox messages", removed);
         // Extract identity_id BEFORE acquiring audit_log (lock ordering: identity → audit_log)
         let identity_id = self.identity.read().identity_id();
@@ -3432,9 +3435,40 @@ impl IronCore {
                             message_id = %msg_id,
                             peer_id = %peer_id,
                             attempt = current_attempt,
-                            "Attempting delivery (attempt #{}/12)",
+                            "Attempting delivery (attempt #{})",
                             current_attempt
                         );
+
+                        // A receipt is useful only while the message it confirms
+                        // can still matter to the sender: drop it once that
+                        // message is past protocol retention, or when the sender
+                        // is blocked. No attempt-count cap; attempts are driven by
+                        // reconnect events.
+                        if msg.is_fire_and_forget() {
+                            let now_secs = web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let expired = msg.receipt_expired(now_secs);
+                            let blocked = !expired
+                                && self
+                                    .blocked_manager
+                                    .read()
+                                    .is_blocked_resolved(peer_id, None)
+                                    .unwrap_or(false);
+                            if expired || blocked {
+                                tracing::warn!(
+                                    event = "outbox_receipt_expired",
+                                    message_id = %msg_id,
+                                    peer_id = %peer_id,
+                                    attempt = current_attempt,
+                                    reason = if expired { "target_message_expired" } else { "sender_blocked" },
+                                    "Dropping delivery receipt that can no longer matter to the sender"
+                                );
+                                failed += 1;
+                                continue;
+                            }
+                        }
 
                         // R1-A2: real egress when the caller owns a live send
                         // path (native swarm loop). The transport-manager
@@ -3517,26 +3551,6 @@ impl IronCore {
                         // (2^attempt, capped at 3600s) and grows u32-
                         // saturating; no threshold converts the entry to
                         // Failed. Only a receipt clears it.
-                        if msg.is_fire_and_forget()
-                            && current_attempt
-                                >= crate::store::outbox::QueuedMessage::fire_and_forget_attempt_limit()
-                        {
-                            // A receipt is metadata, not a real message: bounded
-                            // by attempts (each one a reconnect event, so the
-                            // bound is event-driven, not a timer). The original
-                            // sender keeps retrying its message and re-elicits a
-                            // receipt, so nothing real is lost by dropping this.
-                            tracing::warn!(
-                                event = "outbox_receipt_expired",
-                                message_id = %msg_id,
-                                peer_id = %peer_id,
-                                attempt = current_attempt,
-                                "Dropping undeliverable delivery receipt after {} reconnect attempts",
-                                current_attempt
-                            );
-                            failed += 1;
-                            continue;
-                        }
                         msg.attempts = current_attempt;
                         msg.state = crate::store::outbox::MessageState::Enqueued;
                         let backoff_secs = 2u64.saturating_pow(current_attempt.min(12)).min(3600);
@@ -4038,7 +4052,16 @@ impl IronCore {
                         }
                     }
 
-                    if positive_receipt {
+                    if positive_receipt && !authorized {
+                        // Idempotent: the entry is already cleared (duplicate or
+                        // late receipt for a delivered message), or the sender
+                        // is not the queued recipient. Nothing to do.
+                        tracing::debug!(
+                            event = "receipt_duplicate_noop",
+                            message_id = %receipt.message_id,
+                            "Receipt for an already-delivered or unknown message; no-op"
+                        );
+                    } else if positive_receipt {
                         tracing::info!(
                             event = "receipt_outbox_cleared",
                             message_id = %receipt.message_id,
@@ -5602,10 +5625,11 @@ mod tests {
         assert_eq!(again, vec![text.message_id.clone()]);
     }
 
-    /// An undeliverable receipt is bounded by reconnect attempts and then
-    /// dropped; an undeliverable text message is never dropped.
+    /// An undeliverable receipt is kept (no attempt-count cap) while the
+    /// message it confirms is within protocol retention, and dropped once that
+    /// message has aged out. An undeliverable text message is never dropped.
     #[test]
-    fn undeliverable_receipt_is_dropped_after_bounded_attempts() {
+    fn undeliverable_receipt_expires_with_target_message_not_attempt_count() {
         let core = IronCore::new();
         core.grant_consent();
         core.initialize_identity().unwrap();
@@ -5627,8 +5651,8 @@ mod tests {
             )
             .unwrap();
 
-        let limit = crate::store::outbox::QueuedMessage::fire_and_forget_attempt_limit();
-        for _ in 0..(limit + 2) {
+        // Far more failed reconnect attempts than the old fixed cap of 12.
+        for _ in 0..60 {
             core.retry_outbox_message_now(&receipt.message_id);
             core.retry_outbox_message_now(&text.message_id);
             core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |_, _| {
@@ -5636,8 +5660,48 @@ mod tests {
             });
         }
         assert!(
-            !core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
-            "receipt must be dropped after {limit} failed attempts"
+            core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
+            "receipt for an unexpired target must be kept regardless of attempt count"
+        );
+
+        // Same kind of entry, but its target message is past retention.
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let stale_id = "stale-receipt".to_string();
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                version: crate::store::outbox::QUEUED_VERSION_FIRE_AND_FORGET,
+                message_id: stale_id.clone(),
+                recipient_id: recipient.clone(),
+                envelope_data: vec![1, 2, 3],
+                queued_at: now - crate::store::outbox::MESSAGE_RETENTION_SECS - 1,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: MessageState::Enqueued,
+            })
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &stale_id));
+        let mut dispatched = Vec::new();
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |id, _| {
+            dispatched.push(id.to_string());
+            false
+        });
+        assert!(
+            !dispatched.contains(&stale_id),
+            "an expired receipt is never dispatched"
+        );
+        assert!(
+            !core.outbox_contains_for_recipient(&recipient, &stale_id),
+            "receipt for an expired target must be dropped"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
+            "the unexpired receipt is still kept"
         );
         assert!(
             core.outbox_contains_for_recipient(&recipient, &text.message_id),

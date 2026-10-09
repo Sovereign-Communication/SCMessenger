@@ -66,10 +66,16 @@ pub const QUEUED_VERSION_STANDARD: u8 = 1;
 /// persists with the entry and survives restarts without a schema change.
 /// Nothing ever acknowledges a receipt, so waiting for one re-sent the same
 /// envelope every grace window forever. A receipt is dispatched best-effort:
-/// cleared once the transport accepts it, dropped after
-/// `MAX_DELIVERY_ATTEMPTS` reconnect-driven attempts. The original sender keeps
-/// retrying its own message and so re-elicits a receipt if this one was lost.
+/// cleared once the transport accepts it, and dropped once the message it
+/// refers to has aged out of protocol retention (`MESSAGE_RETENTION_SECS`).
+/// There is no attempt-count cap: attempts are driven by reconnect events.
 pub const QUEUED_VERSION_FIRE_AND_FORGET: u8 = 2;
+
+/// Protocol message retention: the lifetime of a message (the drift envelope
+/// default TTL, and the outbox expiry applied by maintenance). A receipt does
+/// not carry its target's TTL, so this is the bound on how long the target
+/// message can still matter to the sender.
+pub const MESSAGE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Maximum messages queued per peer
 const MAX_QUEUE_PER_PEER: usize = 1000;
@@ -286,9 +292,14 @@ impl QueuedMessage {
         self.version == QUEUED_VERSION_FIRE_AND_FORGET
     }
 
-    /// Maximum reconnect-driven attempts a fire-and-forget entry gets.
-    pub fn fire_and_forget_attempt_limit() -> u32 {
-        MAX_DELIVERY_ATTEMPTS
+    /// True once a fire-and-forget entry (a delivery receipt) is no longer
+    /// useful: the message it confirms has outlived protocol retention, so the
+    /// original sender can no longer be waiting on it. The receipt is queued
+    /// when the target arrives, so `queued_at` bounds the target's age from
+    /// below; this is never earlier than the target's own expiry. Ordinary
+    /// messages never expire here.
+    pub fn receipt_expired(&self, now: u64) -> bool {
+        self.is_fire_and_forget() && now.saturating_sub(self.queued_at) >= MESSAGE_RETENTION_SECS
     }
 }
 
@@ -1576,6 +1587,19 @@ mod tests {
         let plain = drained.iter().find(|m| m.message_id == "plain").unwrap();
         assert!(ff.is_fire_and_forget());
         assert!(!plain.is_fire_and_forget());
+    }
+
+    #[test]
+    fn receipt_expiry_follows_retention_not_attempts() {
+        let mut receipt = make_msg("rcpt", "peer_a");
+        receipt.version = QUEUED_VERSION_FIRE_AND_FORGET;
+        receipt.queued_at = 1_000;
+        receipt.attempts = u32::MAX;
+        assert!(!receipt.receipt_expired(1_000 + MESSAGE_RETENTION_SECS - 1));
+        assert!(receipt.receipt_expired(1_000 + MESSAGE_RETENTION_SECS));
+        let mut plain = make_msg("plain", "peer_a");
+        plain.queued_at = 1_000;
+        assert!(!plain.receipt_expired(u64::MAX));
     }
 
     #[test]
