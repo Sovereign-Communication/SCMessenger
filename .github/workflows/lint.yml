@@ -41,7 +41,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install libdbus-1-dev (Ubuntu)
-        if: steps.docs_only.outputs.is_docs_only != 'true' && runner.environment != 'self-hosted'
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         uses: ./.github/actions/linux-build-deps
         with:
           ripgrep: 'true'
