@@ -367,7 +367,11 @@ class MeshForegroundService : Service() {
                 }
                 isRunning = true
                 // Re-enqueue the periodic re-ensure now that the user has asked for the mesh (KEEP: idempotent).
-                revivalWorkFor(applicationContext).onMeshStarted()
+                try {
+                    revivalWorkFor(applicationContext).onMeshStarted()
+                } catch (e: Exception) {
+                    Timber.w(e, "Could not schedule revival work on start")
+                }
 
                 // Started/Stopped status is carried by the ongoing foreground
                 // service notification (same ID/channel/group). Posting a
@@ -551,7 +555,13 @@ class MeshForegroundService : Service() {
             Timber.i("Stopping mesh service")
             cancelLifecycleObservers()
             // User Stop: no revival work may outlive it (periodic sync and ensure worker).
-            revivalWorkFor(applicationContext).onUserStopped()
+            // Best-effort: a failure here (e.g. no attached Context) must never
+            // preempt the admitted teardown below.
+            try {
+                revivalWorkFor(applicationContext).onUserStopped()
+            } catch (e: Exception) {
+                Timber.w(e, "Could not cancel revival work on user stop; continuing teardown")
+            }
             releaseWakeLock()
 
             // STOP-TEARDOWN-TIMEOUT-001: the repository stop and platform cleanup
