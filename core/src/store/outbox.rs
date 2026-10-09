@@ -34,10 +34,11 @@ fn deserialize_queued_message(data: &[u8]) -> Result<QueuedMessage, bincode::Err
             "empty",
         ))));
     }
-    // If the first byte is 1, it's the new versioned format.
+    // If the first byte is a known version, it's the versioned format (same
+    // layout for both versions; see `QUEUED_VERSION_FIRE_AND_FORGET`).
     // Legacy format starts with a String length. Since string lengths are usually 36 (for UUIDs),
-    // their first byte is 36, not 1.
-    if data[0] == 1 {
+    // their first byte is 36, not 1 or 2.
+    if data[0] == QUEUED_VERSION_STANDARD || data[0] == QUEUED_VERSION_FIRE_AND_FORGET {
         bincode::deserialize(data)
     } else {
         let legacy: LegacyQueuedMessage = bincode::deserialize(data)?;
@@ -55,6 +56,20 @@ fn deserialize_queued_message(data: &[u8]) -> Result<QueuedMessage, bincode::Err
         })
     }
 }
+
+/// `QueuedMessage::version` of an ordinary message: re-dispatched until an
+/// application-level delivery receipt clears it.
+pub const QUEUED_VERSION_STANDARD: u8 = 1;
+
+/// `QueuedMessage::version` of a delivery receipt. Same wire layout as
+/// `QUEUED_VERSION_STANDARD`; the version byte doubles as the kind marker so it
+/// persists with the entry and survives restarts without a schema change.
+/// Nothing ever acknowledges a receipt, so waiting for one re-sent the same
+/// envelope every grace window forever. A receipt is dispatched best-effort:
+/// cleared once the transport accepts it, dropped after
+/// `MAX_DELIVERY_ATTEMPTS` reconnect-driven attempts. The original sender keeps
+/// retrying its own message and so re-elicits a receipt if this one was lost.
+pub const QUEUED_VERSION_FIRE_AND_FORGET: u8 = 2;
 
 /// Maximum messages queued per peer
 const MAX_QUEUE_PER_PEER: usize = 1000;
@@ -262,6 +277,19 @@ pub struct QueuedMessage {
     /// Current state of the message
     #[serde(default = "default_enqueued")]
     pub state: MessageState,
+}
+
+impl QueuedMessage {
+    /// True for an entry that no peer will ever acknowledge (a delivery
+    /// receipt), so it must not wait for an acknowledgement to be cleared.
+    pub fn is_fire_and_forget(&self) -> bool {
+        self.version == QUEUED_VERSION_FIRE_AND_FORGET
+    }
+
+    /// Maximum reconnect-driven attempts a fire-and-forget entry gets.
+    pub fn fire_and_forget_attempt_limit() -> u32 {
+        MAX_DELIVERY_ATTEMPTS
+    }
 }
 
 fn default_version() -> u8 {
@@ -1529,6 +1557,25 @@ mod tests {
             custody_established_at: 0,
             state: MessageState::Enqueued,
         }
+    }
+
+    #[test]
+    fn fire_and_forget_version_roundtrips_through_persistent_backend() {
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(crate::store::backend::MemoryStorage::new());
+        let mut outbox = Outbox::persistent(backend);
+        let mut receipt = make_msg("rcpt-ff", "ab".repeat(32).as_str());
+        receipt.version = QUEUED_VERSION_FIRE_AND_FORGET;
+        outbox.enqueue(receipt).unwrap();
+        outbox
+            .enqueue(make_msg("plain", "ab".repeat(32).as_str()))
+            .unwrap();
+        let drained = outbox.flush_peer_messages(&"ab".repeat(32));
+        assert_eq!(drained.len(), 2);
+        let ff = drained.iter().find(|m| m.message_id == "rcpt-ff").unwrap();
+        let plain = drained.iter().find(|m| m.message_id == "plain").unwrap();
+        assert!(ff.is_fire_and_forget());
+        assert!(!plain.is_fire_and_forget());
     }
 
     #[test]
