@@ -33,6 +33,9 @@ class MeshApplication : Application() {
         // what actually terminates the process and shows the system
         // "process crashed" dialog. Without chaining, the process would
         // keep running with corrupted state.
+        // Seed the user-stop latch from disk before anything can ensure the mesh.
+        com.scmessenger.android.service.UserStopStore.install(this)
+
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         installGlobalCrashHandler(previousHandler)
 
@@ -68,6 +71,19 @@ class MeshApplication : Application() {
 
         schedulePeriodicMaintenance()
 
+        // Unexplained process deaths must be visible in the file log, and the
+        // mesh must come back whenever this process is alive and the user has
+        // not stopped it (the 2026-10-08 outage went ~4h47m with nothing
+        // re-ensuring it).
+        applicationScope.launch {
+            com.scmessenger.android.service.ProcessExitLog.logRecent(this@MeshApplication)
+        }
+        com.scmessenger.android.service.MeshAutoRestart.ensure(
+            this,
+            com.scmessenger.android.service.MeshStartTrigger.PROCESS_START
+        )
+        registerNetworkReensure()
+
         Timber.i(
             "SCMessenger application started: version=%s (%d), git=%s, ref=%s, build_time=%s",
             BuildConfig.VERSION_NAME,
@@ -88,6 +104,20 @@ class MeshApplication : Application() {
             buildMeshSyncWorkRequest()
         )
         Timber.i("Periodic background maintenance worker scheduled")
+    }
+
+    private fun registerNetworkReensure() {
+        kotlin.runCatching {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java)
+            cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    com.scmessenger.android.service.MeshAutoRestart.ensure(
+                        this@MeshApplication,
+                        com.scmessenger.android.service.MeshStartTrigger.NETWORK
+                    )
+                }
+            })
+        }.onFailure { Timber.w(it, "Network re-ensure callback not registered") }
     }
 
     override fun onTerminate() {

@@ -375,32 +375,12 @@ class MainActivity : ComponentActivity() {
      */
     private fun ensureMeshForegroundService() {
         // R3-F1: never resurrect a mesh the user explicitly stopped this
-        // session. Only an in-app Start (ACTION_START via the service view
-        // model) clears the latch.
-        if (MeshForegroundService.userStoppedForSession) {
-            Timber.d("Mesh start skipped: user stop in effect this session")
-            return
-        }
-        try {
-            // R4-M2: ACTION_ENSURE starts the mesh but cannot clear the
-            // user-stop latch, so a STOP racing ahead of this queued intent
-            // still wins.
-            val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
-                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_ENSURE }
-            startForegroundService(intent)
-            MeshForegroundService.fgsStartFailed.value = false
-            Timber.d("Mesh foreground service ensured (ACTION_ENSURE)")
-        } catch (e: Exception) {
-            // R1-6 + R4-L1: background-start restrictions and permission gaps
-            // land here; record the failure as observable companion state
-            // (survives activity recreation) instead of silently swallowing.
-            MeshForegroundService.fgsStartFailed.value = true
-            if (e is IllegalStateException) {
-                Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
-            } else {
-                Timber.e(e, "Failed to start mesh foreground service")
-            }
-        }
+        // R3-F1/R4-M2: the user-stop latch is honoured inside MeshAutoRestart;
+        // ACTION_ENSURE cannot clear it. Logs "[MESH-START] trigger=activity ...".
+        com.scmessenger.android.service.MeshAutoRestart.ensure(
+            this,
+            com.scmessenger.android.service.MeshStartTrigger.ACTIVITY
+        )
     }
 
     override fun onNewIntent(intent: Intent?) {

@@ -101,6 +101,7 @@ class MeshForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceAlive = true
         Timber.d("MeshForegroundService created")
 
         // Initialize WakeLock
@@ -868,6 +869,22 @@ class MeshForegroundService : Service() {
     }
 
 
+    /**
+     * Android 15 calls this when a timed FGS type exhausts its budget (Android
+     * 14 uses the one-argument form); the service must stop within seconds or
+     * the app ANRs. Log it, stop, and hand the re-ensure to the expedited
+     * worker so the mesh returns unless the user stopped it.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        MeshStartLog.emit("[MESH-START] event=fgs_timeout startId=$startId fgsType=$fgsType")
+        stopSelf(startId)
+        if (!userStoppedForSession) MeshAutoRestart.scheduleEnsureWorker(applicationContext)
+    }
+
+    override fun onTimeout(startId: Int) {
+        onTimeout(startId, 0)
+    }
+
     override fun onBind(intent: Intent?): IBinder? {
         // Wire isServiceHealthy check into onBind for binder clients
         if (serviceHealthMonitor.isServiceHealthy()) {
@@ -878,6 +895,7 @@ class MeshForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceAlive = false
         Timber.d("MeshForegroundService destroyed")
         synchronized(lifecycleCommandLock) {
             lifecycleCommandId++
@@ -944,7 +962,16 @@ class MeshForegroundService : Service() {
         internal var userStoppedForSession: Boolean = false
             set(value) {
                 synchronized(userStopLock) { field = value }
+                userStopPersist?.invoke(value)
             }
+
+        /** Mirrors every latch write to disk; installed by [UserStopStore]. Null in JVM tests. */
+        @Volatile
+        internal var userStopPersist: ((Boolean) -> Unit)? = null
+
+        /** True between onCreate and onDestroy of the live service instance. */
+        @Volatile
+        internal var serviceAlive: Boolean = false
 
         /**
          * R4-L1: observable record of the most recent ensure/start attempt
