@@ -302,6 +302,122 @@ pub fn fmt_transport_status(kind: &str, state: &str, peers: Option<usize>, detai
     }
 }
 
+// ---- [RX-DROP] / [RX-STALL] markers ----------------------------------------
+
+/// Minimum spacing between `[RX-DROP]` lines for one (stage, reason) key.
+const RX_DROP_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Bound on distinct (stage, reason) keys tracked by the limiter.
+const RX_DROP_LIMITER_MAX_KEYS: usize = 64;
+
+type DropLimiter = std::collections::HashMap<String, (web_time::Instant, u64)>;
+
+fn rx_drop_limiter() -> &'static parking_lot::Mutex<DropLimiter> {
+    static LIMITER: OnceLock<parking_lot::Mutex<DropLimiter>> = OnceLock::new();
+    LIMITER.get_or_init(|| parking_lot::Mutex::new(DropLimiter::new()))
+}
+
+/// Limiter decision: `None` = skip this line; `Some(n)` = emit, with `n`
+/// lines suppressed since the last emission for the key.
+fn rx_drop_gate_in(map: &mut DropLimiter, key: &str, now: web_time::Instant) -> Option<u64> {
+    if let Some((last, suppressed)) = map.get_mut(key) {
+        if now.saturating_duration_since(*last) < RX_DROP_LOG_INTERVAL {
+            *suppressed = suppressed.saturating_add(1);
+            return None;
+        }
+        let n = *suppressed;
+        *last = now;
+        *suppressed = 0;
+        return Some(n);
+    }
+    if map.len() >= RX_DROP_LIMITER_MAX_KEYS {
+        // Key space is attacker-influenced only through sanitized, fixed
+        // stage/reason literals; if it is somehow full, stay quiet.
+        return None;
+    }
+    map.insert(key.to_string(), (now, 0));
+    Some(0)
+}
+
+/// `[RX-DROP] msg=<id|-> stage=<stage> reason=<reason>`
+pub fn fmt_rx_drop(msg_id: Option<&str>, stage: &str, reason: &str) -> String {
+    format!(
+        "[RX-DROP] msg={} stage={} reason={}",
+        msg_id
+            .map(clamp_id)
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "-".to_string()),
+        sanitize_log_field(stage, 32),
+        sanitize_log_field(reason, 64)
+    )
+}
+
+/// `[RX-DROP] stage=<stage> kind=<kind>` (payload kind with no message id).
+pub fn fmt_rx_drop_kind(stage: &str, kind: &str) -> String {
+    format!(
+        "[RX-DROP] stage={} kind={}",
+        sanitize_log_field(stage, 32),
+        sanitize_log_field(kind, 64)
+    )
+}
+
+/// `[RX-DROP] suppressed=<n> stage=<stage>` (matches PR #512 grammar).
+pub fn fmt_rx_drop_suppressed(count: u64, stage: &str) -> String {
+    format!(
+        "[RX-DROP] suppressed={} stage={}",
+        count,
+        sanitize_log_field(stage, 32)
+    )
+}
+
+/// `[RX-STALL] drain_loop idle_ms=<n> backlog=<n>`
+pub fn fmt_rx_stall_drain(idle_ms: u64, backlog: usize) -> String {
+    format!(
+        "[RX-STALL] drain_loop idle_ms={} backlog={}",
+        idle_ms, backlog
+    )
+}
+
+/// Emit a rate-limited `[RX-DROP]` line (per stage+reason); folded lines are
+/// reported as a following `[RX-DROP] suppressed=<n> stage=<s>` line.
+pub fn log_rx_drop(msg_id: Option<&str>, stage: &str, reason: &str) {
+    let key = format!(
+        "{}/{}",
+        sanitize_log_field(stage, 32),
+        sanitize_log_field(reason, 64)
+    );
+    let gate = rx_drop_gate_in(
+        &mut rx_drop_limiter().lock(),
+        &key,
+        web_time::Instant::now(),
+    );
+    if let Some(suppressed) = gate {
+        if suppressed > 0 {
+            tracing::info!("{}", fmt_rx_drop_suppressed(suppressed, stage));
+        }
+        tracing::info!("{}", fmt_rx_drop(msg_id, stage, reason));
+    }
+}
+
+/// Emit a rate-limited `[RX-DROP] stage=<s> kind=<k>` line.
+pub fn log_rx_drop_kind(stage: &str, kind: &str) {
+    let key = format!(
+        "{}/{}",
+        sanitize_log_field(stage, 32),
+        sanitize_log_field(kind, 64)
+    );
+    let gate = rx_drop_gate_in(
+        &mut rx_drop_limiter().lock(),
+        &key,
+        web_time::Instant::now(),
+    );
+    if let Some(suppressed) = gate {
+        if suppressed > 0 {
+            tracing::info!("{}", fmt_rx_drop_suppressed(suppressed, stage));
+        }
+        tracing::info!("{}", fmt_rx_drop_kind(stage, kind));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +588,53 @@ y",
             fmt_ledger_address_learned("p", "unknown", "/ip4/1.2.3.4/tcp/9"),
             "ledger_address_learned peer=p via=unknown addr=/ip4/1.2.3.4/tcp/9"
         );
+    }
+
+    #[test]
+    fn rx_drop_formats_are_sanitized_and_single_line() {
+        let evil = "a
+b c=d";
+        let l = fmt_rx_drop(Some(evil), evil, evil);
+        assert_eq!(l.lines().count(), 1);
+        assert_eq!(l.matches('=').count(), 3);
+        assert_eq!(
+            fmt_rx_drop(None, "inbox", "duplicate"),
+            "[RX-DROP] msg=- stage=inbox reason=duplicate"
+        );
+        assert_eq!(
+            fmt_rx_drop_kind("swarm_unhandled", "PeerExchange"),
+            "[RX-DROP] stage=swarm_unhandled kind=PeerExchange"
+        );
+        assert_eq!(
+            fmt_rx_drop_suppressed(7, "inbox"),
+            "[RX-DROP] suppressed=7 stage=inbox"
+        );
+        assert_eq!(
+            fmt_rx_stall_drain(30000, 12),
+            "[RX-STALL] drain_loop idle_ms=30000 backlog=12"
+        );
+    }
+
+    #[test]
+    fn rx_drop_gate_rate_limits_and_counts_suppressed() {
+        let mut map = DropLimiter::new();
+        let t0 = web_time::Instant::now();
+        assert_eq!(rx_drop_gate_in(&mut map, "k", t0), Some(0));
+        assert_eq!(rx_drop_gate_in(&mut map, "k", t0), None);
+        assert_eq!(rx_drop_gate_in(&mut map, "k", t0), None);
+        let later = t0 + RX_DROP_LOG_INTERVAL;
+        assert_eq!(rx_drop_gate_in(&mut map, "k", later), Some(2));
+        assert_eq!(rx_drop_gate_in(&mut map, "other", later), Some(0));
+    }
+
+    #[test]
+    fn rx_drop_gate_bounds_key_space() {
+        let mut map = DropLimiter::new();
+        let t0 = web_time::Instant::now();
+        for i in 0..RX_DROP_LIMITER_MAX_KEYS {
+            assert!(rx_drop_gate_in(&mut map, &format!("k{}", i), t0).is_some());
+        }
+        assert_eq!(rx_drop_gate_in(&mut map, "overflow", t0), None);
+        assert_eq!(map.len(), RX_DROP_LIMITER_MAX_KEYS);
     }
 }

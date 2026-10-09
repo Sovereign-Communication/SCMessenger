@@ -4084,6 +4084,10 @@ impl IronCore {
             }
             duplicate
         };
+        if duplicate {
+            // Previously silent: the inbox swallowed the repeat. Rate limited.
+            crate::message_events::log_rx_drop(Some(&message.id), "inbox", "duplicate");
+        }
 
         let content = String::from_utf8(message.payload.clone()).unwrap_or_default();
         // Ordering fix (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK): this store's row is

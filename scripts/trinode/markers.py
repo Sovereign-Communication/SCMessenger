@@ -211,7 +211,7 @@ MARKERS: List[Marker] = [
        evidence=False,
        note="per-transport availability on start/change + connected-peer counts every 5 min"),
     _m("rx_drop", "rx_drop",
-       r"\[RX-DROP\] msg=(?P<msg>\S+) stage=(?P<stage>\S+) reason=(?P<reason>\S+)",
+       r"\[RX-DROP\] (?:msg=(?P<msg>\S+) )?stage=(?P<stage>\S+)(?: reason=(?P<reason>\S+))?(?: kind=(?P<kind>\S+))?",
        "sibling agent PR (format: [RX-DROP] msg=<id> stage=<stage> reason=<r>)",
        evidence=False, note="receiver dropped an inbound message; explains a PARTIAL"),
     _m("rx_drop_suppressed", "rx_drop_suppressed",

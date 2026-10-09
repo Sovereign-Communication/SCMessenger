@@ -493,7 +493,7 @@ def drop_and_stop_summary(events: Sequence[dict], nodes: Sequence[str]) -> dict:
     stops: Dict[str, List[dict]] = {n: [] for n in nodes}
     for e in sorted(events, key=lambda x: (x.get("ts_utc") or "", x["src_line"])):
         if e["event"] == "rx_drop":
-            key = f"{e['detail'].get('stage')}/{e['detail'].get('reason')}"
+            key = f"{e['detail'].get('stage')}/{e['detail'].get('reason') or e['detail'].get('kind')}"
             drops.setdefault(e["node"], defaultdict(int))[key] += 1
         elif e["event"] == "rx_drop_suppressed":
             key = f"{e['detail'].get('stage')}/suppressed"
