@@ -78,6 +78,16 @@ fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId)
         .unwrap_or(true)
 }
 
+/// Local reputation of a peer (0.0 when no core is attached), used to rank
+/// eviction victims when the derived total connection bound is exceeded.
+fn peer_reputation(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> f64 {
+    core_handle
+        .as_ref()
+        .and_then(|weak| weak.upgrade())
+        .map(|core| core.get_reputation_score(&peer_id.to_string()))
+        .unwrap_or(0.0)
+}
+
 fn empty_ledger_exchange_response() -> LedgerExchangeResponse {
     LedgerExchangeResponse {
         version_tag: 1,
@@ -6371,7 +6381,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
                                 match event.result {
                                     Ok(rtt) => {
-                                        swarm.behaviour_mut().admission.stamp_liveness(&event.peer, &event.connection, web_time::Instant::now());
+                                        swarm.behaviour_mut().admission.stamp_ping(&event.peer, &event.connection, web_time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6489,7 +6499,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
-                                swarm.behaviour_mut().admission.stamp_liveness(&peer_id, &connection_id, web_time::Instant::now());
+                                swarm.behaviour_mut().admission.stamp_identify(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker: identify::Received is a liveness proof
                                 // (60s cadence per connection) -- keeps a healthy peer's
                                 // stamps fresh even where ping has nothing to say.
@@ -6836,6 +6846,9 @@ pub async fn start_swarm_with_config(
                                 // delivery storm when mDNS, relay, and ledger dials converge.
                                 let had_active_connection = connection_tracker.get_connection(&peer_id).is_some();
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // Admission: rank this peer for total-bound eviction by its local reputation.
+                                let admission_reputation = peer_reputation(&core_handle, peer_id);
+                                swarm.behaviour_mut().admission.note_reputation(peer_id, admission_reputation);
 
                                 // ZOMBIE tracker: register the path (connection id +
                                 // remote addr) and stamp it live; reaped later only if
@@ -7414,7 +7427,6 @@ pub async fn start_swarm_with_config(
 
                             // Handle outgoing connection errors gracefully — don't panic
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                                super::admission::log_if_hard_ceiling("outgoing-dial", &error);
                                 if let Some(peer_id) = peer_id.as_ref() {
                                     mdns_dial_attempted.remove(peer_id);
                                 }
@@ -7568,7 +7580,6 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
-                                super::admission::log_if_hard_ceiling("incoming-accept", &error);
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a
@@ -9842,7 +9853,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
-                                swarm.behaviour_mut().admission.stamp_liveness(&peer_id, &connection_id, web_time::Instant::now());
+                                swarm.behaviour_mut().admission.stamp_identify(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker (wasm): identify is this loop's only
                                 // liveness stamp (no ping arm); the 60s identify cadence
                                 // keeps a healthy peer's stamps fresh.
@@ -9922,6 +9933,9 @@ pub async fn start_swarm_with_config(
                                 // Clone the remote address before `endpoint` is consumed
                                 // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // Admission: rank this peer for total-bound eviction by its local reputation.
+                                let admission_reputation = peer_reputation(&core_handle, peer_id);
+                                swarm.behaviour_mut().admission.note_reputation(peer_id, admission_reputation);
                                 // R8-F4: the zero-to-one connection transition drives the
                                 // reconnect flush on native; capture the same signal here
                                 // BEFORE this path joins the tracker.
@@ -10176,7 +10190,6 @@ pub async fn start_swarm_with_config(
                                 let _ = event_tx.send(SwarmEvent2::PeerDisconnected(peer_id)).await;
                             }
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                                super::admission::log_if_hard_ceiling("outgoing-dial", &error);
                                 // Kademlia churn — expected at debug level
                                 if let Some(pid) = peer_id {
                                     tracing::debug!("[WARNING] Outgoing connection error to {}: {}", pid, error);
@@ -10229,7 +10242,6 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
-                                super::admission::log_if_hard_ceiling("incoming-accept", &error);
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a

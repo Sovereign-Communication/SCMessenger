@@ -524,7 +524,7 @@ impl IronCoreBehaviour {
 
         // Admission: dynamic per-peer path budget, evict-don't-deny. No static
         // connection caps exist anywhere in the transport.
-        let admission = AdmissionBehaviour::new();
+        let admission = AdmissionBehaviour::for_node(peer_id);
 
         Ok(Self {
             admission,

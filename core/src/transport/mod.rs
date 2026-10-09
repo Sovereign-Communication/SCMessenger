@@ -19,6 +19,7 @@ pub mod ble;
 pub mod bootstrap;
 pub mod capability;
 pub mod circuit_breaker;
+pub mod conn_resources;
 pub mod diagnostics;
 pub mod dial_policy;
 pub mod discovery;
