@@ -24,6 +24,19 @@ final class ChatViewModel {
         self.repository = repository
         loadMessages()
         subscribeToNewMessages()
+        subscribeToOperationErrors()
+    }
+
+    func retryMessage(id: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.repository?.retryFailedMessage(messageId: id)
+                self.error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     func loadMessages() {
@@ -128,6 +141,14 @@ final class ChatViewModel {
                     guard !Task.isCancelled else { return }
                     self?.loadMessages()
                 }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func subscribeToOperationErrors() {
+        repository?.operationErrors
+            .sink { [weak self] error in
+                self?.error = error.localizedDescription
             }
             .store(in: &cancellables)
     }
