@@ -161,6 +161,21 @@ pub fn short_peer(peer: &str) -> String {
     sanitize_log_field(peer, PEER_LOG_CHARS)
 }
 
+/// Number of trailing peer-id chars used by `short_peer_tail`.
+pub const PEER_TAIL_CHARS: usize = 8;
+
+/// Last `PEER_TAIL_CHARS` chars of a peer id, sanitized. Peer ids share a
+/// fixed multihash prefix, so the tail is the discriminating part; this is the
+/// format used by the #520/#521 markers, for cross-marker correlation.
+pub fn short_peer_tail(peer: &str) -> String {
+    let total = peer.chars().count();
+    let tail: String = peer
+        .chars()
+        .skip(total.saturating_sub(PEER_TAIL_CHARS))
+        .collect();
+    sanitize_log_field(&tail, PEER_TAIL_CHARS)
+}
+
 /// Record an event in the process-wide bounded ring.
 pub fn record(msg_id: &str, kind: MessageEventKind, ok: bool) {
     global().write().push(MessageEvent {
@@ -398,13 +413,26 @@ pub fn log_rx_drop(msg_id: Option<&str>, stage: &str, reason: &str) {
     }
 }
 
-/// Emit a rate-limited `[RX-DROP] stage=<s> kind=<k>` line.
-pub fn log_rx_drop_kind(stage: &str, kind: &str) {
-    let key = format!(
-        "{}/{}",
-        sanitize_log_field(stage, 32),
-        sanitize_log_field(kind, 64)
-    );
+/// `[RX] forwarded kind=<k>` (relay control message not consumed by the swarm
+/// handler; the frame is NOT dropped, it continues to normal handling).
+pub fn fmt_rx_forwarded(kind: &str) -> String {
+    format!("[RX] forwarded kind={}", sanitize_log_field(kind, 64))
+}
+
+/// `[RX] drift_frame type=<t> payload_len=<n> from=<peer8>`
+pub fn fmt_rx_drift_frame(frame_type: &str, payload_len: usize, peer: &str) -> String {
+    format!(
+        "[RX] drift_frame type={} payload_len={} from={}",
+        sanitize_log_field(frame_type, 32),
+        payload_len,
+        short_peer_tail(peer)
+    )
+}
+
+/// Emit a rate-limited `[RX] forwarded kind=<k>` line (per kind). Folded
+/// lines are reported as `[RX-DROP] suppressed=<n> stage=swarm_forwarded`.
+pub fn log_rx_forwarded(kind: &str) {
+    let key = format!("swarm_forwarded/{}", sanitize_log_field(kind, 64));
     let gate = rx_drop_gate_in(
         &mut rx_drop_limiter().lock(),
         &key,
@@ -412,9 +440,26 @@ pub fn log_rx_drop_kind(stage: &str, kind: &str) {
     );
     if let Some(suppressed) = gate {
         if suppressed > 0 {
-            tracing::info!("{}", fmt_rx_drop_suppressed(suppressed, stage));
+            tracing::info!("{}", fmt_rx_drop_suppressed(suppressed, "swarm_forwarded"));
         }
-        tracing::info!("{}", fmt_rx_drop_kind(stage, kind));
+        tracing::info!("{}", fmt_rx_forwarded(kind));
+    }
+}
+
+/// Emit a rate-limited `[RX] drift_frame` line. The limiter key is the fixed
+/// literal `drift_frame` (NOT peer- or type-derived), so a peer can neither
+/// flood the log nor grow the limiter's key set.
+pub fn log_rx_drift_frame(frame_type: &str, payload_len: usize, peer: &str) {
+    let gate = rx_drop_gate_in(
+        &mut rx_drop_limiter().lock(),
+        "drift_frame",
+        web_time::Instant::now(),
+    );
+    if let Some(suppressed) = gate {
+        if suppressed > 0 {
+            tracing::info!("{}", fmt_rx_drop_suppressed(suppressed, "drift_frame"));
+        }
+        tracing::info!("{}", fmt_rx_drift_frame(frame_type, payload_len, peer));
     }
 }
 
@@ -604,6 +649,22 @@ b c=d";
         assert_eq!(
             fmt_rx_drop_kind("swarm_unhandled", "PeerExchange"),
             "[RX-DROP] stage=swarm_unhandled kind=PeerExchange"
+        );
+        assert_eq!(
+            fmt_rx_forwarded("peer_exchange"),
+            "[RX] forwarded kind=peer_exchange"
+        );
+        assert_eq!(
+            fmt_rx_drift_frame("Envelope", 42, "12D3KooWabcdefgh01234567"),
+            "[RX] drift_frame type=Envelope payload_len=42 from=01234567"
+        );
+        assert_eq!(short_peer_tail("abc"), "abc");
+        assert_eq!(
+            short_peer_tail(
+                "a=b c
+d1234567"
+            ),
+            "d1234567"
         );
         assert_eq!(
             fmt_rx_drop_suppressed(7, "inbox"),

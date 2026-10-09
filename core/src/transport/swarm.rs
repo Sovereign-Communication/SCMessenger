@@ -65,9 +65,7 @@ use web_time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use web_time::{Duration, Instant, UNIX_EPOCH};
 
-/// Blocked peers must not reach any protocol that can disclose topology or
-/// consume relay/custody resources. Missing core state fails closed.
-/// Static variant name of a relay control message for `[RX-DROP]` markers.
+/// Static variant name of a relay control message for `[RX] forwarded` markers.
 /// Never formats message contents.
 fn relay_message_kind(msg: &crate::relay::protocol::RelayMessage) -> &'static str {
     use crate::relay::protocol::RelayMessage as R;
@@ -89,6 +87,8 @@ fn relay_message_kind(msg: &crate::relay::protocol::RelayMessage) -> &'static st
     }
 }
 
+/// Blocked peers must not reach any protocol that can disclose topology or
+/// consume relay/custody resources. Missing core state fails closed.
 fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> bool {
     core_handle
         .as_ref()
@@ -4900,15 +4900,14 @@ pub async fn start_swarm_with_config(
                                         // root cause, HERMES_FARM_AUDIT 2026-07-16).
                                         let envelope_payload = match DriftFrame::from_bytes(&request.envelope_data) {
                                             Ok(frame) => {
-                                                // INFO so an inbound frame is visible even when
-                                                // it dies later (RCA of a lost inbound frame). The
+                                                // INFO (rate-limited: peers control frame volume) so an
+                                                // inbound frame is visible even when it dies later (RCA of a lost inbound frame). The
                                                 // envelope is still encrypted here, so there is no
                                                 // message id to report; length is a safe proxy.
-                                                tracing::info!(
-                                                    "[RX] drift_frame type={:?} payload_len={} from={}",
-                                                    frame.frame_type,
+                                                crate::message_events::log_rx_drift_frame(
+                                                    &format!("{:?}", frame.frame_type),
                                                     frame.payload.len(),
-                                                    crate::message_events::short_peer(&peer.to_string())
+                                                    &peer.to_string(),
                                                 );
                                                 frame.payload
                                             }
@@ -5041,9 +5040,9 @@ pub async fn start_swarm_with_config(
                                                     continue;
                                                 }
                                                 other => {
-                                                    // Other relay messages, fall through to normal handling
-                                                    crate::message_events::log_rx_drop_kind(
-                                                        "swarm_unhandled",
+                                                    // Other relay messages are NOT dropped: they fall
+                                                    // through to normal handling (MessageReceived).
+                                                    crate::message_events::log_rx_forwarded(
                                                         relay_message_kind(&other),
                                                     );
                                                 }
