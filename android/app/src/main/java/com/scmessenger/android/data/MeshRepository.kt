@@ -3984,20 +3984,26 @@ open class MeshRepository(
             // ensureLocalIdentityFederation, startSwarm/getSwarmBridge FFI,
             // dial(), and repoScope.launch'ed helpers (separate coroutines that
             // would merely queue on this mutex).
-            initializeAndStartSwarmLocked()
-            if (swarmBridge != null) {
-                // An unknown identity read records "started without identity"
-                // so the next trigger retries the upgrade.
-                swarmStartedWithIdentity = identityKnown && identityNow
-            }
+            val startSucceeded = initializeAndStartSwarmLocked()
+            // Record the flag only when this locked start really succeeded. A
+            // failed upgrade retry keeps the old bridge but must leave the flag
+            // unchanged so the next trigger retries. An unknown identity read
+            // records "started without identity" so the next trigger retries.
+            swarmStartedWithIdentity = SwarmStartGate.nextStartedWithIdentity(
+                previous = swarmStartedWithIdentity,
+                startSucceeded = startSucceeded,
+                identityKnown = identityKnown,
+                identityNow = identityNow
+            )
         }
     }
 
-    private suspend fun initializeAndStartSwarmLocked() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /** Returns true only when the swarm started and a bridge is wired. */
+    private suspend fun initializeAndStartSwarmLocked(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val settings = loadSettings()
         if (!settings.internetEnabled) {
             Timber.d("Swarm/Internet disabled in settings")
-            return@withContext
+            return@withContext false
         }
 
         // A bridge wired by an earlier successful start belongs to a LIVE swarm.
@@ -4044,11 +4050,13 @@ open class MeshRepository(
             }
 
             Timber.i("[OK] Internet transport (Swarm) started and bridge wired; listeners=${getListeningAddresses()}")
+            swarmBridge != null
         } catch (e: Exception) {
             if (startSwarmThrew && !hadLiveBridge) {
                 swarmBridge = null
             }
             Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable (liveBridgeKept=${hadLiveBridge})")
+            false
         }
     }
 

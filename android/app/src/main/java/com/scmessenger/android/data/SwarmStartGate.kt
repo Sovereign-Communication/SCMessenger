@@ -17,4 +17,17 @@ object SwarmStartGate {
         if (startedWithIdentity == null) return true
         return identityNow && !startedWithIdentity
     }
+
+    /**
+     * New value of the "started with identity" flag after a locked start. Only
+     * a successful start updates it; a failure (old bridge kept) leaves it
+     * unchanged so the headless -> full upgrade stays pending and the next
+     * trigger retries.
+     */
+    fun nextStartedWithIdentity(
+        previous: Boolean?,
+        startSucceeded: Boolean,
+        identityKnown: Boolean,
+        identityNow: Boolean
+    ): Boolean? = if (startSucceeded) identityKnown && identityNow else previous
 }
