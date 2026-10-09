@@ -3815,6 +3815,8 @@ fn map_dial_result(dial_result: anyhow::Result<()>) -> Result<(), crate::IronCor
         } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
             crate::IronCoreError::NoAddresses
         } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
+            // TODO(#521): live today (behaviour.rs connection_limits); revisit
+            // and drop this mapping if #521 removes the deny path.
             crate::IronCoreError::ConnectionLimit
         } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported") {
             crate::IronCoreError::MultiaddrNotSupported

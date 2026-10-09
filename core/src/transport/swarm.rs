@@ -959,15 +959,18 @@ fn connected_direct_endpoints(tracker: &ConnectionTracker) -> Vec<(std::net::IpA
 /// * Exact (ip, port) of a live direct connection: suppressed, and this is
 ///   genuine connectivity evidence (the Windows-flood fix: the Pixel's
 ///   subnet probe kept re-dialing the very socket it was connected to).
-/// * Same ip, different port: suppressed (neutral, no evidence). A 100-port
-///   probe of one connected host therefore yields no dials while the live
-///   link exists, and dials resume as soon as it closes.
+/// * Same ip, different port, LAN-scope ip only (`is_lan_scope_ip`):
+///   suppressed (neutral, no evidence). A 100-port probe of one connected LAN
+///   host therefore yields no dials while the live link exists, and dials
+///   resume as soon as it closes. Public IPs are NOT matched by IP alone:
+///   several nodes can share one public IP (NAT, one host), so only the exact
+///   socket is suppressed there.
 /// * Loopback and unspecified hosts are never matched.
 ///
-/// Known limitation, accepted: an address-only probe cannot distinguish two
-/// different nodes on one host (e.g. CLI nodes on 9001 and 9002). That is
-/// acceptable because identify and mDNS carry peer ids, and peer-id-bearing
-/// dials bypass this check entirely.
+/// Known limitation, accepted for LAN-scope hosts only: an address-only probe
+/// cannot distinguish two different nodes on one LAN host (e.g. CLI nodes on
+/// 9001 and 9002). That is acceptable because identify and mDNS carry peer
+/// ids, and peer-id-bearing dials bypass this check entirely.
 ///
 /// There is no state here: the "table" is the live connection set itself, so
 /// it is bounded by live connections and entries vanish on ConnectionClosed.
@@ -989,7 +992,7 @@ fn addr_host_already_connected(
     if endpoints.contains(&(ip, port)) {
         return Some(HostSkip::ExactSocket);
     }
-    if endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
+    if is_lan_scope_ip(ip) && endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
         return Some(HostSkip::PathClassConnected);
     }
     None
@@ -11032,7 +11035,7 @@ mod tests {
 
     #[test]
     fn hundred_port_probe_of_connected_host_yields_no_dials() {
-        for host in ["192.168.0.121", "203.0.113.7"] {
+        for host in ["192.168.0.121", "10.0.0.5"] {
             let connected = format!("/ip4/{host}/tcp/9001");
             let tracker = tracker_with(&[("a", connected.as_str())]);
             let mut dials = 0usize;
@@ -11063,6 +11066,17 @@ mod tests {
         // Only a circuit path to the host: different class, still dialable.
         let circuit_only = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001/p2p-circuit")]);
         assert!(!skip(&circuit_only, "/ip4/192.168.0.121/tcp/9002"));
+    }
+
+    #[test]
+    fn public_ip_different_port_is_not_skipped_only_exact_socket_is() {
+        // Two nodes behind one NAT'd public IP (or on one host) must stay
+        // discoverable by address-only dial while another is connected.
+        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
+        for port in 9002..9010u16 {
+            assert!(!skip(&tracker, &format!("/ip4/203.0.113.7/tcp/{port}")));
+        }
+        assert!(skip(&tracker, "/ip4/203.0.113.7/tcp/9001"));
     }
 
     #[test]
