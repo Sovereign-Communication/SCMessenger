@@ -907,8 +907,7 @@
       function updateLedger(entries) {
         const tb = document.getElementById("peers-tbody");
         if (!entries.length) {
-          tb.innerHTML =
-            '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim)">No peers in ledger yet</td></tr>';
+          tb.innerHTML = "";
           return;
         }
         tb.innerHTML = entries

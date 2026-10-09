@@ -41,7 +41,7 @@ pub fn tray_status_for_state(state: crate::TrayIconState, unread: u32, peers: u3
                     if peers == 1 { "" } else { "s" }
                 )
             } else {
-                "SCMessenger — Connected (no peers)".to_string()
+                "SCMessenger — Connected".to_string()
             }
         }
         crate::TrayIconState::UnreadMessages => {

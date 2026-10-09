@@ -585,11 +585,8 @@ struct DiscoveredNodesSection: View {
             Text("Nodes (\(fullPeers) Node / \(headlessPeers) Headless)")
                 .font(Theme.titleLarge)
 
-            if peers.isEmpty {
-                Text("No nodes discovered yet. Check transport status below.")
-                    .font(Theme.bodyMedium)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-            } else {
+            // #469 T9: no absence message when empty; node indicators carry state.
+            if !peers.isEmpty {
                 ForEach(peers) { peer in
                     DashboardPeerRow(peer: peer)
                     if peer.id != peers.last?.id {
