@@ -12,6 +12,7 @@ pub mod bootstrap;
 pub mod cli;
 pub mod config;
 pub mod ledger;
+pub mod platform_signals;
 pub mod seed_dial;
 pub mod server;
 pub mod transport_api;

@@ -11,6 +11,7 @@ mod ble_mesh;
 mod bootstrap;
 mod config;
 mod ledger;
+mod platform_signals;
 mod seed_dial;
 mod server;
 mod transport_api;
@@ -2719,24 +2720,28 @@ async fn cmd_start(
         });
     }
 
-    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // ── V040-T1 HALF 2 / #469 T6: boot-time seed dial (automatic rejoin) ──
     // A node whose address changed can never rejoin: nobody can dial it at
-    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
-    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
-    // then every 120s) until at least one peer is connected; re-arm when the
-    // peer count drops back to zero. The candidate list comes from the core
-    // ledger (proven + seed tiers), which the T2 unification populated from
-    // peers.json. One long-lived task -- never one task per attempt.
-    let seed_dial_swarm = swarm_handle.clone();
-    let seed_dial_core = core.clone();
-    tokio::spawn(async move {
-        let mut sweep: u32 = 0;
-        loop {
-            sweep += 1;
-            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-        }
-    });
+    // its old address, and it never dials out. Sweep the ledger candidates
+    // forever on the shared event-driven DiscoveryScheduler: a network event
+    // (interface change, peer lost, ...) resets the schedule to aggressive and
+    // wakes the loop immediately; with no events the interval decays with
+    // jitter toward a ceiling derived from peer density. No fixed ladder, no
+    // give-up. A lightweight interface-set monitor feeds LanInterfaceChanged
+    // events. One long-lived task each -- never one task per attempt.
+    let seed_dial_client = seed_dial::SeedDialClient::new();
+    {
+        let swarm = swarm_handle.clone();
+        let core_for_dial = core.clone();
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run(swarm, core_for_dial, client).await;
+        });
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run_interface_monitor(client).await;
+        });
+    }
 
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
@@ -4999,9 +5004,8 @@ async fn cmd_discovery(action: DiscoveryAction) -> Result<()> {
         DiscoveryAction::Peers => {
             let peers = api::get_discovery_peers().await?;
             println!("{}", "Locally Discovered Peers".bold());
-            if peers.is_empty() {
-                println!("  {}", "No peers discovered via local transports.".dimmed());
-            } else {
+            // #469 T9: no absence message; an empty list prints only the header.
+            if !peers.is_empty() {
                 for peer in peers {
                     println!(
                         "  • {} ({})",

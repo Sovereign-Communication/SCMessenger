@@ -2345,6 +2345,64 @@ fn register_and_flush_swarm_peer(
     core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
 }
 
+/// OUTBOX-SWEEP-001 bounded periodic re-flush, shared by the native and wasm32
+/// loops (#413 review F2/F3). At most `IronCore::OUTBOX_SWEEP_MAX_PER_PEER`
+/// entries per peer and `IronCore::OUTBOX_SWEEP_MAX_PER_TICK` in total are
+/// re-dispatched per call, so a large backlog never turns one tick into an
+/// unbounded run of synchronous store writes on the single-owner event loop
+/// (the egress needs `&mut swarm`, so the work cannot be moved off-loop; it
+/// is bounded instead). Peers are visited in a rotating order so a full
+/// budget cannot starve the same peers every tick. Per-entry retry spacing
+/// (bounded exponential with jitter) is applied by the flush itself, so an
+/// entry whose receipt never arrives is re-sent less and less often.
+/// Returns the number of entries drained.
+fn sweep_outbox_over_swarm(
+    core: &std::sync::Arc<crate::IronCore>,
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    registered_swarm_peers: &HashMap<PeerId, String>,
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+    rotation: &mut usize,
+) -> usize {
+    let mut connected: Vec<(PeerId, String)> = registered_swarm_peers
+        .iter()
+        .filter(|(pid, _)| swarm.is_connected(pid))
+        .map(|(pid, pk)| (*pid, pk.clone()))
+        .collect();
+    if connected.is_empty() {
+        return 0;
+    }
+    // Stable order, then rotate by a per-tick offset for fairness.
+    connected.sort_by(|a, b| a.1.cmp(&b.1));
+    let start = *rotation % connected.len();
+    *rotation = rotation.wrapping_add(1);
+    connected.rotate_left(start);
+
+    let mut budget = crate::IronCore::OUTBOX_SWEEP_MAX_PER_TICK;
+    let mut total = 0usize;
+    for (peer_id, pk_hex) in connected {
+        if budget == 0 {
+            break;
+        }
+        let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+            flush_outbox_over_swarm(
+                swarm,
+                &peer_id,
+                message_id,
+                envelope,
+                reconnect_request_to_message,
+            )
+        };
+        let drained = core.sweep_peer_outbox_with_egress(
+            &pk_hex,
+            budget.min(crate::IronCore::OUTBOX_SWEEP_MAX_PER_PEER),
+            &mut egress,
+        );
+        budget = budget.saturating_sub(drained);
+        total += drained;
+    }
+    total
+}
+
 /// R2-B1 / R3-C3 single-owner outbox egress: frame the envelope and dispatch
 /// it over the messaging request-response protocol to `peer_id`. Returns
 /// false when the peer is not connected at send time so the flush applies
@@ -4423,6 +4481,21 @@ pub async fn start_swarm_with_config(
             // Mycorrhizal routing: periodic optimization tick (every 30s)
             let mut routing_optimization_interval = tokio::time::interval(Duration::from_secs(30));
 
+            // OUTBOX-SWEEP-001 (2026-09-23): re-flush outbox entries whose
+            // grace timer expired on peers that are STILL connected. The
+            // reconnect gate (register_and_flush_swarm_peer) fires once per
+            // connection; on an always-on mesh connections rarely drop, so a
+            // lost receipt left entries stranded (Windows node: outbox_count
+            // 118 / undelivered 259 with all links healthy). This sweep is the
+            // missing periodic retry; it reuses the single-owner flush path
+            // with the egress closure, so entries are only drained when they
+            // are due (flush_peer_messages checks next_retry_at) and only when
+            // the connection is live at send time.
+            let mut outbox_sweep_interval = tokio::time::interval(Duration::from_secs(120));
+            // Rotating start offset so a full per-tick budget does not always
+            // serve the same peers first (see `sweep_outbox_over_swarm`).
+            let mut outbox_sweep_rotation: usize = 0;
+
             // Check for pending relay reconnects frequently
             let mut relay_reconnect_interval = tokio::time::interval(Duration::from_secs(5));
             let mut custody_pull_interval = tokio::time::interval(Duration::from_secs(5));
@@ -4680,6 +4753,28 @@ pub async fn start_swarm_with_config(
                                 maintenance.timeout_budget_summary.elapsed,
                                 maintenance.timeout_budget_summary.current_phase,
                             );
+                        }
+                    }
+
+                    // OUTBOX-SWEEP-001: periodic re-flush for still-connected
+                    // peers whose grace window expired without a receipt.
+                    _ = outbox_sweep_interval.tick() => {
+                        if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                            let swept = sweep_outbox_over_swarm(
+                                &core,
+                                &mut swarm,
+                                &registered_swarm_peers,
+                                &mut reconnect_request_to_message,
+                                &mut outbox_sweep_rotation,
+                            );
+                            if swept > 0 {
+                                tracing::debug!(
+                                    event = "outbox_sweep_tick",
+                                    swept = swept,
+                                    "Outbox sweep re-dispatched {} due entries",
+                                    swept
+                                );
+                            }
                         }
                     }
 
@@ -8855,6 +8950,12 @@ pub async fn start_swarm_with_config(
         // ZOMBIE-CONNECTION REAP (wasm parity, RCA WIFI_TRANSPORT_REGRESSION_2026-09-18):
         // inline-check idiom per this loop's timing convention (f64 Date::now()).
         let mut last_zombie_reap: f64 = js_sys::Date::now();
+        // OUTBOX-SWEEP-001 wasm parity (#413 review F3): same bounded sweep as
+        // the native loop, on this loop's inline Date::now() idiom. Like the
+        // other inline-check timers it is evaluated whenever the select! wakes
+        // (any command or swarm event), not on a free-running timer.
+        let mut last_outbox_sweep: f64 = js_sys::Date::now();
+        let mut outbox_sweep_rotation: usize = 0;
         let mut zombie_tracker = ZombieTracker::new();
         let mut seen_delivery_convergence_markers: HashSet<String> = HashSet::new();
         let bootstrap_addrs_clone = bootstrap_addrs;
@@ -10349,6 +10450,21 @@ pub async fn start_swarm_with_config(
                         );
                     }
                     last_custody_pull = js_sys::Date::now();
+                }
+
+                // OUTBOX-SWEEP-001 (wasm parity): bounded periodic re-flush of due
+                // outbox entries on still-connected peers (120 s, as native).
+                if js_sys::Date::now() - last_outbox_sweep >= 120_000.0 {
+                    if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                        let _ = sweep_outbox_over_swarm(
+                            &core,
+                            &mut swarm,
+                            &registered_swarm_peers,
+                            &mut reconnect_request_to_message,
+                            &mut outbox_sweep_rotation,
+                        );
+                    }
+                    last_outbox_sweep = js_sys::Date::now();
                 }
 
                 // ZOMBIE-CONNECTION REAP (wasm parity): same contract as the native
