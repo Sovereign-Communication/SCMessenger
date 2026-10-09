@@ -8,8 +8,13 @@
 // Wake events ([`WakeTrigger`]): inbound connection or dial from the peer,
 // identify, a newly learned address, a network-change event from the merged
 // discovery scheduler, or an outbound message queued for the peer. A wake
-// pulls the next attempt forward to the backoff floor (so a wake storm is
-// still bounded to roughly one attempt per floor interval per address).
+// grants a ONE-SHOT credit: the next attempt is pulled forward to the backoff
+// floor, but the backoff ladder is NOT reset (a failed woken attempt resumes
+// the ladder where it was). Each (address, trigger) source has a token bucket
+// whose refill period is derived from the observed event frequency, clamped
+// by the stability-derived ceiling, so a flood of wakes cannot hold an
+// address at the floor. mDNS wakes are honoured only for peers with prior
+// authenticated history (mDNS is an unauthenticated LAN claim).
 //
 // Backoff: exponential from the floor, full jitter (uniform 0.5..1.0 of the
 // nominal interval), with a ceiling derived from observed network stability
@@ -44,8 +49,11 @@ const DORMANT_AFTER_FAILURES: u32 = 3;
 /// EWMA weight of the newest connect outcome in the stability estimate.
 const STABILITY_ALPHA: f64 = 0.2;
 
+/// Initial per-address stability estimate (no evidence either way).
+const STABILITY_PRIOR: f64 = 0.5;
+
 /// Events that wake a dormant (or backed-off) peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WakeTrigger {
     /// The peer (or its host) connected to us.
     InboundConnection,
@@ -53,8 +61,11 @@ pub enum WakeTrigger {
     InboundDial,
     /// Identify exchanged with the peer.
     Identify,
-    /// A new address for the peer was learned (ledger, identify, mDNS, BLE).
+    /// A new address for the peer was learned (ledger, identify, BLE).
     AddressLearned,
+    /// The peer was sighted via mDNS. mDNS is an unauthenticated LAN
+    /// broadcast, so this wakes only peers with prior authenticated history.
+    MdnsDiscovered,
     /// Network-change event from the discovery scheduler.
     NetworkChange,
     /// An outbound message was queued for the peer.
@@ -69,6 +80,7 @@ impl WakeTrigger {
             WakeTrigger::InboundDial => "inbound_dial",
             WakeTrigger::Identify => "identify",
             WakeTrigger::AddressLearned => "address_learned",
+            WakeTrigger::MdnsDiscovered => "mdns_discovered",
             WakeTrigger::NetworkChange => "network_change",
             WakeTrigger::OutboundQueued => "outbound_queued",
         }
@@ -96,6 +108,59 @@ pub(crate) fn jitter_unit() -> f64 {
 /// Apply full jitter: uniform(0.5, 1.0) of `nominal`.
 pub(crate) fn jittered(nominal: Duration) -> Duration {
     nominal.mul_f64(0.5 + 0.5 * jitter_unit())
+}
+
+/// Token bucket for the wake credits of one (address, trigger) source.
+///
+/// Capacity is a single credit (a wake is a one-shot credit, not a stream).
+/// The refill period is derived, not a literal: it is the EWMA of the observed
+/// gap between events from this source, clamped to `[ceiling / 4, ceiling]`
+/// where `ceiling` is the stability-derived backoff ceiling. A rare source
+/// therefore always finds its credit refilled, while a flooding source
+/// (gap -> 0) is held to one credit per quarter-ceiling no matter how fast it
+/// fires. Rejected events still update the observed frequency.
+#[derive(Debug, Clone)]
+pub(crate) struct WakeBucket {
+    tokens: f64,
+    refilled_at: Instant,
+    last_event: Option<Instant>,
+    gap_ewma: Option<Duration>,
+}
+
+impl WakeBucket {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self {
+            tokens: 1.0,
+            refilled_at: now,
+            last_event: None,
+            gap_ewma: None,
+        }
+    }
+
+    /// Consume one credit if available.
+    pub(crate) fn admit(&mut self, now: Instant, ceiling: Duration) -> bool {
+        let ceiling = ceiling.max(BACKOFF_FLOOR);
+        if let Some(last) = self.last_event {
+            let gap = now.saturating_duration_since(last);
+            self.gap_ewma = Some(match self.gap_ewma {
+                Some(prev) => prev.mul_f64(1.0 - STABILITY_ALPHA) + gap.mul_f64(STABILITY_ALPHA),
+                None => gap,
+            });
+        }
+        self.last_event = Some(now);
+
+        let min_period = (ceiling / 4).max(BACKOFF_FLOOR);
+        let period = self.gap_ewma.unwrap_or(ceiling).clamp(min_period, ceiling);
+        let elapsed = now.saturating_duration_since(self.refilled_at);
+        self.tokens = (self.tokens + elapsed.as_secs_f64() / period.as_secs_f64()).min(1.0);
+        self.refilled_at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Last 8 characters of a peer id, for log markers.
@@ -143,6 +208,16 @@ pub struct PerPeerBackoffState {
     pub dormant: bool,
     /// Optional peer ID if known at registration time.
     pub peer_id: Option<PeerId>,
+    /// Per-address EWMA of connect outcomes in [0, 1] (1 = all succeed).
+    /// Drives THIS address's backoff ceiling, so dead ledger-learned
+    /// addresses stretch only their own ladder.
+    success_rate: f64,
+    /// True once a connection through this entry (or, via
+    /// `reset_peer_backoff`, any entry of the same peer) was established over
+    /// an authenticated transport.
+    authenticated_before: bool,
+    /// Wake-credit buckets, one per trigger (bounded by the trigger count).
+    wake_buckets: HashMap<WakeTrigger, WakeBucket>,
 }
 
 impl PerPeerBackoffState {
@@ -159,7 +234,21 @@ impl PerPeerBackoffState {
             next_attempt_at: now,
             dormant: false,
             peer_id,
+            success_rate: STABILITY_PRIOR,
+            authenticated_before: false,
+            wake_buckets: HashMap::new(),
         }
+    }
+
+    /// Fold a connect outcome into this address's stability estimate.
+    fn record_outcome(&mut self, success: bool) {
+        let sample = if success { 1.0 } else { 0.0 };
+        self.success_rate = (1.0 - STABILITY_ALPHA) * self.success_rate + STABILITY_ALPHA * sample;
+    }
+
+    /// Backoff ceiling for this address, from its own stability estimate.
+    pub fn ceiling(&self) -> Duration {
+        ceiling_for_success_rate(self.success_rate)
     }
 
     /// Check if this peer is eligible for a dial attempt right now.
@@ -229,12 +318,49 @@ impl PerPeerBackoffState {
         );
     }
 
-    /// Wake the peer: pull the next attempt forward to the backoff floor
-    /// after the last attempt, and restart the ladder from the floor. The
-    /// attempt rate stays bounded by [`BACKOFF_FLOOR`]. Returns true when the
-    /// state actually changed (something was waiting).
+    /// Grant a one-shot wake credit: pull the next attempt forward to the
+    /// backoff floor after the last attempt. The backoff ladder is NOT reset
+    /// (`backoff_duration` and `attempt_count` are kept), so a woken attempt
+    /// that fails resumes the ladder where it was. Credits are limited by a
+    /// per-trigger token bucket (see [`WakeBucket`]); mDNS wakes need prior
+    /// authenticated history. Returns true when a credit was granted
+    /// (something was waiting).
     pub fn wake_at(&mut self, now: Instant, trigger: WakeTrigger) -> bool {
+        let authenticated = self.authenticated_before;
+        self.wake_at_with(now, trigger, authenticated)
+    }
+
+    /// As [`Self::wake_at`], with peer-level authenticated history supplied
+    /// by the caller (history may sit on a sibling address entry).
+    fn wake_at_with(
+        &mut self,
+        now: Instant,
+        trigger: WakeTrigger,
+        peer_authenticated: bool,
+    ) -> bool {
         if self.attempt_count == 0 && !self.dormant {
+            return false;
+        }
+        if trigger == WakeTrigger::MdnsDiscovered && !peer_authenticated {
+            debug!(
+                "[DIAL] wake ignored peer={} trigger={} reason=no_authenticated_history",
+                short_peer(self.peer_id),
+                trigger.as_str()
+            );
+            return false;
+        }
+        let ceiling = self.ceiling();
+        let admitted = self
+            .wake_buckets
+            .entry(trigger)
+            .or_insert_with(|| WakeBucket::new(now))
+            .admit(now, ceiling);
+        if !admitted {
+            debug!(
+                "[DIAL] wake rate-limited peer={} trigger={}",
+                short_peer(self.peer_id),
+                trigger.as_str()
+            );
             return false;
         }
         let was_dormant = self.dormant;
@@ -242,7 +368,6 @@ impl PerPeerBackoffState {
         if earliest < self.next_attempt_at {
             self.next_attempt_at = earliest;
         }
-        self.backoff_duration = BACKOFF_FLOOR;
         self.dormant = false;
         if was_dormant {
             info!(
@@ -272,6 +397,7 @@ impl PerPeerBackoffState {
         self.last_attempt_ts = now;
         self.next_attempt_at = now;
         self.dormant = false;
+        self.authenticated_before = true;
 
         info!(
             peer_id=?self.peer_id,
@@ -290,9 +416,6 @@ pub struct DialPolicyManager {
     peer_backoff: Arc<RwLock<HashMap<String, PerPeerBackoffState>>>,
     /// Count of in-flight (queued but not yet connected/failed) dials to each peer.
     concurrent_dials: Arc<RwLock<HashMap<String, u32>>>,
-    /// EWMA of recent connect outcomes in [0, 1] (1 = all succeed). Drives
-    /// the backoff ceiling.
-    success_rate: Arc<RwLock<f64>>,
     /// Offset added to the monotonic clock. Always zero in production;
     /// tests advance it to simulate hours passing without sleeping.
     clock_skew: Arc<RwLock<Duration>>,
@@ -304,7 +427,6 @@ impl DialPolicyManager {
         Self {
             peer_backoff: Arc::new(RwLock::new(HashMap::new())),
             concurrent_dials: Arc::new(RwLock::new(HashMap::new())),
-            success_rate: Arc::new(RwLock::new(0.5)),
             clock_skew: Arc::new(RwLock::new(Duration::ZERO)),
         }
     }
@@ -320,15 +442,14 @@ impl DialPolicyManager {
         *skew = skew.saturating_add(by);
     }
 
-    fn record_outcome(&self, success: bool) {
-        let mut rate = self.success_rate.write();
-        let sample = if success { 1.0 } else { 0.0 };
-        *rate = (1.0 - STABILITY_ALPHA) * *rate + STABILITY_ALPHA * sample;
-    }
-
-    /// Current backoff ceiling, derived from observed network stability.
-    pub fn current_ceiling(&self) -> Duration {
-        ceiling_for_success_rate(*self.success_rate.read())
+    /// Backoff ceiling for one address, derived from that address's own
+    /// observed connect stability (never from other peers' failures).
+    pub fn ceiling_for(&self, addr_key: &str) -> Duration {
+        self.peer_backoff
+            .read()
+            .get(addr_key)
+            .map(PerPeerBackoffState::ceiling)
+            .unwrap_or_else(|| ceiling_for_success_rate(STABILITY_PRIOR))
     }
 
     /// Register the start of a dial attempt to a peer address.
@@ -395,37 +516,37 @@ impl DialPolicyManager {
     /// Record a transient dial failure for a peer address.
     /// Increments the attempt count and applies jittered exponential backoff.
     pub fn record_dial_failure(&self, addr_key: &str, peer_id: Option<PeerId>) {
-        self.record_outcome(false);
         let now = self.now();
-        let ceiling = self.current_ceiling();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
             .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.record_outcome(false);
+        let ceiling = state.ceiling();
         state.on_dial_failure_at(now, ceiling);
     }
 
     /// Record a permanent-looking dial failure for a peer address. The
     /// address goes Dormant (wake event or backoff); it is never dead.
     pub fn record_permanent_failure(&self, addr_key: &str, peer_id: Option<PeerId>) {
-        self.record_outcome(false);
         let now = self.now();
-        let ceiling = self.current_ceiling();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
             .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.record_outcome(false);
+        let ceiling = state.ceiling();
         state.on_permanent_failure_at(now, ceiling);
     }
 
     /// Reset backoff state for a peer after successful connection.
     pub fn reset_on_connection_established(&self, addr_key: &str, peer_id: Option<PeerId>) {
-        self.record_outcome(true);
         let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
             .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.record_outcome(true);
         state.on_connection_established_at(now);
     }
 
@@ -438,12 +559,18 @@ impl DialPolicyManager {
     /// attributed to this peer. Only entries whose stored peer_id matches and
     /// that are dormant or have failures are touched.
     pub fn reset_peer_backoff(&self, peer_id: PeerId) {
-        self.record_outcome(true);
         let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let mut reset_count = 0u32;
         for (key, state) in backoff.iter_mut() {
-            if state.peer_id == Some(peer_id) && (state.dormant || state.attempt_count > 0) {
+            if state.peer_id != Some(peer_id) {
+                continue;
+            }
+            // An established connection is authenticated history for the
+            // peer on every address entry, failing or not.
+            state.authenticated_before = true;
+            if state.dormant || state.attempt_count > 0 {
+                state.record_outcome(true);
                 state.on_connection_established_at(now);
                 reset_count += 1;
                 debug!(addr_key=%key, "[DIAL-POLICY] Peer-level liveness reset cleared backoff entry");
@@ -463,10 +590,15 @@ impl DialPolicyManager {
     pub fn wake_peer(&self, peer_id: PeerId, trigger: WakeTrigger) -> usize {
         let now = self.now();
         let mut backoff = self.peer_backoff.write();
+        // Authenticated history is a property of the peer: it may sit on a
+        // sibling address entry (for example the inbound ephemeral address).
+        let authenticated = backoff
+            .values()
+            .any(|s| s.peer_id == Some(peer_id) && s.authenticated_before);
         backoff
             .values_mut()
             .filter(|s| s.peer_id == Some(peer_id))
-            .map(|s| s.wake_at(now, trigger))
+            .map(|s| s.wake_at_with(now, trigger, authenticated))
             .filter(|changed| *changed)
             .count()
     }
@@ -493,13 +625,17 @@ impl DialPolicyManager {
             .count()
     }
 
-    /// Consume a discovery-scheduler event: any event that resets a transport
-    /// to aggressive discovery also wakes waiting peers. Peer-loss events do
-    /// not (a loss is not a reason to expect reachability).
+    /// Consume a discovery-scheduler event: events that reflect a genuine
+    /// LOCAL change (interface, radio, foreground, ledger/invite news) wake
+    /// waiting peers. Peer-loss events do not (a loss is not a reason to
+    /// expect reachability), and `NewPeerConnected` does not: a remote party
+    /// (including a Sybil) can trigger it cheaply.
     pub fn on_network_event(&self, event: &super::discovery_scheduler::NetworkEvent) -> usize {
         use super::discovery_scheduler::NetworkEvent;
         match event {
-            NetworkEvent::PeerDisconnected { .. } | NetworkEvent::AllPeersLost => 0,
+            NetworkEvent::PeerDisconnected { .. }
+            | NetworkEvent::AllPeersLost
+            | NetworkEvent::NewPeerConnected => 0,
             NetworkEvent::BleStateChanged { on } if !*on => 0,
             NetworkEvent::LedgerReceived { new_entries } if *new_entries == 0 => 0,
             _ => self.wake_all(WakeTrigger::NetworkChange),
@@ -796,9 +932,13 @@ mod tests {
         assert!(state.dormant);
         assert!(!state.is_eligible_at(t0 + BACKOFF_FLOOR));
 
+        let ladder_before = state.backoff_duration;
+        let attempts_before = state.attempt_count;
         assert!(state.wake_at(t0, WakeTrigger::Identify));
         assert!(!state.dormant);
-        assert_eq!(state.backoff_duration, BACKOFF_FLOOR);
+        // One-shot credit: the ladder is NOT reset.
+        assert_eq!(state.backoff_duration, ladder_before);
+        assert_eq!(state.attempt_count, attempts_before);
         // Due after the floor gap, not before: wake storms stay bounded.
         assert!(!state.is_eligible_at(t0));
         assert!(state.is_eligible_at(t0 + BACKOFF_FLOOR));
@@ -820,7 +960,7 @@ mod tests {
         let mut attempts = 0u32;
         for _ in 0..200 {
             manager.record_dial_failure(key, None);
-            manager.advance_clock(manager.current_ceiling()); // backoff alone suffices
+            manager.advance_clock(manager.ceiling_for(key)); // backoff alone suffices
             assert!(
                 manager.register_dial_attempt(key, None),
                 "backoff alone must always bring the peer back"
@@ -831,7 +971,7 @@ mod tests {
         assert_eq!(attempts, 200);
         let st = manager.get_backoff_state(key).expect("state");
         assert!(st.dormant);
-        assert!(st.backoff_duration <= manager.current_ceiling());
+        assert!(st.backoff_duration <= manager.ceiling_for(key));
 
         // Now backed off with the peer unreachable; a wake event makes it
         // eligible again at the floor, long before the ceiling.
@@ -865,6 +1005,130 @@ mod tests {
             "attempts per minute not bounded: {attempts}"
         );
         assert!(attempts >= 1);
+    }
+
+    #[test]
+    fn test_wake_is_one_shot_credit_ladder_resumes_after_failed_attempt() {
+        let t0 = Instant::now();
+        let mut state = PerPeerBackoffState::new_at(None, t0);
+        for _ in 0..8 {
+            state.on_dial_failure_at(t0, BACKOFF_CEILING_BASE);
+        }
+        let ladder = state.backoff_duration;
+        assert!(state.wake_at(t0, WakeTrigger::Identify));
+        let t1 = t0 + BACKOFF_FLOOR;
+        assert!(state.is_eligible_at(t1));
+        // The woken attempt fails: the next wait follows the preserved
+        // ladder (at least half the nominal interval), not the floor.
+        state.on_dial_failure_at(t1, BACKOFF_CEILING_BASE);
+        let wait = state.next_attempt_at.duration_since(t1);
+        assert!(state.backoff_duration >= ladder);
+        assert!(wait >= ladder.mul_f64(0.5), "ladder was reset: {wait:?}");
+    }
+
+    #[test]
+    fn test_wake_bucket_limits_a_flood_per_source() {
+        let t0 = Instant::now();
+        let mut state = PerPeerBackoffState::new_at(None, t0);
+        for _ in 0..8 {
+            state.on_dial_failure_at(t0, BACKOFF_CEILING_BASE);
+        }
+        let ceiling = state.ceiling();
+        let min_period = (ceiling / 4).max(BACKOFF_FLOOR);
+        let mut admitted = 0u64;
+        // 100 ms flood for 200 s.
+        for i in 0..2000u32 {
+            let now = t0 + Duration::from_millis(100) * i;
+            if state.wake_at(now, WakeTrigger::NetworkChange) {
+                admitted += 1;
+            }
+        }
+        let allowed =
+            1 + (Duration::from_secs(200).as_secs_f64() / min_period.as_secs_f64()) as u64;
+        assert!(admitted >= 1);
+        assert!(
+            admitted <= allowed,
+            "admitted {admitted} > allowed {allowed}"
+        );
+        // Sources are independent: another trigger still has its own credit.
+        assert!(state.wake_at(t0 + Duration::from_secs(200), WakeTrigger::Identify));
+    }
+
+    #[test]
+    fn test_rare_wake_source_is_always_admitted() {
+        let t0 = Instant::now();
+        let mut state = PerPeerBackoffState::new_at(None, t0);
+        for _ in 0..4 {
+            state.on_dial_failure_at(t0, BACKOFF_CEILING_BASE);
+        }
+        let ceiling = state.ceiling();
+        for i in 0..5u32 {
+            let now = t0 + ceiling * (i + 1);
+            assert!(state.wake_at(now, WakeTrigger::NetworkChange), "event {i}");
+        }
+    }
+
+    #[test]
+    fn test_mdns_wake_needs_authenticated_history() {
+        use libp2p::identity::Keypair;
+        let manager = DialPolicyManager::new();
+        let stranger = Keypair::generate_ed25519().public().to_peer_id();
+        let known = Keypair::generate_ed25519().public().to_peer_id();
+        let stranger_key = "/ip4/192.168.1.90/tcp/4001";
+        let known_key = "/ip4/192.168.1.91/tcp/4001";
+        for _ in 0..5 {
+            manager.record_dial_failure(stranger_key, Some(stranger));
+        }
+        // `known` connected once (authenticated), then went away.
+        manager.reset_on_connection_established(known_key, Some(known));
+        for _ in 0..5 {
+            manager.record_dial_failure(known_key, Some(known));
+        }
+        assert_eq!(
+            manager.wake_peer(stranger, WakeTrigger::MdnsDiscovered),
+            0,
+            "unauthenticated mDNS claim must not wake"
+        );
+        assert!(
+            manager
+                .get_backoff_state(stranger_key)
+                .expect("state")
+                .dormant
+        );
+        assert_eq!(manager.wake_peer(known, WakeTrigger::MdnsDiscovered), 1);
+    }
+
+    #[test]
+    fn test_authenticated_history_on_sibling_entry_counts_for_mdns() {
+        use libp2p::identity::Keypair;
+        let manager = DialPolicyManager::new();
+        let pid = Keypair::generate_ed25519().public().to_peer_id();
+        let dialed = "/ip4/192.168.1.60/tcp/4001";
+        for _ in 0..5 {
+            manager.record_dial_failure(dialed, Some(pid));
+        }
+        // Inbound connection from an ephemeral address proves the peer.
+        manager.reset_peer_backoff(pid);
+        for _ in 0..5 {
+            manager.record_dial_failure(dialed, Some(pid));
+        }
+        assert_eq!(manager.wake_peer(pid, WakeTrigger::MdnsDiscovered), 1);
+    }
+
+    #[test]
+    fn test_dead_address_does_not_stretch_other_addresses_ceiling() {
+        let manager = DialPolicyManager::new();
+        for _ in 0..40 {
+            manager.record_dial_failure("/ip4/203.0.113.9/tcp/1", None);
+        }
+        let fresh = ceiling_for_success_rate(STABILITY_PRIOR);
+        assert!(manager.ceiling_for("/ip4/203.0.113.9/tcp/1") > fresh);
+        assert_eq!(manager.ceiling_for("/ip4/198.51.100.2/tcp/1"), fresh);
+        manager.record_dial_failure("/ip4/198.51.100.2/tcp/1", None);
+        assert!(
+            manager.ceiling_for("/ip4/198.51.100.2/tcp/1")
+                < manager.ceiling_for("/ip4/203.0.113.9/tcp/1")
+        );
     }
 
     #[test]
@@ -913,6 +1177,8 @@ mod tests {
             0
         );
         assert_eq!(manager.on_network_event(&NetworkEvent::AllPeersLost), 0);
+        // A remote party (Sybil) can trigger this cheaply: never a wake.
+        assert_eq!(manager.on_network_event(&NetworkEvent::NewPeerConnected), 0);
         assert_eq!(
             manager.on_network_event(&NetworkEvent::LedgerReceived { new_entries: 0 }),
             0
@@ -930,7 +1196,7 @@ mod tests {
         manager.record_permanent_failure(key, None);
         assert!(!manager.register_dial_attempt(key, None));
         assert!(manager.get_backoff_state(key).expect("state").dormant);
-        manager.advance_clock(manager.current_ceiling());
+        manager.advance_clock(manager.ceiling_for(key));
         assert!(manager.register_dial_attempt(key, None));
     }
     #[test]

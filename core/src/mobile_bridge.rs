@@ -199,6 +199,9 @@ pub struct MeshService {
     relay_budget: std::sync::Arc<Mutex<u32>>,
     swarm_headless_mode: std::sync::Arc<Mutex<Option<bool>>>,
     current_device_profile: Mutex<Option<DeviceProfile>>,
+    /// Last (has_wifi, has_cellular) reported by the platform, so only a
+    /// genuine change is forwarded to the swarm as a revival wake.
+    last_network: Mutex<Option<(bool, bool)>>,
     device_state: RwLock<Option<DeviceState>>,
     auto_adjust: Arc<AutoAdjustEngine>,
     wifi_aware_bridge: Arc<Mutex<Option<Arc<PlatformWifiAwareBridge>>>>,
@@ -231,6 +234,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -263,6 +267,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -299,6 +304,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -1630,7 +1636,7 @@ impl MeshService {
         self.update_device_state(profile);
     }
 
-    pub fn on_network_changed(&self, has_wifi: bool, _has_cellular: bool) {
+    pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
         let mut profile = self
             .current_device_profile
             .lock()
@@ -1639,6 +1645,24 @@ impl MeshService {
         profile.has_wifi = has_wifi;
         // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
+
+        // Revival wake: a genuine interface change (for example the Wi-Fi to
+        // cellular handover) is a reason to expect previously unreachable
+        // peers may now be reachable. The first report only records the
+        // baseline; repeated identical reports are not events. The swarm
+        // rate limits wakes per source, so a flapping platform callback
+        // cannot hold addresses at the backoff floor.
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+        if let Some((prev_wifi, prev_cellular)) = previous {
+            if prev_wifi != has_wifi {
+                self.swarm_bridge
+                    .notify_network_event(crate::transport::NetworkEvent::WifiChanged);
+            }
+            if prev_cellular != has_cellular {
+                self.swarm_bridge
+                    .notify_network_event(crate::transport::NetworkEvent::CellularChanged);
+            }
+        }
     }
 
     pub fn on_motion_changed(&self, motion: MotionState) {
@@ -4100,6 +4124,16 @@ impl SwarmBridge {
     /// This must be called after starting the swarm to wire up network operations.
     pub fn set_handle(&self, handle: SwarmHandle) {
         *self.handle.lock() = Some(handle);
+    }
+
+    /// Forward a platform network event to the swarm's dial policy so waiting
+    /// peers get a (rate-limited) revival wake. Non-blocking; a no-op when no
+    /// swarm is running.
+    pub fn notify_network_event(&self, event: crate::transport::NetworkEvent) {
+        let handle = self.handle.lock().clone();
+        if let Some(handle) = handle {
+            handle.notify_network_event(event);
+        }
     }
 
     /// Internal helper to get the runtime handle for spawning

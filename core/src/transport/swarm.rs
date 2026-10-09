@@ -6422,9 +6422,12 @@ pub async fn start_swarm_with_config(
                                 for (peer_id, addr) in peers {
                                     tracing::info!("mDNS discovered peer: {} at {}", peer_id, addr);
                                     // Wake event: a (re)sighting of the peer on the LAN.
+                                    // mDNS is an unauthenticated claim, so this wakes only
+                                    // peers with prior authenticated history, and is
+                                    // rate limited like every other wake source.
                                     dial_policy_manager.wake_peer(
                                         peer_id,
-                                        super::dial_policy::WakeTrigger::AddressLearned,
+                                        super::dial_policy::WakeTrigger::MdnsDiscovered,
                                     );
                                     // V040-T14: mDNS is an unauthenticated LAN broadcast — the
                                     // (peer_id, addr) pair is asserted by the broadcaster, not

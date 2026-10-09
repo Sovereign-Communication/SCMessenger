@@ -226,6 +226,13 @@ pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialCl
         // computed right below.
         if let Some(event) = peer_transition(previous_peers, peers) {
             client.scheduler.on_event(event);
+            // Also forward to the dial policy so every NetworkEvent source
+            // takes the same path (real interface changes arrive through
+            // `SeedDialClient::emit` from `run_interface_monitor`). The
+            // policy deliberately does not wake on peer-count transitions
+            // (NewPeerConnected is remote-triggerable), so this is a no-op
+            // wake today and stays safe if the filter changes.
+            swarm.notify_network_event(event);
         }
         // A peer still connected across two consecutive sweeps is a proven
         // connection: restore normal reset responsiveness.
