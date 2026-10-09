@@ -130,6 +130,10 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
     }
 }
 
+/// Longest raw peer-id string `routing_peer_seen` will even attempt to parse
+/// (a 32-byte id is 64 hex chars; allows prefixes and libp2p base58 forms).
+const MAX_ROUTING_PEER_ID_STR_LEN: usize = 128;
+
 /// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
 /// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
 /// PeerId encoding.
@@ -159,6 +163,25 @@ fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
     }
 
     None
+}
+
+/// Validate an untrusted peer-id string for the routing entry points: bound its
+/// raw length, parse it to 32 bytes, and reject the all-zero id. Fails closed
+/// (returns `None`) so hostile ids never reach engine maps.
+fn validate_routing_peer_id(caller: &str, raw: &str) -> Option<[u8; 32]> {
+    if raw.len() > MAX_ROUTING_PEER_ID_STR_LEN {
+        tracing::warn!(caller, len = raw.len(), "oversized peer id rejected");
+        return None;
+    }
+    let Some(peer_id) = parse_peer_id_32(raw) else {
+        tracing::warn!(caller, "unparseable peer id rejected");
+        return None;
+    };
+    if peer_id == [0u8; 32] {
+        tracing::warn!(caller, "all-zero peer id rejected");
+        return None;
+    }
+    Some(peer_id)
 }
 
 /// The main entry point for the SCMessenger core.
@@ -2840,37 +2863,44 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Record that a peer was seen on a given transport.
+    ///
+    /// Untrusted-input contract: `peer_id_hex` must parse to a 32-byte peer id
+    /// (via `parse_peer_id_32`) and its raw form is length-bounded before any
+    /// decoding. Anything else is dropped (fail closed) and never reaches the
+    /// engine, so a hostile transport cannot grow the adaptive-TTL or
+    /// negative-cache maps with arbitrary strings.
     pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
+        let Some(peer_id) = validate_routing_peer_id("routing_peer_seen", &peer_id_hex) else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            let transport_type = parse_transport_type(&transport);
-            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
-                engine.peer_seen(peer_id, transport_type);
-            } else {
-                engine.record_message_activity(&peer_id_hex);
-                engine.clear_unreachable_peer(&peer_id_hex);
-            }
+            engine.peer_seen(peer_id, parse_transport_type(&transport));
         }
     }
 
     /// Update peer hint vectors for routing table.
+    ///
+    /// Same untrusted-input contract as `routing_peer_seen`: the id is
+    /// length-bounded and parsed to 32 bytes before it touches the engine, and
+    /// adaptive-TTL state is keyed by the canonical hex form.
     pub fn routing_update_peer_hints(&self, peer_id_hex: String, hints: Vec<Vec<u8>>) {
+        let Some(peer_id) = validate_routing_peer_id("routing_update_peer_hints", &peer_id_hex)
+        else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
-            engine.record_message_activity(&peer_id_hex);
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    let parsed_hints: Vec<[u8; 8]> = hints
-                        .into_iter()
-                        .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
-                        .collect();
-                    // LocalCell intentionally updates only peers already known to
-                    // the local topology; an announcement cannot create a peer.
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_peer_hints(&peer_id, parsed_hints);
-                }
-            }
+            engine.record_message_activity(&hex::encode(peer_id));
+            let parsed_hints: Vec<[u8; 8]> = hints
+                .into_iter()
+                .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
+                .collect();
+            // LocalCell intentionally updates only peers already known to
+            // the local topology; an announcement cannot create a peer.
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .update_peer_hints(&peer_id, parsed_hints);
         }
     }
 
@@ -2890,20 +2920,24 @@ impl IronCore {
     }
 
     /// Update reliability score for a peer based on success/failure.
+    ///
+    /// Same untrusted-input contract as `routing_peer_seen`; the negative cache
+    /// and adaptive-TTL maps are keyed by the canonical hex of the parsed id.
     pub fn routing_update_reliability(&self, peer_id_hex: String, success: bool) {
+        let Some(peer_id) = validate_routing_peer_id("routing_update_reliability", &peer_id_hex)
+        else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_reliability(&peer_id, success);
-                }
-            }
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .update_reliability(&peer_id, success);
+            let key = hex::encode(peer_id);
             if success {
-                engine.record_message_activity(&peer_id_hex);
+                engine.record_message_activity(&key);
             } else {
-                engine.record_unreachable_peer(&peer_id_hex);
+                engine.record_unreachable_peer(&key);
             }
         }
     }
@@ -4254,9 +4288,9 @@ impl IronCore {
             .unwrap_or_default()
     }
 
-    /// Get fallback relay addresses from the bootstrap manager: the
-    /// hardcoded `CORE_BOOTSTRAP_NODES` plus any environment-variable
-    /// overrides, available immediately without needing live swarm events.
+    /// Get fallback relay addresses from the bootstrap manager: candidates
+    /// added at runtime from the ledger (no static or env-supplied seeds),
+    /// available immediately without needing live swarm events.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn get_fallback_relays(&self) -> Vec<libp2p::Multiaddr> {
         self.relay_bootstrap_manager
@@ -6245,6 +6279,79 @@ mod tests {
             "relayed-circuit sighting must be recorded distinctly, got {:?}",
             stored.transports
         );
+    }
+
+    #[test]
+    fn routing_peer_seen_rejects_hostile_peer_ids() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer_count = |core: &IronCore| {
+            core.routing_engine
+                .write()
+                .as_mut()
+                .expect("engine set")
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_count()
+        };
+
+        let hostile = [
+            String::new(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+        ];
+        for id in hostile {
+            core.routing_peer_seen(id, "tcp".to_string());
+        }
+        assert_eq!(peer_count(&core), 0, "hostile ids must not create peers");
+
+        core.routing_peer_seen(hex::encode([7u8; 32]), "tcp".to_string());
+        assert_eq!(peer_count(&core), 1, "a valid 32-byte id is still accepted");
+    }
+
+    #[test]
+    fn routing_update_hints_and_reliability_reject_hostile_peer_ids() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let counts = |core: &IronCore| {
+            let mut guard = core.routing_engine.write();
+            let engine = guard.as_mut().expect("engine set");
+            (
+                engine.adaptive_ttl().len(),
+                engine.negative_cache_stats().entry_count,
+            )
+        };
+
+        let hostile = [
+            String::new(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+        ];
+        for id in hostile {
+            core.routing_update_peer_hints(id.clone(), vec![vec![0u8; 8]]);
+            core.routing_update_reliability(id.clone(), true);
+            core.routing_update_reliability(id, false);
+        }
+        assert_eq!(
+            counts(&core),
+            (0, 0),
+            "hostile ids must not grow adaptive-TTL or negative-cache maps"
+        );
+
+        let peer = hex::encode([9u8; 32]);
+        core.routing_update_reliability(peer.clone(), true);
+        core.routing_update_reliability(peer, false);
+        assert_eq!(counts(&core), (1, 1), "a valid id is keyed once by hex");
     }
 
     #[test]

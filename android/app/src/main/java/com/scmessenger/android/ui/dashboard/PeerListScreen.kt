@@ -86,15 +86,13 @@ fun PeerListScreen(
                             .padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = stringResource(R.string.peer_list_no_peers),
-                            style = MaterialTheme.typography.titleLarge
-                        )
+                        // #469 T9: neutral activity state, never an absence claim.
+                        CircularProgressIndicator()
 
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = stringResource(R.string.peer_list_no_peers_description),
+                            text = stringResource(R.string.peer_list_discovering),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
