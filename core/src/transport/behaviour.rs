@@ -67,6 +67,23 @@ const _: () = assert!(
     "MAX_ESTABLISHED_PER_PEER must be below MAX_ESTABLISHED_INCOMING"
 );
 
+/// The node's libp2p connection limits. Extracted so a test can exercise the
+/// real limits object that `IronCoreBehaviour::new` installs.
+pub(crate) fn node_connection_limits() -> connection_limits::ConnectionLimits {
+    connection_limits::ConnectionLimits::default()
+        .with_max_pending_outgoing(Some(32))
+        .with_max_established_outgoing(Some(128))
+        .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
+        // Per-peer cap, see MAX_ESTABLISHED_PER_PEER. A mobile peer's
+        // Wi-Fi to cellular handover leaves its dead Wi-Fi sockets counted
+        // here for up to about a minute (until the ping timeout), and while
+        // they fill the cap the peer's fresh connections are denied (#417).
+        // The cap has to absorb those handover ghost slots. The retained
+        // path count is trimmed separately (see `per_peer_cap`) and never
+        // lowers this admission ceiling.
+        .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER))
+}
+
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
@@ -559,18 +576,7 @@ impl IronCoreBehaviour {
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
 
         // Connection limits to prevent resource exhaustion
-        let connection_limits = connection_limits::Behaviour::new(
-            connection_limits::ConnectionLimits::default()
-                .with_max_pending_outgoing(Some(32))
-                .with_max_established_outgoing(Some(128))
-                .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
-                // Per-peer cap, see MAX_ESTABLISHED_PER_PEER. A mobile peer's
-                // Wi-Fi to cellular handover leaves its dead Wi-Fi sockets counted
-                // here for up to about a minute (until the ping timeout), and while
-                // they fill the cap the peer's fresh connections are denied (#417).
-                // The cap has to absorb those handover ghost slots.
-                .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER)),
-        );
+        let connection_limits = connection_limits::Behaviour::new(node_connection_limits());
 
         Ok(Self {
             relay_client,
@@ -597,6 +603,50 @@ impl IronCoreBehaviour {
 mod tests {
     use super::*;
     use crate::identity::IdentityKeys;
+
+    /// Drives the REAL limits object `IronCoreBehaviour::new` installs (via
+    /// `node_connection_limits`) with one peer opening connections, and checks
+    /// the denial lands exactly at `MAX_ESTABLISHED_PER_PEER`. Fails if the
+    /// constructor stops using the constant or someone lowers the admission
+    /// ceiling (the CONN-CAP v2 trim must not reduce admission, #417).
+    #[test]
+    fn installed_limits_admit_exactly_the_per_peer_cap_for_one_peer() {
+        use libp2p::core::ConnectedPoint;
+        use libp2p::swarm::behaviour::{ConnectionEstablished, FromSwarm};
+        use libp2p::swarm::{ConnectionId, NetworkBehaviour};
+
+        let mut limits = connection_limits::Behaviour::new(node_connection_limits());
+        let peer = libp2p::PeerId::random();
+        let local: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().expect("fixture addr");
+        let remote: libp2p::Multiaddr = "/ip4/10.0.0.2/tcp/50000".parse().expect("fixture addr");
+        let endpoint = ConnectedPoint::Listener {
+            local_addr: local.clone(),
+            send_back_addr: remote.clone(),
+        };
+
+        let mut admitted = 0u32;
+        for n in 0..(MAX_ESTABLISHED_PER_PEER + 4) {
+            let id = ConnectionId::new_unchecked(n as usize);
+            if limits
+                .handle_established_inbound_connection(id, peer, &local, &remote)
+                .is_err()
+            {
+                break;
+            }
+            limits.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id: peer,
+                connection_id: id,
+                endpoint: &endpoint,
+                failed_addresses: &[],
+                other_established: admitted as usize,
+            }));
+            admitted += 1;
+        }
+        assert_eq!(
+            admitted, MAX_ESTABLISHED_PER_PEER,
+            "the installed per-peer admission cap must be MAX_ESTABLISHED_PER_PEER"
+        );
+    }
 
     #[test]
     fn relay_request_carries_ws13_metadata_when_set() {

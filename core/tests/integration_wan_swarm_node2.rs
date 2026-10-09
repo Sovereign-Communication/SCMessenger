@@ -398,7 +398,11 @@ mod layer1_domain_assertions {
         let target_pid = random_libp2p_peer_id();
 
         let relay_ext_addr: Multiaddr = "/ip4/203.0.113.100/tcp/4001".parse().unwrap();
-        ladder.add_relay(relay_pid, vec![relay_ext_addr.clone()]);
+        ladder.add_relay(
+            relay_pid,
+            vec![relay_ext_addr.clone()],
+            scmessenger_core::transport::dial_policy::observed_direct_ip(&relay_ext_addr),
+        );
 
         let relay_routes = ladder.build_relay_addresses(target_pid);
         assert_eq!(relay_routes.len(), 1);
@@ -583,7 +587,8 @@ mod layer2_branch_coverage {
         let same_pid = random_libp2p_peer_id();
 
         let ext_addr: Multiaddr = "/ip4/192.168.1.1/tcp/4001".parse().unwrap();
-        ladder.add_relay(same_pid, vec![ext_addr]);
+        let observed = scmessenger_core::transport::dial_policy::observed_direct_ip(&ext_addr);
+        ladder.add_relay(same_pid, vec![ext_addr], observed);
 
         // Building relay addresses where target == relay should produce no routes!
         let routes = ladder.build_relay_addresses(same_pid);
@@ -802,7 +807,11 @@ mod layer4_multi_hop_call_depth {
 
         // 4. Hop 4: Fallback to CircuitRelay via InternetRelay
         let relay_multiaddr: Multiaddr = "/ip4/203.0.113.1/tcp/5555".parse().unwrap();
-        relay_ladder.add_relay(relay_peer, vec![relay_multiaddr.clone()]);
+        relay_ladder.add_relay(
+            relay_peer,
+            vec![relay_multiaddr.clone()],
+            scmessenger_core::transport::dial_policy::observed_direct_ip(&relay_multiaddr),
+        );
 
         let circuit_addrs = relay_ladder.build_relay_addresses(libp2p_target);
         assert!(!circuit_addrs.is_empty());

@@ -78,6 +78,46 @@ fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId)
         .unwrap_or(true)
 }
 
+/// The relay to credit for a freshly established connection, if any.
+///
+/// Relay reputation is earned only from a circuit WE dialed: an inbound
+/// circuit is opened by a peer that may be the relay's own Sybil, so it
+/// proves nothing. Returns `None` for inbound connections, non-circuit paths
+/// and self-referential circuits.
+fn outbound_circuit_relay(
+    is_dialer: bool,
+    remote_addr: &libp2p::Multiaddr,
+    target: &PeerId,
+) -> Option<PeerId> {
+    if !is_dialer {
+        return None;
+    }
+    super::dial_policy::circuit_relay_of(remote_addr).filter(|relay| relay != target)
+}
+
+/// Whether `peer_id` is independently trusted: a saved contact (identified
+/// by its public-key hex) that is not blocked. Missing core state fails
+/// closed. Invite-verified peers become contacts through the same store.
+fn peer_is_trusted_contact(core_handle: &Option<Weak<crate::IronCore>>, peer_id: &PeerId) -> bool {
+    let Ok(public_key) = extract_ed25519_public_key_from_peer_id(peer_id) else {
+        return false;
+    };
+    let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
+        return false;
+    };
+    if core
+        .is_peer_blocked(peer_id.to_string(), None)
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    core.contacts_store_manager()
+        .get_by_public_key(&hex::encode(public_key))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 fn empty_ledger_exchange_response() -> LedgerExchangeResponse {
     LedgerExchangeResponse {
         version_tag: 1,
@@ -793,10 +833,16 @@ fn dial_skip_reason(
     addr: &Multiaddr,
     target_peer_id: Option<PeerId>,
     trusted: bool,
+    redial_cooldown_active: bool,
 ) -> Option<&'static str> {
     if let Some(pid) = target_peer_id {
         if pid == *swarm.local_peer_id() {
             return Some("target is self (local peer id)");
+        }
+        // CONN-CAP v2 hysteresis: right after a path trim the peer is not re-dialed,
+        // which would only recreate the fan-out the trim just removed.
+        if redial_cooldown_active {
+            return Some("peer was just path-trimmed -- redial cooldown");
         }
         if swarm.is_connected(&pid) {
             return Some("peer already connected -- respond over existing link");
@@ -4065,6 +4111,11 @@ pub async fn start_swarm_with_config(
         // Track connections and address observations (Phase 1 & 2)
         let mut connection_tracker = ConnectionTracker::new();
         let mut address_observer = AddressObserver::new();
+        // CONN-CAP v2: the single owner of per-peer path bookkeeping (retained-path
+        // trim, tracked closes, activity, redial cooldown). Admission stays with
+        // connection_limits (behaviour::MAX_ESTABLISHED_PER_PEER); see per_peer_cap.
+        let mut path_ledger: super::per_peer_cap::PathLedger<PeerId, libp2p::swarm::ConnectionId> =
+            super::per_peer_cap::PathLedger::new();
 
         // Track successful relay reservations by ListenerId
         let mut successful_relay_reservations: HashMap<
@@ -4332,6 +4383,10 @@ pub async fn start_swarm_with_config(
             let mut zombie_reap_interval =
                 tokio::time::interval(Duration::from_millis(ZOMBIE_REAP_INTERVAL_MS));
             let mut zombie_tracker = ZombieTracker::new();
+            // CONN-CAP v2: re-issue overdue closes of trimmed paths (libp2p keeps
+            // counting a connection until ConnectionClosed, so a stalled close must
+            // not be forgotten).
+            let mut path_close_sweep_interval = tokio::time::interval(Duration::from_secs(5));
 
             // P1 Item 4: Circuit-relay preference after connection established
             let circuit_relay_ladder = CircuitRelayLadder::new();
@@ -4639,6 +4694,23 @@ pub async fn start_swarm_with_config(
                         }
                     }
 
+                    // CONN-CAP v2: a trimmed path stays tracked until ConnectionClosed;
+                    // re-issue the close if it is overdue.
+                    _ = path_close_sweep_interval.tick() => {
+                        let reissued = super::per_peer_cap::sweep_pending_closes(
+                            &mut path_ledger,
+                            web_time::Instant::now(),
+                            |id| swarm.close_connection(id),
+                        );
+                        if reissued > 0 {
+                            tracing::warn!(
+                                reissued,
+                                pending = path_ledger.pending_closes(),
+                                "[CONN-CAP] re-issued overdue close of trimmed path(s); ConnectionClosed not yet seen"
+                            );
+                        }
+                    }
+
                     // Mycorrhizal routing: periodic optimization tick
                     _ = routing_optimization_interval.tick() => {
                         let now_secs = web_time::SystemTime::now()
@@ -4846,8 +4918,11 @@ pub async fn start_swarm_with_config(
                     event = swarm.select_next_some() => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(
-                                request_response::Event::Message { peer, message, .. }
+                                request_response::Event::Message { peer, connection_id, message }
                             )) => {
+                                // CONN-CAP v2: the main message protocol (request in,
+                                // response out) proves this path is carrying real traffic.
+                                path_ledger.stamp(&peer, &connection_id, web_time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         // Block enforcement FIRST (before any parse or dial): a blocked
@@ -5268,6 +5343,7 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                path_ledger.stamp(&peer, &connection_id, web_time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         if peer_is_blocked(&core_handle, peer) {
@@ -5710,6 +5786,8 @@ pub async fn start_swarm_with_config(
                                         if let Some(message_id) = pending_relay_requests.remove(&request_id) {
                                             if let Some(pending) = pending_messages.remove(&message_id) {
                                                 if response.accepted {
+                                                    // No relay reputation here: `accepted` is the
+                                                    // relay's own claim, not proof of delivery.
                                                     let latency_ms = pending.attempt_start.elapsed().unwrap_or_default().as_millis() as u64;
                                                     multi_path_delivery.record_success(&message_id, vec![peer, pending.target_peer], latency_ms);
                                                     tracing::info!("[OK] Message relayed successfully via {} to {} ({}ms)", peer, pending.target_peer, latency_ms);
@@ -5763,6 +5841,7 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                path_ledger.stamp(&peer, &connection_id, web_time::Instant::now());
                                 if peer_is_blocked(&core_handle, peer) {
                                     tracing::warn!(
                                         "Blocked peer {} attempted ledger exchange; refusing topology disclosure",
@@ -6292,6 +6371,8 @@ pub async fn start_swarm_with_config(
                                         renewal,
                                         ..
                                     } => {
+                                        // No relay reputation here: a granted reservation
+                                        // is the relay's own claim, not proof of service.
                                         if renewal {
                                             tracing::debug!(
                                                 "Relay circuit reservation RENEWED via {}",
@@ -6375,6 +6456,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
                                 match event.result {
                                     Ok(rtt) => {
+                                        path_ledger.stamp(&event.peer, &event.connection, web_time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6489,8 +6571,9 @@ pub async fn start_swarm_with_config(
                             // Accept ANY peer identity, regardless of expected PeerID.
                             // Log the identity and add all addresses to Kademlia.
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                path_ledger.stamp(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker: identify::Received is a liveness proof
                                 // (60s cadence per connection) -- keeps a healthy peer's
                                 // stamps fresh even where ping has nothing to say.
@@ -6633,9 +6716,16 @@ pub async fn start_swarm_with_config(
                                         &local_transport_addrs,
                                     );
                                     if !routable_relay_addrs.is_empty() {
+                                        // The relay's network group comes from the remote
+                                        // IP of THIS authenticated connection, never from
+                                        // the addresses it advertises about itself.
+                                        let observed_relay_ip = connection_tracker
+                                            .get_connection_by_id(&peer_id, &connection_id.to_string())
+                                            .and_then(|c| super::dial_policy::observed_direct_ip(&c.remote_addr));
                                         circuit_relay_ladder.add_relay(
                                             peer_id,
                                             routable_relay_addrs.clone(),
+                                            observed_relay_ip,
                                         );
                                     }
 
@@ -6837,6 +6927,50 @@ pub async fn start_swarm_with_config(
                                 // delivery storm when mDNS, relay, and ledger dials converge.
                                 let had_active_connection = connection_tracker.get_connection(&peer_id).is_some();
                                 let remote_addr = endpoint.get_remote_address().clone();
+
+                                // CONN-CAP v2: enforce the retained path count BEFORE any
+                                // relay/bootstrap registration, so a path that is trimmed on
+                                // arrival never registers or triggers follow-up traffic.
+                                // Trimmed ids stay tracked until ConnectionClosed.
+                                let path_outcome = super::per_peer_cap::handle_established(
+                                    &mut path_ledger,
+                                    peer_id,
+                                    connection_id,
+                                    super::per_peer_cap::PathKind::of_addr(&remote_addr),
+                                    web_time::Instant::now(),
+                                    |id| swarm.close_connection(id),
+                                );
+                                for extra in &path_outcome.closed {
+                                    tracing::info!(
+                                        peer = %peer_id,
+                                        closed_connection = ?extra,
+                                        live = path_ledger.live_paths(&peer_id),
+                                        retained_bound = super::per_peer_cap::RETAINED_MAX_PATHS_PER_PEER,
+                                        "[CONN-CAP] closing redundant per-peer path to hold the retained bound"
+                                    );
+                                }
+
+                                // Relay reputation is earned only by service we proved
+                                // locally: a circuit WE dialed (never an inbound one,
+                                // which a colluding peer can open at will) to a target
+                                // we independently trust (a saved contact), credited at
+                                // most once per (relay, target) per day.
+                                if !path_outcome.new_path_trimmed {
+                                    if let Some(relay_pid) =
+                                        outbound_circuit_relay(endpoint.is_dialer(), &remote_addr, &peer_id)
+                                    {
+                                        if peer_is_trusted_contact(&core_handle, &peer_id)
+                                            && circuit_relay_ladder
+                                                .record_proven_relay_via_target(&relay_pid, &peer_id)
+                                        {
+                                            tracing::debug!(
+                                                relay = %relay_pid,
+                                                via_peer = %peer_id,
+                                                "[CIRCUIT-RELAY] proven relay service: outbound circuit to a trusted contact"
+                                            );
+                                        }
+                                    }
+                                }
 
                                 // ZOMBIE tracker: register the path (connection id +
                                 // remote addr) and stamp it live; reaped later only if
@@ -7047,9 +7181,12 @@ pub async fn start_swarm_with_config(
                                 );
 
                                 // Add to bootstrap capability (potential relay node)
-                                // ALL peers are mandatory relays
-                                bootstrap_capability.add_peer(peer_id);
-                                multi_path_delivery.add_relay(peer_id);
+                                // ALL peers are mandatory relays (a path trimmed on arrival is
+                                // not registered: CONN-CAP v2, trim before registration)
+                                if !path_outcome.new_path_trimmed {
+                                    bootstrap_capability.add_peer(peer_id);
+                                    multi_path_delivery.add_relay(peer_id);
+                                }
                                 dispatch_pending_custody_for_peer(
                                     &mut swarm,
                                     &relay_custody_store,
@@ -7234,10 +7371,20 @@ pub async fn start_swarm_with_config(
                                     &connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
+                                // CONN-CAP v2: ConnectionClosed is the only event that drops a
+                                // tracked path. A trim-initiated close is not a path failure.
+                                let close_outcome = super::per_peer_cap::handle_closed(
+                                    &mut path_ledger,
+                                    &peer_id,
+                                    &connection_id,
+                                    num_established,
+                                    web_time::Instant::now(),
+                                );
                                 // A different live path may now be selected. Force a
                                 // fresh ledger exchange so failover cannot leave this
                                 // peer with stale topology knowledge.
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                if !close_outcome.was_trim
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -7281,7 +7428,16 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                // CONN-CAP v2: num_established == 0 here, so libp2p holds no
+                                // connection for this peer; drain every tracked path.
+                                let _ = super::per_peer_cap::handle_closed(
+                                    &mut path_ledger,
+                                    &peer_id,
+                                    &connection_id,
+                                    0,
+                                    web_time::Instant::now(),
+                                );
                                 tracing::info!(
                                     "[ERROR] Disconnected from {}",
                                     peer_id
@@ -7964,7 +8120,13 @@ pub async fn start_swarm_with_config(
                                     }
                                 };
                                 if let Some(reason) =
-                                    dial_skip_reason(&swarm, &addr, target_peer_id, trusted)
+                                    dial_skip_reason(
+                                        &swarm,
+                                        &addr,
+                                        target_peer_id,
+                                        trusted,
+                                        target_peer_id.is_some_and(|pid| path_ledger.redial_blocked(&pid, web_time::Instant::now())),
+                                    )
                                 {
                                     tracing::info!(
                                         "[DIAL-SKIP] {}: {} (target {:?})",
@@ -8788,6 +8950,10 @@ pub async fn start_swarm_with_config(
         // Keep observational parity where possible on wasm.
         let reflection_service = AddressReflectionService::new();
         let mut connection_tracker = ConnectionTracker::new();
+        // CONN-CAP v2 (wasm parity): same PathLedger and the same shared helpers as
+        // the native loop, so the two cannot drift.
+        let mut path_ledger: super::per_peer_cap::PathLedger<PeerId, libp2p::swarm::ConnectionId> =
+            super::per_peer_cap::PathLedger::new();
         // R8-F4: same lifecycle contracts as the native loop -- canonical pk
         // (hex) this loop registered per wire peer, and the once-per-connection
         // flush gate. Both are owned by this single-threaded select task.
@@ -8820,6 +8986,7 @@ pub async fn start_swarm_with_config(
         // ZOMBIE-CONNECTION REAP (wasm parity, RCA WIFI_TRANSPORT_REGRESSION_2026-09-18):
         // inline-check idiom per this loop's timing convention (f64 Date::now()).
         let mut last_zombie_reap: f64 = js_sys::Date::now();
+        let mut last_path_close_sweep: f64 = js_sys::Date::now();
         let mut zombie_tracker = ZombieTracker::new();
         let mut seen_delivery_convergence_markers: HashSet<String> = HashSet::new();
         let bootstrap_addrs_clone = bootstrap_addrs;
@@ -8963,7 +9130,13 @@ pub async fn start_swarm_with_config(
                                         continue;
                                     }
                                 };
-                                if let Some(reason) = dial_skip_reason(&swarm, &addr, resolved_target, trusted) {
+                                if let Some(reason) = dial_skip_reason(
+                                    &swarm,
+                                    &addr,
+                                    resolved_target,
+                                    trusted,
+                                    resolved_target.is_some_and(|pid| path_ledger.redial_blocked(&pid, web_time::Instant::now())),
+                                ) {
                                     tracing::info!("[DIAL-SKIP] (wasm) {}: {}", addr, reason);
                                     let _ = reply.send(Err(format!("skipped: {}", reason))).await;
                                     continue;
@@ -9136,6 +9309,10 @@ pub async fn start_swarm_with_config(
                     event = swarm_fut => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(ev)) => {
+                                // CONN-CAP v2: any request/response on this path stamps its activity.
+                                if let request_response::Event::Message { peer, connection_id, .. } = &ev {
+                                    path_ledger.stamp(peer, connection_id, web_time::Instant::now());
+                                }
                                 match ev {
                                     request_response::Event::Message { peer, message, .. } => match message {
                                         request_response::Message::Request { request, channel, .. } => {
@@ -9355,6 +9532,10 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(ev)) => {
+                                // CONN-CAP v2: any request/response on this path stamps its activity.
+                                if let request_response::Event::Message { peer, connection_id, .. } = &ev {
+                                    path_ledger.stamp(peer, connection_id, web_time::Instant::now());
+                                }
                                 match ev {
                                     request_response::Event::Message { peer, connection_id, message } => match message {
                                         request_response::Message::Request { request, channel, .. } => {
@@ -9658,6 +9839,10 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::LedgerExchange(ev)) => {
+                                // CONN-CAP v2: any request/response on this path stamps its activity.
+                                if let request_response::Event::Message { peer, connection_id, .. } = &ev {
+                                    path_ledger.stamp(peer, connection_id, web_time::Instant::now());
+                                }
                                 match ev {
                                     request_response::Event::Message { peer, message, .. } => {
                                     if peer_is_blocked(&core_handle, peer) {
@@ -9825,8 +10010,9 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                path_ledger.stamp(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker (wasm): identify is this loop's only
                                 // liveness stamp (no ping arm); the 60s identify cadence
                                 // keeps a healthy peer's stamps fresh.
@@ -9906,6 +10092,25 @@ pub async fn start_swarm_with_config(
                                 // Clone the remote address before `endpoint` is consumed
                                 // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // CONN-CAP v2 (wasm parity): same shared helper as native, run
+                                // first so the trim precedes any registration.
+                                let path_outcome = super::per_peer_cap::handle_established(
+                                    &mut path_ledger,
+                                    peer_id,
+                                    connection_id,
+                                    super::per_peer_cap::PathKind::of_addr(&remote_addr),
+                                    web_time::Instant::now(),
+                                    |id| swarm.close_connection(id),
+                                );
+                                for extra in &path_outcome.closed {
+                                    tracing::info!(
+                                        peer = %peer_id,
+                                        closed_connection = ?extra,
+                                        live = path_ledger.live_paths(&peer_id),
+                                        retained_bound = super::per_peer_cap::RETAINED_MAX_PATHS_PER_PEER,
+                                        "[CONN-CAP] closing redundant per-peer path to hold the retained bound (WASM)"
+                                    );
+                                }
                                 // R8-F4: the zero-to-one connection transition drives the
                                 // reconnect flush on native; capture the same signal here
                                 // BEFORE this path joins the tracker.
@@ -10055,7 +10260,15 @@ pub async fn start_swarm_with_config(
                                     &                                    connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                let close_outcome = super::per_peer_cap::handle_closed(
+                                    &mut path_ledger,
+                                    &peer_id,
+                                    &connection_id,
+                                    num_established,
+                                    web_time::Instant::now(),
+                                );
+                                if !close_outcome.was_trim
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -10088,7 +10301,16 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                // CONN-CAP v2: num_established == 0 here, so libp2p holds no
+                                // connection for this peer; drain every tracked path.
+                                let _ = super::per_peer_cap::handle_closed(
+                                    &mut path_ledger,
+                                    &peer_id,
+                                    &connection_id,
+                                    0,
+                                    web_time::Instant::now(),
+                                );
                                 tracing::info!("[ERROR] Disconnected from {} (WASM)", peer_id);
                                 connection_tracker.remove_connection(&peer_id);
                                 // Last connection for this peer is gone (num_established
@@ -10340,6 +10562,22 @@ pub async fn start_swarm_with_config(
                     last_zombie_reap = js_sys::Date::now();
                 }
 
+                // CONN-CAP v2 (wasm parity): re-issue overdue closes of trimmed paths.
+                if js_sys::Date::now() - last_path_close_sweep >= 5_000.0 {
+                    let reissued = super::per_peer_cap::sweep_pending_closes(
+                        &mut path_ledger,
+                        web_time::Instant::now(),
+                        |id| swarm.close_connection(id),
+                    );
+                    if reissued > 0 {
+                        tracing::warn!(
+                            reissued,
+                            "[CONN-CAP] re-issued overdue close of trimmed path(s) (WASM)"
+                        );
+                    }
+                    last_path_close_sweep = js_sys::Date::now();
+                }
+
                 // Keep bootstrap links warm on browser clients.
                 if js_sys::Date::now() - last_bootstrap_redial >= 60_000.0 {
                     let connected_peers: HashSet<PeerId> =
@@ -10421,15 +10659,62 @@ use libp2p::{gossipsub, request_response};
 
 #[cfg(test)]
 mod tests {
+    /// Structural wiring guard (Rule-8 review of #372, finding 5). The behaviour
+    /// of the shared helpers is covered in `per_peer_cap`; what only this file
+    /// can get wrong is NOT CALLING them. Counts are taken over the production
+    /// half of the file, and the needles are built at runtime so this test body
+    /// cannot satisfy its own search.
+    #[test]
+    fn both_swarm_loops_drive_the_shared_path_ledger() {
+        let src = include_str!("swarm.rs");
+        // Line-ending independent (Windows checkouts may be CRLF): cut at the first
+        // `mod tests {`, which is this module.
+        let cut = src
+            .find(&format!("mod {} {{", "tests"))
+            .expect("this test module exists");
+        let prod = &src[..cut];
+        let count = |needle: String| prod.matches(needle.as_str()).count();
+        let helper = |name: &str| format!("per_peer_cap::{name}(");
+
+        // One call per ConnectionEstablished arm (native + wasm).
+        assert_eq!(count(helper("handle_established")), 2);
+        // Partial-close and last-close arm in each loop.
+        assert_eq!(count(helper("handle_closed")), 4);
+        // Periodic overdue-close re-issue in each loop.
+        assert_eq!(count(helper("sweep_pending_closes")), 2);
+        // Redial cooldown consulted at both dial sites.
+        assert_eq!(count("path_ledger.redial_blocked(".to_string()), 2);
+        // Activity stamped by ping, identify, messaging, address reflection and
+        // ledger exchange (native) and by identify plus the three request/response
+        // arms (wasm).
+        assert!(
+            count("path_ledger.stamp(".to_string()) >= 9,
+            "every liveness/traffic arm must stamp path activity"
+        );
+        // Relay reputation is credited from exactly one signal: an outbound
+        // circuit to a trusted contact. Self-asserted relay claims (accepted
+        // response, granted reservation) and inbound circuits never score.
+        assert_eq!(count(".record_proven_relay_via_target(".to_string()), 1);
+        assert_eq!(count(".record_proven_relay(".to_string()), 0);
+        assert_eq!(count("outbound_circuit_relay(".to_string()), 2);
+        assert_eq!(count("peer_is_trusted_contact(".to_string()), 2);
+        assert_eq!(count("record_relay_success".to_string()), 0);
+        // Registration is gated on the trim result.
+        assert!(count("path_outcome.new_path_trimmed".to_string()) >= 1);
+        // The old loose maps must not come back.
+        assert_eq!(count("peer_established_paths".to_string()), 0);
+        assert_eq!(count("path_last_activity".to_string()), 0);
+    }
+
     use super::{
         addr_targets_self, build_mdns_dial_addr, build_routable_relay_addrs, classify_deny_cause,
         endpoint_transport_string, extract_ed25519_public_key_from_peer_id, extract_ip_component,
-        is_ledger_exchange_path_failure, peer_is_blocked, rearm_ledger_exchange_after_failure,
-        resolve_dial_target, select_drift_fallback_carrier,
-        should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
-        validate_delivery_convergence_marker_shape, verify_registration_message,
-        wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause, PendingCustodyDispatch,
-        PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
+        is_ledger_exchange_path_failure, outbound_circuit_relay, peer_is_blocked,
+        peer_is_trusted_contact, rearm_ledger_exchange_after_failure, resolve_dial_target,
+        select_drift_fallback_carrier, should_apply_delivery_convergence_marker,
+        target_peer_id_from_multiaddr, validate_delivery_convergence_marker_shape,
+        verify_registration_message, wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause,
+        PendingCustodyDispatch, PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
         RELAY_DUPLICATE_WINDOW_MS, RELAY_PEER_BUCKET_BURST_CAPACITY,
         RELAY_PEER_BUCKET_REFILL_PER_SEC,
     };
@@ -11024,6 +11309,59 @@ mod tests {
             &Some(Arc::downgrade(&core)),
             PeerId::random()
         ));
+    }
+
+    fn circuit_addr(relay: &PeerId, target: &PeerId) -> libp2p::Multiaddr {
+        format!("/ip4/198.51.100.7/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+            .parse()
+            .expect("fixture addr")
+    }
+
+    #[test]
+    fn inbound_circuit_gives_no_relay_credit() {
+        let relay = PeerId::random();
+        let target = PeerId::random();
+        let addr = circuit_addr(&relay, &target);
+        // Listener side (inbound): never credited.
+        assert_eq!(outbound_circuit_relay(false, &addr, &target), None);
+        // Dialer side (outbound): the relay is named.
+        assert_eq!(outbound_circuit_relay(true, &addr, &target), Some(relay));
+        // Direct (non-circuit) outbound paths and self-circuits: none.
+        let direct: libp2p::Multiaddr = "/ip4/198.51.100.7/tcp/4001".parse().expect("fixture");
+        assert_eq!(outbound_circuit_relay(true, &direct, &target), None);
+        assert_eq!(outbound_circuit_relay(true, &addr, &relay), None);
+    }
+
+    #[test]
+    fn only_saved_unblocked_contacts_are_trusted_circuit_targets() {
+        let core = Arc::new(crate::IronCore::new());
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test identity initialization must succeed");
+        let handle = Some(Arc::downgrade(&core));
+
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let contact_peer = keypair.public().to_peer_id();
+        let stranger = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        // Fail closed without core state, and for an unknown peer.
+        assert!(!peer_is_trusted_contact(&None, &contact_peer));
+        assert!(!peer_is_trusted_contact(&handle, &contact_peer));
+
+        let pk = extract_ed25519_public_key_from_peer_id(&contact_peer)
+            .expect("ed25519 peer id carries its key");
+        let pk_hex = hex::encode(pk);
+        core.contacts_store_manager()
+            .add(crate::store::contacts::Contact::new(pk_hex.clone(), pk_hex))
+            .expect("contact add must succeed");
+        assert!(peer_is_trusted_contact(&handle, &contact_peer));
+        assert!(!peer_is_trusted_contact(&handle, &stranger));
+
+        // A blocked contact is not trusted.
+        core.block_peer(contact_peer.to_string(), None, Some("test".to_string()))
+            .expect("test block must succeed");
+        assert!(!peer_is_trusted_contact(&handle, &contact_peer));
     }
 
     #[test]
