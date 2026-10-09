@@ -12,6 +12,7 @@ mod bootstrap;
 mod config;
 mod invite;
 mod ledger;
+mod platform_signals;
 mod seed_dial;
 mod server;
 mod transport_api;
@@ -2083,6 +2084,46 @@ async fn cmd_contact(action: ContactAction) -> Result<()> {
     Ok(())
 }
 
+/// One-time #469 migration. Any legacy `bootstrap_nodes` found in the config
+/// are imported into the ledger as unproven seed entries (so existing
+/// deployments keep their connectivity). Addresses the ledger refuses are
+/// logged and kept in `legacy_bootstrap_nodes_rejected`; the original key is
+/// dropped only by a successful save of the config holding both lists. If the
+/// save fails the in-memory list is already drained but the file keeps the key,
+/// so the next start retries; the ledger import is idempotent (duplicates
+/// collapse) and the rejected list is deduplicated.
+fn migrate_legacy_bootstrap_config(
+    config: &mut config::Config,
+    ledger_manager: &scmessenger_core::store::LedgerManager,
+) {
+    if config.legacy_bootstrap_nodes.is_empty() {
+        return;
+    }
+    let outcome = bootstrap::migrate_legacy_bootstrap_nodes(
+        &mut config.legacy_bootstrap_nodes,
+        &mut config.legacy_bootstrap_nodes_rejected,
+        ledger_manager,
+    );
+    tracing::info!(
+        "[MIGRATION] legacy config bootstrap_nodes: found={} imported_as_unproven_seeds={} rejected_and_recorded={}",
+        outcome.found,
+        outcome.imported,
+        outcome.rejected
+    );
+    if outcome.rejected > 0 {
+        tracing::warn!(
+            "[MIGRATION] {} legacy address(es) were not imported; preserved in config key legacy_bootstrap_nodes_rejected",
+            outcome.rejected
+        );
+    }
+    if let Err(e) = config.save() {
+        tracing::warn!(
+            "[MIGRATION] failed to drop legacy bootstrap_nodes from config: {}",
+            e
+        );
+    }
+}
+
 async fn cmd_config(action: ConfigAction) -> Result<()> {
     let mut config = config::Config::load()?;
 
@@ -2388,7 +2429,7 @@ async fn cmd_start(
         );
         println!("  body: {}", body);
     }
-    let config = config::Config::load()?;
+    let mut config = config::Config::load()?;
     let ws_port = port.unwrap_or({
         if config.listen_port == 0 {
             9000 // Default to 9000 if config has random port
@@ -2478,6 +2519,10 @@ async fn cmd_start(
         scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
     );
 
+    // One-time #469 migration: pre-existing config `bootstrap_nodes` become
+    // unproven ledger seeds, then the key is dropped from the config file.
+    migrate_legacy_bootstrap_config(&mut config, &core.ledger_manager);
+
     // Subscribe to any topics discovered in the ledger from past sessions
     let known_topics = connection_ledger.all_known_topics();
 
@@ -2530,8 +2575,11 @@ async fn cmd_start(
         transport_bridge::TransportBridge::new(),
     ));
 
-    // Merge config bootstrap nodes with environment / default bootstrap nodes
-    let merged_bootstrap = bootstrap::merge_bootstrap_nodes(config.bootstrap_nodes.clone());
+    // Dial candidates come from the peer ledger only (no static seeds, #469).
+    let merged_bootstrap = bootstrap::ledger_candidate_addrs(&core.ledger_manager);
+    if merged_bootstrap.is_empty() {
+        tracing::info!("[DISCOVERY] cold: awaiting invite or LAN/BLE");
+    }
 
     // Build web context for landing page + public APIs
     let web_ctx = Arc::new(server::WebContext {
@@ -2560,7 +2608,7 @@ async fn cmd_start(
             scmessenger_core::transport::DiscoveryMode::Manual
         });
 
-    // Parse bootstrap node multiaddrs from merged list (relay also uses bootstrap nodes)
+    // Parse ledger-derived candidate multiaddrs (relay also uses these)
     let relay_bootstrap: Vec<libp2p::Multiaddr> = merged_bootstrap
         .iter()
         .filter_map(|addr| addr.parse().ok())
@@ -2675,24 +2723,28 @@ async fn cmd_start(
         });
     }
 
-    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // ── V040-T1 HALF 2 / #469 T6: boot-time seed dial (automatic rejoin) ──
     // A node whose address changed can never rejoin: nobody can dial it at
-    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
-    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
-    // then every 120s) until at least one peer is connected; re-arm when the
-    // peer count drops back to zero. The candidate list comes from the core
-    // ledger (proven + seed tiers), which the T2 unification populated from
-    // peers.json. One long-lived task -- never one task per attempt.
-    let seed_dial_swarm = swarm_handle.clone();
-    let seed_dial_core = core.clone();
-    tokio::spawn(async move {
-        let mut sweep: u32 = 0;
-        loop {
-            sweep += 1;
-            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-        }
-    });
+    // its old address, and it never dials out. Sweep the ledger candidates
+    // forever on the shared event-driven DiscoveryScheduler: a network event
+    // (interface change, peer lost, ...) resets the schedule to aggressive and
+    // wakes the loop immediately; with no events the interval decays with
+    // jitter toward a ceiling derived from peer density. No fixed ladder, no
+    // give-up. A lightweight interface-set monitor feeds LanInterfaceChanged
+    // events. One long-lived task each -- never one task per attempt.
+    let seed_dial_client = seed_dial::SeedDialClient::new();
+    {
+        let swarm = swarm_handle.clone();
+        let core_for_dial = core.clone();
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run(swarm, core_for_dial, client).await;
+        });
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run_interface_monitor(client).await;
+        });
+    }
 
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
@@ -3459,7 +3511,7 @@ async fn cmd_start(
                                                 println!("\n{} Delivered: {}", "[OK][OK]".green(), short_id);
                                                 print!("> ");
                                                 let _ = std::io::Write::flush(&mut std::io::stdout());
-                                                tracing::debug!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
+                                                tracing::info!("Delivery ACK received from {}: msg_id={}", peer_id, receipt.message_id);
 
                                                 // Mark the message as delivered in history
                                                 if let Err(e) = history_rx.mark_delivered(receipt.message_id.clone()) {
@@ -3646,16 +3698,6 @@ async fn cmd_start(
                                     if cfg.set(&key, &value).is_ok() {
                                         // Config updated
                                     }
-                                }
-                            }
-                            server::UiCommand::ConfigBootstrapAdd { multiaddr } => {
-                                if let Ok(mut cfg) = config::Config::load() {
-                                    let _ = cfg.add_bootstrap_node(multiaddr.clone());
-                                }
-                            }
-                            server::UiCommand::ConfigBootstrapRemove { multiaddr } => {
-                                if let Ok(mut cfg) = config::Config::load() {
-                                    let _ = cfg.remove_bootstrap_node(&multiaddr);
                                 }
                             }
                             server::UiCommand::FactoryReset => {
@@ -4095,11 +4137,13 @@ async fn cmd_relay(
     );
     println!();
 
-    // Load config for bootstrap nodes
-    let config = config::Config::load()?;
-    let all_bootstrap = bootstrap::merge_bootstrap_nodes(config.bootstrap_nodes.clone());
+    // Load config, run the one-time #469 legacy-seed migration, then derive
+    // dial candidates from the ledger only (no static seeds).
+    let mut config = config::Config::load()?;
+    migrate_legacy_bootstrap_config(&mut config, &core.ledger_manager);
+    let all_bootstrap = bootstrap::ledger_candidate_addrs(&core.ledger_manager);
     println!(
-        "  Bootstrap:    {} node(s)",
+        "  Ledger seeds: {} candidate(s)",
         all_bootstrap.len().to_string().bright_cyan()
     );
     for (i, node) in all_bootstrap.iter().enumerate() {
@@ -4108,13 +4152,10 @@ async fn cmd_relay(
     println!();
 
     // Connection ledger — dial state over the single core store
-    let mut connection_ledger = ledger::ConnectionLedger::new(
+    let connection_ledger = ledger::ConnectionLedger::new(
         scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
     );
     let known_topics = connection_ledger.all_known_topics();
-    for node in &all_bootstrap {
-        connection_ledger.add_bootstrap(node, Some(&local_peer_id.to_string()));
-    }
     let ledger = Arc::new(tokio::sync::Mutex::new(connection_ledger));
 
     // Peers map
@@ -4159,14 +4200,14 @@ async fn cmd_relay(
             scmessenger_core::transport::DiscoveryMode::Manual
         });
 
-    // Parse bootstrap node multiaddrs from config
+    // Parse ledger-derived candidate multiaddrs
     let bootstrap_multiaddrs: Vec<libp2p::Multiaddr> = all_bootstrap
         .iter()
         .filter_map(|addr| addr.parse().ok())
         .collect();
     if !bootstrap_multiaddrs.is_empty() {
         println!(
-            " Auto-dialing {} bootstrap node(s)",
+            " Auto-dialing {} ledger candidate(s)",
             bootstrap_multiaddrs.len()
         );
     }
@@ -4949,9 +4990,8 @@ async fn cmd_discovery(action: DiscoveryAction) -> Result<()> {
         DiscoveryAction::Peers => {
             let peers = api::get_discovery_peers().await?;
             println!("{}", "Locally Discovered Peers".bold());
-            if peers.is_empty() {
-                println!("  {}", "No peers discovered via local transports.".dimmed());
-            } else {
+            // #469 T9: no absence message; an empty list prints only the header.
+            if !peers.is_empty() {
                 for peer in peers {
                     println!(
                         "  • {} ({})",

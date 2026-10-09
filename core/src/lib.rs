@@ -16,6 +16,7 @@ pub mod error;
 pub mod identity;
 pub mod iron_core;
 pub mod message;
+pub mod message_events;
 pub mod mobile_bridge;
 pub mod notification;
 pub mod notification_defaults;

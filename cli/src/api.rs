@@ -1414,10 +1414,68 @@ fn export_diagnostics(
             .into(),
     );
     payload.insert(
+        "recent_message_events".to_string(),
+        recent_message_events_json(DIAG_RECENT_MSG_IDS, DIAG_EVENTS_PER_MSG),
+    );
+    payload.insert(
         "timestamp_ms".to_string(),
         chrono::Utc::now().timestamp_millis().into(),
     );
     Value::Object(payload).to_string()
+}
+
+/// Bounds for the `recent_message_events` diagnostics section (G9).
+const DIAG_RECENT_MSG_IDS: usize = 20;
+const DIAG_EVENTS_PER_MSG: usize = 8;
+
+/// Last events per message id (sent/custody/decrypt/history/receipt) from the
+/// bounded in-memory ring. Ids and fixed event names only: no content.
+fn recent_message_events_json(max_messages: usize, per_message: usize) -> Value {
+    let rows: Vec<Value> =
+        scmessenger_core::message_events::recent_message_events(max_messages, per_message)
+            .into_iter()
+            .map(|(msg_id, events)| {
+                let evs: Vec<Value> = events
+                    .into_iter()
+                    .map(|e| {
+                        let mut m = Map::new();
+                        m.insert("event".to_string(), e.kind.as_str().into());
+                        m.insert("ok".to_string(), e.ok.into());
+                        m.insert("ts_ms".to_string(), e.ts_ms.into());
+                        Value::Object(m)
+                    })
+                    .collect();
+                let mut m = Map::new();
+                m.insert("msg".to_string(), msg_id.into());
+                m.insert("events".to_string(), Value::Array(evs));
+                Value::Object(m)
+            })
+            .collect();
+    Value::Array(rows)
+}
+
+#[cfg(test)]
+mod message_events_diag_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_events_are_bounded_and_content_free() {
+        for i in 0..50 {
+            scmessenger_core::message_events::record(
+                &format!("diag-test-{i}"),
+                scmessenger_core::message_events::MessageEventKind::Sent,
+                true,
+            );
+        }
+        let v = recent_message_events_json(5, 2);
+        let rows = v.as_array().expect("array");
+        assert!(rows.len() <= 5);
+        for row in rows {
+            assert!(row["events"].as_array().expect("events").len() <= 2);
+            let keys: Vec<_> = row.as_object().expect("obj").keys().cloned().collect();
+            assert!(keys.iter().all(|k| k == "msg" || k == "events"));
+        }
+    }
 }
 
 async fn handle_get_connection_path_state(
