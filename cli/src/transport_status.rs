@@ -83,9 +83,10 @@ pub fn on_listening(addr: &str) {
     if let Some(kind) = classify_multiaddr(addr) {
         // Only the port goes into detail: the listen address itself can
         // include a LAN IP.
-        let detail = match addr.split('/').find_map(|seg| {
-            (!seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit())).then_some(seg)
-        }) {
+        let detail = match addr
+            .split('/')
+            .find(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()))
+        {
             Some(port) => format!("listen_port_{}", port),
             None => "listening".to_string(),
         };
