@@ -79,7 +79,7 @@ object UserStopStore {
 }
 
 internal object MeshAutoRestart {
-    private const val ENSURE_WORK_NAME = "com.scmessenger.mesh.ensure"
+    internal const val ENSURE_WORK_NAME = "com.scmessenger.mesh.ensure"
     internal const val ENSURE_NOTIFICATION_ID = 1002
 
     enum class Decision { START, ALREADY_RUNNING, USER_STOPPED }

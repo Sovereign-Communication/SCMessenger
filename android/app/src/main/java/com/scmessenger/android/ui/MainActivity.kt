@@ -419,6 +419,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Drop the delayed permission-reset post so the Handler does not hold this activity.
+        handler.removeCallbacksAndMessages(null)
         // Stop ANR watchdog when activity is destroyed
         try {
             anrWatchdog.stop()

@@ -366,6 +366,8 @@ class MeshForegroundService : Service() {
                     return
                 }
                 isRunning = true
+                // Re-enqueue the periodic re-ensure now that the user has asked for the mesh (KEEP: idempotent).
+                revivalWorkFor(applicationContext).onMeshStarted()
 
                 // Started/Stopped status is carried by the ongoing foreground
                 // service notification (same ID/channel/group). Posting a
@@ -548,6 +550,8 @@ class MeshForegroundService : Service() {
 
             Timber.i("Stopping mesh service")
             cancelLifecycleObservers()
+            // User Stop: no revival work may outlive it (periodic sync and ensure worker).
+            revivalWorkFor(applicationContext).onUserStopped()
             releaseWakeLock()
 
             // STOP-TEARDOWN-TIMEOUT-001: the repository stop and platform cleanup
