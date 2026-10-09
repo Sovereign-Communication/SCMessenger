@@ -66,6 +66,12 @@ pub const FD_SHARE: f64 = 0.5;
 /// the application and the OS page cache pressure it already causes.
 pub const MEMORY_SHARE: f64 = 0.5;
 
+/// Descriptors connections may use out of a soft limit (the rest is for sled,
+/// log files, listeners, DNS and the host application).
+pub fn connection_fd_share(soft_limit: u64) -> usize {
+    to_usize((soft_limit as f64 * FD_SHARE) as u64).max(1)
+}
+
 /// Conservative prior for the resident cost of one connection, used until
 /// RSS deltas have been measured. The review estimated 50-150 KB with about a
 /// dozen handlers; 256 KiB is above that range (also covering the Noise,
@@ -321,9 +327,7 @@ impl ResourceModel {
         scale_permille: u32,
     ) -> Option<Derived> {
         let descriptor_free = occupancy.total.saturating_sub(occupancy.fd);
-        let b_fd = snapshot
-            .fd_soft_limit
-            .map(|limit| to_usize((limit as f64 * FD_SHARE) as u64).max(1));
+        let b_fd = snapshot.fd_soft_limit.map(connection_fd_share);
         let b_mem = snapshot.mem_available.map(|avail| {
             let per = self.per_connection_bytes();
             let pool = occupancy.total as f64 * per + avail as f64;

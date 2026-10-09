@@ -40,8 +40,8 @@
 //! trigger the failover ledger re-exchange.
 
 use super::conn_resources::{
-    format_total_marker, platform_scale_permille, retain_share, sample_resources, Derived,
-    Occupancy, PressureKind, ResourceModel, ResourceSnapshot,
+    connection_fd_share, format_total_marker, platform_scale_permille, retain_share,
+    sample_resources, Derived, Occupancy, PressureKind, ResourceModel, ResourceSnapshot,
 };
 use super::path_budget::{
     addr_uses_fd, format_budget_marker, format_evict_marker, short_peer, tiebreak, Eviction,
@@ -60,6 +60,7 @@ use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use web_time::{Duration, Instant};
@@ -78,6 +79,27 @@ pub const RESOURCE_SAMPLE_QUANTA: u32 = 5;
 /// How often the machine is re-sampled.
 pub const RESOURCE_SAMPLE_INTERVAL: Duration =
     Duration::from_secs(EVAL_QUANTUM.as_secs() * RESOURCE_SAMPLE_QUANTA as u64);
+
+/// Consecutive quiet scheduling quanta (no OS exhaustion event) after which the
+/// pending-inbound cap is released without waiting for the periodic sample.
+/// Two: the first quiet quantum shows the accept errors have stopped, the
+/// second confirms it was not a lull between bursts. Releasing sooner than the
+/// 5-quantum sample stops flood and re-engage from oscillating for longer than
+/// the flood itself lasts; a renewed flood simply raises a new episode.
+pub const PENDING_CAP_QUIET_QUANTA: u32 = 2;
+
+/// How long a source address stays "known" without being seen again. Home and
+/// mobile addresses of contacts rotate on a scale of days (DHCP leases, carrier
+/// NAT); a stale entry only reserves a bounded pending allowance, so a week is
+/// generous without letting the set grow without limit.
+pub const KNOWN_SOURCE_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// A resource figure the latest probe failed to supply stands in for at most
+/// this many sample intervals. A probe fails under descriptor exhaustion, which
+/// lasts seconds; after three intervals the machine has changed enough that a
+/// remembered figure misleads more than it helps, and the bound is derived from
+/// the remaining inputs instead.
+pub const SNAPSHOT_MAX_AGE_SAMPLES: u32 = 3;
 
 /// Minimum spacing between log lines of one category (evictions per reason,
 /// hard-ceiling errors). Suppressed lines are counted, not lost: the next
@@ -234,6 +256,34 @@ pub fn local_dialed(endpoint: &ConnectedPoint) -> bool {
 struct PendingConn {
     start: Instant,
     inbound: bool,
+    /// Remote IP of an inbound connection (None for a non-IP transport).
+    src: Option<IpAddr>,
+    /// The source was a known one when the connection arrived.
+    known: bool,
+}
+
+/// The remote IP carried by a multiaddr, if any.
+fn source_ip(addr: &Multiaddr) -> Option<IpAddr> {
+    addr.iter().find_map(|p| match p {
+        libp2p::multiaddr::Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
+        libp2p::multiaddr::Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
+        _ => None,
+    })
+}
+
+/// The /24 (IPv4) or /48 (IPv6) a source address belongs to: the unit one
+/// access network or customer allocation hands out.
+fn source_prefix(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            IpAddr::V4(std::net::Ipv4Addr::new(o[0], o[1], o[2], 0))
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], 0, 0, 0, 0, 0))
+        }
+    }
 }
 
 /// Why a pending inbound connection was dropped at accept time.
@@ -268,6 +318,26 @@ pub struct AdmissionBehaviour {
     /// While OS pressure lasts: how many young pending inbound connections
     /// are tolerated before new ones are dropped at accept time.
     pending_cap: Option<usize>,
+    /// Young pending inbound per remote IP and per /24 (/48), and how many are
+    /// from known sources (kept in step with `pending`).
+    pending_by_ip: HashMap<IpAddr, usize>,
+    pending_by_prefix: HashMap<IpAddr, usize>,
+    pending_known: usize,
+    /// Source addresses of saved contacts, authenticated peers, relays and
+    /// bootstrap nodes, with when each was last confirmed.
+    known_sources: HashMap<IpAddr, Instant>,
+    /// Inbound handshakes completed in the current and previous quantum: what
+    /// honest arrival looks like, the floor of any pending cap.
+    completed_now: usize,
+    completed_prev: usize,
+    /// Consecutive quiet quanta while a pending cap is in force.
+    quiet_quanta: u32,
+    /// When the last pressure episode ran (episodes are one per quantum).
+    last_episode: Option<Instant>,
+    /// When each snapshot figure was last supplied by a probe.
+    fd_at: Instant,
+    mem_at: Instant,
+    rss_at: Instant,
     shed_log: RateGate,
     /// Closes to hand to the swarm on the next poll.
     to_close: VecDeque<(PeerId, ConnectionId)>,
@@ -306,6 +376,17 @@ impl AdmissionBehaviour {
             pending: HashMap::new(),
             pending_inbound: 0,
             pending_cap: None,
+            pending_by_ip: HashMap::new(),
+            pending_by_prefix: HashMap::new(),
+            pending_known: 0,
+            known_sources: HashMap::new(),
+            completed_now: 0,
+            completed_prev: 0,
+            quiet_quanta: 0,
+            last_episode: None,
+            fd_at: now,
+            mem_at: now,
+            rss_at: now,
             shed_log: RateGate::new(),
             to_close: VecDeque::new(),
             evicted_closed: HashMap::new(),
@@ -345,6 +426,10 @@ impl AdmissionBehaviour {
     pub fn with_sampler(mut self, sampler: fn() -> ResourceSnapshot) -> Self {
         self.sampler = sampler;
         self.snapshot = sampler();
+        let now = Instant::now();
+        self.fd_at = now;
+        self.mem_at = now;
+        self.rss_at = now;
         self
     }
 
@@ -356,22 +441,72 @@ impl AdmissionBehaviour {
 
     /// An outbound connection attempt started.
     pub fn begin_handshake(&mut self, id: ConnectionId, now: Instant) {
-        self.track_pending(id, now, false);
+        self.track_pending(id, now, false, None);
     }
 
     /// An inbound connection was accepted and is in its handshake.
     pub fn begin_inbound_handshake(&mut self, id: ConnectionId, now: Instant) {
-        self.track_pending(id, now, true);
+        self.track_pending(id, now, true, None);
     }
 
-    fn track_pending(&mut self, id: ConnectionId, now: Instant, inbound: bool) {
+    fn track_pending(
+        &mut self,
+        id: ConnectionId,
+        now: Instant,
+        inbound: bool,
+        src: Option<IpAddr>,
+    ) {
         if let std::collections::hash_map::Entry::Vacant(slot) = self.pending.entry(id) {
-            slot.insert(PendingConn {
+            let known = inbound && src.is_some_and(|ip| self.known_sources.contains_key(&ip));
+            let conn = PendingConn {
                 start: now,
                 inbound,
-            });
+                src,
+                known,
+            };
+            slot.insert(conn);
             if inbound {
                 self.pending_inbound += 1;
+                Self::count_in(
+                    &mut self.pending_by_ip,
+                    &mut self.pending_by_prefix,
+                    &mut self.pending_known,
+                    &conn,
+                );
+            }
+        }
+    }
+
+    fn count_in(
+        by_ip: &mut HashMap<IpAddr, usize>,
+        by_prefix: &mut HashMap<IpAddr, usize>,
+        known: &mut usize,
+        conn: &PendingConn,
+    ) {
+        if let Some(ip) = conn.src {
+            *by_ip.entry(ip).or_insert(0) += 1;
+            *by_prefix.entry(source_prefix(ip)).or_insert(0) += 1;
+        }
+        if conn.known {
+            *known += 1;
+        }
+    }
+
+    fn count_out(&mut self, conn: &PendingConn) {
+        if let Some(ip) = conn.src {
+            Self::dec(&mut self.pending_by_ip, ip);
+            Self::dec(&mut self.pending_by_prefix, source_prefix(ip));
+        }
+        if conn.known {
+            self.pending_known = self.pending_known.saturating_sub(1);
+        }
+    }
+
+    fn dec(map: &mut HashMap<IpAddr, usize>, key: IpAddr) {
+        if let Some(n) = map.get_mut(&key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                map.remove(&key);
             }
         }
     }
@@ -381,8 +516,18 @@ impl AdmissionBehaviour {
         let ended = self.pending.remove(id)?;
         if ended.inbound {
             self.pending_inbound = self.pending_inbound.saturating_sub(1);
+            self.count_out(&ended);
         }
         Some(ended.start)
+    }
+
+    /// Record a source address as known: a saved contact's or authenticated
+    /// peer's last-seen address, a relay or a bootstrap node. Pending inbound
+    /// from it keeps a reserved allowance when pressure caps the rest.
+    pub fn note_known_source(&mut self, addr: &Multiaddr) {
+        if let Some(ip) = source_ip(addr) {
+            self.known_sources.insert(ip, Instant::now());
+        }
     }
 
     /// A connection finished its handshake. Recomputes the peer's budget and
@@ -396,9 +541,13 @@ impl AdmissionBehaviour {
         local_dialed: bool,
         now: Instant,
     ) {
+        let inbound = self.pending.get(&id).is_some_and(|conn| conn.inbound);
         let handshake = self
             .end_handshake(&id)
             .map_or(Duration::ZERO, |start| now.saturating_duration_since(start));
+        if inbound {
+            self.completed_now = self.completed_now.saturating_add(1);
+        }
         let class = PathClass::of_addr(remote_addr);
         let (canonical, authority) = match self.local_peer {
             Some(local) => tiebreak(&local.to_bytes(), &peer.to_bytes(), local_dialed),
@@ -469,11 +618,15 @@ impl AdmissionBehaviour {
     }
 
     /// The OS refused a resource (accept, dial or listener error). Marks the
-    /// current tick as a pressure episode; any number of events inside one tick
-    /// are ONE episode (the count is diagnostic only).
+    /// the event for the next pressure episode; episodes run at most once per
+    /// scheduling quantum and carry every event raised since the last one.
     pub fn note_os_exhaustion(&mut self, kind: PressureKind) {
         self.pressure_events = self.pressure_events.saturating_add(1);
-        self.pressure_kind = Some(kind);
+        // Descriptor exhaustion is sticky within an episode: it is the kind
+        // pending sockets can cause.
+        if self.pressure_kind != Some(PressureKind::Fd) {
+            self.pressure_kind = Some(kind);
+        }
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
@@ -520,10 +673,25 @@ impl AdmissionBehaviour {
     /// True when `tick` has anything to do. Every part of `tick` is gated on
     /// one of these deadlines, so polling it earlier is a no-op.
     fn tick_due(&self, now: Instant) -> bool {
-        self.pressure_events > 0
+        self.episode_due(now)
             || now >= self.last_eval + EVAL_QUANTUM
             || now >= self.last_sample + RESOURCE_SAMPLE_INTERVAL
             || now >= self.last_marker + MARKER_INTERVAL
+    }
+
+    /// True when accumulated pressure events may become an episode: one per
+    /// scheduling quantum, however many polls the events arrive across.
+    fn episode_due(&self, now: Instant) -> bool {
+        self.pressure_events > 0
+            && self
+                .last_episode
+                .is_none_or(|at| now.saturating_duration_since(at) >= EVAL_QUANTUM)
+    }
+
+    /// Honest arrival rate: inbound handshakes that completed in the current
+    /// or previous quantum. Flooders do not complete handshakes.
+    fn honest_arrivals(&self) -> usize {
+        self.completed_now.max(self.completed_prev)
     }
 
     /// How long a pre-handshake inbound connection may stay pending before it
@@ -545,15 +713,90 @@ impl AdmissionBehaviour {
         self.pending.retain(|_, conn| {
             !(conn.inbound && now.saturating_duration_since(conn.start) > allowance)
         });
-        self.pending_inbound = self.pending.values().filter(|conn| conn.inbound).count();
+        self.pending_known = 0;
+        self.pending_by_ip.clear();
+        self.pending_by_prefix.clear();
+        let live: Vec<PendingConn> = self
+            .pending
+            .values()
+            .filter(|c| c.inbound)
+            .copied()
+            .collect();
+        self.pending_inbound = live.len();
+        for conn in &live {
+            Self::count_in(
+                &mut self.pending_by_ip,
+                &mut self.pending_by_prefix,
+                &mut self.pending_known,
+                conn,
+            );
+        }
     }
 
-    /// One pressure episode against pre-handshake inbound: write off the stale
-    /// ones, then retain a multiplicative share of the young ones as the bound.
-    fn shrink_pending_cap(&mut self, now: Instant) {
+    /// One descriptor-pressure episode against pre-handshake inbound. Applies
+    /// only when pending sockets plausibly caused it: they outnumber the
+    /// established descriptor-owning paths, or together fill the share of the
+    /// descriptor limit connections may use. Otherwise (an outbound dial hit
+    /// EMFILE with two handshakes in flight) honest first contacts are left
+    /// alone. The cap retains a multiplicative share of the young pending set,
+    /// never more than the measured descriptor headroom (connection share of
+    /// the soft limit minus established descriptors), never less than the
+    /// honest arrivals observed in the last two quanta.
+    fn shrink_pending_cap(&mut self, now: Instant, established_fd: usize) {
         self.write_off_stale_pending(now);
-        let cap = retain_share(self.pending_inbound).max(1);
-        self.pending_cap = Some(self.pending_cap.map_or(cap, |old| old.min(cap)));
+        let pending = self.pending_inbound;
+        let share = self.snapshot.fd_soft_limit.map(connection_fd_share);
+        let filled = share.is_some_and(|s| pending.saturating_add(established_fd) >= s);
+        if pending == 0 || !(pending > established_fd || filled) {
+            return;
+        }
+        let floor = self.honest_arrivals();
+        let mut cap = retain_share(pending).max(floor);
+        if let Some(s) = share {
+            cap = cap.min(s.saturating_sub(established_fd).max(floor));
+        }
+        let cap = self.pending_cap.map_or(cap, |old| old.min(cap)).max(floor);
+        self.pending_cap = Some(cap);
+    }
+
+    /// Merge a probe reading with the figures it failed to supply. A missing
+    /// figure stands in from the last reading for at most
+    /// `SNAPSHOT_MAX_AGE_SAMPLES` sample intervals, then is dropped.
+    fn merge_snapshot(&mut self, fresh: ResourceSnapshot, now: Instant) -> ResourceSnapshot {
+        let max_age = RESOURCE_SAMPLE_INTERVAL * SNAPSHOT_MAX_AGE_SAMPLES;
+        fn pick(
+            new: Option<u64>,
+            old: Option<u64>,
+            at: &mut Instant,
+            now: Instant,
+            max_age: Duration,
+        ) -> Option<u64> {
+            if new.is_some() {
+                *at = now;
+                new
+            } else if now.saturating_duration_since(*at) <= max_age {
+                old
+            } else {
+                None
+            }
+        }
+        ResourceSnapshot {
+            fd_soft_limit: pick(
+                fresh.fd_soft_limit,
+                self.snapshot.fd_soft_limit,
+                &mut self.fd_at,
+                now,
+                max_age,
+            ),
+            mem_available: pick(
+                fresh.mem_available,
+                self.snapshot.mem_available,
+                &mut self.mem_at,
+                now,
+                max_age,
+            ),
+            rss: pick(fresh.rss, self.snapshot.rss, &mut self.rss_at, now, max_age),
+        }
     }
 
     /// Periodic work: re-evaluate grace expiry, re-sample the machine, enforce
@@ -561,7 +804,7 @@ impl AdmissionBehaviour {
     /// from poll: every part is gated on its own deadline.
     pub fn tick(&mut self, now: Instant) {
         let periodic = now.saturating_duration_since(self.last_sample) >= RESOURCE_SAMPLE_INTERVAL;
-        let fresh = if periodic || self.pressure_events > 0 {
+        let fresh = if periodic || self.episode_due(now) {
             Some((self.sampler)())
         } else {
             None
@@ -583,7 +826,7 @@ impl AdmissionBehaviour {
         if let Some(snapshot) = fresh {
             // A probe that failed (it needs a descriptor, and descriptors are
             // what ran out) must not erase the last good figures.
-            self.snapshot = snapshot.or_last(&self.snapshot);
+            self.snapshot = self.merge_snapshot(snapshot, now);
             let occupancy = self.occupancy();
             self.resources.observe(snapshot.rss, occupancy.total);
             if periodic {
@@ -593,20 +836,40 @@ impl AdmissionBehaviour {
             }
             recompute = true;
         }
-        if self.pressure_events > 0 {
-            // ONE episode per tick, however many error events it held.
+        let mut had_episode = false;
+        if self.episode_due(now) {
+            // ONE episode per quantum, however many error events it carries;
+            // events raised between episodes wait for the next one.
             if let Some(kind) = self.pressure_kind.take() {
                 let occupancy = self.occupancy_for_pressure();
                 self.resources.note_pressure(kind, occupancy);
-                self.shrink_pending_cap(now);
+                if kind == PressureKind::Fd {
+                    self.shrink_pending_cap(now, occupancy.fd);
+                }
             }
             self.pressure_events = 0;
+            self.last_episode = Some(now);
+            self.quiet_quanta = 0;
+            had_episode = true;
             recompute = true;
         }
         if quantum {
             self.last_eval = now;
+            self.completed_prev = self.completed_now;
+            self.completed_now = 0;
+            self.known_sources
+                .retain(|_, seen| now.saturating_duration_since(*seen) < KNOWN_SOURCE_TTL);
             if self.pending_cap.is_some() {
                 self.write_off_stale_pending(now);
+                if had_episode || self.pressure_events > 0 {
+                    self.quiet_quanta = 0;
+                } else {
+                    self.quiet_quanta += 1;
+                    if self.quiet_quanta >= PENDING_CAP_QUIET_QUANTA {
+                        self.pending_cap = None;
+                        self.quiet_quanta = 0;
+                    }
+                }
             }
             let evictions = self.ledger.evaluate_all(now);
             self.queue(evictions, now);
@@ -637,6 +900,33 @@ impl AdmissionBehaviour {
         }
     }
 
+    /// Why a new pending inbound from `src` must be refused while `cap` is in
+    /// force (None: admit). Known sources have their own allowance, one
+    /// concurrent handshake per known address, so a flood cannot starve a
+    /// contact's reconnect. Everyone else shares `cap`, and no single IP or
+    /// /24 (/48) may hold more than an equal share of it among the sources
+    /// currently pending, so one source cannot fill the cap alone.
+    fn pending_refusal(&self, cap: usize, src: Option<IpAddr>) -> Option<&'static str> {
+        if src.is_some_and(|ip| self.known_sources.contains_key(&ip)) {
+            return (self.pending_known >= self.known_sources.len()).then_some("known-pool");
+        }
+        let general = self.pending_inbound.saturating_sub(self.pending_known);
+        if general >= cap {
+            return Some("cap");
+        }
+        let ip = src?;
+        let ip_limit = (cap / (self.pending_by_ip.len() + 1)).max(1);
+        if self.pending_by_ip.get(&ip).copied().unwrap_or(0) >= ip_limit {
+            return Some("per-ip");
+        }
+        let prefix = source_prefix(ip);
+        let prefix_limit = (cap / (self.pending_by_prefix.len() + 1)).max(1);
+        if self.pending_by_prefix.get(&prefix).copied().unwrap_or(0) >= prefix_limit {
+            return Some("per-prefix");
+        }
+        None
+    }
+
     /// Re-derive the total bound and evict whatever exceeds it. `keep` (the
     /// connection that triggered the check) is never chosen.
     fn enforce_total(&mut self, now: Instant, keep: Option<ConnectionId>) {
@@ -660,11 +950,20 @@ impl AdmissionBehaviour {
             && self.ledger.pending_closes() == 0
             && self.to_close.is_empty()
             && self.pending_cap.is_none()
+            && self.pressure_events == 0
         {
             return None;
         }
         let mut next =
             (self.last_sample + RESOURCE_SAMPLE_INTERVAL).min(self.last_marker + MARKER_INTERVAL);
+        if self.pressure_events > 0 {
+            if let Some(at) = self.last_episode {
+                next = next.min(at + EVAL_QUANTUM);
+            }
+        }
+        if self.pending_cap.is_some() {
+            next = next.min(self.last_eval + EVAL_QUANTUM);
+        }
         if let Some(deadline) = self.ledger.next_deadline(now) {
             next = next.min(deadline.max(self.last_eval + EVAL_QUANTUM));
         }
@@ -726,23 +1025,25 @@ impl NetworkBehaviour for AdmissionBehaviour {
         &mut self,
         connection_id: ConnectionId,
         _: &Multiaddr,
-        _: &Multiaddr,
+        send_back_addr: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
         let now = Instant::now();
+        let src = source_ip(send_back_addr);
         if let Some(cap) = self.pending_cap {
-            if self.pending_inbound >= cap {
+            if let Some(why) = self.pending_refusal(cap, src) {
                 if let Some(suppressed) = self.shed_log.permit(now, LOG_INTERVAL) {
                     tracing::warn!(
-                        "[CONN] pending-shed pending={} cap={} suppressed={}",
+                        "[CONN] pending-shed pending={} cap={} reason={} suppressed={}",
                         self.pending_inbound,
                         cap,
+                        why,
                         suppressed
                     );
                 }
                 return Err(ConnectionDenied::new(PendingShed));
             }
         }
-        self.begin_inbound_handshake(connection_id, now);
+        self.track_pending(connection_id, now, true, src);
         Ok(())
     }
 
@@ -763,7 +1064,7 @@ impl NetworkBehaviour for AdmissionBehaviour {
         _: &[Multiaddr],
         _: Endpoint,
     ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
-        self.begin_handshake(connection_id, Instant::now());
+        self.track_pending(connection_id, Instant::now(), false, None);
         Ok(Vec::new())
     }
 
@@ -1297,13 +1598,20 @@ mod tests {
         assert_eq!(b.pending_inbound, 500);
 
         // The flood exhausts descriptors: hundreds of ListenerError events per
-        // poll, for several ticks in a row.
+        // poll, for several quanta in a row. The flood keeps the pending set
+        // full of young sockets.
         let mut closed: Vec<(PeerId, ConnectionId)> = Vec::new();
+        let mut next_id = 200_000usize;
         for tick in 1..=6u64 {
+            let t = at(base, 1_500 * tick);
+            while b.pending_inbound < 500 {
+                b.track_pending(cid(next_id), t, true, None);
+                next_id += 1;
+            }
             for _ in 0..300 {
                 b.note_os_exhaustion(PressureKind::Fd);
             }
-            b.tick_with(at(base, 100 * tick), Some(fd_limit_1000()), false);
+            b.tick_with(t, Some(fd_limit_1000()), false);
             closed.extend(drain(&mut b));
         }
         for (peer, _) in &closed {
@@ -1327,8 +1635,9 @@ mod tests {
         // The flood's sockets age out or finish; once the pending set is under
         // the bound new inbound is accepted again (authenticated peers can
         // reconnect).
-        for n in 0..500 {
-            b.end_handshake(&cid(100_000 + n));
+        let ids: Vec<ConnectionId> = b.pending.keys().copied().collect();
+        for id in ids {
+            b.end_handshake(&id);
         }
         assert!(inbound_pending(&mut b, 10_000).is_ok());
 
@@ -1353,7 +1662,7 @@ mod tests {
         }
         for tick in 1..=15u64 {
             b.note_os_exhaustion(PressureKind::Fd);
-            b.tick_with(at(base, 100 * tick), Some(fd_limit_1000()), false);
+            b.tick_with(at(base, 1_500 * tick), Some(fd_limit_1000()), false);
         }
         let closes = drain(&mut b);
         assert_eq!(closes.len(), 11, "every stranger shed, bound converged");
@@ -1373,7 +1682,219 @@ mod tests {
         // A minute later none of them is young any more.
         b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
         assert_eq!(b.pending_inbound, 0);
-        assert_eq!(b.pending_cap, Some(1));
+        assert_eq!(
+            b.pending_cap, None,
+            "nothing pending after the write-off: no cap, certainly not a literal 1"
+        );
+    }
+
+    fn src_ip(last: u8, net: u8) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::new(10, 0, net, last))
+    }
+
+    /// `n` young pending inbound sockets spread over `sources` flooding IPs
+    /// (one /24 each), tracked as of `t`.
+    fn flood(b: &mut AdmissionBehaviour, n: usize, sources: u8, t: Instant) {
+        for i in 0..n {
+            let s = (i % usize::from(sources)) as u8;
+            b.track_pending(cid(300_000 + i), t, true, Some(src_ip(1, s)));
+        }
+    }
+
+    fn established_authenticated(b: &mut AdmissionBehaviour, n: usize, base: Instant) {
+        for i in 0..n {
+            let peer = PeerId::random();
+            b.path_established(peer, cid(i), &wan(), true, at(base, i as u64));
+            b.note_authenticated(peer);
+        }
+    }
+
+    #[test]
+    fn one_outbound_emfile_with_a_couple_of_pending_does_not_cap_honest_inbound() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        established_authenticated(&mut b, 20, base);
+        b.track_pending(cid(900), at(base, 50), true, Some(src_ip(1, 0)));
+        b.track_pending(cid(901), at(base, 50), true, Some(src_ip(2, 0)));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        assert_eq!(
+            b.pending_cap, None,
+            "two pending sockets did not cause descriptor exhaustion"
+        );
+        assert!(b
+            .handle_pending_inbound_connection(cid(902), &wan(), &wan())
+            .is_ok());
+        assert!(b
+            .handle_pending_inbound_connection(cid(903), &wan(), &wan())
+            .is_ok());
+    }
+
+    #[test]
+    fn a_flood_of_pending_sockets_derives_the_cap_from_headroom_and_arrivals() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        established_authenticated(&mut b, 20, base);
+        flood(&mut b, 500, 4, at(base, 10));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        // retain 3/4 of 500, below the headroom of 500 - 20 established.
+        assert_eq!(b.pending_cap, Some(375));
+    }
+
+    #[test]
+    fn the_cap_never_drops_below_observed_honest_arrivals() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        // 440 established paths plus forty honest inbound handshakes that
+        // completed this quantum: 480 of the 500 connection descriptors.
+        for i in 0..440usize {
+            b.path_established(PeerId::random(), cid(i), &wan(), true, at(base, 1));
+        }
+        for i in 0..40usize {
+            b.track_pending(cid(1_000 + i), at(base, 1), true, Some(src_ip(9, 9)));
+            b.path_established(PeerId::random(), cid(1_000 + i), &wan(), false, at(base, 2));
+        }
+        // Sixty pending sockets: headroom is only 20, retain-share 45.
+        flood(&mut b, 60, 4, at(base, 10));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        assert_eq!(
+            b.pending_cap,
+            Some(40),
+            "the cap keeps room for the 40 honest arrivals, not the headroom of 20"
+        );
+    }
+
+    #[test]
+    fn a_burst_of_events_within_one_quantum_is_one_episode() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        let honest = PeerId::random();
+        b.path_established(honest, cid(0), &wan(), true, base);
+        b.note_authenticated(honest);
+        for n in 1..=40usize {
+            b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
+        }
+        flood(&mut b, 500, 4, at(base, 10));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        let after_first = b.ledger.occupancy().0;
+        let cap = b.pending_cap;
+        assert!(after_first < 41, "the first episode shed some paths");
+        // Many events, each followed by a poll, all inside the same quantum.
+        for i in 1..=50u64 {
+            b.note_os_exhaustion(PressureKind::Fd);
+            assert!(
+                !b.tick_due(at(base, 100 + i)),
+                "no tick work inside the quantum"
+            );
+        }
+        assert_eq!(b.ledger.occupancy().0, after_first, "no further shrink");
+        assert_eq!(b.pending_cap, cap, "the pending cap did not compound");
+        assert_eq!(b.pressure_events, 50, "events are carried, not dropped");
+        // The next quantum runs ONE more episode for all of them.
+        let next = at(base, 100) + EVAL_QUANTUM;
+        assert!(b.tick_due(next));
+        b.tick_with(next, Some(fd_limit_1000()), false);
+        assert_eq!(b.pressure_events, 0);
+        assert!(b.ledger.occupancy().0 >= after_first * 3 / 4 - 1);
+        assert!(honest_alive(&b, honest));
+    }
+
+    fn honest_alive(b: &AdmissionBehaviour, peer: PeerId) -> bool {
+        b.ledger.live_paths(&peer) == 1
+    }
+
+    #[test]
+    fn a_known_contact_is_admitted_during_a_500_socket_flood_from_few_sources() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        established_authenticated(&mut b, 10, base);
+        let contact: Multiaddr = "/ip4/203.0.113.9/tcp/4001"
+            .parse()
+            .expect("valid multiaddr");
+        b.note_known_source(&contact);
+        flood(&mut b, 500, 4, at(base, 10));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        let cap = b.pending_cap.expect("flood capped");
+        assert!(b.pending_inbound >= cap, "the general allowance is full");
+
+        // The contact's reconnect is admitted from its reserved allowance.
+        let from_contact: Multiaddr = "/ip4/203.0.113.9/tcp/51234"
+            .parse()
+            .expect("valid multiaddr");
+        assert!(b
+            .handle_pending_inbound_connection(cid(1), &lan(4001), &from_contact)
+            .is_ok());
+        // One concurrent handshake per known address: it cannot be used to flood.
+        assert!(b
+            .handle_pending_inbound_connection(cid(2), &lan(4001), &from_contact)
+            .is_err());
+
+        // The flood drains partway. A flooder cannot refill the cap alone,
+        // but a new source is admitted.
+        for i in 0..200usize {
+            b.end_handshake(&cid(300_000 + i));
+        }
+        let flooder: Multiaddr = "/ip4/10.0.0.1/tcp/40000".parse().expect("valid multiaddr");
+        let newcomer: Multiaddr = "/ip4/198.51.100.7/tcp/40000"
+            .parse()
+            .expect("valid multiaddr");
+        assert!(b
+            .handle_pending_inbound_connection(cid(3), &lan(4001), &flooder)
+            .is_err());
+        assert!(b
+            .handle_pending_inbound_connection(cid(4), &lan(4001), &newcomer)
+            .is_ok());
+    }
+
+    #[test]
+    fn the_pending_cap_is_released_after_quiet_quanta_without_the_sample() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        established_authenticated(&mut b, 10, base);
+        flood(&mut b, 500, 4, at(base, 10));
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        assert!(b.pending_cap.is_some());
+        b.tick_with(at(base, 1_600), None, false);
+        assert!(b.pending_cap.is_some(), "one quiet quantum is not enough");
+        b.tick_with(at(base, 3_100), None, false);
+        assert!(
+            b.pending_cap.is_none(),
+            "{PENDING_CAP_QUIET_QUANTA} quiet quanta release the cap"
+        );
+    }
+
+    #[test]
+    fn a_remembered_resource_figure_expires() {
+        let base = Instant::now();
+        fn good() -> ResourceSnapshot {
+            ResourceSnapshot {
+                fd_soft_limit: Some(1000),
+                mem_available: Some(1 << 40),
+                rss: Some(1 << 20),
+            }
+        }
+        let degraded = ResourceSnapshot {
+            fd_soft_limit: Some(1000),
+            mem_available: None,
+            rss: None,
+        };
+        let mut b = AdmissionBehaviour::new().with_sampler(good);
+        b.tick_with(at(base, 5_000), Some(degraded), true);
+        assert_eq!(
+            b.snapshot.mem_available,
+            Some(1 << 40),
+            "recent figure stands"
+        );
+        let stale = RESOURCE_SAMPLE_INTERVAL * (SNAPSHOT_MAX_AGE_SAMPLES + 1);
+        b.tick_with(base + stale, Some(degraded), true);
+        assert_eq!(b.snapshot.mem_available, None, "an old figure is dropped");
+        assert_eq!(b.snapshot.rss, None);
+        assert_eq!(b.snapshot.fd_soft_limit, Some(1000));
     }
 
     #[test]

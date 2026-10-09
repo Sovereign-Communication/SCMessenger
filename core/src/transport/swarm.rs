@@ -173,6 +173,22 @@ fn inbound_message_is_validated(
     envelope_signed_by_known_contact(&core, &payload)
 }
 
+/// Refresh the admission standing of a peer that just produced validated
+/// traffic. Standing is otherwise sampled only at `ConnectionEstablished`, so a
+/// peer that became a contact (or earned reputation) mid-connection would stay
+/// unprotected until it reconnected.
+fn refresh_admission_standing(
+    admission: &mut super::admission::AdmissionBehaviour,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: PeerId,
+) {
+    let standing = peer_standing(core_handle, peer_id);
+    admission.note_reputation(peer_id, standing.reputation);
+    if standing.authenticated {
+        admission.note_authenticated(peer_id);
+    }
+}
+
 fn empty_ledger_exchange_response() -> LedgerExchangeResponse {
     LedgerExchangeResponse {
         version_tag: 1,
@@ -4315,6 +4331,8 @@ pub async fn start_swarm_with_config(
                 bootstrap_addrs.len()
             );
             for addr in &bootstrap_addrs {
+                // Bootstrap nodes are known sources for pending-inbound admission.
+                swarm.behaviour_mut().admission.note_known_source(addr);
                 // Self-dial check: skip bootstrap addrs whose p2p component
                 // matches our own peer ID (e.g. portproxy loopback).
                 let is_self = addr.iter().any(|proto| {
@@ -4943,7 +4961,12 @@ pub async fn start_swarm_with_config(
                                         inbound_message_is_validated(&core_handle, peer, &request.envelope_data)
                                     }
                                     request_response::Message::Response { request_id, response } => {
+                                        // An `accepted` reply from a peer we chose as a
+                                        // custody or relay target is free for a Sybil to
+                                        // give: it stamps only for saved contacts and
+                                        // peers with authenticated history.
                                         response.accepted
+                                            && peer_standing(&core_handle, peer).authenticated
                                             && (pending_custody_dispatches.contains_key(request_id)
                                                 || reconnect_request_to_message.contains_key(request_id)
                                                 || request_to_message.contains_key(request_id))
@@ -4951,6 +4974,7 @@ pub async fn start_swarm_with_config(
                                 };
                                 if admission_validated {
                                     swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
+                                    refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, peer);
                                 }
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
@@ -5889,6 +5913,7 @@ pub async fn start_swarm_with_config(
                                 // free to produce and proves nothing.
                                 if peer_standing(&core_handle, peer).authenticated {
                                     swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
+                                    swarm.behaviour_mut().admission.note_authenticated(peer);
                                 }
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
@@ -6960,6 +6985,9 @@ pub async fn start_swarm_with_config(
                                 swarm.behaviour_mut().admission.note_reputation(peer_id, standing.reputation);
                                 if standing.authenticated || known_relays.contains(&peer_id) {
                                     swarm.behaviour_mut().admission.note_authenticated(peer_id);
+                                    // Its address is a known source: pending inbound from
+                                    // it keeps a reserved allowance under accept pressure.
+                                    swarm.behaviour_mut().admission.note_known_source(&remote_addr);
                                 }
 
                                 // ZOMBIE tracker: register the path (connection id +
@@ -8812,6 +8840,8 @@ pub async fn start_swarm_with_config(
                 bootstrap_addrs.len()
             );
             for addr in &bootstrap_addrs {
+                // Bootstrap nodes are known sources for pending-inbound admission.
+                swarm.behaviour_mut().admission.note_known_source(addr);
                 // Self-dial check: skip bootstrap addrs whose p2p component
                 // matches our own peer ID (e.g. portproxy loopback).
                 let is_self = addr.iter().any(|proto| {
@@ -9281,6 +9311,7 @@ pub async fn start_swarm_with_config(
                                 {
                                     if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data) {
                                         swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
+                                        refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, *peer);
                                     }
                                 }
                                 match ev {
@@ -10060,6 +10091,7 @@ pub async fn start_swarm_with_config(
                                 swarm.behaviour_mut().admission.note_reputation(peer_id, standing.reputation);
                                 if standing.authenticated {
                                     swarm.behaviour_mut().admission.note_authenticated(peer_id);
+                                    swarm.behaviour_mut().admission.note_known_source(&remote_addr);
                                 }
                                 // R8-F4: the zero-to-one connection transition drives the
                                 // reconnect flush on native; capture the same signal here

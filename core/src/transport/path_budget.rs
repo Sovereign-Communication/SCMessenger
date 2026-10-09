@@ -760,7 +760,22 @@ pub struct PathLedger<C, I> {
     /// decision. Registered at every mutation that creates a deadline, so it is
     /// never later than the true next deadline; a stale (too early) value only
     /// costs one spurious recompute.
-    deadline_hint: Option<Instant>,
+    deadline_hint: DeadlineHint,
+    /// Full-ledger deadline scans performed (tests prove polls do not scan).
+    #[cfg(test)]
+    scans: u64,
+}
+
+/// What the ledger knows about its next time-driven deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeadlineHint {
+    /// Nothing recorded: the next query scans once and caches the answer.
+    Unknown,
+    /// A scan (kept current by every mutation that creates a deadline) found
+    /// nothing time-sensitive. Queries are O(1) and never rescan.
+    Nothing,
+    /// Lower bound on the next deadline.
+    At(Instant),
 }
 
 impl<C, I> Default for PathLedger<C, I> {
@@ -770,7 +785,9 @@ impl<C, I> Default for PathLedger<C, I> {
             baseline: HandshakeBaseline::default(),
             trust: HashMap::new(),
             counts: Counts::default(),
-            deadline_hint: None,
+            deadline_hint: DeadlineHint::Unknown,
+            #[cfg(test)]
+            scans: 0,
         }
     }
 }
@@ -854,7 +871,13 @@ where
         if at <= now {
             return;
         }
-        self.deadline_hint = Some(self.deadline_hint.map_or(at, |h| h.min(at)));
+        self.deadline_hint = match self.deadline_hint {
+            // Unknown stays unknown: the pending scan will see this deadline
+            // too, and a lone registration is not a lower bound on the rest.
+            DeadlineHint::Unknown => DeadlineHint::Unknown,
+            DeadlineHint::Nothing => DeadlineHint::At(at),
+            DeadlineHint::At(h) => DeadlineHint::At(h.min(at)),
+        };
     }
 
     /// Re-evaluate every peer that holds more than one path (grace windows
@@ -1034,7 +1057,7 @@ where
                     reason: EvictReason::OverTotal,
                     class,
                 });
-                self.deadline_hint = Some(self.deadline_hint.map_or(due, |h| h.min(due)));
+                self.hint_deadline(due, now);
                 excess_total = excess_total.saturating_sub(1);
                 if c.uses_fd {
                     excess_fd = excess_fd.saturating_sub(1);
@@ -1153,6 +1176,7 @@ where
     /// [`SILENCE_INTERVALS`] grace windows. Each is re-armed.
     pub fn due_reissue(&mut self, now: Instant) -> Vec<(C, I)> {
         let mut due = Vec::new();
+        let mut reissued = Vec::new();
         for (peer, paths) in self.peers.iter_mut() {
             for path in paths.iter_mut() {
                 let after = path.grace * SILENCE_INTERVALS;
@@ -1160,9 +1184,13 @@ where
                     if now.saturating_duration_since(closing.issued_at) >= after {
                         closing.issued_at = now;
                         due.push((*peer, path.id));
+                        reissued.push(now + after);
                     }
                 }
             }
+        }
+        for at in reissued {
+            self.hint_deadline(at, now);
         }
         due
     }
@@ -1178,15 +1206,27 @@ where
     /// (O(paths)) to find the true next deadline, so the cost is paid per fired
     /// deadline, not per poll.
     pub fn next_deadline(&mut self, now: Instant) -> Option<Instant> {
-        if let Some(hint) = self.deadline_hint {
-            if hint > now {
-                return Some(hint);
-            }
-        } else if self.counts.live <= 1 && self.counts.closing == 0 {
-            return None;
+        match self.deadline_hint {
+            DeadlineHint::At(hint) if hint > now => return Some(hint),
+            // A scan already proved nothing is time-driven, and every
+            // mutation that creates a deadline registers it: no rescan, however
+            // many peers are connected and however often this is polled.
+            DeadlineHint::Nothing => return None,
+            _ => {}
+        }
+        #[cfg(test)]
+        {
+            self.scans += 1;
         }
         let scanned = self.scan_next_deadline(now);
-        self.deadline_hint = scanned.filter(|at| *at > now);
+        self.deadline_hint = match scanned {
+            None => DeadlineHint::Nothing,
+            // Due now: the caller acts on it at its next scheduling quantum, so
+            // cache one quantum ahead rather than rescanning on every poll
+            // until it fires. Mutations register earlier deadlines over this.
+            Some(at) if at <= now => DeadlineHint::At(now + EVAL_QUANTUM),
+            Some(at) => DeadlineHint::At(at),
+        };
         scanned
     }
 
@@ -2124,6 +2164,30 @@ mod tests {
         // Once it has passed, a fresh deadline is found by one scan.
         let later = ledger.next_deadline(first + Duration::from_millis(1));
         assert!(later.is_some_and(|d| d > first));
+    }
+
+    #[test]
+    fn repeated_polls_with_no_deadline_do_not_scan() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        // Several single-path peers: the normal case, nothing time-driven.
+        for peer in 0..8u32 {
+            ledger.on_established(peer, 100 + peer, PathClass::Lan, rtt(), at(base, 0));
+        }
+        assert_eq!(ledger.next_deadline(at(base, 1)), None);
+        let scans = ledger.scans;
+        for ms in 2..500 {
+            assert_eq!(ledger.next_deadline(at(base, ms)), None);
+        }
+        assert_eq!(ledger.scans, scans, "no scan after the answer is known");
+        // A mutation that creates a deadline is seen without a rescan.
+        ledger.on_established(0, 900, PathClass::WanV4, rtt(), at(base, 600));
+        assert!(ledger.next_deadline(at(base, 601)).is_some());
+        let scans = ledger.scans;
+        for ms in 602..700 {
+            assert!(ledger.next_deadline(at(base, ms)).is_some());
+        }
+        assert_eq!(ledger.scans, scans);
     }
 
     #[test]
