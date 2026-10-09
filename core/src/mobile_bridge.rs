@@ -916,6 +916,9 @@ impl MeshService {
                                             }
                                         });
                                     }
+                                    let registration_gate = RegistrationGate::new(
+                                        MAX_CONCURRENT_REGISTRATIONS,
+                                    );
                                     while let Some(event) = event_rx.recv().await {
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
@@ -1099,6 +1102,7 @@ impl MeshService {
                                                     // with a hard timeout.
                                                     let reg_handle = handle.clone();
                                                     spawn_bounded_registration(
+                                                        &registration_gate,
                                                         peer_id.to_string(),
                                                         REGISTRATION_ATTEMPT_TIMEOUT,
                                                         async move {
@@ -3226,28 +3230,82 @@ pub struct HistoryStats {
 /// Upper bound for one background identity-registration attempt.
 const REGISTRATION_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
+/// Maximum registration round trips in flight at once (PR #512 review F1).
+const MAX_CONCURRENT_REGISTRATIONS: usize = 8;
+
+/// Bounds detached registration tasks: at most one per peer, and at most
+/// `cap` overall. Excess attempts are skipped, never queued.
+#[derive(Clone)]
+struct RegistrationGate {
+    in_flight: Arc<Mutex<HashSet<String>>>,
+    permits: Arc<tokio::sync::Semaphore>,
+}
+
+impl RegistrationGate {
+    fn new(cap: usize) -> Self {
+        Self {
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            permits: Arc::new(tokio::sync::Semaphore::new(cap)),
+        }
+    }
+
+    #[cfg(test)]
+    fn pending(&self) -> usize {
+        self.in_flight.lock().len()
+    }
+}
+
+/// Last 8 characters of a peer id, for compact log lines.
+fn short_peer(peer: &str) -> String {
+    let skip = peer.chars().count().saturating_sub(8);
+    peer.chars().skip(skip).collect()
+}
+
 /// Run a registration round trip off the swarm-event drain loop, bounded by
 /// `timeout`, logging (never propagating) any failure. Returns immediately.
-fn spawn_bounded_registration<F, E>(peer: String, timeout: std::time::Duration, fut: F)
+/// Skipped (returns false) when `peer` already has a registration in flight or
+/// the global cap is reached.
+fn spawn_bounded_registration<F, E>(
+    gate: &RegistrationGate,
+    peer: String,
+    timeout: std::time::Duration,
+    fut: F,
+) -> bool
 where
     F: std::future::Future<Output = Result<(), E>> + Send + 'static,
     E: fmt::Debug,
 {
+    let Ok(permit) = gate.permits.clone().try_acquire_owned() else {
+        tracing::debug!(
+            "Registration with {} skipped: concurrency cap",
+            short_peer(&peer)
+        );
+        return false;
+    };
+    if !gate.in_flight.lock().insert(peer.clone()) {
+        return false;
+    }
+    let in_flight = gate.in_flight.clone();
     tokio::spawn(async move {
+        let _permit = permit;
         match tokio::time::timeout(timeout, fut).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 tracing::warn!("Failed to register local identity with {}: {:?}", peer, err);
             }
             Err(_) => {
-                tracing::warn!(
-                    "Registration with {} timed out after {:?}; continuing",
-                    peer,
-                    timeout
+                let pending = in_flight.lock().len();
+                tracing::info!(
+                    "[RX-STALL] register_identity peer={} timeout_ms={} pending={}",
+                    short_peer(&peer),
+                    timeout.as_millis(),
+                    pending
                 );
             }
         }
+        in_flight.lock().remove(&peer);
     });
+    true
 }
 
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
@@ -4454,9 +4512,11 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     #[tokio::test(flavor = "current_thread")]
-    async fn stalled_registration_does_not_block_event_drain() {
+    async fn stalled_registration_times_out_and_next_event_is_processed() {
         // Models the drain loop: event 1 triggers a registration that never
-        // completes; event 2 (an inbound message) must still be processed.
+        // completes; event 2 (an inbound message) must still be processed, and
+        // the injected short timeout must fire and release the in-flight slot.
+        let gate = super::RegistrationGate::new(4);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(8);
         tx.send(1).await.expect("send 1");
         tx.send(2).await.expect("send 2");
@@ -4464,31 +4524,61 @@ mod tests {
         for _ in 0..2 {
             let ev = rx.recv().await.expect("event");
             if ev == 1 {
-                super::spawn_bounded_registration(
+                assert!(super::spawn_bounded_registration(
+                    &gate,
                     "peer-stall".to_string(),
                     std::time::Duration::from_millis(50),
                     std::future::pending::<Result<(), String>>(),
-                );
+                ));
+                assert_eq!(gate.pending(), 1);
             }
             processed.push(ev);
         }
         assert_eq!(processed, vec![1, 2]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while gate.pending() != 0 {
+            assert!(std::time::Instant::now() < deadline, "timeout never fired");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(gate.permits.available_permits(), 4);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn registration_gate_dedups_per_peer_and_caps_globally() {
+        let gate = super::RegistrationGate::new(2);
+        let long = std::time::Duration::from_secs(30);
+        let spawn = |peer: &str| {
+            super::spawn_bounded_registration(
+                &gate,
+                peer.to_string(),
+                long,
+                std::future::pending::<Result<(), String>>(),
+            )
+        };
+        assert!(spawn("peer-a"));
+        assert!(!spawn("peer-a"), "same peer must be deduplicated");
+        assert!(spawn("peer-b"));
+        assert!(!spawn("peer-c"), "global cap of 2 must reject a third peer");
+        assert_eq!(gate.pending(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn bounded_registration_runs_detached_and_reports_errors() {
+        let gate = super::RegistrationGate::new(2);
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = done.clone();
-        super::spawn_bounded_registration(
+        assert!(super::spawn_bounded_registration(
+            &gate,
             "peer-err".to_string(),
             std::time::Duration::from_secs(5),
             async move {
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 Err::<(), _>("rejected".to_string())
             },
-        );
+        ));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(gate.pending(), 0, "slot must be released after an error");
     }
 
     use super::*;

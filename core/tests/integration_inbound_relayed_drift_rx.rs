@@ -8,7 +8,7 @@
 //! Run with:
 //!   cargo test --test integration_inbound_relayed_drift_rx
 
-use scmessenger_core::drift::{DriftFrame, FrameType};
+use scmessenger_core::drift::{DriftEnvelope, DriftFrame, FrameType};
 use scmessenger_core::{IronCore, MessageType};
 
 fn make_node() -> IronCore {
@@ -84,4 +84,50 @@ fn corrupted_relayed_frame_is_a_loud_error_not_silent_success() {
     bad.truncate(bad.len() / 2);
     assert!(bob.receive_message(bad).is_err());
     assert!(bob.receive_message(Vec::new()).is_err());
+}
+
+/// Parse the envelope, mutate one byte inside an authenticated region, and
+/// re-encode. Re-encoding keeps the frame well-formed, so rejection must come
+/// from signature/AEAD verification and not from a decode failure.
+fn tampered(envelope_data: &[u8], mutate: impl FnOnce(&mut DriftEnvelope)) -> Vec<u8> {
+    let mut env = DriftEnvelope::from_bytes(envelope_data).expect("envelope parses");
+    mutate(&mut env);
+    env.to_bytes().expect("tampered envelope still encodes")
+}
+
+#[test]
+fn tampered_ciphertext_or_signature_is_rejected_and_nothing_persisted() {
+    let alice = make_node();
+    let bob = make_node();
+    let prepared = alice
+        .prepare_message(pubkey(&bob), "secret".to_string(), MessageType::Text, None)
+        .expect("prepare_message must succeed");
+
+    let flipped_ciphertext = tampered(&prepared.envelope_data, |env| {
+        assert!(!env.ciphertext.is_empty());
+        let mid = env.ciphertext.len() / 2;
+        env.ciphertext[mid] ^= 0x01;
+    });
+    assert!(
+        bob.receive_message(flipped_ciphertext).is_err(),
+        "ciphertext tamper must be rejected"
+    );
+
+    let flipped_signature = tampered(&prepared.envelope_data, |env| {
+        env.signature[0] ^= 0x01;
+    });
+    assert!(
+        bob.receive_message(flipped_signature).is_err(),
+        "signature tamper must be rejected"
+    );
+
+    let records = bob
+        .history_store_manager()
+        .recent_including_hidden(Some(identity_id(&alice)), 10)
+        .expect("history readable");
+    assert!(records.is_empty(), "rejected frames must not be persisted");
+
+    // The untouched original still decrypts: the rejections left no state.
+    bob.receive_message(prepared.envelope_data)
+        .expect("pristine envelope must still be accepted");
 }
