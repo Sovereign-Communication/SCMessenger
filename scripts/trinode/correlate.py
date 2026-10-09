@@ -495,6 +495,11 @@ def drop_and_stop_summary(events: Sequence[dict], nodes: Sequence[str]) -> dict:
         if e["event"] == "rx_drop":
             key = f"{e['detail'].get('stage')}/{e['detail'].get('reason')}"
             drops.setdefault(e["node"], defaultdict(int))[key] += 1
+        elif e["event"] == "rx_drop_suppressed":
+            key = f"{e['detail'].get('stage')}/suppressed"
+            drops.setdefault(e["node"], defaultdict(int))[key] += int(e["detail"].get("count") or 0)
+        elif e["event"] == "rx_stall":
+            drops.setdefault(e["node"], defaultdict(int))["rx/stall"] += 1
         elif e["event"] == "mesh_stop":
             stops.setdefault(e["node"], []).append(
                 {"phase": e["detail"].get("phase"), "result": e["detail"].get("result"),

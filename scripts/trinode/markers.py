@@ -30,6 +30,8 @@ Event vocabulary used by the correlator:
   routing_peer_seen    [ROUTING] peer_seen (routing engine fed a sighting)
   transport_status     [TRANSPORT] kind/state/detail (+ peers=N periodic)
   rx_drop              [RX-DROP] receiver dropped a message (stage/reason)
+  rx_drop_suppressed   [RX-DROP] suppressed=<n> stage=<s> (#512)
+  rx_stall             [RX-STALL] receive-path stall (#512)
   mesh_stop            [MESH-STOP] stop sequence phases
 """
 from __future__ import annotations
@@ -212,6 +214,14 @@ MARKERS: List[Marker] = [
        r"\[RX-DROP\] msg=(?P<msg>\S+) stage=(?P<stage>\S+) reason=(?P<reason>\S+)",
        "sibling agent PR (format: [RX-DROP] msg=<id> stage=<stage> reason=<r>)",
        evidence=False, note="receiver dropped an inbound message; explains a PARTIAL"),
+    _m("rx_drop_suppressed", "rx_drop_suppressed",
+       r"\[RX-DROP\] suppressed=(?P<count>\d+) stage=(?P<stage>\S+)",
+       "sibling agent PR #512 (format: [RX-DROP] suppressed=<n> stage=<s>)",
+       evidence=False, note="rate-limited rx-drop lines folded into a count"),
+    _m("rx_stall", "rx_stall",
+       r"\[RX-STALL\](?: (?P<fields>.*))?$",
+       "sibling agent PR #512 ([RX-STALL] receive-path stall watchdog)",
+       evidence=False, note="receive path stalled; fields kept as raw sanitized text"),
     _m("mesh_stop", "mesh_stop",
        r"\[MESH-STOP\] (?P<phase>requested|swarm_shutdown|rust_stop|foreground_removed|complete)"
        r"(?: (?P<result>ok|timeout))?(?: ms=(?P<ms>\d+))?",

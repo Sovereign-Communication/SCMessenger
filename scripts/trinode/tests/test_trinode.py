@@ -368,6 +368,13 @@ class TestObservabilityMarkers(unittest.TestCase):
         e = self._ev("windows", "rx_history msg=m1 from=abcdef0123456789 result=failed dup=false hidden=false")
         self.assertEqual(e[0]["event"], "rx_history_failed")
 
+    def test_rx_drop_suppressed_and_stall(self):
+        e = self._ev("android", "[RX-DROP] suppressed=7 stage=decode")
+        self.assertEqual(e[0]["event"], "rx_drop_suppressed")
+        self.assertEqual(e[0]["detail"]["count"], "7")
+        e = self._ev("android", "[RX-STALL] idle_ms=30000")
+        self.assertEqual(e[0]["event"], "rx_stall")
+
     def test_rx_drop_and_mesh_stop(self):
         e = self._ev("android", "[RX-DROP] msg=m9 stage=decode reason=bad_sig")
         self.assertEqual((e[0]["event"], e[0]["msg_id"], e[0]["detail"]["stage"], e[0]["detail"]["reason"]),
