@@ -821,6 +821,9 @@ impl MeshService {
                         rt.block_on(async move {
                             let mut startup_signal = Some(startup_tx);
                             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
+                            // [RX-STALL] drain-loop watchdog state (see the thread
+                            // spawned just before the drain loop below).
+                            let drain_watch_tx = event_tx.downgrade();
 
                             // This site already cloned out of the guard rather than
                             // holding it; stated directly now so it reads the same
@@ -916,7 +919,45 @@ impl MeshService {
                                             }
                                         });
                                     }
+                                    // [RX-STALL] watchdog. The drain loop runs on a
+                                    // current_thread runtime and its handlers are
+                                    // synchronous, so a stalled handler also stalls any
+                                    // task on this runtime: the watchdog is a plain OS
+                                    // thread. It holds only a WeakSender, so it does not
+                                    // keep the channel open and exits once the swarm drops.
+                                    let drain_started = std::time::Instant::now();
+                                    let drain_progress_ms =
+                                        Arc::new(std::sync::atomic::AtomicU64::new(0));
+                                    {
+                                        let progress = Arc::clone(&drain_progress_ms);
+                                        let weak_tx = drain_watch_tx;
+                                        let _ = std::thread::Builder::new()
+                                            .name("rx-stall-watchdog".to_string())
+                                            .spawn(move || loop {
+                                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                                let Some(tx) = weak_tx.upgrade() else { break };
+                                                let backlog =
+                                                    tx.max_capacity().saturating_sub(tx.capacity());
+                                                drop(tx);
+                                                let idle_ms = (drain_started.elapsed().as_millis() as u64)
+                                                    .saturating_sub(
+                                                        progress.load(std::sync::atomic::Ordering::Relaxed),
+                                                    );
+                                                if backlog > 0 && idle_ms >= 30_000 {
+                                                    tracing::warn!(
+                                                        "{}",
+                                                        crate::message_events::fmt_rx_stall_drain(
+                                                            idle_ms, backlog
+                                                        )
+                                                    );
+                                                }
+                                            });
+                                    }
                                     while let Some(event) = event_rx.recv().await {
+                                        drain_progress_ms.store(
+                                            drain_started.elapsed().as_millis() as u64,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
                                                 peer_id,
