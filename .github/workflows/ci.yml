@@ -55,6 +55,7 @@ jobs:
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
+
   naming-policy:
     name: Naming policy
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
@@ -97,25 +98,23 @@ jobs:
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
+
   lint:
     name: Lint
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Detect docs-only change
         id: docs_only
         uses: ./.github/actions/detect-docs-only
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.docs_only.outputs.is_docs_only != 'true' && runner.environment != 'self-hosted'
+        if: steps.docs_only.outputs.is_docs_only != 'true'
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         if: steps.docs_only.outputs.is_docs_only != 'true'
-      - name: Install Linux build dependencies
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
         if: steps.docs_only.outputs.is_docs_only != 'true'
-        uses: ./.github/actions/linux-build-deps
       - run: cargo fmt --check
         if: steps.docs_only.outputs.is_docs_only != 'true'
       - run: cargo clippy --workspace --all-features -- -D warnings
@@ -124,21 +123,10 @@ jobs:
       # deps against the live index, and tinyvec 1.13.0 fails to compile on
       # the runner toolchain, killing the Lint gate (tinyvec 1.11.0 in
       # cargo-deny 0.20.2's shipped Cargo.lock is known-good).
-      # The self-hosted runner keeps ~/.cargo/bin between jobs, so reuse a
-      # matching cargo-deny instead of recompiling it on every run.
-      - name: Install cargo-deny 0.20.2
+      - run: cargo install cargo-deny --version 0.20.2 --locked
         if: steps.docs_only.outputs.is_docs_only != 'true'
-        run: |
-          if cargo deny --version 2>/dev/null | grep -q '0\.20\.2'; then
-            echo "[OK] cargo-deny 0.20.2 already installed"
-          else
-            cargo install cargo-deny --version 0.20.2 --locked
-          fi
       - run: cargo deny check
         if: steps.docs_only.outputs.is_docs_only != 'true'
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   orchestration:
     name: Orchestration control plane
@@ -162,9 +150,10 @@ jobs:
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
+
   test:
     name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && ((github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest') || matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -183,15 +172,13 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true') && runner.environment != 'self-hosted'
+        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - uses: Swatinem/rust-cache@v2
         if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
       - name: Install libdbus-1-dev (Ubuntu)
         if: matrix.os == 'ubuntu-latest' && steps.docs_only.outputs.is_docs_only != 'true'
-        uses: ./.github/actions/linux-build-deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       # Only Windows runners lack a preinstalled/vendored protoc; matches the
       # manual cross-platform-test.yml dispatch workflow's test-windows job.
       - name: Install protoc (Windows)
@@ -209,13 +196,10 @@ jobs:
       - name: Run workspace tests
         if: matrix.os != 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
         run: cargo test --workspace --features test-utils
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   docs:
     name: Docs
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       # One owner decides: the platform gate subsumes the docs-only gate, because
@@ -225,24 +209,18 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
-      - name: Install Linux build dependencies
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: ./.github/actions/linux-build-deps
       - run: cargo doc --workspace --no-deps
         if: steps.platform.outputs.rust_relevant == 'true'
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   ffi-surface:
     name: FFI Surface Contract
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       # One owner decides: the platform gate subsumes the docs-only gate, because
@@ -252,15 +230,12 @@ jobs:
       - name: Detect platform-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
-      - name: Install Linux build dependencies
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: ./.github/actions/linux-build-deps
       # gen_kotlin/gen_swift locate the compiled cdylib by filesystem path at
       # runtime rather than through a Cargo dependency edge, so `cargo run`
       # alone doesn't guarantee it's been built (verified: deleting the
@@ -274,9 +249,6 @@ jobs:
         if: steps.platform.outputs.rust_relevant == 'true'
       - run: scripts/ffi_surface.sh
         if: steps.platform.outputs.rust_relevant == 'true'
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   windows-cli-artifact:
     name: Windows CLI Artifact

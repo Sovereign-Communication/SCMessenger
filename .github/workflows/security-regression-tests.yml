@@ -75,7 +75,7 @@ env:
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -94,10 +94,8 @@ jobs:
       # and an unpinned `stable` is exactly the drift the repo pin exists to
       # prevent: scripts/check_toolchain_pin.py fails closed on it, and left
       # alone it would turn this repo red on an unrelated diff one day.
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: steps.platform.outputs.rust_relevant == 'true'
 
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -108,7 +106,7 @@ jobs:
 
       - name: Install libdbus-1-dev (Ubuntu)
         if: steps.platform.outputs.rust_relevant == 'true'
-        uses: ./.github/actions/linux-build-deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Run forgery/negative-security regression tests
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -148,6 +146,3 @@ jobs:
           fi
 
           echo "[OK] $MATCHED forgery/negative-security regression test(s) selected and passed"
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
