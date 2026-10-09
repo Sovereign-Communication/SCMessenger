@@ -207,7 +207,7 @@ impl ContactManager {
         Ok(())
     }
 
-    /// Get a contact by peer ID
+    /// Get a contact by peer ID, public key, or identity ID
     // UNIFICATION verbose logging for nickname load
     pub fn get(&self, peer_id: String) -> Result<Option<Contact>, crate::IronCoreError> {
         let db = self.db.lock();
@@ -225,17 +225,22 @@ impl ContactManager {
                 local_nickname = ?contact.local_nickname,
                 "UNIFICATION loaded contact nickname"
             );
-            Ok(Some(contact))
-        } else {
-            Ok(None)
+            return Ok(Some(contact));
         }
+        // Fallback: the row may be filed under a different spelling of the
+        // same identity (libp2p peer id vs public-key hex vs identity id).
+        Ok(Self::scan_for_identifier(&db, &peer_id)?.map(|(_, contact)| contact))
     }
 
-    /// Remove a contact
+    /// Remove a contact by peer ID, public key, or identity ID
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         db.remove(peer_id.as_bytes())
             .map_err(|_| crate::IronCoreError::StorageError)?;
+        if let Some((key, _)) = Self::scan_for_identifier(&db, &peer_id)? {
+            db.remove(key)
+                .map_err(|_| crate::IronCoreError::StorageError)?;
+        }
         Ok(())
     }
 
@@ -495,6 +500,48 @@ impl ContactManager {
     }
 }
 
+// Internal helpers: kept out of the `#[uniffi::export]` block (associated
+// functions without `self` are not exportable).
+impl ContactManager {
+    /// Does `contact` answer to `identifier` (peer id or public key, case
+    /// insensitive, or the identity id derived from its public key)?
+    fn contact_answers_to(contact: &Contact, identifier: &str) -> bool {
+        if identifier.is_empty() {
+            return false;
+        }
+        // A libp2p peer id is base58 and therefore case-SENSITIVE: two distinct
+        // peer ids can differ only by case, so it must match exactly (a
+        // case-insensitive match could remove the wrong contact). Only the hex
+        // spellings (public key, identity id) are case-folded, and only when the
+        // identifier is itself hex-shaped.
+        if contact.peer_id == identifier {
+            return true;
+        }
+        let hex_shaped = identifier.bytes().all(|b| b.is_ascii_hexdigit());
+        hex_shaped
+            && (contact.peer_id.eq_ignore_ascii_case(identifier)
+                || contact.public_key.eq_ignore_ascii_case(identifier)
+                || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
+                    .is_some_and(|id| id.eq_ignore_ascii_case(identifier)))
+    }
+
+    fn scan_for_identifier(
+        db: &Db,
+        identifier: &str,
+    ) -> Result<Option<(sled::IVec, Contact)>, crate::IronCoreError> {
+        let trimmed = identifier.trim();
+        for item in db.iter() {
+            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if Self::contact_answers_to(&contact, trimmed) {
+                    return Ok(Some((key, contact)));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 fn current_timestamp() -> u64 {
     web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
@@ -594,6 +641,74 @@ mod tests {
 
         assert_eq!(contact.display_name(), "Alice");
         assert_eq!(contact.peer_id, "12D3KooTest");
+    }
+
+    #[test]
+    fn contact_manager_resolves_and_removes_by_any_identity_spelling(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_id, key_hex) = self_certifying_keypair(b"scm-idv2-bridge");
+        let identity_id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
+        manager
+            .add(Contact::new(peer_id.clone(), key_hex.clone()).with_nickname("A".to_string()))?;
+
+        assert!(manager.get(peer_id.clone())?.is_some());
+        assert!(manager.get(key_hex.clone())?.is_some());
+        assert!(manager.get(key_hex.to_uppercase())?.is_some());
+        assert!(manager.get(identity_id.clone())?.is_some());
+        assert!(manager.get("unrelated".to_string())?.is_none());
+        assert!(manager.get(String::new())?.is_none());
+
+        manager.remove(identity_id)?;
+        assert!(manager.get(peer_id)?.is_none());
+        assert!(manager.get(key_hex)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn contact_manager_rejects_non_key_identifiers_and_keeps_peer_id_case_exact(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_a, key_a) = self_certifying_keypair(b"scm-idv2-neg-a");
+        let (peer_b, key_b) = self_certifying_keypair(b"scm-idv2-neg-b");
+        manager.add(Contact::new(peer_a.clone(), key_a.clone()))?;
+        manager.add(Contact::new(peer_b.clone(), key_b.clone()))?;
+
+        // Non-key identifiers never resolve and never delete anything.
+        for junk in ["not-a-key", "12D3KooWnotakey", "zz", " "] {
+            assert!(manager.get(junk.to_string())?.is_none(), "{junk}");
+            manager.remove(junk.to_string())?;
+        }
+        assert_eq!(manager.list()?.len(), 2);
+
+        // A base58 peer id is case-sensitive: a case-flipped spelling must not
+        // resolve to (or remove) the contact.
+        let flipped: String = peer_a
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        assert!(manager.get(flipped.clone())?.is_none());
+        manager.remove(flipped)?;
+        assert!(manager.get(peer_a.clone())?.is_some());
+
+        // The hex spelling of a different contact does not touch the first.
+        manager.remove(key_b.to_uppercase())?;
+        assert!(manager.get(peer_b)?.is_none());
+        assert!(manager.get(peer_a)?.is_some());
+        assert_eq!(manager.list()?.len(), 1);
+        Ok(())
     }
 
     #[test]
