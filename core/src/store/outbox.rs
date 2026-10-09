@@ -1050,18 +1050,34 @@ impl Outbox {
     /// a queue split across the canonical key and a pre-canonicalization
     /// spelling is fully emptied by a single call.
     pub fn flush_peer_messages(&mut self, recipient_id: &str) -> Vec<QueuedMessage> {
+        self.flush_peer_messages_limited(recipient_id, usize::MAX)
+    }
+
+    /// Like [`flush_peer_messages`](Self::flush_peer_messages) but drains at
+    /// most `limit` due messages (#413 review F2: the periodic sweep must not
+    /// run an unbounded burst of synchronous store writes on the event loop).
+    /// Undrained due entries stay queued untouched for the next call.
+    pub fn flush_peer_messages_limited(
+        &mut self,
+        recipient_id: &str,
+        limit: usize,
+    ) -> Vec<QueuedMessage> {
         // Resolve before borrowing the backend, so the per-key drain below
         // can take &mut self.
         let keys = self.queue_keys_with_messages(recipient_id);
         let mut drained = Vec::new();
         for key in &keys {
-            drained.extend(self.flush_queue_key(key));
+            let room = limit.saturating_sub(drained.len());
+            if room == 0 {
+                break;
+            }
+            drained.extend(self.flush_queue_key(key, room));
         }
         drained
     }
 
-    /// Drain due messages from a single resolved queue key.
-    fn flush_queue_key(&mut self, queue_key: &str) -> Vec<QueuedMessage> {
+    /// Drain up to `limit` due messages from a single resolved queue key.
+    fn flush_queue_key(&mut self, queue_key: &str, limit: usize) -> Vec<QueuedMessage> {
         match &mut self.backend {
             OutboxBackend::Memory { queues, total, .. } => {
                 let now_ms = web_time::SystemTime::now()
@@ -1091,7 +1107,7 @@ impl Outbox {
                             remaining.push_back(msg);
                             continue;
                         }
-                        if is_due(msg.next_retry_at) {
+                        if drained.len() < limit && is_due(msg.next_retry_at) {
                             drained.push(msg);
                         } else {
                             remaining.push_back(msg);
@@ -1137,7 +1153,7 @@ impl Outbox {
                             if msg.in_custody || msg.state != MessageState::Enqueued {
                                 continue;
                             }
-                            if is_due(msg.next_retry_at) {
+                            if messages.len() < limit && is_due(msg.next_retry_at) {
                                 messages.push(msg);
                                 keys_to_remove.push(key);
                             }
@@ -1600,6 +1616,25 @@ mod tests {
         let mut plain = make_msg("plain", "peer_a");
         plain.queued_at = 1_000;
         assert!(!plain.receipt_expired(u64::MAX));
+    }
+
+    #[test]
+    fn flush_peer_messages_limited_drains_at_most_limit_and_keeps_rest() {
+        let mut outbox = Outbox::new();
+        for i in 0..10 {
+            outbox
+                .enqueue(make_msg(&format!("lim-{i}"), "limit_peer"))
+                .unwrap();
+        }
+        let first = outbox.flush_peer_messages_limited("limit_peer", 3);
+        assert_eq!(first.len(), 3);
+        assert_eq!(outbox.total_count(), 7, "undrained entries stay queued");
+        assert!(outbox
+            .flush_peer_messages_limited("limit_peer", 0)
+            .is_empty());
+        assert_eq!(outbox.total_count(), 7);
+        let rest = outbox.flush_peer_messages("limit_peer");
+        assert_eq!(rest.len(), 7, "unbounded flush still drains everything");
     }
 
     #[test]
