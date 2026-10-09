@@ -92,6 +92,113 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("let a = 1;", r["added_text"])
 
 
+def _diff(path: str, added: str, removed: str = "") -> str:
+    """One-hunk unified diff (-U0 style) for `path`."""
+    out = [f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}", "@@ -1 +1 @@"]
+    if removed:
+        out.append(f"-{removed}")
+    out.append(f"+{added}")
+    return "\n".join(out) + "\n"
+
+
+class ContentAwareSelectionTests(unittest.TestCase):
+    OUTBOX = "core/src/store/outbox.rs"
+
+    def test_testplan_needs_test_source_or_production_code(self):
+        # Issue #500 regression: CI-only change must not select testplan.
+        for p in ["docker/Dockerfile.android-test", ".github/workflows/ci.yml", "docs/testplan.md",
+                  "android/app/build.gradle.kts", "docs/README.md"]:
+            self.assertNotIn("testplan", jc.select_buckets([p]), p)
+        for p in ["core/tests/it.rs", "core/src/x_test.rs", "scripts/test_jev_canonical_check.py",
+                  "android/app/src/test/java/Foo.kt", "android/app/src/main/RoleTest.kt",
+                  "ios/FooTests.swift", "core/src/store/outbox.rs"]:
+            self.assertIn("testplan", jc.select_buckets([p]), p)
+
+    def test_testplan_production_change_asks_for_test(self):
+        self.assertIn("testplan", jc.select_buckets(["core/src/transport/relay.rs"]))
+        self.assertNotIn("testplan", jc.select_buckets(["core/src/transport/relay.md"]))
+
+    def test_infra_bucket_selected_by_ci_paths_only(self):
+        for p in [".github/workflows/ci.yml", "docker/Dockerfile.android-test", "Dockerfile",
+                  "services/relay/Dockerfile.prod"]:
+            self.assertIn("infra", jc.select_buckets([p]), p)
+        self.assertNotIn("infra", jc.select_buckets(["docs/ci.md", "core/src/lib.rs"]))
+        self.assertFalse(jc.BUCKETS["infra"]["protected"])
+        self.assertEqual(set(jc.BUCKETS["infra"]["questions"]),
+                         {"bounded_behaviour", "checks_not_weakened", "ci_run_evidence"})
+
+    def test_concurrency_not_selected_for_plain_rs_change_with_diff(self):
+        # The #483/#413 flip: a plain .rs edit must not select concurrency.
+        d = {self.OUTBOX: "let x = compute(1);"}
+        self.assertNotIn("concurrency", jc.select_buckets([self.OUTBOX], added_by_path=d))
+
+    def test_concurrency_markers_each_select(self):
+        for line in ["RwLock::new(0)", "let m = Mutex::new(0);", "Arc<Foo>", "g = x.lock();",
+                     "let v = c.read();", "w.write();", "tokio::spawn(job);", "async fn f() {}",
+                     "y.await?", "let (tx, rx) = mpsc::channel();", "AtomicU64::new(0)",
+                     "synchronized(lock) { }", "scope.launch { work() }",
+                     "withContext(Dispatchers.IO) { }", "actor Counter {", "DispatchQueue.main.async {}"]:
+            self.assertIn("concurrency", jc.select_buckets([self.OUTBOX], added_by_path={self.OUTBOX: line}), line)
+        for line in ["let x = 1;", "fn compute() -> u32 { 2 }", "let s = format!(\"{}\", 1);"]:
+            self.assertNotIn("concurrency", jc.select_buckets([self.OUTBOX], added_by_path={self.OUTBOX: line}), line)
+
+    def test_concurrency_removed_lines_do_not_count(self):
+        d = jc.parse_unified_diff(_diff(self.OUTBOX, "let x = 1;", removed="let m = Mutex::new(0);"))
+        self.assertNotIn("concurrency", jc.select_buckets([self.OUTBOX], added_by_path=d["added_by_path"]))
+
+    def test_concurrency_marker_must_be_in_matching_file(self):
+        paths = ["core/src/a.rs", "core/src/b.rs"]
+        only_a = {"core/src/a.rs": "let x = 1;", "core/src/b.rs": "let g = m.lock();"}
+        self.assertIn("concurrency", jc.select_buckets(paths, added_by_path=only_a))
+        self.assertNotIn("concurrency", jc.select_buckets(["core/src/a.rs"], added_by_path=only_a))
+
+    def test_concurrency_path_fallback_without_diff(self):
+        self.assertIn("concurrency", jc.select_buckets([self.OUTBOX]))
+        self.assertIn("concurrency", jc.select_buckets([self.OUTBOX], added_by_path=None, added_text=None))
+        self.assertNotIn("concurrency", jc.select_buckets([self.OUTBOX], added_text="let x = 1;"))
+
+    def test_concurrency_excludes_test_sources(self):
+        d = {"core/tests/it.rs": "let m = Mutex::new(0);"}
+        self.assertNotIn("concurrency", jc.select_buckets(["core/tests/it.rs"], added_by_path=d))
+
+    def test_lifecycle_content_gated_on_open_close_patterns(self):
+        p = "android/app/src/main/Ble.kt"
+        self.assertNotIn("lifecycle", jc.select_buckets([p], added_by_path={p: "val n = 1"}))
+        for line in ["override fun onDestroy() {", "socket.close()", "bluetoothGatt.close()",
+                     "scanner.startScan(cb)", "try { } finally { }"]:
+            self.assertIn("lifecycle", jc.select_buckets([p], added_by_path={p: line}), line)
+
+    def test_lifecycle_platform_globs_narrowed(self):
+        self.assertNotIn("lifecycle", jc.select_buckets(["docs/PlatformNotes.md"]))
+        self.assertIn("lifecycle", jc.select_buckets(["core/src/PlatformBridge.kt"], added_text="x.close()"))
+
+    def test_protected_buckets_remain_path_selected(self):
+        p = "core/src/crypto/seal.rs"
+        self.assertIn("security_crypto", jc.select_buckets([p], added_by_path={p: "let x = 1;"}))
+        p = "core/src/routing/neighborhood.rs"
+        self.assertIn("routing", jc.select_buckets([p], added_by_path={p: "// comment"}))
+
+    def test_parse_unified_diff_attributes_added_lines_per_file(self):
+        text = _diff("core/src/a.rs", "let x = 1;") + _diff("core/src/b.rs", "let m = Arc::new(0);")
+        d = jc.parse_unified_diff(text)
+        self.assertEqual(d["added_by_path"]["core/src/a.rs"], "let x = 1;")
+        self.assertEqual(d["added_by_path"]["core/src/b.rs"], "let m = Arc::new(0);")
+        self.assertEqual(d["diff_paths"], ["core/src/a.rs", "core/src/b.rs"])
+
+    def test_parse_unified_diff_header_lookalikes_are_content(self):
+        # An added line "+++ notes" is content, not a file header, when no @@ follows it.
+        text = _diff("core/src/a.rs", "let x = 1;") + "+++ notes\n+more\n"
+        d = jc.parse_unified_diff(text)
+        self.assertEqual(d["added_by_path"]["core/src/a.rs"], "let x = 1;\n++ notes\nmore")
+        self.assertEqual(d["diff_paths"], ["core/src/a.rs"])
+
+    def test_deleted_file_adds_nothing(self):
+        text = "diff --git a/core/src/old.rs b/core/src/old.rs\n--- a/core/src/old.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-let m = Mutex::new(0);\n"
+        d = jc.parse_unified_diff(text)
+        self.assertEqual(d["added_by_path"], {})
+        self.assertEqual(d["diff_paths"], [])
+
+
 class ScoringTests(unittest.TestCase):
     def score(self, selected, ans, evidence=True, **kw):
         kw.setdefault("evidence_ids", ["E1"] if evidence else [])
@@ -356,6 +463,35 @@ class MainSchemaTests(unittest.TestCase):
         rc, payload, _ = self.run_main(state, lambda ids: self.all_ids(ids))
         self.assertEqual(rc, 1)  # instruction yes has no evidence_map entry
         self.assertFalse(payload["is_passing"])
+
+    def test_main_state_diff_plain_rs_edit_does_not_ask_concurrency(self):
+        # Mock evaluator: a plain .rs edit (no shared-state constructs) must not get concurrency questions.
+        path = "core/src/store/outbox.rs"
+        state = {"instruction": "x", "files": [path], "evidence": ["cargo test: ok"],
+                 "evidence_map": ALL_CITED, "diff": _diff(path, "let x = compute(1);")}
+        rc, payload, cap = self.run_main(state, lambda ids: self.all_ids(ids))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("concurrency", payload["buckets_selected"])
+        self.assertFalse(any(q.startswith("concurrency.") for q in cap["questions"]))
+
+    def test_main_state_diff_arc_edit_asks_concurrency(self):
+        path = "core/src/store/outbox.rs"
+        state = {"instruction": "x", "files": [path], "evidence": ["cargo test: ok"],
+                 "evidence_map": ALL_CITED, "diff": _diff(path, "let m = Arc::new(Mutex::new(0));")}
+        rc, payload, cap = self.run_main(state, lambda ids: self.all_ids(ids))
+        self.assertEqual(rc, 0)
+        self.assertIn("concurrency", payload["buckets_selected"])
+        self.assertIn("concurrency.shared_state_safe", cap["questions"])
+
+    def test_main_ci_only_change_selects_infra_not_testplan(self):
+        # Issue #500 shape: CI/docker-only change.
+        state = {"instruction": "x", "files": ["docker/Dockerfile.android-test"], "evidence": ["ci run 1"],
+                 "evidence_map": ALL_CITED}
+        rc, payload, cap = self.run_main(state, lambda ids: self.all_ids(ids))
+        self.assertEqual(rc, 0)
+        self.assertIn("infra", payload["buckets_selected"])
+        self.assertNotIn("testplan", payload["buckets_selected"])
+        self.assertIn("infra.ci_run_evidence", cap["questions"])
 
 
 if __name__ == "__main__":

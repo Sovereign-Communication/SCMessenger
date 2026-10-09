@@ -15,6 +15,7 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.scmessenger.android.R
+import com.scmessenger.android.data.ServiceStopSequence
 import com.scmessenger.android.ui.MainActivity
 import com.scmessenger.android.utils.NotificationHelper
 import com.scmessenger.android.utils.displayName
@@ -165,6 +166,14 @@ class MeshForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): latch the user stop here,
+        // synchronously, before anything suspends. decideCommand() sets it too,
+        // but that runs inside serviceScope.launch -- i.e. after this function
+        // has already chosen its return value -- so a STOP delivery could still
+        // hand the system a sticky restart request.
+        if (action == ACTION_STOP) {
+            userStoppedForSession = true
+        }
         // R6-2: ACTION_ENSURE is delivered via startForegroundService() too,
         // so the 5-second startForeground() contract applies even when the
         // user-stop latch later resolves the delivery to NoOp.
@@ -216,7 +225,15 @@ class MeshForegroundService : Service() {
             }
         }
 
-        return START_STICKY
+        // A latched stop must not invite the system to redeliver a null-action
+        // restart; every other delivery keeps the sticky default so the mesh
+        // stays alive while the app is backgrounded.
+        return if (shouldReturnSticky(userStoppedForSession, action)) {
+            START_STICKY
+        } else {
+            Timber.i("Returning START_NOT_STICKY: user stop in effect")
+            START_NOT_STICKY
+        }
     }
 
     /**
@@ -532,32 +549,33 @@ class MeshForegroundService : Service() {
             cancelLifecycleObservers()
             releaseWakeLock()
 
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { meshRepository.stopMeshService() }
-                    .onFailure { Timber.e(it, "Error while stopping mesh repository") }
-            }
-
-            isRunning = false
-            // The user-stop latch is deliberately NOT set here. decideCommand
-            // set it synchronously when this STOP was registered, and this
-            // coroutine may run long after a newer ACTION_START cleared it --
-            // re-asserting it during teardown would strand a mesh the user
-            // explicitly asked to start.
-            connectedPeers.clear()
-            messagesRelayed.set(0)
-            anrWatchdog.stop()
-            performanceMonitor.recordServiceStop()
-            serviceHealthMonitor.stopMonitoring()
-
-            withContext(Dispatchers.Default) {
-                kotlin.runCatching { platformBridge.cleanup() }
-                    .onFailure { Timber.w(it, "Platform bridge cleanup failed during stop") }
-            }
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            // Do not let teardown stop a newer START delivery that is already
-            // queued behind this lifecycle operation.
-            stopSelfResult(startId)
+            // STOP-TEARDOWN-TIMEOUT-001: the repository stop and platform cleanup
+            // are bounded here too (the repository bounds its own FFI waits, but
+            // the lifecycle monitor itself can be held by a wedged start), and
+            // stopForeground/stopSelf run regardless of how they end. The
+            // sequence lives in ServiceStopSequence so a JVM test can drive it
+            // with a repository stop that never returns.
+            ServiceStopSequence.run(
+                repositoryStop = { meshRepository.stopMeshService() },
+                localTeardown = {
+                    isRunning = false
+                    // The user-stop latch is deliberately NOT set here.
+                    // decideCommand set it synchronously when this STOP was
+                    // registered, and this coroutine may run long after a newer
+                    // ACTION_START cleared it -- re-asserting it during teardown
+                    // would strand a mesh the user explicitly asked to start.
+                    connectedPeers.clear()
+                    messagesRelayed.set(0)
+                    anrWatchdog.stop()
+                    performanceMonitor.recordServiceStop()
+                    serviceHealthMonitor.stopMonitoring()
+                },
+                platformCleanup = { platformBridge.cleanup() },
+                removeForeground = { stopForeground(STOP_FOREGROUND_REMOVE) },
+                // Do not let teardown stop a newer START delivery that is already
+                // queued behind this lifecycle operation.
+                stopSelf = { stopSelfResult(startId) }
+            )
         } finally {
             clearStopRequestIfCurrent(requestId)
         }
@@ -948,6 +966,19 @@ class MeshForegroundService : Service() {
             Resume,
             NoOp
         }
+
+        /**
+         * STOP-TEARDOWN-TIMEOUT-001: should this delivery return START_STICKY?
+         *
+         * Only while no user stop is latched, or when the delivery is an
+         * explicit ACTION_START. While the stop is latched, a sticky restart
+         * asks the system to redeliver this service, and the latch then resolves
+         * that delivery to NoOp -- a request that exists only to be refused, at
+         * the cost of a service the user believes is stopped. Pure, so the rule
+         * is unit-testable without an Android runtime.
+         */
+        internal fun shouldReturnSticky(latched: Boolean, action: String?): Boolean =
+            !(latched && action != ACTION_START)
 
         /**
          * The single place a lifecycle command is turned into a decision, and
