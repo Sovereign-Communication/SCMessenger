@@ -11151,7 +11151,7 @@ mod tests {
         pending.insert(7, tx);
         super::fail_pending_reflection(&mut pending, &7, "refused".to_string()).await;
         assert!(pending.is_empty());
-        let res = super::await_reflection_reply(&mut rx, Duration::from_secs(2)).await;
+        let res = super::await_reflection_reply(&mut rx, std::time::Duration::from_secs(2)).await;
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("refused"));
         // Idempotent for an already-removed entry.
@@ -11163,12 +11163,13 @@ mod tests {
         // Sender kept alive and never used: only the timeout can release us.
         let (_tx, mut rx) = tokio::sync::mpsc::channel::<Result<String, String>>(1);
         let started = web_time::Instant::now();
-        let res = super::await_reflection_reply(&mut rx, Duration::from_millis(50)).await;
+        let res =
+            super::await_reflection_reply(&mut rx, std::time::Duration::from_millis(50)).await;
         assert!(res.is_err());
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert!(
             super::ADDRESS_REFLECTION_REPLY_BOUND
-                > Duration::from_secs(
+                > std::time::Duration::from_secs(
                     super::super::behaviour::ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS
                 )
         );
