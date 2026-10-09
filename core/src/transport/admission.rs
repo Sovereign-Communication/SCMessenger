@@ -56,7 +56,7 @@ use libp2p::swarm::{
     THandlerInEvent, THandlerOutEvent, ToSwarm,
 };
 use libp2p::{Multiaddr, PeerId};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
@@ -326,10 +326,15 @@ pub struct AdmissionBehaviour {
     /// Source addresses of saved contacts, authenticated peers, relays and
     /// bootstrap nodes, with when each was last confirmed.
     known_sources: HashMap<IpAddr, Instant>,
-    /// Inbound handshakes completed in the current and previous quantum: what
-    /// honest arrival looks like, the floor of any pending cap.
-    completed_now: usize,
-    completed_prev: usize,
+    /// Inbound connections that produced VALIDATED traffic (a raw Noise
+    /// completion proves nothing) in the current and previous quantum: what
+    /// honest arrival looks like, the floor of any pending cap. Rotated on every
+    /// quantum boundary, so it never holds a lifetime count.
+    validated_now: usize,
+    validated_prev: usize,
+    /// Inbound paths still waiting for their first validated stamp. An entry
+    /// leaves on validation or on close, so the set is bounded by live paths.
+    unvalidated_inbound: HashSet<ConnectionId>,
     /// Consecutive quiet quanta while a pending cap is in force.
     quiet_quanta: u32,
     /// When the last pressure episode ran (episodes are one per quantum).
@@ -380,8 +385,9 @@ impl AdmissionBehaviour {
             pending_by_prefix: HashMap::new(),
             pending_known: 0,
             known_sources: HashMap::new(),
-            completed_now: 0,
-            completed_prev: 0,
+            validated_now: 0,
+            validated_prev: 0,
+            unvalidated_inbound: HashSet::new(),
             quiet_quanta: 0,
             last_episode: None,
             fd_at: now,
@@ -546,7 +552,8 @@ impl AdmissionBehaviour {
             .end_handshake(&id)
             .map_or(Duration::ZERO, |start| now.saturating_duration_since(start));
         if inbound {
-            self.completed_now = self.completed_now.saturating_add(1);
+            // Counted as honest arrival only once it produces validated traffic.
+            self.unvalidated_inbound.insert(id);
         }
         let class = PathClass::of_addr(remote_addr);
         let (canonical, authority) = match self.local_peer {
@@ -574,6 +581,7 @@ impl AdmissionBehaviour {
         now: Instant,
     ) {
         self.end_handshake(id);
+        self.unvalidated_inbound.remove(id);
         let outcome = self.ledger.on_closed(peer, id, remaining_established);
         if outcome.was_eviction {
             self.evicted_closed.insert(*id, now);
@@ -593,9 +601,13 @@ impl AdmissionBehaviour {
     /// VALIDATED protocol traffic on a path: a message decrypted for us or
     /// signed by a known identity, or an exchange with a saved contact. The
     /// swarm must not call this for bare request receipt, address-reflection
-    /// probes or anything else a stranger can produce for free.
+    /// probes or anything else a stranger can produce for free. The first such
+    /// stamp of an inbound path is what counts it as an honest arrival.
     pub fn stamp_traffic(&mut self, peer: &PeerId, id: &ConnectionId, now: Instant) {
         self.ledger.stamp_traffic(peer, id, now);
+        if self.unvalidated_inbound.remove(id) {
+            self.validated_now = self.validated_now.saturating_add(1);
+        }
     }
 
     /// A ping failed on a path.
@@ -688,10 +700,11 @@ impl AdmissionBehaviour {
                 .is_none_or(|at| now.saturating_duration_since(at) >= EVAL_QUANTUM)
     }
 
-    /// Honest arrival rate: inbound handshakes that completed in the current
-    /// or previous quantum. Flooders do not complete handshakes.
+    /// Honest arrival rate: inbound connections that produced validated traffic
+    /// in the current or previous quantum. A Noise handshake with throwaway
+    /// keys is free to produce, so raw completions are not evidence.
     fn honest_arrivals(&self) -> usize {
-        self.completed_now.max(self.completed_prev)
+        self.validated_now.max(self.validated_prev)
     }
 
     /// How long a pre-handshake inbound connection may stay pending before it
@@ -740,8 +753,9 @@ impl AdmissionBehaviour {
     /// EMFILE with two handshakes in flight) honest first contacts are left
     /// alone. The cap retains a multiplicative share of the young pending set,
     /// never more than the measured descriptor headroom (connection share of
-    /// the soft limit minus established descriptors), never less than the
-    /// honest arrivals observed in the last two quanta.
+    /// the soft limit minus established descriptors). Honest arrivals of the
+    /// last two quanta are a floor, itself clamped to that headroom: the floor
+    /// must never push pending past the descriptor limit.
     fn shrink_pending_cap(&mut self, now: Instant, established_fd: usize) {
         self.write_off_stale_pending(now);
         let pending = self.pending_inbound;
@@ -750,10 +764,11 @@ impl AdmissionBehaviour {
         if pending == 0 || !(pending > established_fd || filled) {
             return;
         }
-        let floor = self.honest_arrivals();
+        let headroom = share.map(|s| s.saturating_sub(established_fd));
+        let floor = headroom.map_or(self.honest_arrivals(), |h| self.honest_arrivals().min(h));
         let mut cap = retain_share(pending).max(floor);
-        if let Some(s) = share {
-            cap = cap.min(s.saturating_sub(established_fd).max(floor));
+        if let Some(h) = headroom {
+            cap = cap.min(h);
         }
         let cap = self.pending_cap.map_or(cap, |old| old.min(cap)).max(floor);
         self.pending_cap = Some(cap);
@@ -821,7 +836,19 @@ impl AdmissionBehaviour {
         fresh: Option<ResourceSnapshot>,
         periodic: bool,
     ) {
-        let quantum = now.saturating_duration_since(self.last_eval) >= EVAL_QUANTUM;
+        let elapsed = now.saturating_duration_since(self.last_eval);
+        let quantum = elapsed >= EVAL_QUANTUM;
+        if quantum {
+            // Rotate before any episode reads the honest-arrival floor. After a
+            // gap of two or more quanta no arrival is recent: the count is never
+            // a lifetime total, however long the node was quiet.
+            self.validated_prev = if elapsed < EVAL_QUANTUM * 2 {
+                self.validated_now
+            } else {
+                0
+            };
+            self.validated_now = 0;
+        }
         let mut recompute = quantum;
         if let Some(snapshot) = fresh {
             // A probe that failed (it needs a descriptor, and descriptors are
@@ -855,8 +882,7 @@ impl AdmissionBehaviour {
         }
         if quantum {
             self.last_eval = now;
-            self.completed_prev = self.completed_now;
-            self.completed_now = 0;
+            // Known sources are pruned every quantum, not only in episodes.
             self.known_sources
                 .retain(|_, seen| now.saturating_duration_since(*seen) < KNOWN_SOURCE_TTL);
             if self.pending_cap.is_some() {
@@ -907,8 +933,11 @@ impl AdmissionBehaviour {
     /// /24 (/48) may hold more than an equal share of it among the sources
     /// currently pending, so one source cannot fill the cap alone.
     fn pending_refusal(&self, cap: usize, src: Option<IpAddr>) -> Option<&'static str> {
-        if src.is_some_and(|ip| self.known_sources.contains_key(&ip)) {
-            return (self.pending_known >= self.known_sources.len()).then_some("known-pool");
+        if let Some(ip) = src.filter(|ip| self.known_sources.contains_key(ip)) {
+            // One concurrent handshake per known address: a shared address
+            // (carrier NAT) cannot take an allowance that belongs to every contact.
+            let open = self.pending_by_ip.get(&ip).copied().unwrap_or(0);
+            return (open >= 1).then_some("known-pool");
         }
         let general = self.pending_inbound.saturating_sub(self.pending_known);
         if general >= cap {
@@ -951,6 +980,8 @@ impl AdmissionBehaviour {
             && self.to_close.is_empty()
             && self.pending_cap.is_none()
             && self.pressure_events == 0
+            && self.validated_now == 0
+            && self.validated_prev == 0
         {
             return None;
         }
@@ -961,7 +992,7 @@ impl AdmissionBehaviour {
                 next = next.min(at + EVAL_QUANTUM);
             }
         }
-        if self.pending_cap.is_some() {
+        if self.pending_cap.is_some() || self.validated_now > 0 || self.validated_prev > 0 {
             next = next.min(self.last_eval + EVAL_QUANTUM);
         }
         if let Some(deadline) = self.ledger.next_deadline(now) {
@@ -1743,26 +1774,69 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_never_drops_below_observed_honest_arrivals() {
+    fn the_honest_floor_is_clamped_to_measured_headroom() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
-        // 440 established paths plus forty honest inbound handshakes that
-        // completed this quantum: 480 of the 500 connection descriptors.
+        // 440 established paths plus forty inbound paths that produced validated
+        // traffic this quantum: 480 of the 500 connection descriptors.
         for i in 0..440usize {
             b.path_established(PeerId::random(), cid(i), &wan(), true, at(base, 1));
         }
         for i in 0..40usize {
+            let peer = PeerId::random();
             b.track_pending(cid(1_000 + i), at(base, 1), true, Some(src_ip(9, 9)));
-            b.path_established(PeerId::random(), cid(1_000 + i), &wan(), false, at(base, 2));
+            b.path_established(peer, cid(1_000 + i), &wan(), false, at(base, 2));
+            b.stamp_traffic(&peer, &cid(1_000 + i), at(base, 2));
         }
-        // Sixty pending sockets: headroom is only 20, retain-share 45.
+        // Sixty pending sockets: headroom is only 20, retain-share 45. The floor
+        // of 40 honest arrivals is clamped to that headroom.
         flood(&mut b, 60, 4, at(base, 10));
         b.note_os_exhaustion(PressureKind::Fd);
         b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
         assert_eq!(
             b.pending_cap,
-            Some(40),
-            "the cap keeps room for the 40 honest arrivals, not the headroom of 20"
+            Some(20),
+            "the cap never exceeds the headroom"
+        );
+    }
+
+    #[test]
+    fn raw_handshakes_without_validated_traffic_are_not_honest_arrivals() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        for i in 0..40usize {
+            b.track_pending(cid(1_000 + i), at(base, 1), true, Some(src_ip(9, 9)));
+            b.path_established(PeerId::random(), cid(1_000 + i), &wan(), false, at(base, 2));
+        }
+        assert_eq!(b.honest_arrivals(), 0, "completion alone proves nothing");
+    }
+
+    #[test]
+    fn a_quiet_node_then_flood_does_not_inherit_lifetime_arrivals() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        established_authenticated(&mut b, 20, base);
+        // Forty validated arrivals in one quantum, then a long quiet stretch with
+        // no tick at all. The floor must age out, not stay a lifetime count.
+        for i in 0..40usize {
+            let peer = PeerId::random();
+            b.track_pending(cid(1_000 + i), base, true, Some(src_ip(9, 9)));
+            b.path_established(peer, cid(1_000 + i), &wan(), false, base);
+            b.stamp_traffic(&peer, &cid(1_000 + i), base);
+        }
+        let later = base + EVAL_QUANTUM * 100;
+        flood(&mut b, 500, 4, later);
+        b.note_os_exhaustion(PressureKind::Fd);
+        b.tick_with(later, Some(fd_limit_1000()), false);
+        assert_eq!(
+            b.honest_arrivals(),
+            0,
+            "a 100-quantum gap leaves no recent arrivals"
+        );
+        let cap = b.pending_cap.expect("flood capped");
+        assert!(
+            cap <= 375,
+            "the flood is capped by its own share, got {cap}"
         );
     }
 
