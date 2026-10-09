@@ -45,9 +45,13 @@
 //!
 //! [`PathLedger::evict_over_total`] enforces a resource-derived bound across
 //! ALL peers (see `conn_resources`). Above the bound the lowest-value paths
-//! are evicted, never refused: no application traffic first, then paths still
-//! in grace, then redundant paths of multi-path peers, then lowest local
-//! reputation (unknown is lowest), then youngest.
+//! are evicted, never refused. Value, lowest first: peers with no authenticated
+//! history (not a saved contact, no positive reputation), then paths with no
+//! VALIDATED protocol traffic (raw request receipt proves nothing: only traffic
+//! the swarm validated is stamped), then paths outside grace, then redundant
+//! paths of multi-path peers, then lowest local reputation (unknown is lowest),
+//! then youngest. Selection is a partial selection (`select_nth_unstable_by`),
+//! not a full sort, and occupancy is kept in incremental counters.
 //!
 //! When `used` (live, non-closing paths) exceeds a peer's budget the surplus is
 //! evicted, worst first:
@@ -667,13 +671,96 @@ impl HandshakeBaseline {
     }
 }
 
+/// What the local node knows about a connected peer, used to rank eviction
+/// victims. Unknown peers (no entry) rank below every known one.
+#[derive(Debug, Clone, Copy)]
+struct Trust {
+    /// Authenticated history: a saved contact, or a peer with positive local
+    /// reputation earned through validated exchanges. Never granted by merely
+    /// sending requests.
+    authenticated: bool,
+    /// Local reputation score (higher is more valuable).
+    reputation: f64,
+}
+
+impl Default for Trust {
+    fn default() -> Self {
+        Self {
+            authenticated: false,
+            reputation: f64::NEG_INFINITY,
+        }
+    }
+}
+
+/// Incrementally maintained occupancy, so the hot paths (every establishment,
+/// every poll) never scan the ledger.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counts {
+    /// Live (non-closing) paths.
+    live: usize,
+    /// Live paths that own a descriptor.
+    live_fd: usize,
+    /// Live paths that carried validated protocol traffic.
+    active: usize,
+    /// Evicted paths awaiting `ConnectionClosed`.
+    closing: usize,
+}
+
+impl Counts {
+    fn add_live<I>(&mut self, path: &Path<I>) {
+        self.live += 1;
+        if path.meta.uses_fd {
+            self.live_fd += 1;
+        }
+        if path.traffic {
+            self.active += 1;
+        }
+    }
+
+    fn remove_live<I>(&mut self, path: &Path<I>) {
+        self.live = self.live.saturating_sub(1);
+        if path.meta.uses_fd {
+            self.live_fd = self.live_fd.saturating_sub(1);
+        }
+        if path.traffic {
+            self.active = self.active.saturating_sub(1);
+        }
+    }
+
+    /// A tracked path is gone (closed or drained).
+    fn remove_tracked<I>(&mut self, path: &Path<I>) {
+        if path.closing.is_some() {
+            self.closing = self.closing.saturating_sub(1);
+        } else {
+            self.remove_live(path);
+        }
+    }
+}
+
+/// Mark `path` as evicted, keeping the counters in step. Returns the instant
+/// at which a stalled close is due for re-issue.
+fn mark_closing<I>(counts: &mut Counts, path: &mut Path<I>, now: Instant) -> Instant {
+    if path.closing.is_none() {
+        counts.remove_live(path);
+        counts.closing += 1;
+    }
+    path.closing = Some(Closing { issued_at: now });
+    now + path.grace * SILENCE_INTERVALS
+}
+
 /// Path bookkeeping. `C` is the peer key, `I` the connection id.
 #[derive(Debug)]
 pub struct PathLedger<C, I> {
     peers: HashMap<C, Vec<Path<I>>>,
     baseline: HandshakeBaseline,
-    /// Local reputation per connected peer; unknown peers rank lowest.
-    reputation: HashMap<C, f64>,
+    /// Local trust per connected peer; unknown peers rank lowest.
+    trust: HashMap<C, Trust>,
+    counts: Counts,
+    /// Lower bound on the next instant at which time alone could change a
+    /// decision. Registered at every mutation that creates a deadline, so it is
+    /// never later than the true next deadline; a stale (too early) value only
+    /// costs one spurious recompute.
+    deadline_hint: Option<Instant>,
 }
 
 impl<C, I> Default for PathLedger<C, I> {
@@ -681,7 +768,9 @@ impl<C, I> Default for PathLedger<C, I> {
         Self {
             peers: HashMap::new(),
             baseline: HandshakeBaseline::default(),
-            reputation: HashMap::new(),
+            trust: HashMap::new(),
+            counts: Counts::default(),
+            deadline_hint: None,
         }
     }
 }
@@ -727,7 +816,7 @@ where
             self.baseline.record(handshake);
         }
         let grace = (effective * GRACE_HANDSHAKES).max(EVAL_QUANTUM);
-        self.peers.entry(peer).or_default().push(Path {
+        let path = Path {
             id,
             class,
             meta,
@@ -739,8 +828,33 @@ where
             ping_failed: false,
             traffic: false,
             closing: None,
-        });
+        };
+        self.counts.add_live(&path);
+        let paths = self.peers.entry(peer).or_default();
+        paths.push(path);
+        // A peer holding several live paths has time-driven deadlines (grace
+        // ends, authority deferral, silence quantum): register them now so
+        // `next_deadline` never has to scan the ledger to find them.
+        let live = paths.iter().filter(|p| p.closing.is_none()).count();
+        if live > 1 {
+            let mut hints = vec![now + EVAL_QUANTUM];
+            for p in paths.iter().filter(|p| p.closing.is_none()) {
+                hints.push(p.established_at + p.grace);
+                hints.push(p.established_at + p.grace * (1 + AUTHORITY_DEFER_WINDOWS));
+            }
+            for at in hints {
+                self.hint_deadline(at, now);
+            }
+        }
         self.evict_for(peer, now, Some(id))
+    }
+
+    /// Register a deadline in the lower-bound hint (past instants are ignored).
+    fn hint_deadline(&mut self, at: Instant, now: Instant) {
+        if at <= now {
+            return;
+        }
+        self.deadline_hint = Some(self.deadline_hint.map_or(at, |h| h.min(at)));
     }
 
     /// Re-evaluate every peer that holds more than one path (grace windows
@@ -766,9 +880,10 @@ where
         };
         let assessment = assess(paths, now, keep);
         let mut out = Vec::with_capacity(assessment.victims.len());
+        let mut hints = Vec::new();
         for (index, reason) in assessment.victims {
             let path = &mut paths[index];
-            path.closing = Some(Closing { issued_at: now });
+            hints.push(mark_closing(&mut self.counts, path, now));
             out.push(Eviction {
                 peer,
                 id: path.id,
@@ -776,44 +891,60 @@ where
                 class: path.class,
             });
         }
+        for at in hints {
+            self.hint_deadline(at, now);
+        }
         out
     }
 
-    /// Live paths overall and live paths that own a file descriptor.
+    /// Live paths overall and live paths that own a file descriptor. O(1).
     pub fn occupancy(&self) -> (usize, usize) {
+        (self.counts.live, self.counts.live_fd)
+    }
+
+    /// Live paths that have carried validated protocol traffic. O(1).
+    pub fn active_paths(&self) -> usize {
+        self.counts.active
+    }
+
+    /// Live paths worth protecting under resource pressure, and how many of
+    /// them own a descriptor: paths of authenticated peers, plus paths that
+    /// carried validated traffic. O(paths); called once per pressure episode,
+    /// never from the hot path.
+    pub fn protected_paths(&self) -> (usize, usize) {
         let mut total = 0;
         let mut fd = 0;
-        for paths in self.peers.values() {
+        for (peer, paths) in &self.peers {
+            let authenticated = self.trust.get(peer).is_some_and(|t| t.authenticated);
             for path in paths.iter().filter(|p| p.closing.is_none()) {
-                total += 1;
-                if path.meta.uses_fd {
-                    fd += 1;
+                if authenticated || path.traffic {
+                    total += 1;
+                    if path.meta.uses_fd {
+                        fd += 1;
+                    }
                 }
             }
         }
         (total, fd)
     }
 
-    /// Live paths that have carried protocol traffic.
-    pub fn active_paths(&self) -> usize {
-        self.peers
-            .values()
-            .flat_map(|paths| paths.iter())
-            .filter(|p| p.closing.is_none() && p.traffic)
-            .count()
-    }
-
     /// Enforce the resource-derived bound across ALL peers by EVICTING the
     /// lowest-value paths (never by refusing a connection). Value, lowest first:
     ///
-    /// 1. no protocol traffic seen (paths that carry traffic go last)
-    /// 2. still inside grace (an honest new path gets time to prove itself, but
+    /// 1. peer without authenticated history (not a saved contact, no positive
+    ///    reputation): authenticated peers go last
+    /// 2. no VALIDATED protocol traffic seen (paths that carry traffic go last)
+    /// 3. still inside grace (an honest new path gets time to prove itself, but
     ///    only ahead of paths that already carry traffic)
-    /// 3. redundant: the peer holds other live paths (sole paths go later)
-    /// 4. lowest local reputation (unknown peers are lowest)
-    /// 5. youngest first, so Sybil churn evicts itself
+    /// 4. redundant: the peer holds other live paths (sole paths go later)
+    /// 5. lowest local reputation (unknown peers are lowest)
+    /// 6. youngest first, so Sybil churn evicts itself
     ///
     /// `keep` (the connection that triggered the check) is never chosen.
+    ///
+    /// Victims are found by partial selection (`select_nth_unstable_by`) in
+    /// growing windows, so the cost is O(paths) plus O(k log k) for the k
+    /// victims, not a full O(paths log paths) sort per call.
     pub fn evict_over_total(
         &mut self,
         limits: TotalLimits,
@@ -826,9 +957,11 @@ where
         if excess_total == 0 && excess_fd == 0 {
             return Vec::new();
         }
+        #[derive(Clone, Copy)]
         struct Candidate<C, I> {
             peer: C,
             id: I,
+            authenticated: bool,
             traffic: bool,
             protected: bool,
             sole: bool,
@@ -836,14 +969,19 @@ where
             established_at: Instant,
             uses_fd: bool,
         }
-        let mut candidates: Vec<Candidate<C, I>> = Vec::new();
+        fn rank<C, I>(a: &Candidate<C, I>, b: &Candidate<C, I>) -> std::cmp::Ordering {
+            a.authenticated
+                .cmp(&b.authenticated)
+                .then(a.traffic.cmp(&b.traffic))
+                .then(a.protected.cmp(&b.protected))
+                .then(a.sole.cmp(&b.sole))
+                .then(a.reputation.total_cmp(&b.reputation))
+                .then(b.established_at.cmp(&a.established_at))
+        }
+        let mut candidates: Vec<Candidate<C, I>> = Vec::with_capacity(live_total);
         for (peer, paths) in &self.peers {
             let live = paths.iter().filter(|p| p.closing.is_none()).count();
-            let reputation = self
-                .reputation
-                .get(peer)
-                .copied()
-                .unwrap_or(f64::NEG_INFINITY);
+            let trust = self.trust.get(peer).copied().unwrap_or_default();
             for path in paths.iter().filter(|p| p.closing.is_none()) {
                 if keep == Some(path.id) {
                     continue;
@@ -851,49 +989,59 @@ where
                 candidates.push(Candidate {
                     peer: *peer,
                     id: path.id,
+                    authenticated: trust.authenticated,
                     traffic: path.traffic,
                     protected: now < path.established_at + path.grace,
                     sole: live <= 1,
-                    reputation,
+                    reputation: trust.reputation,
                     established_at: path.established_at,
                     uses_fd: path.meta.uses_fd,
                 });
             }
         }
-        candidates.sort_by(|a, b| {
-            a.traffic
-                .cmp(&b.traffic)
-                .then(a.protected.cmp(&b.protected))
-                .then(a.sole.cmp(&b.sole))
-                .then(a.reputation.total_cmp(&b.reputation))
-                .then(b.established_at.cmp(&a.established_at))
-        });
         let mut out = Vec::new();
-        for c in candidates {
-            if excess_total == 0 && excess_fd == 0 {
-                break;
+        let mut rest: &mut [Candidate<C, I>] = &mut candidates;
+        // First window: exactly the number of victims the excess asks for. If
+        // fd-only excess forces skipping non-fd paths the window doubles.
+        let mut window = excess_total.saturating_add(excess_fd).max(1);
+        while (excess_total > 0 || excess_fd > 0) && !rest.is_empty() {
+            let k = window.min(rest.len());
+            if k < rest.len() {
+                rest.select_nth_unstable_by(k - 1, rank);
             }
-            let helps_fd = c.uses_fd && excess_fd > 0;
-            if excess_total == 0 && !helps_fd {
-                continue;
-            }
-            if let Some(path) = self
-                .peers
-                .get_mut(&c.peer)
-                .and_then(|paths| paths.iter_mut().find(|p| p.id == c.id))
-            {
-                path.closing = Some(Closing { issued_at: now });
+            rest[..k].sort_by(rank);
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(k);
+            for c in head.iter() {
+                if excess_total == 0 && excess_fd == 0 {
+                    break;
+                }
+                let helps_fd = c.uses_fd && excess_fd > 0;
+                if excess_total == 0 && !helps_fd {
+                    continue;
+                }
+                let Some(path) = self
+                    .peers
+                    .get_mut(&c.peer)
+                    .and_then(|paths| paths.iter_mut().find(|p| p.id == c.id))
+                else {
+                    continue;
+                };
+                let due = mark_closing(&mut self.counts, path, now);
+                let class = path.class;
                 out.push(Eviction {
                     peer: c.peer,
                     id: c.id,
                     reason: EvictReason::OverTotal,
-                    class: path.class,
+                    class,
                 });
+                self.deadline_hint = Some(self.deadline_hint.map_or(due, |h| h.min(due)));
                 excess_total = excess_total.saturating_sub(1);
                 if c.uses_fd {
                     excess_fd = excess_fd.saturating_sub(1);
                 }
             }
+            rest = tail;
+            window = window.saturating_mul(2);
         }
         out
     }
@@ -901,7 +1049,16 @@ where
     /// Local reputation of a connected peer (higher is more valuable).
     pub fn note_reputation(&mut self, peer: C, score: f64) {
         if self.peers.contains_key(&peer) {
-            self.reputation.insert(peer, score);
+            self.trust.entry(peer).or_default().reputation = score;
+        }
+    }
+
+    /// The peer has authenticated history (a saved contact, or positive
+    /// reputation earned through validated exchanges). Ranks its paths above
+    /// every unauthenticated path, including ones that merely sent requests.
+    pub fn note_authenticated(&mut self, peer: C) {
+        if self.peers.contains_key(&peer) {
+            self.trust.entry(peer).or_default().authenticated = true;
         }
     }
 
@@ -928,10 +1085,24 @@ where
     /// exchange, address reflection): refreshes activity and marks the path as
     /// carrying traffic. It does not feed any liveness cadence because bursty
     /// traffic says nothing about periodic beats.
+    ///
+    /// Callers stamp only traffic they VALIDATED (decrypted for us, signed by a
+    /// known identity, or from a known contact). Receipt of a bare request, an
+    /// address-reflection probe or a ledger exchange from a stranger proves
+    /// nothing and must not be stamped: it would let a Sybil buy eviction
+    /// immunity with free requests.
     pub fn stamp_traffic(&mut self, peer: &C, id: &I, now: Instant) {
-        if let Some(path) = self.live_path_mut(peer, id) {
+        let found = self.peers.get_mut(peer).and_then(|paths| {
+            paths
+                .iter_mut()
+                .find(|p| p.id == *id && p.closing.is_none())
+        });
+        if let Some(path) = found {
             path.last_activity = now;
-            path.traffic = true;
+            if !path.traffic {
+                path.traffic = true;
+                self.counts.active += 1;
+            }
         }
     }
 
@@ -958,13 +1129,18 @@ where
         if let Some(paths) = self.peers.get_mut(peer) {
             if let Some(pos) = paths.iter().position(|p| p.id == *id) {
                 was_eviction = paths[pos].closing.is_some();
-                paths.remove(pos);
+                let gone = paths.remove(pos);
+                self.counts.remove_tracked(&gone);
             }
             remaining = paths.len();
         }
         if remaining_established == 0 || remaining == 0 {
-            self.peers.remove(peer);
-            self.reputation.remove(peer);
+            if let Some(drained) = self.peers.remove(peer) {
+                for leftover in &drained {
+                    self.counts.remove_tracked(leftover);
+                }
+            }
+            self.trust.remove(peer);
             remaining = 0;
         }
         CloseOutcome {
@@ -996,7 +1172,25 @@ where
     /// re-issue, or (while any peer holds several live paths) the next
     /// evaluation quantum for silence detection. `None` when nothing is
     /// time-sensitive.
-    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+    ///
+    /// Served from the registered lower-bound hint in O(1) while it lies in
+    /// the future. Only once the hint has passed is the ledger scanned
+    /// (O(paths)) to find the true next deadline, so the cost is paid per fired
+    /// deadline, not per poll.
+    pub fn next_deadline(&mut self, now: Instant) -> Option<Instant> {
+        if let Some(hint) = self.deadline_hint {
+            if hint > now {
+                return Some(hint);
+            }
+        } else if self.counts.live <= 1 && self.counts.closing == 0 {
+            return None;
+        }
+        let scanned = self.scan_next_deadline(now);
+        self.deadline_hint = scanned.filter(|at| *at > now);
+        scanned
+    }
+
+    fn scan_next_deadline(&self, now: Instant) -> Option<Instant> {
         let mut next: Option<Instant> = None;
         let mut consider = |at: Instant| {
             let at = at.max(now);
@@ -1060,10 +1254,23 @@ where
 
     /// Evicted paths still awaiting `ConnectionClosed`, across all peers.
     pub fn pending_closes(&self) -> usize {
-        self.peers
-            .values()
-            .map(|paths| paths.iter().filter(|p| p.closing.is_some()).count())
-            .sum()
+        self.counts.closing
+    }
+
+    /// True when the incremental counters agree with a full recount (tests).
+    #[cfg(test)]
+    pub(crate) fn counters_consistent(&self) -> bool {
+        let mut fresh = Counts::default();
+        for paths in self.peers.values() {
+            for path in paths {
+                if path.closing.is_some() {
+                    fresh.closing += 1;
+                } else {
+                    fresh.add_live(path);
+                }
+            }
+        }
+        fresh == self.counts
     }
 
     /// Derived budget for one peer right now.
@@ -1844,6 +2051,82 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_idle_contact_outlives_unauthenticated_peers_with_traffic() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        // Honest contact: authenticated history, completely idle.
+        ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.note_authenticated(1);
+        // Sybils that hammered us with requests: traffic stamped (as a naive
+        // receiver would) but no authenticated history.
+        for n in 0..20u32 {
+            let id = 100 + n;
+            ledger.on_established(
+                id,
+                id,
+                PathClass::WanV4,
+                rtt(),
+                at(base, 1_000 + u64::from(n)),
+            );
+            ledger.stamp_traffic(&id, &id, at(base, 2_000));
+        }
+        let ev = ledger.evict_over_total(TotalLimits { total: 5, fd: 5 }, at(base, 60_000), None);
+        assert_eq!(ev.len(), 16);
+        assert!(!ev.iter().any(|e| e.id == 1), "the idle contact is kept");
+        assert!(ledger.counters_consistent());
+    }
+
+    #[test]
+    fn unknown_peers_rank_below_known_low_reputation_peers() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.on_established(2, 2, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.note_reputation(1, 5.0);
+        let ev = ledger.evict_over_total(TotalLimits { total: 1, fd: 1 }, at(base, 60_000), None);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].peer, 2, "no data at all ranks lowest");
+    }
+
+    #[test]
+    fn counters_track_establish_evict_traffic_and_close() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        for n in 0..50u32 {
+            ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, u64::from(n)));
+            ledger.stamp_traffic(&n, &n, at(base, 100));
+        }
+        assert_eq!(ledger.occupancy(), (50, 50));
+        assert_eq!(ledger.active_paths(), 50);
+        assert!(ledger.counters_consistent());
+        let ev = ledger.evict_over_total(TotalLimits { total: 20, fd: 20 }, at(base, 60_000), None);
+        assert_eq!(ev.len(), 30);
+        assert_eq!(ledger.occupancy(), (20, 20));
+        assert_eq!(ledger.pending_closes(), 30);
+        assert!(ledger.counters_consistent());
+        for e in &ev {
+            let _ = ledger.on_closed(&e.peer, &e.id, 0);
+        }
+        assert_eq!(ledger.pending_closes(), 0);
+        assert_eq!(ledger.occupancy(), (20, 20));
+        assert!(ledger.counters_consistent());
+    }
+
+    #[test]
+    fn next_deadline_is_served_from_the_hint_without_scanning() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        ledger.on_established(PEER, 1, PathClass::Lan, rtt(), at(base, 0));
+        ledger.on_established(PEER, 2, PathClass::WanV4, rtt(), at(base, 0));
+        let first = ledger.next_deadline(at(base, 10)).expect("deadline");
+        // A second call before the hint passes returns the identical value.
+        assert_eq!(ledger.next_deadline(at(base, 20)), Some(first));
+        // Once it has passed, a fresh deadline is found by one scan.
+        let later = ledger.next_deadline(first + Duration::from_millis(1));
+        assert!(later.is_some_and(|d| d > first));
+    }
+
+    #[test]
     fn next_deadline_tracks_grace_and_stalled_closes() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
@@ -1982,6 +2265,8 @@ mod tests {
                 if let Some(new_id) = established {
                     prop_assert!(evictions.iter().all(|e| e.id != new_id));
                 }
+                // Incremental counters always match a full recount.
+                prop_assert!(ledger.counters_consistent());
                 // Budget bookkeeping stays consistent.
                 let stats = ledger.stats(now);
                 prop_assert!(stats.budget <= stats.used);

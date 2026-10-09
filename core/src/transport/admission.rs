@@ -13,14 +13,25 @@
 //!   available memory and measured per-connection cost
 //!   ([`super::conn_resources`]), recomputed on a tick and immediately on OS
 //!   resource errors. Above it the lowest-value paths are evicted
-//!   (`reason=over-total`): no application traffic first, then redundant
-//!   paths, then lowest local reputation, then youngest, so Sybil churn evicts
-//!   itself while established, traffic-bearing peers keep their connection.
+//!   (`reason=over-total`): peers without authenticated history first, then
+//!   paths with no VALIDATED traffic, then redundant paths, then lowest local
+//!   reputation, then youngest, so Sybil churn evicts itself while established
+//!   authenticated peers keep their connection.
 //!
 //! The OS can still refuse an accept or dial below libp2p (EMFILE, ENOMEM,
 //! ...). Those errors arrive as swarm events; they are logged (rate-limited)
-//! as `[CONN] hard-ceiling` AND fed back into the total so room is evicted at
-//! once.
+//! as `[CONN] hard-ceiling` AND fed back into the total, once per tick (one
+//! episode, however many events), shrinking multiplicatively and never below
+//! the authenticated / validated-traffic paths. Pending (pre-handshake)
+//! inbound sockets are the cheapest thing to shed: they hold a descriptor yet
+//! have no authenticated identity. While pressure lasts the number of
+//! young pending inbound connections is bounded (also multiplicatively, per
+//! episode), pending entries older than a locally derived handshake allowance
+//! are written off, and a new pending inbound beyond the bound is dropped at
+//! accept time (the only place this module ever declines a connection; it
+//! never applies to an established peer, and under proven descriptor
+//! exhaustion the OS would have refused the accept anyway). The periodic
+//! sample lifts both caps.
 //!
 //! The swarm loop feeds the behaviour liveness stamps (ping and identify are
 //! separate sources), traffic stamps and local reputation (the behaviour
@@ -29,16 +40,16 @@
 //! trigger the failover ledger re-exchange.
 
 use super::conn_resources::{
-    format_total_marker, platform_scale_permille, sample_resources, Derived, Occupancy,
-    PressureKind, ResourceModel, ResourceSnapshot,
+    format_total_marker, platform_scale_permille, retain_share, sample_resources, Derived,
+    Occupancy, PressureKind, ResourceModel, ResourceSnapshot,
 };
 use super::path_budget::{
     addr_uses_fd, format_budget_marker, format_evict_marker, short_peer, tiebreak, Eviction,
-    PathClass, PathLedger, PathMeta, EVAL_QUANTUM,
+    PathClass, PathLedger, PathMeta, EVAL_QUANTUM, GRACE_HANDSHAKES,
 };
 use futures_timer::Delay;
 use libp2p::core::transport::PortUse;
-use libp2p::core::Endpoint;
+use libp2p::core::{ConnectedPoint, Endpoint};
 use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, FromSwarm};
 use libp2p::swarm::{
     dummy, CloseConnection, ConnectionDenied, ConnectionId, DialError, NetworkBehaviour, THandler,
@@ -204,6 +215,39 @@ pub fn log_if_hard_ceiling(context: &str, err: &(dyn std::error::Error + 'static
     }
 }
 
+/// True when THIS end holds the dialer role on `endpoint`.
+///
+/// `ConnectedPoint::is_dialer()` is true for every `Dialer` variant, including
+/// the DCUtR hole-punch where both peers dial and `role_override` assigns the
+/// listener role to one of them: both ends would then report "I dialed" and
+/// the tie-break would disagree about which connection is canonical (the flap
+/// livelock). The role actually played on the wire is `role_override`.
+pub fn local_dialed(endpoint: &ConnectedPoint) -> bool {
+    match endpoint {
+        ConnectedPoint::Dialer { role_override, .. } => role_override.is_dialer(),
+        ConnectedPoint::Listener { .. } => false,
+    }
+}
+
+/// A connection in its handshake.
+#[derive(Debug, Clone, Copy)]
+struct PendingConn {
+    start: Instant,
+    inbound: bool,
+}
+
+/// Why a pending inbound connection was dropped at accept time.
+#[derive(Debug)]
+struct PendingShed;
+
+impl fmt::Display for PendingShed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("pending inbound shed under OS resource pressure")
+    }
+}
+
+impl std::error::Error for PendingShed {}
+
 fn full_scale() -> u32 {
     1000
 }
@@ -216,8 +260,15 @@ fn no_resources() -> ResourceSnapshot {
 pub struct AdmissionBehaviour {
     local_peer: Option<PeerId>,
     ledger: PathLedger<PeerId, ConnectionId>,
-    /// Handshake start per connection id, to measure the handshake duration.
-    pending: HashMap<ConnectionId, Instant>,
+    /// Handshake start (and direction) per connection id, to measure the
+    /// handshake duration and to bound pre-handshake inbound under pressure.
+    pending: HashMap<ConnectionId, PendingConn>,
+    /// Pending entries that are inbound (kept in step with `pending`).
+    pending_inbound: usize,
+    /// While OS pressure lasts: how many young pending inbound connections
+    /// are tolerated before new ones are dropped at accept time.
+    pending_cap: Option<usize>,
+    shed_log: RateGate,
     /// Closes to hand to the swarm on the next poll.
     to_close: VecDeque<(PeerId, ConnectionId)>,
     /// Connections that closed because we evicted them, until the swarm loop
@@ -253,6 +304,9 @@ impl AdmissionBehaviour {
             local_peer: None,
             ledger: PathLedger::new(),
             pending: HashMap::new(),
+            pending_inbound: 0,
+            pending_cap: None,
+            shed_log: RateGate::new(),
             to_close: VecDeque::new(),
             evicted_closed: HashMap::new(),
             resources: ResourceModel::new(),
@@ -300,9 +354,35 @@ impl AdmissionBehaviour {
         self
     }
 
-    /// A connection attempt started (inbound or outbound).
+    /// An outbound connection attempt started.
     pub fn begin_handshake(&mut self, id: ConnectionId, now: Instant) {
-        self.pending.entry(id).or_insert(now);
+        self.track_pending(id, now, false);
+    }
+
+    /// An inbound connection was accepted and is in its handshake.
+    pub fn begin_inbound_handshake(&mut self, id: ConnectionId, now: Instant) {
+        self.track_pending(id, now, true);
+    }
+
+    fn track_pending(&mut self, id: ConnectionId, now: Instant, inbound: bool) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.pending.entry(id) {
+            slot.insert(PendingConn {
+                start: now,
+                inbound,
+            });
+            if inbound {
+                self.pending_inbound += 1;
+            }
+        }
+    }
+
+    /// A handshake ended (established, failed, closed or written off).
+    fn end_handshake(&mut self, id: &ConnectionId) -> Option<Instant> {
+        let ended = self.pending.remove(id)?;
+        if ended.inbound {
+            self.pending_inbound = self.pending_inbound.saturating_sub(1);
+        }
+        Some(ended.start)
     }
 
     /// A connection finished its handshake. Recomputes the peer's budget and
@@ -317,8 +397,7 @@ impl AdmissionBehaviour {
         now: Instant,
     ) {
         let handshake = self
-            .pending
-            .remove(&id)
+            .end_handshake(&id)
             .map_or(Duration::ZERO, |start| now.saturating_duration_since(start));
         let class = PathClass::of_addr(remote_addr);
         let (canonical, authority) = match self.local_peer {
@@ -345,7 +424,7 @@ impl AdmissionBehaviour {
         remaining_established: usize,
         now: Instant,
     ) {
-        self.pending.remove(id);
+        self.end_handshake(id);
         let outcome = self.ledger.on_closed(peer, id, remaining_established);
         if outcome.was_eviction {
             self.evicted_closed.insert(*id, now);
@@ -362,7 +441,10 @@ impl AdmissionBehaviour {
         self.ledger.stamp_identify(peer, id, now);
     }
 
-    /// Protocol traffic on a path (message protocol, ledger exchange, ...).
+    /// VALIDATED protocol traffic on a path: a message decrypted for us or
+    /// signed by a known identity, or an exchange with a saved contact. The
+    /// swarm must not call this for bare request receipt, address-reflection
+    /// probes or anything else a stranger can produce for free.
     pub fn stamp_traffic(&mut self, peer: &PeerId, id: &ConnectionId, now: Instant) {
         self.ledger.stamp_traffic(peer, id, now);
     }
@@ -378,8 +460,17 @@ impl AdmissionBehaviour {
         self.ledger.note_reputation(peer, score);
     }
 
-    /// The OS refused a resource (accept, dial or listener error). Shrinks the
-    /// total at the next tick, immediately in event-loop terms.
+    /// The peer has authenticated history (a saved contact, or positive local
+    /// reputation earned through validated exchanges). Its paths rank above
+    /// every unauthenticated path when the total bound forces evictions and
+    /// are the floor of pressure shrinking.
+    pub fn note_authenticated(&mut self, peer: PeerId) {
+        self.ledger.note_authenticated(peer);
+    }
+
+    /// The OS refused a resource (accept, dial or listener error). Marks the
+    /// current tick as a pressure episode; any number of events inside one tick
+    /// are ONE episode (the count is diagnostic only).
     pub fn note_os_exhaustion(&mut self, kind: PressureKind) {
         self.pressure_events = self.pressure_events.saturating_add(1);
         self.pressure_kind = Some(kind);
@@ -410,7 +501,59 @@ impl AdmissionBehaviour {
             total,
             fd,
             active: self.ledger.active_paths(),
+            protected: 0,
+            protected_fd: 0,
         }
+    }
+
+    /// Occupancy including the paths worth protecting. O(paths): only for a
+    /// pressure episode, never the hot path.
+    fn occupancy_for_pressure(&self) -> Occupancy {
+        let (protected, protected_fd) = self.ledger.protected_paths();
+        Occupancy {
+            protected,
+            protected_fd,
+            ..self.occupancy()
+        }
+    }
+
+    /// True when `tick` has anything to do. Every part of `tick` is gated on
+    /// one of these deadlines, so polling it earlier is a no-op.
+    fn tick_due(&self, now: Instant) -> bool {
+        self.pressure_events > 0
+            || now >= self.last_eval + EVAL_QUANTUM
+            || now >= self.last_sample + RESOURCE_SAMPLE_INTERVAL
+            || now >= self.last_marker + MARKER_INTERVAL
+    }
+
+    /// How long a pre-handshake inbound connection may stay pending before it
+    /// is written off: a few locally measured handshakes (the same allowance a
+    /// new path gets as grace), never less than one scheduling quantum.
+    fn pending_allowance(&self) -> Duration {
+        self.ledger
+            .handshake_baseline()
+            .map_or(EVAL_QUANTUM, |baseline| baseline * GRACE_HANDSHAKES)
+            .max(EVAL_QUANTUM)
+    }
+
+    /// Forget pending inbound connections older than the allowance. The swarm
+    /// offers no handle to abort them (the transport upgrade timeout reaps
+    /// them), but accounting for them as live would let a slow-drip flood hold
+    /// the pending bound closed forever.
+    fn write_off_stale_pending(&mut self, now: Instant) {
+        let allowance = self.pending_allowance();
+        self.pending.retain(|_, conn| {
+            !(conn.inbound && now.saturating_duration_since(conn.start) > allowance)
+        });
+        self.pending_inbound = self.pending.values().filter(|conn| conn.inbound).count();
+    }
+
+    /// One pressure episode against pre-handshake inbound: write off the stale
+    /// ones, then retain a multiplicative share of the young ones as the bound.
+    fn shrink_pending_cap(&mut self, now: Instant) {
+        self.write_off_stale_pending(now);
+        let cap = retain_share(self.pending_inbound).max(1);
+        self.pending_cap = Some(self.pending_cap.map_or(cap, |old| old.min(cap)));
     }
 
     /// Periodic work: re-evaluate grace expiry, re-sample the machine, enforce
@@ -438,26 +581,33 @@ impl AdmissionBehaviour {
         let quantum = now.saturating_duration_since(self.last_eval) >= EVAL_QUANTUM;
         let mut recompute = quantum;
         if let Some(snapshot) = fresh {
-            self.snapshot = snapshot;
+            // A probe that failed (it needs a descriptor, and descriptors are
+            // what ran out) must not erase the last good figures.
+            self.snapshot = snapshot.or_last(&self.snapshot);
             let occupancy = self.occupancy();
             self.resources.observe(snapshot.rss, occupancy.total);
             if periodic {
                 self.resources.clear_pressure();
+                self.pending_cap = None;
                 self.last_sample = now;
             }
             recompute = true;
         }
         if self.pressure_events > 0 {
-            let occupancy = self.occupancy();
+            // ONE episode per tick, however many error events it held.
             if let Some(kind) = self.pressure_kind.take() {
-                self.resources
-                    .note_pressure(kind, occupancy, self.pressure_events);
+                let occupancy = self.occupancy_for_pressure();
+                self.resources.note_pressure(kind, occupancy);
+                self.shrink_pending_cap(now);
             }
             self.pressure_events = 0;
             recompute = true;
         }
         if quantum {
             self.last_eval = now;
+            if self.pending_cap.is_some() {
+                self.write_off_stale_pending(now);
+            }
             let evictions = self.ledger.evaluate_all(now);
             self.queue(evictions, now);
             for (peer, id) in self.ledger.due_reissue(now) {
@@ -505,10 +655,11 @@ impl AdmissionBehaviour {
 
     /// Earliest instant at which time alone could change a decision, so `poll`
     /// can register a timer instead of relying on unrelated wakes.
-    fn next_wake(&self, now: Instant) -> Option<Instant> {
+    fn next_wake(&mut self, now: Instant) -> Option<Instant> {
         if self.ledger.occupancy().0 == 0
             && self.ledger.pending_closes() == 0
             && self.to_close.is_empty()
+            && self.pending_cap.is_none()
         {
             return None;
         }
@@ -577,7 +728,21 @@ impl NetworkBehaviour for AdmissionBehaviour {
         _: &Multiaddr,
         _: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
-        self.begin_handshake(connection_id, Instant::now());
+        let now = Instant::now();
+        if let Some(cap) = self.pending_cap {
+            if self.pending_inbound >= cap {
+                if let Some(suppressed) = self.shed_log.permit(now, LOG_INTERVAL) {
+                    tracing::warn!(
+                        "[CONN] pending-shed pending={} cap={} suppressed={}",
+                        self.pending_inbound,
+                        cap,
+                        suppressed
+                    );
+                }
+                return Err(ConnectionDenied::new(PendingShed));
+            }
+        }
+        self.begin_inbound_handshake(connection_id, now);
         Ok(())
     }
 
@@ -626,7 +791,7 @@ impl NetworkBehaviour for AdmissionBehaviour {
                     peer_id,
                     connection_id,
                     endpoint.get_remote_address(),
-                    endpoint.is_dialer(),
+                    local_dialed(endpoint),
                     now,
                 );
             }
@@ -639,13 +804,13 @@ impl NetworkBehaviour for AdmissionBehaviour {
                 self.path_closed(&peer_id, &connection_id, remaining_established, now);
             }
             FromSwarm::DialFailure(failure) => {
-                self.pending.remove(&failure.connection_id);
+                self.end_handshake(&failure.connection_id);
                 if let Some(kind) = dial_error_pressure(failure.error) {
                     self.note_exhaustion_event(kind, "outgoing-dial", failure.error);
                 }
             }
             FromSwarm::ListenFailure(failure) => {
-                self.pending.remove(&failure.connection_id);
+                self.end_handshake(&failure.connection_id);
                 if let Some(kind) = classify_exhaustion(failure.error) {
                     self.note_exhaustion_event(kind, "incoming-accept", failure.error);
                 }
@@ -673,7 +838,9 @@ impl NetworkBehaviour for AdmissionBehaviour {
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         let now = Instant::now();
-        self.tick(now);
+        if self.tick_due(now) {
+            self.tick(now);
+        }
         if let Some((peer_id, id)) = self.to_close.pop_front() {
             return Poll::Ready(ToSwarm::CloseConnection {
                 peer_id,
@@ -986,13 +1153,14 @@ mod tests {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
         assert!(drain(&mut b).is_empty(), "6 paths are far below the bound");
-        // Two accepts fail with EMFILE: the OS just proved it cannot carry
-        // more than 4. No need to wait for the periodic sample.
+        // Two accepts fail with EMFILE inside one tick: that is ONE episode,
+        // which retains 3/4 of the live paths (6 -> 5), not one eviction per
+        // event. No need to wait for the periodic sample.
         b.note_os_exhaustion(PressureKind::Fd);
         b.note_os_exhaustion(PressureKind::Fd);
         b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
-        assert_eq!(drain(&mut b).len(), 2, "room was evicted at once");
-        assert_eq!(b.ledger.occupancy().0, 4);
+        assert_eq!(drain(&mut b).len(), 1, "room was evicted at once");
+        assert_eq!(b.ledger.occupancy().0, 5);
         // The scheduled sample lifts the cap again.
         b.tick_with(at(base, 10_000), Some(fd_limit_1000()), true);
         assert_eq!(b.total_budget().expect("derived").limits.total, 500);
@@ -1088,6 +1256,280 @@ mod tests {
         let closes_hi = drain(&mut at_hi);
         assert_eq!(closes_lo, vec![(hi, cid(2))]);
         assert_eq!(closes_hi, vec![(lo, cid(2))]);
+    }
+
+    // ---- finding 1: pressure episodes, pending relief ---------------------
+
+    fn inbound_pending(b: &mut AdmissionBehaviour, n: usize) -> Result<(), ConnectionDenied> {
+        let a = lan(20_000);
+        b.handle_pending_inbound_connection(cid(100_000 + n), &a, &a)
+    }
+
+    #[test]
+    fn pending_flood_and_emfile_bursts_never_evict_authenticated_established_peers() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        // 30 authenticated peers (half of them idle) and 10 unknown idle ones.
+        let honest: Vec<PeerId> = (0..30).map(|_| PeerId::random()).collect();
+        let strangers: Vec<PeerId> = (0..10).map(|_| PeerId::random()).collect();
+        for (n, peer) in honest.iter().enumerate() {
+            b.path_established(*peer, cid(n), &wan(), true, at(base, n as u64));
+            b.note_authenticated(*peer);
+            if n % 2 == 0 {
+                b.stamp_traffic(peer, &cid(n), at(base, 50));
+            }
+        }
+        for (n, peer) in strangers.iter().enumerate() {
+            b.path_established(
+                *peer,
+                cid(1_000 + n),
+                &wan(),
+                false,
+                at(base, 60 + n as u64),
+            );
+        }
+        assert!(drain(&mut b).is_empty(), "40 paths are far below the bound");
+
+        // A raw-TCP flood: 500 sockets sit in their handshake.
+        for n in 0..500 {
+            assert!(inbound_pending(&mut b, n).is_ok(), "no pressure yet");
+        }
+        assert_eq!(b.pending_inbound, 500);
+
+        // The flood exhausts descriptors: hundreds of ListenerError events per
+        // poll, for several ticks in a row.
+        let mut closed: Vec<(PeerId, ConnectionId)> = Vec::new();
+        for tick in 1..=6u64 {
+            for _ in 0..300 {
+                b.note_os_exhaustion(PressureKind::Fd);
+            }
+            b.tick_with(at(base, 100 * tick), Some(fd_limit_1000()), false);
+            closed.extend(drain(&mut b));
+        }
+        for (peer, _) in &closed {
+            assert!(
+                !honest.contains(peer),
+                "an authenticated established peer was evicted to make room for pending sockets"
+            );
+        }
+        for peer in &honest {
+            assert_eq!(b.ledger.live_paths(peer), 1, "honest path survives");
+        }
+        // Only unauthenticated idle peers were shed, and no more than exist.
+        assert!(closed.len() <= strangers.len());
+        assert!(b.ledger.occupancy().0 >= honest.len());
+
+        // Pending relief: the young pending set is bounded multiplicatively and
+        // a new pre-handshake inbound is dropped at accept time.
+        let cap = b.pending_cap.expect("pending bound in force");
+        assert!(cap < 500, "cap {cap} shrinks below the flood");
+        assert!(inbound_pending(&mut b, 9_999).is_err());
+        // The flood's sockets age out or finish; once the pending set is under
+        // the bound new inbound is accepted again (authenticated peers can
+        // reconnect).
+        for n in 0..500 {
+            b.end_handshake(&cid(100_000 + n));
+        }
+        assert!(inbound_pending(&mut b, 10_000).is_ok());
+
+        // The periodic sample restores both bounds.
+        b.tick_with(at(base, 10_000), Some(fd_limit_1000()), true);
+        assert_eq!(b.total_budget().expect("derived").limits.total, 500);
+        assert!(b.pending_cap.is_none());
+        for n in 20_000..20_600 {
+            assert!(inbound_pending(&mut b, n).is_ok());
+        }
+    }
+
+    #[test]
+    fn pressure_sheds_unauthenticated_idle_peers_before_authenticated_ones() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        let honest = PeerId::random();
+        b.path_established(honest, cid(0), &wan(), true, base);
+        b.note_authenticated(honest);
+        for n in 1..=11usize {
+            b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
+        }
+        for tick in 1..=15u64 {
+            b.note_os_exhaustion(PressureKind::Fd);
+            b.tick_with(at(base, 100 * tick), Some(fd_limit_1000()), false);
+        }
+        let closes = drain(&mut b);
+        assert_eq!(closes.len(), 11, "every stranger shed, bound converged");
+        assert!(!closes.iter().any(|(peer, _)| *peer == honest));
+        assert_eq!(b.ledger.live_paths(&honest), 1);
+    }
+
+    #[test]
+    fn stale_pending_inbound_is_written_off_under_pressure() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        for n in 0..50usize {
+            b.begin_inbound_handshake(cid(n), base);
+        }
+        assert_eq!(b.pending_inbound, 50);
+        b.note_os_exhaustion(PressureKind::Fd);
+        // A minute later none of them is young any more.
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
+        assert_eq!(b.pending_inbound, 0);
+        assert_eq!(b.pending_cap, Some(1));
+    }
+
+    #[test]
+    fn a_failed_probe_under_exhaustion_keeps_the_memory_figures() {
+        let base = Instant::now();
+        fn good() -> ResourceSnapshot {
+            ResourceSnapshot {
+                fd_soft_limit: Some(1000),
+                mem_available: Some(1 << 40),
+                rss: None,
+            }
+        }
+        let mut b = AdmissionBehaviour::new().with_sampler(good);
+        b.path_established(PeerId::random(), cid(0), &wan(), true, base);
+        // The /proc reads fail with EMFILE; only getrlimit answers.
+        let degraded = ResourceSnapshot {
+            fd_soft_limit: Some(1000),
+            mem_available: None,
+            rss: None,
+        };
+        b.tick_with(at(base, 10_000), Some(degraded), true);
+        assert_eq!(b.snapshot.mem_available, Some(1 << 40));
+    }
+
+    // ---- finding 2: traffic is not free ------------------------------------
+
+    #[test]
+    fn sybil_traffic_never_outranks_an_idle_authenticated_contact() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
+        let contact = PeerId::random();
+        b.path_established(contact, cid(0), &wan(), true, base);
+        b.note_authenticated(contact);
+        b.note_reputation(contact, 50.0);
+        for n in 1..30usize {
+            let sybil = PeerId::random();
+            b.path_established(sybil, cid(n), &wan(), false, at(base, 10_000 + n as u64));
+            // Even if a careless receiver stamped its requests as traffic.
+            b.stamp_traffic(&sybil, &cid(n), at(base, 11_000));
+        }
+        let closes = drain(&mut b);
+        assert!(
+            !closes.iter().any(|(peer, _)| *peer == contact),
+            "the idle contact outlives every request-spamming Sybil"
+        );
+        assert_eq!(b.ledger.live_paths(&contact), 1);
+    }
+
+    // ---- finding 3: hole-punched connections ----------------------------------
+
+    fn punched(role: Endpoint) -> ConnectedPoint {
+        ConnectedPoint::Dialer {
+            address: wan(),
+            role_override: role,
+            port_use: PortUse::Reuse,
+        }
+    }
+
+    fn dialed(address: Multiaddr) -> ConnectedPoint {
+        ConnectedPoint::Dialer {
+            address,
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        }
+    }
+
+    fn accepted() -> ConnectedPoint {
+        ConnectedPoint::Listener {
+            local_addr: lan(4001),
+            send_back_addr: wan(),
+        }
+    }
+
+    fn establish(b: &mut AdmissionBehaviour, peer: PeerId, id: usize, point: &ConnectedPoint) {
+        b.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+            peer_id: peer,
+            connection_id: cid(id),
+            endpoint: point,
+            failed_addresses: &[],
+            other_established: 0,
+        }));
+    }
+
+    #[test]
+    fn hole_punch_role_override_decides_who_dialed() {
+        assert!(local_dialed(&punched(Endpoint::Dialer)));
+        assert!(
+            !local_dialed(&punched(Endpoint::Listener)),
+            "a Dialer endpoint with the listener role did not dial on the wire"
+        );
+        assert!(local_dialed(&dialed(wan())));
+        assert!(!local_dialed(&accepted()));
+    }
+
+    #[test]
+    fn both_ends_pick_the_same_canonical_when_a_hole_punch_meets_a_direct_connection() {
+        let base = Instant::now();
+        let x = PeerId::random();
+        let y = PeerId::random();
+        let (lo, hi) = if x.to_bytes() < y.to_bytes() {
+            (x, y)
+        } else {
+            (y, x)
+        };
+        let mut at_lo = AdmissionBehaviour::new().with_local_peer(lo);
+        let mut at_hi = AdmissionBehaviour::new().with_local_peer(hi);
+        // Connection 1: a DCUtR hole punch. BOTH ends see ConnectedPoint::Dialer;
+        // `lo` plays the dialer role, `hi` the listener role.
+        // Connection 2: an ordinary direct dial by `hi` (listener at `lo`).
+        establish(&mut at_lo, hi, 1, &punched(Endpoint::Dialer));
+        establish(&mut at_hi, lo, 1, &punched(Endpoint::Listener));
+        establish(&mut at_lo, hi, 2, &accepted());
+        establish(&mut at_hi, lo, 2, &dialed(wan()));
+        at_lo.tick(at(base, 120_000));
+        at_hi.tick(at(base, 120_000));
+        let closes_lo = drain(&mut at_lo);
+        let closes_hi = drain(&mut at_hi);
+        assert_eq!(
+            closes_lo,
+            closes_hi
+                .iter()
+                .map(|(_, id)| (hi, *id))
+                .collect::<Vec<_>>(),
+            "both ends close the same connection id"
+        );
+        assert_eq!(closes_lo.len(), 1);
+        // Canonical is the connection dialed by the lower id: connection 1.
+        assert_eq!(closes_lo[0].1, cid(2));
+    }
+
+    // ---- finding 4: hot paths do not scan ----------------------------------
+
+    #[test]
+    fn connect_flood_keeps_counters_exact_and_the_bound_enforced() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
+        for n in 0..3_000usize {
+            b.path_established(PeerId::random(), cid(n), &wan(), false, at(base, n as u64));
+            if let Some((peer, id)) = b.next_close_request() {
+                b.path_closed(&peer, &id, 0, at(base, n as u64));
+            }
+        }
+        assert_eq!(b.ledger.occupancy().0, 4);
+        assert!(b.ledger.counters_consistent());
+    }
+
+    #[test]
+    fn poll_skips_the_tick_until_a_deadline_is_due() {
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        assert!(!b.tick_due(now));
+        assert!(matches!(b.poll(&mut cx), Poll::Pending));
+        b.note_os_exhaustion(PressureKind::Fd);
+        assert!(b.tick_due(now), "pressure makes the tick due at once");
     }
 
     // ---- timer ------------------------------------------------------------

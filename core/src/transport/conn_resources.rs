@@ -27,8 +27,15 @@
 //! * The platform scale shrinks the bound on battery (see
 //!   [`set_platform_power`]): every kept-alive path costs radio wakeups.
 //! * Pressure feedback (EMFILE/ENFILE/ENOMEM/ENOBUFS from dial, accept or
-//!   listener errors) shrinks the bound IMMEDIATELY to what the OS just proved
-//!   it can carry; the next periodic sample restores the derived figure.
+//!   listener errors) shrinks the bound at once, but per EPISODE (one tick),
+//!   not per error event: a raw-socket flood raises hundreds of errors per
+//!   poll and must not translate into hundreds of evictions. Each episode
+//!   retains [`PRESSURE_RETAIN_NUM`]/[`PRESSURE_RETAIN_DEN`] of the live paths
+//!   (multiplicative shrink) and never goes below the paths worth protecting
+//!   (authenticated peers and paths with validated traffic): established
+//!   authenticated peers are never evicted to make room for unauthenticated
+//!   sockets. The next periodic sample restores the derived figure. When the
+//!   probe fails under descriptor exhaustion the last good snapshot is kept.
 //!
 //! Above the bound the ledger EVICTS the lowest-value paths; it never refuses
 //! a connection. Where no input is available (a platform without a memory
@@ -78,6 +85,22 @@ pub const ESTIMATE_FLOOR_FRACTION: f64 = 0.125;
 /// not a bound: noisy deltas (other allocations ride along) get a quarter
 /// weight so the estimate follows sustained change but not single samples.
 pub const RSS_SMOOTHING: f64 = 0.25;
+
+/// Fraction of the live paths one pressure episode retains (3/4). A model
+/// parameter, not a cap: repeated episodes compound, so sustained exhaustion
+/// converges quickly on what the machine can carry, while one burst of errors
+/// (however many events it holds) costs at most a quarter of the paths, and
+/// never those worth protecting.
+pub const PRESSURE_RETAIN_NUM: usize = 3;
+/// Denominator of [`PRESSURE_RETAIN_NUM`].
+pub const PRESSURE_RETAIN_DEN: usize = 4;
+
+/// Connection-count growths with zero measured RSS growth tolerated before the
+/// per-connection estimate starts decaying towards its floor. Allocator reuse
+/// can hide one or two connections' cost; a sustained run of free
+/// connections is evidence the estimate is too high (for example after a
+/// one-off spike inflated it).
+pub const ZERO_GROWTH_PATIENCE: u32 = 3;
 
 /// Windows handle-table maximum, used as its descriptor limit (see module docs).
 pub const WINDOWS_HANDLE_LIMIT: u64 = 1 << 24;
@@ -132,6 +155,21 @@ pub struct ResourceSnapshot {
     pub rss: Option<u64>,
 }
 
+impl ResourceSnapshot {
+    /// This reading, with every field the probe failed to supply taken from
+    /// `last`. Under descriptor exhaustion the `/proc` reads themselves fail
+    /// (they need a descriptor); losing the memory figures at exactly that
+    /// moment would drop the bound to the pressure cap alone, so the last good
+    /// figure stands in until a probe succeeds again.
+    pub fn or_last(self, last: &ResourceSnapshot) -> ResourceSnapshot {
+        ResourceSnapshot {
+            fd_soft_limit: self.fd_soft_limit.or(last.fd_soft_limit),
+            mem_available: self.mem_available.or(last.mem_available),
+            rss: self.rss.or(last.rss),
+        }
+    }
+}
+
 /// A derived bound and the input that binds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Derived {
@@ -153,8 +191,13 @@ pub struct Occupancy {
     pub total: usize,
     /// Live paths that own a descriptor.
     pub fd: usize,
-    /// Live paths that have carried protocol traffic.
+    /// Live paths that have carried validated protocol traffic.
     pub active: usize,
+    /// Live paths worth protecting under pressure (authenticated peers, or
+    /// validated traffic). Only filled for pressure episodes; zero otherwise.
+    pub protected: usize,
+    /// The protected paths that own a descriptor.
+    pub protected_fd: usize,
 }
 
 /// Measured per-connection cost plus pressure feedback.
@@ -162,6 +205,8 @@ pub struct Occupancy {
 pub struct ResourceModel {
     per_connection: f64,
     last: Option<(u64, usize)>,
+    /// Consecutive connection-count growths that showed no RSS growth.
+    flat_growths: u32,
     pressure: Option<Pressure>,
 }
 
@@ -170,6 +215,7 @@ impl Default for ResourceModel {
         Self {
             per_connection: PRIOR_CONNECTION_BYTES,
             last: None,
+            flat_growths: 0,
             pressure: None,
         }
     }
@@ -197,34 +243,52 @@ impl ResourceModel {
             if live > prev_live {
                 let added = (live - prev_live) as f64;
                 let grown = rss.saturating_sub(prev_rss) as f64;
+                let floor = PRIOR_CONNECTION_BYTES * ESTIMATE_FLOOR_FRACTION;
                 if grown > 0.0 {
-                    let sample = (grown / added).clamp(
-                        PRIOR_CONNECTION_BYTES * ESTIMATE_FLOOR_FRACTION,
-                        PRIOR_CONNECTION_BYTES * OBSERVATION_CEILING_PRIORS,
-                    );
+                    let sample = (grown / added)
+                        .clamp(floor, PRIOR_CONNECTION_BYTES * OBSERVATION_CEILING_PRIORS);
                     self.per_connection =
                         self.per_connection * (1.0 - RSS_SMOOTHING) + sample * RSS_SMOOTHING;
+                    self.flat_growths = 0;
+                } else {
+                    // Connections grew and RSS did not. One or two such steps
+                    // are allocator reuse; a sustained run means the estimate
+                    // is too high, so it decays towards its floor.
+                    self.flat_growths = self.flat_growths.saturating_add(1);
+                    if self.flat_growths >= ZERO_GROWTH_PATIENCE {
+                        self.per_connection =
+                            self.per_connection * (1.0 - RSS_SMOOTHING) + floor * RSS_SMOOTHING;
+                    }
                 }
             }
         }
         self.last = Some((rss, live));
     }
 
-    /// The OS refused `events` allocations/accepts/dials: it just proved it
-    /// cannot carry more than `live - events`. Shrink to that immediately
-    /// (never below one path) so the ledger evicts room. The cap lasts until
-    /// the next periodic sample ([`ResourceModel::clear_pressure`]).
-    pub fn note_pressure(&mut self, kind: PressureKind, occupancy: Occupancy, events: usize) {
-        let total = occupancy.total.saturating_sub(events).max(1);
+    /// The OS refused allocations/accepts/dials during one tick (ONE episode,
+    /// however many error events it held). Retain
+    /// [`PRESSURE_RETAIN_NUM`]/[`PRESSURE_RETAIN_DEN`] of the live paths, but
+    /// never fewer than the paths worth protecting (`occupancy.protected`):
+    /// pressure sheds unauthenticated, traffic-less paths first and never
+    /// authenticated peers. Repeated episodes compound; the cap lasts until the
+    /// next periodic sample ([`ResourceModel::clear_pressure`]).
+    pub fn note_pressure(&mut self, kind: PressureKind, occupancy: Occupancy) {
+        let total = retain_share(occupancy.total)
+            .max(occupancy.protected)
+            .max(1);
         let fd = match kind {
-            PressureKind::Fd => Some(occupancy.fd.saturating_sub(events).max(1)),
+            PressureKind::Fd => Some(
+                retain_share(occupancy.fd)
+                    .max(occupancy.protected_fd)
+                    .max(1),
+            ),
             PressureKind::Mem => None,
         };
         self.pressure = Some(match self.pressure {
             Some(old) => Pressure {
-                total: old.total.min(total),
+                total: old.total.min(total).max(occupancy.protected).max(1),
                 fd: match (old.fd, fd) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), Some(b)) => Some(a.min(b).max(occupancy.protected_fd).max(1)),
                     (a, b) => a.or(b),
                 },
                 source: kind,
@@ -324,6 +388,15 @@ impl ResourceModel {
             source,
         })
     }
+}
+
+/// One pressure episode's retained share of `live` paths (rounded up, but an
+/// episode always sheds at least one path while more than one is live, so small
+/// counts converge too).
+pub fn retain_share(live: usize) -> usize {
+    live.saturating_mul(PRESSURE_RETAIN_NUM)
+        .div_ceil(PRESSURE_RETAIN_DEN)
+        .min(live.saturating_sub(1).max(1))
 }
 
 fn scale(value: usize, permille: u32) -> usize {
@@ -590,6 +663,8 @@ mod tests {
             total,
             fd,
             active: 0,
+            protected: 0,
+            protected_fd: 0,
         }
     }
 
@@ -682,6 +757,8 @@ mod tests {
             total: 100,
             fd: 100,
             active: 80,
+            protected: 80,
+            protected_fd: 80,
         };
         let floored = model.derive(&snap, busy, 1000).expect("derived");
         assert_eq!(floored.limits.total, 80);
@@ -762,7 +839,59 @@ mod tests {
     }
 
     #[test]
-    fn pressure_shrinks_immediately_and_clears_on_resample() {
+    fn a_sustained_run_of_free_connections_decays_an_inflated_estimate() {
+        let mut model = ResourceModel::new();
+        let mut rss = 100 * 1024 * 1024u64;
+        let mut live = 10usize;
+        model.observe(Some(rss), live);
+        // A burst of expensive connections inflates the estimate above the prior.
+        for _ in 0..8 {
+            rss += 4 * PRIOR_CONNECTION_BYTES as u64 * 10;
+            live += 10;
+            model.observe(Some(rss), live);
+        }
+        let inflated = model.per_connection_bytes();
+        assert!(inflated > 2.0 * PRIOR_CONNECTION_BYTES, "{inflated}");
+        // Then connections keep arriving at no measurable cost.
+        for _ in 0..40 {
+            live += 10;
+            model.observe(Some(rss), live);
+        }
+        let decayed = model.per_connection_bytes();
+        assert!(
+            decayed < inflated / 2.0,
+            "{decayed} should decay from {inflated}"
+        );
+        assert!(
+            decayed >= PRIOR_CONNECTION_BYTES * ESTIMATE_FLOOR_FRACTION,
+            "never below the floor"
+        );
+    }
+
+    #[test]
+    fn a_failed_probe_keeps_the_last_good_figures() {
+        let good = ResourceSnapshot {
+            fd_soft_limit: Some(1024),
+            mem_available: Some(GIB),
+            rss: Some(100 * 1024 * 1024),
+        };
+        // Under EMFILE the /proc reads fail; getrlimit still answers.
+        let degraded = ResourceSnapshot {
+            fd_soft_limit: Some(1024),
+            mem_available: None,
+            rss: None,
+        };
+        assert_eq!(degraded.or_last(&good), good);
+        let fresh = ResourceSnapshot {
+            fd_soft_limit: Some(2048),
+            mem_available: Some(2 * GIB),
+            rss: Some(1),
+        };
+        assert_eq!(fresh.or_last(&good), fresh, "a successful probe wins");
+    }
+
+    #[test]
+    fn pressure_is_per_episode_multiplicative_and_floored_at_protected_paths() {
         let mut model = ResourceModel::new();
         let snap = ResourceSnapshot {
             fd_soft_limit: Some(10_000),
@@ -771,30 +900,43 @@ mod tests {
         };
         let normal = model.derive(&snap, occ(100, 100), 1000).expect("derived");
         assert_eq!(normal.limits.total, 5_000);
-        // 7 accepts failed with EMFILE while 100 paths were live.
-        model.note_pressure(PressureKind::Fd, occ(100, 100), 7);
+        // One episode (however many error events it held) keeps 3/4.
+        model.note_pressure(PressureKind::Fd, occ(100, 100));
         assert!(model.under_pressure());
         let shrunk = model.derive(&snap, occ(100, 100), 1000).expect("derived");
-        assert_eq!(shrunk.limits.total, 93);
-        assert_eq!(shrunk.limits.fd, 93);
+        assert_eq!(shrunk.limits.total, 75);
+        assert_eq!(shrunk.limits.fd, 75);
         assert_eq!(shrunk.source, BudgetSource::Fd);
-        // Further pressure only ever tightens.
-        model.note_pressure(PressureKind::Fd, occ(93, 93), 3);
-        let tighter = model.derive(&snap, occ(93, 93), 1000).expect("derived");
-        assert_eq!(tighter.limits.total, 90);
+        // Sustained pressure compounds but stops at the protected floor.
+        let mut live = 75usize;
+        for _ in 0..20 {
+            let now = Occupancy {
+                protected: 40,
+                protected_fd: 40,
+                ..occ(live, live)
+            };
+            model.note_pressure(PressureKind::Fd, now);
+            live = model
+                .derive(&snap, now, 1000)
+                .expect("derived")
+                .limits
+                .total
+                .min(live);
+        }
+        assert_eq!(live, 40, "authenticated paths are never cut");
         model.clear_pressure();
-        let back = model.derive(&snap, occ(90, 90), 1000).expect("derived");
-        assert_eq!(back.limits.total, 5_000);
+        let back = model.derive(&snap, occ(40, 40), 1000).expect("derived");
+        assert_eq!(back.limits.total, 5_000, "the periodic sample restores it");
     }
 
     #[test]
     fn memory_pressure_applies_even_without_any_probe() {
         let mut model = ResourceModel::new();
-        model.note_pressure(PressureKind::Mem, occ(40, 10), 4);
+        model.note_pressure(PressureKind::Mem, occ(40, 10));
         let d = model
             .derive(&ResourceSnapshot::default(), occ(40, 10), 1000)
             .expect("pressure alone yields a bound");
-        assert_eq!(d.limits.total, 36);
+        assert_eq!(d.limits.total, 30);
         assert_eq!(d.limits.fd, usize::MAX, "memory pressure leaves fd alone");
         assert_eq!(d.source, BudgetSource::Mem);
     }
@@ -802,11 +944,17 @@ mod tests {
     #[test]
     fn pressure_never_drops_the_bound_below_one_path() {
         let mut model = ResourceModel::new();
-        model.note_pressure(PressureKind::Fd, occ(3, 3), 50);
-        let d = model
-            .derive(&ResourceSnapshot::default(), occ(3, 3), 1000)
-            .expect("derived");
-        assert_eq!(d.limits.total, 1);
+        let mut live = 3usize;
+        for _ in 0..50 {
+            model.note_pressure(PressureKind::Fd, occ(live, live));
+            live = model
+                .derive(&ResourceSnapshot::default(), occ(live, live), 1000)
+                .expect("derived")
+                .limits
+                .total
+                .min(live);
+        }
+        assert_eq!(live, 1);
     }
 
     #[test]
