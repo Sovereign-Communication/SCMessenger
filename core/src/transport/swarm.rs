@@ -1484,39 +1484,30 @@ fn extract_ip_component(addr: &str) -> Option<String> {
 
 /// Classified reason an inbound connection was denied, from the deny cause
 /// carried by libp2p 0.48's `ListenError::Denied { cause: ConnectionDenied }`.
-/// `Other` prints the raw cause so an unknown source still lands in the log.
+/// Admission never denies (it evicts), so a deny now always comes from some
+/// other behaviour or gate; the raw cause is printed so it lands in the log.
 enum DenyCause {
-    ConnectionLimits(u32),
     Other(String),
 }
 
 impl core::fmt::Display for DenyCause {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            DenyCause::ConnectionLimits(limit) => {
-                write!(f, "connection_limits: limit {} reached", limit)
-            }
             DenyCause::Other(raw) => write!(f, "other: {}", raw),
         }
     }
 }
 
-/// Extract the deny cause. Known sources are classified; anything else is
-/// reported verbatim. Never fails open into a generic string when a known
-/// source matches.
+/// Extract the deny cause. Never fails open into a generic string.
 fn classify_deny_cause(cause: &libp2p::swarm::ConnectionDenied) -> DenyCause {
-    if let Some(exceeded) = cause.downcast_ref::<libp2p::connection_limits::Exceeded>() {
-        DenyCause::ConnectionLimits(exceeded.limit())
-    } else {
-        // ConnectionDenied's own Display is the literal "connection denied"
-        // and does NOT chain its source -- printing it verbatim is exactly
-        // the black box the RCA hit. The real reason lives in `source()`.
-        let raw = cause
-            .source()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown deny cause".to_string());
-        DenyCause::Other(raw)
-    }
+    // ConnectionDenied's own Display is the literal "connection denied"
+    // and does NOT chain its source -- printing it verbatim is exactly
+    // the black box the RCA hit. The real reason lives in `source()`.
+    let raw = cause
+        .source()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown deny cause".to_string());
+    DenyCause::Other(raw)
 }
 
 const DELIVERY_CONVERGENCE_MAX_CLOCK_SKEW_MS: u64 = 24 * 60 * 60 * 1000;
@@ -4846,8 +4837,11 @@ pub async fn start_swarm_with_config(
                     event = swarm.select_next_some() => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(
-                                request_response::Event::Message { peer, message, .. }
+                                request_response::Event::Message { peer, connection_id, message }
                             )) => {
+                                // Admission: the main message protocol proves this path
+                                // is carrying real traffic.
+                                swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         // Block enforcement FIRST (before any parse or dial): a blocked
@@ -5268,6 +5262,7 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         if peer_is_blocked(&core_handle, peer) {
@@ -5763,6 +5758,7 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
                                 if peer_is_blocked(&core_handle, peer) {
                                     tracing::warn!(
                                         "Blocked peer {} attempted ledger exchange; refusing topology disclosure",
@@ -6375,6 +6371,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
                                 match event.result {
                                     Ok(rtt) => {
+                                        swarm.behaviour_mut().admission.stamp_liveness(&event.peer, &event.connection, web_time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6386,6 +6383,7 @@ pub async fn start_swarm_with_config(
                                         zombie_tracker.note_liveness(&event.peer, marker_now_ms());
                                     }
                                     Err(ref failure) => {
+                                        swarm.behaviour_mut().admission.note_ping_failed(&event.peer, &event.connection);
                                         tracing::warn!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6489,8 +6487,9 @@ pub async fn start_swarm_with_config(
                             // Accept ANY peer identity, regardless of expected PeerID.
                             // Log the identity and add all addresses to Kademlia.
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_liveness(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker: identify::Received is a liveness proof
                                 // (60s cadence per connection) -- keeps a healthy peer's
                                 // stamps fresh even where ping has nothing to say.
@@ -7234,10 +7233,17 @@ pub async fn start_swarm_with_config(
                                     &connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
+                                // Admission-initiated eviction: not a path failure, so no
+                                // failover ledger re-exchange.
+                                let evicted_close = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 // A different live path may now be selected. Force a
                                 // fresh ledger exchange so failover cannot leave this
                                 // peer with stale topology knowledge.
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                if !evicted_close
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -7281,7 +7287,11 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                let _ = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 tracing::info!(
                                     "[ERROR] Disconnected from {}",
                                     peer_id
@@ -7404,6 +7414,7 @@ pub async fn start_swarm_with_config(
 
                             // Handle outgoing connection errors gracefully — don't panic
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                                super::admission::log_if_hard_ceiling("outgoing-dial", &error);
                                 if let Some(peer_id) = peer_id.as_ref() {
                                     mdns_dial_attempted.remove(peer_id);
                                 }
@@ -7557,6 +7568,7 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
+                                super::admission::log_if_hard_ceiling("incoming-accept", &error);
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a
@@ -9136,6 +9148,9 @@ pub async fn start_swarm_with_config(
                     event = swarm_fut => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(ev)) => {
+                                if let request_response::Event::Message { peer, connection_id, .. } = &ev {
+                                    swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
+                                }
                                 match ev {
                                     request_response::Event::Message { peer, message, .. } => match message {
                                         request_response::Message::Request { request, channel, .. } => {
@@ -9825,8 +9840,9 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_liveness(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker (wasm): identify is this loop's only
                                 // liveness stamp (no ping arm); the 60s identify cadence
                                 // keeps a healthy peer's stamps fresh.
@@ -10055,7 +10071,14 @@ pub async fn start_swarm_with_config(
                                     &                                    connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                // Admission-initiated eviction: not a path failure, so no
+                                // failover ledger re-exchange.
+                                let evicted_close = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
+                                if !evicted_close
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -10088,7 +10111,11 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                let _ = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 tracing::info!("[ERROR] Disconnected from {} (WASM)", peer_id);
                                 connection_tracker.remove_connection(&peer_id);
                                 // Last connection for this peer is gone (num_established
@@ -10149,6 +10176,7 @@ pub async fn start_swarm_with_config(
                                 let _ = event_tx.send(SwarmEvent2::PeerDisconnected(peer_id)).await;
                             }
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                                super::admission::log_if_hard_ceiling("outgoing-dial", &error);
                                 // Kademlia churn — expected at debug level
                                 if let Some(pid) = peer_id {
                                     tracing::debug!("[WARNING] Outgoing connection error to {}: {}", pid, error);
@@ -10201,6 +10229,7 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
+                                super::admission::log_if_hard_ceiling("incoming-accept", &error);
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a
@@ -10428,10 +10457,9 @@ mod tests {
         resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         validate_delivery_convergence_marker_shape, verify_registration_message,
-        wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause, PendingCustodyDispatch,
-        PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
-        RELAY_DUPLICATE_WINDOW_MS, RELAY_PEER_BUCKET_BURST_CAPACITY,
-        RELAY_PEER_BUCKET_REFILL_PER_SEC,
+        wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
+        RelayAbuseGuardrails, RelayRequest, ZombieTracker, RELAY_DUPLICATE_WINDOW_MS,
+        RELAY_PEER_BUCKET_BURST_CAPACITY, RELAY_PEER_BUCKET_REFILL_PER_SEC,
     };
     use crate::identity::IdentityKeys;
     use crate::store::relay_custody::RelayCustodyStore;
@@ -10611,15 +10639,6 @@ mod tests {
         assert!(
             other.to_string().contains("custom gate"),
             "an unknown deny cause must print verbatim, got: {other}"
-        );
-        // The per-peer cap is the limit that denied in the handover RCA (#417);
-        // derive it from the constant so the test tracks the real value.
-        let cap = crate::transport::behaviour::MAX_ESTABLISHED_PER_PEER;
-        let limits = DenyCause::ConnectionLimits(cap);
-        let s = limits.to_string();
-        assert!(
-            s.contains("connection_limits") && s.contains(&format!("limit {cap} reached")),
-            "the limit that denied must be named: {s}"
         );
     }
 
