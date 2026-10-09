@@ -7,7 +7,7 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-10-01T04:24Z (landing-plan dispatch coverage linked; no runtime or release status changed)
+Last updated: 2026-10-07 (bootstrap section rewritten to the #469 decided model; stale GCP bootstrap VM reference marked superseded; no runtime or release status changed)
 Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
@@ -986,6 +986,14 @@ The transport layer was relying solely on TCP for relay connections. Many cellul
    - Implemented ledger sharing for headless node discovery
    - Headless nodes are prioritized based on stability and uptime metrics
    - No static bootstrap nodes - discovery is dynamic via ledger exchange
+   - Bootstrap model (decided 2026-10-06, #469; `docs/BOOTSTRAP.md`,
+     `docs/BOOTSTRAP_GOVERNANCE.md`): invite-only seeding, nothing static, all
+     nodes equal full relays with predominance by earned reputation, and
+     event-driven discovery backoff that never gives up. The UI never shows a
+     "no network peers" message. Implementation tasks T1-T13 are in
+     `docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`; the static-seed mechanisms
+     (`SC_BOOTSTRAP_NODES`, `bootstrap_nodes` config) are being removed by T4
+     (#485).
 
 3. **Stable Node Prioritization**
    - Nodes with higher uptime and reliability scores are prioritized
@@ -1283,8 +1291,11 @@ ssh relay-server "journalctl -u scm-relay --since '5 minutes ago'"
 
 **If Relay is Down:**
 
-1. Check GCP instance status: `gcloud compute instances describe scmessenger-bootstrap --zone=us-central1-a`
-2. Start VM if terminated: `gcloud compute instances start scmessenger-bootstrap --zone=us-central1-a`
+1. [SUPERSEDED 2026-10-07] An earlier revision referenced a GCP VM named
+   `scmessenger-bootstrap`. There is no bootstrap node or bootstrap VM (all
+   nodes are equal; `docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`). Check the
+   status of whichever always-on node you operate with your own provider tooling.
+2. Restart that node's host if it is stopped.
 3. Check container status: `./scripts/test_gcp_node.sh`
 4. Restart container if needed: `./scripts/deploy_gcp_node.sh`
 5. Verify port listening: `gcloud compute ssh relay-server -- sudo netstat -tlnp | grep 9001`

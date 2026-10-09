@@ -1,15 +1,105 @@
 # Peer Seed Address Governance
 
 > **Status:** Current
-> **Last updated:** 2026-07-25
+> **Last updated:** 2026-10-07
 
-> Terminology note: "bootstrap node" survives only as a config-key name. It does
-> not denote a node role. There are no dedicated relays and no bootstrap tier --
-> there are only nodes, and every node is a full relay. See
-> `docs/BOOTSTRAP.md` for the joining model and `docs/TRANSPORT_ARCHITECTURE.md`
-> for the architecture.
+> Terminology note: there are no dedicated relays, no bootstrap tier and no
+> node classes -- only nodes, and every node is a full relay. The only
+> distinction between nodes is whether an identity is loaded. Use "always-on
+> node", never "bootstrap node". See `docs/BOOTSTRAP.md` for the joining model,
+> `docs/rules/NODE_MODEL.md` and `docs/TRANSPORT_ARCHITECTURE.md`.
 
-## Decision
+## Decision (operator, 2026-10-06; issue #469)
+
+Authoritative record: `docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`.
+
+1. **Invite-only bootstrap.** The only seed source is an invite (QR or invite
+   info). Peer discovery otherwise is local (LAN/BLE/Wi-Fi Aware/Multipeer) and
+   ledger gossip over `/sc/ledger-exchange/1.0.0`.
+2. **Nothing is static.** No shipped addresses, no seed list, no environment
+   variable, no config key, no DNS/URL seed. Task T4 (#485) removes the legacy
+   `SC_BOOTSTRAP_NODES` variable, the `bootstrap_nodes` config field and
+   `bootstrap_node_add/remove` pseudo-keys, and the empty compiled constants.
+3. **All nodes are equal.** Predominance is earned by reputation (uptime,
+   recency, failure count, relay health), never by a flag. An always-on AWS node
+   becomes predominant for store-and-forward only because it behaves well.
+   (The `headless_bonus` term in `relay_health.rs` is a node-class input and is
+   removed by T11.)
+4. **Retry never gives up, and the UI never claims absence.** Discovery backoff
+   is event-driven (network, BLE, foreground, invite, ledger events reset it to
+   aggressive, then it decays with jitter to a density/power-derived ceiling);
+   the UI never shows a "no network peers" message -- node indicators are the
+   only connectivity presentation.
+
+Nothing routable is compiled into a public build and there is no project-operated
+entry infrastructure to govern, no enrollment process for community addresses,
+and no PR path for contributing addresses.
+
+## Trust Model
+
+- **An invite is a signed hint, not a grant of trust.** The inviter's signature
+  covers the seed ledger (`get_signable_data()`), so tampering invalidates the
+  invite. Seed entries are bare multiaddrs imported as unproven
+  (`success_count = 0`); they are promoted only by a successful live dial, never
+  directly from wire data. The inviter chooses what to disclose; treat an invite
+  as though its address list were public.
+- **Seed or ledger peers carry no privilege.** The peer at a seed address gets
+  the same treatment as one found by mDNS or learned from the ledger. It cannot
+  read message contents (end-to-end encryption) and cannot impersonate a peer
+  (cryptographic identities). The most a bad node can do is refuse service or
+  gossip junk records, bounded by reputation and by no node being load-bearing.
+- **Ledger entries are unsigned hints, not attestations.** An entry asserts only
+  "this address was reachable for the peer that told us". Connections are
+  authenticated by libp2p Noise; a wrong address fails closed. Exchanged pairs
+  reach the DHT only when `ledger_verified_pair` holds.
+- **Reputation, not roles.** Preference among known nodes comes from observed
+  behaviour: `LedgerManager::get_preferred_relays`
+  (`core/src/store/ledger_entry.rs`), `core/src/transport/reputation.rs`,
+  `core/src/transport/relay_health.rs`.
+- **Identity flexibility.** A node may rotate its libp2p PeerId without breaking
+  clients that dial by IP:port; include `/p2p/<PEER_ID>` when pinning matters.
+- **No PKI or certificate pinning.** Trust rests on the invite signature, the
+  authenticated transport, and the persisted ledger.
+
+## Operator Guidance
+
+An operator running an always-on node mints invites for the people they want to
+bring in (`scm invite create`, T2). That node is an ordinary node; nothing about
+it is compiled into anything. Per-node setup is in
+`docs/RELAY_OPERATOR_GUIDE.md`; the joining model is in `docs/BOOTSTRAP.md`.
+Test and simulation rigs follow the same flow: one node mints an invite and the
+others redeem it (T10); topologies are fixtures, not shipped defaults.
+
+## Open Enhancements
+
+- Ledger entry expiry and pruning policy to bound stale-record accumulation.
+- Reputation-weighted dial order across ledger candidates (partly present in
+  `get_preferred_relays`).
+
+## References
+
+- Decision and implementation spec: `docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`
+- Invite token and seed ledger: `core/src/relay/invite.rs`
+- Ledger exchange protocol registration: `core/src/transport/behaviour.rs`
+- Ledger storage (core/mobile, `LedgerManager`): `core/src/store/ledger_entry.rs`
+- Ledger storage (CLI, `peers.json`): `cli/src/ledger.rs`
+- Joining model: `docs/BOOTSTRAP.md`
+- Node model: `docs/rules/NODE_MODEL.md`
+- Node operator guide: `docs/RELAY_OPERATOR_GUIDE.md`
+
+---
+
+# Superseded Content (historical record)
+
+[SUPERSEDED 2026-10-06] The sections below record the earlier static-seed
+governance model, including the former "Resolution Order for Seed Addresses".
+They are retained as history only and are not guidance. Superseded by
+`docs/BOOTSTRAP_RENDEZVOUS_DECISION_469.md`; the mechanisms they describe
+(`SC_BOOTSTRAP_NODES`, build-time seeding, `bootstrap_nodes` config,
+`config set bootstrap_node_add`, `CORE_BOOTSTRAP_NODES`,
+`DEFAULT_BOOTSTRAP_NODES`) are removed by T4 (#485).
+
+## [Superseded] Decision
 
 Peer discovery is governed by **ledger exchange plus local discovery**. Static
 seed address lists exist only as an optional, user-supplied cold-start input, and
@@ -25,7 +115,7 @@ Nothing routable is compiled into a public build. There is no project-operated
 entry infrastructure to govern, and no enrollment process for community
 addresses.
 
-## Resolution Order for Seed Addresses
+## [Superseded] Resolution Order for Seed Addresses
 
 An optional startup dial list is still resolved. This governs *which seed
 addresses a cold node dials first*, nothing more -- none of it is required for
@@ -68,36 +158,7 @@ local network, or from an inbound dial -- peer records arrive over the
 source of remote peers. The resolution chain above is not consulted again for
 discovery.
 
-## Trust Model
-
-- **Seed addresses carry no privilege.** Supplying an address to dial is not a
-  grant of trust: the peer at that address gets exactly the same treatment as a
-  peer found by mDNS or learned from the ledger. It cannot read message contents
-  (end-to-end encryption) and cannot impersonate any peer (cryptographic
-  identities). The most a bad seed can do is refuse service or gossip junk peer
-  records, which is bounded by reputation tracking and by the fact that no node
-  is load-bearing for entry.
-
-- **The user chooses the entry point.** Because nothing is shipped, the trust
-  decision at cold start is explicit and local: the user or operator decides
-  whose address to use. No default delegates that decision to the project.
-
-- **Ledger entries are unsigned hints, not attestations.** A record learned via
-  ledger exchange asserts only "this address was reachable for the peer that
-  told us". Connections are still authenticated by libp2p Noise against the
-  PeerId, so a wrong or malicious address fails closed rather than yielding a
-  wrong peer.
-
-- **Identity flexibility.** A node may rotate its libp2p PeerId without breaking
-  clients that dial it by IP:port; the client accepts whichever valid Noise
-  identity the remote presents. This supports key rotation and multi-node
-  deployments behind one address. The cost is that IP:port-only addresses do not
-  pin identity -- include `/p2p/<PEER_ID>` when identity pinning matters.
-
-- **No PKI or certificate pinning.** Trust rests on the user-supplied seed, the
-  authenticated transport, and the persisted ledger.
-
-## Operator Guidance
+## [Superseded] Operator Guidance
 
 An operator running a reachable node for their own users configures those
 clients with that node's address. This is ordinary configuration of a private
@@ -115,23 +176,3 @@ scmessenger-cli config get bootstrap_nodes
 Substitute your own values -- there are no addresses to copy from this document.
 Per-node operational setup is in `docs/RELAY_OPERATOR_GUIDE.md`; the joining
 model and the full command reference are in `docs/BOOTSTRAP.md`.
-
-## Open Enhancements
-
-- **Reputation-weighted dial order:** prefer seed and ledger addresses with
-  better observed connect success.
-- **Ledger entry expiry and pruning policy:** bound stale-record accumulation.
-
-Already implemented and no longer pending: gossip-based peer discovery via
-ledger exchange, and removal of all shipped default addresses.
-
-## References
-
-- Ledger exchange protocol registration: `core/src/transport/behaviour.rs`
-- Ledger storage (core/mobile, `LedgerManager`): `core/src/store/ledger_entry.rs`
-- Ledger storage (CLI, `peers.json`): `cli/src/ledger.rs`
-- Seed address resolution: `core/src/transport/bootstrap.rs` (`BootstrapManager`,
-  `BootstrapConfig`, `CORE_BOOTSTRAP_NODES`)
-- CLI seed handling: `cli/src/bootstrap.rs`, `cli/src/config.rs`
-- Joining model and command reference: `docs/BOOTSTRAP.md`
-- Node operator guide: `docs/RELAY_OPERATOR_GUIDE.md`
