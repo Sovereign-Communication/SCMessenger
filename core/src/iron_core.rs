@@ -2364,6 +2364,35 @@ impl IronCore {
                 }
             }
 
+            // Wire-learned peers: the ledger carries public keys for peers we
+            // have never added as contacts. An identity_id is a preimage-bound
+            // hash of the key, so a hash match against a ledger key is
+            // self-verifying (an advertiser cannot forge a key for someone
+            // else's identity_id). `ledger_manager` is not built for wasm32.
+            #[cfg(not(target_arch = "wasm32"))]
+            for entry in self
+                .ledger_manager
+                .dialable_addresses()
+                .into_iter()
+                .chain(self.ledger_manager.seed_addresses(64))
+            {
+                let Some(pk_hex) = entry.public_key.as_deref() else {
+                    continue;
+                };
+                let pk_clean = pk_hex.trim().to_lowercase();
+                if !crate::identity::is_valid_public_key(&pk_clean) {
+                    continue;
+                }
+                if pk_clean == trimmed {
+                    return Ok(pk_clean);
+                }
+                if crate::identity::identity_id_from_public_key_hex(&pk_clean).as_deref()
+                    == Some(trimmed.as_str())
+                {
+                    return Ok(pk_clean);
+                }
+            }
+
             // No stored record resolves it. Only now fall back to the heuristic,
             // which is correct for a genuine public key of a peer we have never
             // seen, and is the best available answer for anything else.
@@ -5261,6 +5290,36 @@ mod tests {
             core.resolve_identity(id).unwrap(),
             pk,
             "identity_id must resolve to the public key, not be returned as-is"
+        );
+    }
+
+    #[test]
+    fn test_resolve_identity_rejects_non_key_recipients_without_panicking() {
+        let core = IronCore::new();
+        for junk in ["", " ", "not-a-key", "zz", "12D3KooWnotakey", "0x1234"] {
+            assert!(
+                core.resolve_identity(junk.to_string()).is_err(),
+                "non-key recipient {junk:?} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_resolve_identity_resolves_identity_id_of_ledger_only_peer() {
+        let core = IronCore::new();
+        let (peer_id, key_hex) = crate::test_support::self_certifying_keypair(b"scm-idv2-ledger");
+        let identity_id = crate::identity::identity_id_from_public_key_hex(&key_hex)
+            .expect("identity id for a valid key");
+
+        // Not a contact: resolution must not succeed yet via any stored record.
+        core.ledger_manager
+            .record_connection("/ip4/203.0.113.7/tcp/4001".to_string(), peer_id);
+
+        assert_eq!(
+            core.resolve_identity(identity_id).unwrap(),
+            key_hex,
+            "identity_id of a ledger-learned peer must resolve to its public key"
         );
     }
 

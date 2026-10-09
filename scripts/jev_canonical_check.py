@@ -10,7 +10,14 @@ The default source is the pinned admission in scripts/harness_admission.json.
 Set HARNESS_REPO only for an explicitly unpinned canary experiment.
 
 State JSON should include: wp, instruction, files, acceptance, evidence
-(commands/outputs), canon rows claimed.
+(commands/outputs), canon rows claimed. Optional: `diff` (unified diff text) for
+content-aware bucket selection when `--changed-paths-from` is not used.
+
+Bucket selection (content-aware): protected buckets, infra and dead_code are
+path/deletion-selected. concurrency and lifecycle need an ADDED diff line matching
+their markers in a matching file (path-only when no diff is known). testplan
+needs a real test source path or a production code path (which then asks for a
+test). Bare substring globs such as `**/*test*` are not used.
 
 Design (schema 1.1.0). The gate is *bucketed*: each changed path is mapped to
 the audit dimensions it touches (docs/jev-completion/PRESCRIPTIONS.md) and only
@@ -149,6 +156,22 @@ _SECURITY_BATTERY = {
     ),
 }
 
+# Content gates for path-broad buckets. Matched against ADDED diff lines of the
+# bucket's own matching files only (removed lines and untouched code do not count).
+CONCURRENCY_MARKERS = [
+    r"RwLock", r"Mutex", r"Arc<", r"\.lock\(\)", r"\.read\(\)", r"\.write\(\)",
+    r"tokio::spawn", r"\basync\s+fn\b", r"\.await\b", r"[Cc]hannel", r"\bAtomic[A-Z]\w*",
+    r"\bsynchronized\b", r"\blaunch\s*[{(]", r"\bwithContext\s*\(", r"\bactor\s+\w+",
+    r"DispatchQueue",
+]
+LIFECYCLE_MARKERS = [
+    r"\b(?:open|close|connect|disconnect|register|unregister|bind|unbind|release|"
+    r"dispose|shutdown|start|stop)\w*\s*\(",
+    r"\bfinally\b", r"\bonDestroy\b", r"\bdeinit\b", r"\.use\s*[{(]", r"\busing\s*\(",
+]
+# Source files whose change means production behaviour changed (testplan asks for a test).
+PRODUCTION_CODE_EXTS = (".rs", ".kt", ".swift", ".java", ".py", ".udl", ".ts", ".js")
+
 # Buckets derive from the audit dimensions (PRESCRIPTIONS.md battery headlines:
 # input not validated, fail-open, hard-to-test, concurrency, context need).
 BUCKETS: Dict[str, Dict[str, Any]] = {
@@ -244,15 +267,11 @@ BUCKETS: Dict[str, Dict[str, Any]] = {
         },
         "weight": 1.0,
         "protected": False,
-        # Only selected when the diff touches shared-state / async constructs.
-        "content_markers": [
-            r"\bArc<", r"RwLock", r"Mutex", r"\.await\b", r"\basync\b", r"Atomic",
-            r"\bsynchronized\b", r"DispatchQueue", r"\blaunch\b", r"CoroutineScope",
-            r"\bactor\b", r"tokio::spawn",
-        ],
+        # Selected only when an added line in a matching file uses shared-state/async constructs.
+        "content_markers": CONCURRENCY_MARKERS,
     },
     "lifecycle": {
-        "path_globs": ["android/**", "iOS/**", "**/Platform*"],
+        "path_globs": ["android/**", "iOS/**", "**/Platform*.kt", "**/Platform*.swift"],
         "questions": {
             "resources_closed": _ynq(
                 "Are resources (sockets, GATT, file handles, scopes) closed on every exit path?",
@@ -262,14 +281,42 @@ BUCKETS: Dict[str, Dict[str, Any]] = {
         },
         "weight": 1.0,
         "protected": False,
+        # Selected only when an added line opens/closes/registers a resource or lifecycle hook.
+        "content_markers": LIFECYCLE_MARKERS,
     },
     "testplan": {
-        "path_globs": ["**/tests/**", "**/*test*", "**/*Test*"],
+        # Real test sources only (a bare "test" substring in a name does not count).
+        "path_globs": [
+            "**/tests/**", "**/src/test/**", "**/src/androidTest/**",
+            "**/*_test.rs", "**/test_*.py", "**/*Test.kt", "**/*Tests.swift",
+        ],
         "questions": {
             "named_test": _ynq(
                 "Is the changed behavior covered by a named test?",
                 "A named test exercises the changed behavior.",
                 "Changed behavior has no covering test.",
+            ),
+        },
+        "weight": 1.0,
+        "protected": False,
+    },
+    "infra": {
+        "path_globs": [".github/workflows/**", "docker/**", "**/Dockerfile*"],
+        "questions": {
+            "bounded_behaviour": _ynq(
+                "Does the CI/container change keep behaviour bounded (explicit timeouts, capped retries, no unbounded loops or waits)?",
+                "Timeouts and retry counts are bounded; no unbounded loop or wait is introduced.",
+                "A step can run or retry without bound, or has no timeout.",
+            ),
+            "checks_not_weakened": _ynq(
+                "Does the change leave every existing CI check, gate and test step failing on error (none skipped, disabled, continue-on-error or made advisory)?",
+                "Every existing check still fails the build on error.",
+                "A check is skipped, disabled, made advisory, or its failure is ignored.",
+            ),
+            "ci_run_evidence": _ynq(
+                "Is the changed path exercised by a CI run whose result is cited as evidence?",
+                "A cited CI run executed the changed workflow, image or Dockerfile.",
+                "No CI run exercising the changed path is cited.",
             ),
         },
         "weight": 1.0,
@@ -335,6 +382,10 @@ def _is_test_path(path: str) -> bool:
     return path_matches(path, BUCKETS["testplan"]["path_globs"])
 
 
+def _is_production_code(path: str) -> bool:
+    return path.lower().endswith(PRODUCTION_CODE_EXTS) and not _is_test_path(path)
+
+
 def git_diff_info(base_ref: str, repo_root: Path) -> Dict[str, Any]:
     """Changed paths, deleted paths, removed symbol names and added text."""
 
@@ -359,10 +410,33 @@ _SYMBOL_RE = re.compile(
 
 
 def parse_unified_diff(diff: str) -> Dict[str, Any]:
+    """Split a unified diff into removed symbols, added text (global and per file).
+
+    File attribution comes from `+++ b/<path>` headers. A header is recognised
+    only when the next line is a hunk header (`@@`), so content lines that merely
+    start with `---`/`+++` are not mistaken for one. Text before any header is
+    keyed by "" (applies to every path). Deleted files (`+++ /dev/null`) add nothing.
+    """
     removed: Set[str] = set()
     added: List[str] = []
-    for line in diff.splitlines():
-        if line.startswith("---") or line.startswith("+++"):
+    by_path: Dict[str, List[str]] = {}
+    diff_paths: Set[str] = set()
+    current = ""
+    lines = diff.splitlines()
+    for i, line in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if line.startswith("diff --git "):
+            current = ""
+            continue
+        if line.startswith("+++ ") and nxt.startswith("@@"):
+            target = line[4:].strip()
+            if target == "/dev/null":
+                current = ""
+            else:
+                current = (target[2:] if target.startswith("b/") else target).replace("\\", "/")
+                diff_paths.add(current)
+            continue
+        if line.startswith("--- ") and nxt.startswith("+++ "):
             continue
         if line.startswith("-"):
             m = _SYMBOL_RE.match(line[1:])
@@ -370,7 +444,20 @@ def parse_unified_diff(diff: str) -> Dict[str, Any]:
                 removed.add(m.group(1))
         elif line.startswith("+"):
             added.append(line[1:])
-    return {"removed_symbols": sorted(removed), "added_text": "\n".join(added)}
+            by_path.setdefault(current, []).append(line[1:])
+    return {
+        "removed_symbols": sorted(removed),
+        "added_text": "\n".join(added),
+        "added_by_path": {k: "\n".join(v) for k, v in by_path.items()},
+        "diff_paths": sorted(diff_paths),
+    }
+
+
+def _added_for(path: str, added_by_path: Optional[Dict[str, str]], added_text: Optional[str]) -> Optional[str]:
+    """Added diff text that can be attributed to `path`; None when no diff is known."""
+    if added_by_path is not None:
+        return "\n".join(t for t in (added_by_path.get(path, ""), added_by_path.get("", "")) if t)
+    return added_text
 
 
 def select_buckets(
@@ -379,8 +466,17 @@ def select_buckets(
     deleted: Iterable[str] = (),
     removed_symbols: Iterable[str] = (),
     added_text: Optional[str] = None,
+    added_by_path: Optional[Dict[str, str]] = None,
 ) -> List[str]:
-    """Return selected bucket names (instruction always, in BUCKETS order)."""
+    """Return selected bucket names (instruction always, in BUCKETS order).
+
+    Path globs decide the protected buckets and infra. Content-gated buckets
+    (concurrency, lifecycle) additionally need an ADDED diff line that matches
+    their markers, checked per file when `added_by_path` is known (else against
+    the global `added_text`). With no diff text at all, they fall back to paths.
+    testplan needs a real test source path, or a production code path (which then
+    asks for a test).
+    """
     paths = [p.replace("\\", "/") for p in paths]
     selected: List[str] = []
     for name, spec in BUCKETS.items():
@@ -391,14 +487,22 @@ def select_buckets(
             if list(deleted) or list(removed_symbols):
                 selected.append(name)
             continue
-        hits = [p for p in paths if path_matches(p, spec["path_globs"])]
-        if name == "concurrency":
-            hits = [p for p in hits if not _is_test_path(p)]
-            if added_text is not None:
-                markers = spec["content_markers"]
-                if not any(re.search(m, added_text) for m in markers):
-                    hits = []
-        if hits:
+        if name == "testplan":
+            hit = any(_is_test_path(p) or _is_production_code(p) for p in paths)
+        else:
+            hits = [p for p in paths if path_matches(p, spec["path_globs"])]
+            if name == "concurrency":
+                hits = [p for p in hits if not _is_test_path(p)]
+            markers = spec.get("content_markers")
+            if markers and hits:
+                gated = []
+                for p in hits:
+                    text = _added_for(p, added_by_path, added_text)
+                    if text is None or any(re.search(m, text) for m in markers):
+                        gated.append(p)
+                hits = gated
+            hit = bool(hits)
+        if hit:
             selected.append(name)
     return selected
 
@@ -577,10 +681,25 @@ def load_harness():
 
 
 def resolve_paths(args: argparse.Namespace, state: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge state `files` and git diff paths; diff content only comes from git."""
-    info: Dict[str, Any] = {"paths": [], "deleted": [], "removed_symbols": [], "added_text": None}
+    """Merge state `files`, git diff and an optional state `diff` (unified diff text).
+
+    `added_by_path` stays None when no diff is known at all; select_buckets then
+    falls back to path-only selection for the content-gated buckets.
+    """
+    info: Dict[str, Any] = {"paths": [], "deleted": [], "removed_symbols": [], "added_text": None,
+                            "added_by_path": None}
     if args.changed_paths_from:
         info.update(git_diff_info(args.changed_paths_from, Path(args.repo_root).resolve()))
+    state_diff = state.get("diff")
+    if isinstance(state_diff, str) and state_diff.strip():
+        parsed = parse_unified_diff(state_diff)
+        by_path = dict(info["added_by_path"] or {})
+        for p, text in parsed["added_by_path"].items():
+            by_path[p] = "\n".join(t for t in (by_path.get(p, ""), text) if t)
+        info["added_by_path"] = by_path
+        info["added_text"] = "\n".join(t for t in (info["added_text"], parsed["added_text"]) if t)
+        info["removed_symbols"] = sorted(set(info["removed_symbols"]) | set(parsed["removed_symbols"]))
+        info["paths"] = sorted(set(info["paths"]) | set(parsed["diff_paths"]))
     state_files = [f if isinstance(f, str) else f.get("path", "") for f in state.get("files", []) or []]
     info["paths"] = sorted(set(info["paths"]) | {f for f in state_files if f})
     info["deleted"] = sorted(set(info["deleted"]) | set(state.get("deleted_files", []) or []))
@@ -638,7 +757,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             deleted=info["deleted"],
             removed_symbols=info["removed_symbols"],
             added_text=info["added_text"],
+            added_by_path=info["added_by_path"],
         )
+        diff_basis = "content-aware" if info["added_by_path"] is not None or info["added_text"] is not None else "path-only"
+        print(f"[INFO] bucket selection basis={diff_basis}")
     else:
         # Legacy invocation with no file list: the original canon pair + instruction.
         selected = ["identity", "routing", INSTRUCTION_BUCKET]
