@@ -1,58 +1,146 @@
 // Per-peer backoff state machine for graceful dial policy.
 //
-// This module implements P1 Item 3: Per-Peer Backoff State Machine (max 3 concurrent dials)
-// and P1 Item 4: Prefer Circuit-Relay After Connection Established.
+// Event-driven peer revival (operator directive: no static caps, never give
+// up). A peer is NEVER dead-marked. Repeated failures push it into a
+// `Dormant` state, which only means "the next attempt waits for a wake event
+// or for its jittered backoff to elapse". Retries never stop.
 //
-// Philosophy: Each peer maintains attempt_count, last_attempt_ts, and backoff_duration.
-// The global dial orchestrator enforces max 3 concurrent outbound dials. Exponential
-// backoff ranges from 1s to 30s (capped). On successful connection, backoff resets.
+// Wake events ([`WakeTrigger`]): inbound connection or dial from the peer,
+// identify, a newly learned address, a network-change event from the merged
+// discovery scheduler, or an outbound message queued for the peer. A wake
+// pulls the next attempt forward to the backoff floor (so a wake storm is
+// still bounded to roughly one attempt per floor interval per address).
+//
+// Backoff: exponential from the floor, full jitter (uniform 0.5..1.0 of the
+// nominal interval), with a ceiling derived from observed network stability
+// (EWMA of recent connect success vs failure) rather than a literal.
 //
 // Circuit-relay preference: Once a peer connects, we add circuit-relay multiaddrs
-// to the candidate ladder in order: direct → relay → fallback.
+// to the candidate ladder in order: direct -> relay -> fallback.
 
 use libp2p::{Multiaddr, PeerId};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
-use web_time::{Duration, Instant};
+use tracing::{debug, info};
+use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// How long a peer stays dead after 3 failed dial attempts before the
-/// dial-policy auto-revives it. "Dead" is a bounded backoff state, not a
-/// lifetime sentence: a peer that was down and comes back must be retried
-/// within a minute (bootstrap sweep cadence), not held out until a
-/// ConnectionEstablished/liveness event or the 1-hour hygiene prune.
-/// 2026-09-03: 3-node validation showed the 5-minute dead cycle -- secondary
-/// address failures dead-marked a peer whose live path identify kept
-/// confirming. Fix A/B/C stop dead-marks on live peers; this window bounds
-/// the dead state for genuinely unreachable peers.
-///
-/// Anti-hammer bound (review A3, 2026-09-03): a revive is NOT a free dial
-/// burst. A revived entry starts from zero strikes, but the FIRST failure
-/// immediately re-applies the 1s/2s/4s backoff ladder and the 3rd strike
-/// re-marks it dead -- so a genuinely unreachable address gets at most ~3
-/// attempts within the seconds after a revive, then stays dead until the
-/// next 60s window. Worst case is ~3 dial attempts/minute per dead address,
-/// and the window itself is a single shared constant used by both
-/// `is_eligible` (read) and `maybe_revive` (mutate), so no path can observe
-/// a different revive predicate.
-pub const DEAD_REVIVE_AFTER: Duration = Duration::from_secs(60);
+/// Backoff floor: first retry interval and the minimum gap between two
+/// attempts to the same address, even when wake events arrive in a flood.
+/// This also bounds attempts per minute per address (<= 60) under any wake
+/// pattern.
+pub const BACKOFF_FLOOR: Duration = Duration::from_secs(1);
+
+/// Scale for the stability-derived ceiling (like the discovery scheduler's
+/// `base_ceiling`): the ceiling is this value multiplied by a factor in
+/// [1, 4] that grows as the recent connect success rate falls.
+pub const BACKOFF_CEILING_BASE: Duration = Duration::from_secs(30);
+
+/// Consecutive failures after which a peer is reported as `Dormant`. This is
+/// a labelling threshold only: it never blocks or stops dialing.
+const DORMANT_AFTER_FAILURES: u32 = 3;
+
+/// EWMA weight of the newest connect outcome in the stability estimate.
+const STABILITY_ALPHA: f64 = 0.2;
+
+/// Events that wake a dormant (or backed-off) peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeTrigger {
+    /// The peer (or its host) connected to us.
+    InboundConnection,
+    /// The peer (or its host) attempted to dial us.
+    InboundDial,
+    /// Identify exchanged with the peer.
+    Identify,
+    /// A new address for the peer was learned (ledger, identify, mDNS, BLE).
+    AddressLearned,
+    /// Network-change event from the discovery scheduler.
+    NetworkChange,
+    /// An outbound message was queued for the peer.
+    OutboundQueued,
+}
+
+impl WakeTrigger {
+    /// Stable name for the `[DIAL] wake` marker.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WakeTrigger::InboundConnection => "inbound_connection",
+            WakeTrigger::InboundDial => "inbound_dial",
+            WakeTrigger::Identify => "identify",
+            WakeTrigger::AddressLearned => "address_learned",
+            WakeTrigger::NetworkChange => "network_change",
+            WakeTrigger::OutboundQueued => "outbound_queued",
+        }
+    }
+}
+
+/// Uniform value in [0, 1) for backoff jitter. SplitMix64 over a process-wide
+/// counter mixed with wall-clock nanos: cheap, dependency-free, and works on
+/// every target (including wasm32). Not for cryptographic use.
+pub(crate) fn jitter_unit() -> f64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut z = COUNTER
+        .fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
+        .wrapping_add(nanos);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Apply full jitter: uniform(0.5, 1.0) of `nominal`.
+pub(crate) fn jittered(nominal: Duration) -> Duration {
+    nominal.mul_f64(0.5 + 0.5 * jitter_unit())
+}
+
+/// Last 8 characters of a peer id, for log markers.
+fn short_peer(peer_id: Option<PeerId>) -> String {
+    match peer_id {
+        Some(p) => {
+            let s = p.to_string();
+            let skip = s.chars().count().saturating_sub(8);
+            s.chars().skip(skip).collect()
+        }
+        None => "unknown".to_string(),
+    }
+}
+
+/// Backoff ceiling derived from the recent connect success rate in [0, 1].
+/// A healthy network keeps the ceiling near the base (retries stay brisk); a
+/// failing network stretches it up to 4x so a dead link is not hammered, while
+/// wake events still bring the next attempt forward immediately.
+pub fn ceiling_for_success_rate(success_rate: f64) -> Duration {
+    let rate = if success_rate.is_finite() {
+        success_rate.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    BACKOFF_CEILING_BASE
+        .mul_f64(1.0 + 3.0 * (1.0 - rate))
+        .max(BACKOFF_FLOOR)
+}
 
 /// Per-peer backoff state tracking.
 #[derive(Debug, Clone)]
 pub struct PerPeerBackoffState {
-    /// Number of failed dial attempts (0-3). At 3, peer is considered dead.
+    /// Consecutive failed dial attempts. Unbounded: there is no failure
+    /// threshold at which dialing stops.
     pub attempt_count: u32,
     /// Timestamp of the last dial attempt to this peer.
     pub last_attempt_ts: Instant,
-    /// Current backoff duration (1s → 2s → 4s → 8s → 16s → 30s capped).
+    /// Current nominal backoff duration (1s doubling up to the ceiling).
     pub backoff_duration: Duration,
-    /// Whether this peer is marked as dead (bounded: auto-revives after
-    /// [`DEAD_REVIVE_AFTER`]).
-    pub is_dead: bool,
-    /// When the dead mark was applied; `None` when not dead. Drives the
-    /// bounded auto-revive window.
-    pub dead_since: Option<Instant>,
+    /// Earliest time of the next attempt (jittered backoff, or pulled
+    /// forward by a wake event).
+    pub next_attempt_at: Instant,
+    /// `Dormant`: the next attempt waits for a wake event or the jittered
+    /// backoff. Not a terminal state; cleared by wake or success.
+    pub dormant: bool,
     /// Optional peer ID if known at registration time.
     pub peer_id: Option<PeerId>,
 }
@@ -60,105 +148,130 @@ pub struct PerPeerBackoffState {
 impl PerPeerBackoffState {
     /// Create a new backoff state with initial backoff of 1 second.
     pub fn new(peer_id: Option<PeerId>) -> Self {
+        Self::new_at(peer_id, Instant::now())
+    }
+
+    fn new_at(peer_id: Option<PeerId>, now: Instant) -> Self {
         Self {
             attempt_count: 0,
-            last_attempt_ts: Instant::now(),
-            backoff_duration: Duration::from_secs(1),
-            is_dead: false,
-            dead_since: None,
+            last_attempt_ts: now,
+            backoff_duration: BACKOFF_FLOOR,
+            next_attempt_at: now,
+            dormant: false,
             peer_id,
         }
     }
 
     /// Check if this peer is eligible for a dial attempt right now.
-    ///
-    /// Dead is bounded: once the revive window has elapsed the entry reads as
-    /// eligible again (the caller then dials; the persistent state is revived
-    /// by [`Self::maybe_revive`] inside `register_dial_attempt`).
     pub fn is_eligible(&self) -> bool {
-        if self.is_dead {
-            return self
-                .dead_since
-                .is_some_and(|since| since.elapsed() >= DEAD_REVIVE_AFTER);
-        }
-        if self.attempt_count >= 3 {
-            return false;
-        }
-        // Allow the first attempt immediately.
-        if self.attempt_count == 0 {
-            return true;
-        }
-        Instant::now() >= self.last_attempt_ts + self.backoff_duration
+        self.is_eligible_at(Instant::now())
     }
 
-    /// Revive a dead entry whose window has elapsed, resetting strike count
-    /// and backoff. Returns true when a revive actually happened.
-    pub fn maybe_revive(&mut self) -> bool {
-        if self.is_dead {
-            if let Some(since) = self.dead_since {
-                if since.elapsed() >= DEAD_REVIVE_AFTER {
-                    self.is_dead = false;
-                    self.dead_since = None;
-                    self.attempt_count = 0;
-                    self.backoff_duration = Duration::from_secs(1);
-                    self.last_attempt_ts = Instant::now();
-                    debug!(
-                        peer_id=?self.peer_id,
-                        "[DIAL-BACKOFF] Dead entry auto-revived after revive window"
-                    );
-                    return true;
-                }
-            }
-        }
-        false
+    /// Eligibility at an explicit time (fake-clock friendly).
+    pub fn is_eligible_at(&self, now: Instant) -> bool {
+        now >= self.next_attempt_at
     }
 
-    /// Record a failed dial attempt: increment attempt_count and double backoff (capped at 30s).
+    /// Record a failed dial attempt using the default ceiling.
     pub fn on_dial_failure(&mut self) {
-        self.attempt_count += 1;
-        self.last_attempt_ts = Instant::now();
+        self.on_dial_failure_at(Instant::now(), BACKOFF_CEILING_BASE);
+    }
 
-        // Double the backoff duration, capped at 30 seconds.
-        let doubled = self.backoff_duration.as_secs() * 2;
-        self.backoff_duration = Duration::from_secs(doubled.min(30));
+    /// Record a failed dial attempt: increment the count, double the nominal
+    /// backoff up to `ceiling`, schedule the next attempt with full jitter.
+    pub fn on_dial_failure_at(&mut self, now: Instant, ceiling: Duration) {
+        self.attempt_count = self.attempt_count.saturating_add(1);
+        self.last_attempt_ts = now;
+
+        let ceiling = ceiling.max(BACKOFF_FLOOR);
+        let doubled = self.backoff_duration.saturating_mul(2);
+        self.backoff_duration = doubled.min(ceiling);
+        let wait = jittered(self.backoff_duration);
+        self.next_attempt_at = now + wait;
 
         debug!(
             peer_id=?self.peer_id,
             attempt_count=self.attempt_count,
-            backoff_secs=self.backoff_duration.as_secs(),
+            backoff_ms=self.backoff_duration.as_millis() as u64,
             "[DIAL-BACKOFF] Incremented attempt count and backoff"
         );
 
-        // After 3 attempts, mark as dead (bounded by DEAD_REVIVE_AFTER).
-        if self.attempt_count >= 3 {
-            warn!(
-                peer_id=?self.peer_id,
-                "[DIAL-BACKOFF] Peer marked as dead after 3 failed attempts"
+        if self.attempt_count >= DORMANT_AFTER_FAILURES && !self.dormant {
+            self.dormant = true;
+            info!(
+                "[DIAL] dormant peer={} reason=repeated_failures next_wake=event|backoff_ms={}",
+                short_peer(self.peer_id),
+                wait.as_millis()
             );
-            self.is_dead = true;
-            self.dead_since = Some(Instant::now());
         }
     }
 
-    /// Record a permanent dial failure (mark peer as dead immediately).
+    /// Record a permanent-looking dial failure (for example an unsupported
+    /// address). The peer goes Dormant at the current ceiling; it is NOT
+    /// dead and is retried on the next wake event or backoff expiry.
     pub fn on_permanent_failure(&mut self) {
-        self.is_dead = true;
-        self.dead_since = Some(Instant::now());
-        self.attempt_count = 3;
-        warn!(
-            peer_id=?self.peer_id,
-            "[DIAL-BACKOFF] Peer marked as dead due to permanent failure"
+        self.on_permanent_failure_at(Instant::now(), BACKOFF_CEILING_BASE);
+    }
+
+    /// See [`Self::on_permanent_failure`].
+    pub fn on_permanent_failure_at(&mut self, now: Instant, ceiling: Duration) {
+        let ceiling = ceiling.max(BACKOFF_FLOOR);
+        self.attempt_count = self.attempt_count.max(DORMANT_AFTER_FAILURES);
+        self.last_attempt_ts = now;
+        self.backoff_duration = ceiling;
+        let wait = jittered(ceiling);
+        self.next_attempt_at = now + wait;
+        self.dormant = true;
+        info!(
+            "[DIAL] dormant peer={} reason=permanent_failure next_wake=event|backoff_ms={}",
+            short_peer(self.peer_id),
+            wait.as_millis()
         );
+    }
+
+    /// Wake the peer: pull the next attempt forward to the backoff floor
+    /// after the last attempt, and restart the ladder from the floor. The
+    /// attempt rate stays bounded by [`BACKOFF_FLOOR`]. Returns true when the
+    /// state actually changed (something was waiting).
+    pub fn wake_at(&mut self, now: Instant, trigger: WakeTrigger) -> bool {
+        if self.attempt_count == 0 && !self.dormant {
+            return false;
+        }
+        let was_dormant = self.dormant;
+        let earliest = (self.last_attempt_ts + BACKOFF_FLOOR).max(now);
+        if earliest < self.next_attempt_at {
+            self.next_attempt_at = earliest;
+        }
+        self.backoff_duration = BACKOFF_FLOOR;
+        self.dormant = false;
+        if was_dormant {
+            info!(
+                "[DIAL] wake peer={} trigger={}",
+                short_peer(self.peer_id),
+                trigger.as_str()
+            );
+        } else {
+            debug!(
+                "[DIAL] wake peer={} trigger={}",
+                short_peer(self.peer_id),
+                trigger.as_str()
+            );
+        }
+        true
     }
 
     /// Reset backoff state on successful connection.
     pub fn on_connection_established(&mut self) {
+        self.on_connection_established_at(Instant::now());
+    }
+
+    fn on_connection_established_at(&mut self, now: Instant) {
         let old_attempt_count = self.attempt_count;
         self.attempt_count = 0;
-        self.backoff_duration = Duration::from_secs(1);
-        self.last_attempt_ts = Instant::now();
-        self.is_dead = false;
-        self.dead_since = None;
+        self.backoff_duration = BACKOFF_FLOOR;
+        self.last_attempt_ts = now;
+        self.next_attempt_at = now;
+        self.dormant = false;
 
         info!(
             peer_id=?self.peer_id,
@@ -169,15 +282,20 @@ impl PerPeerBackoffState {
 }
 
 /// Global dial policy manager: tracks per-peer backoff state and enforces
-/// concurrent dial limits (max 3 concurrent outbound dials to any peer).
+/// concurrent dial limits per address.
 #[derive(Debug, Clone)]
 pub struct DialPolicyManager {
     /// Per-peer backoff state, keyed by peer address (stripped of /p2p/).
     /// Using String as key to handle addresses without peer IDs.
     peer_backoff: Arc<RwLock<HashMap<String, PerPeerBackoffState>>>,
     /// Count of in-flight (queued but not yet connected/failed) dials to each peer.
-    /// Used to enforce max 3 concurrent dials per peer.
     concurrent_dials: Arc<RwLock<HashMap<String, u32>>>,
+    /// EWMA of recent connect outcomes in [0, 1] (1 = all succeed). Drives
+    /// the backoff ceiling.
+    success_rate: Arc<RwLock<f64>>,
+    /// Offset added to the monotonic clock. Always zero in production;
+    /// tests advance it to simulate hours passing without sleeping.
+    clock_skew: Arc<RwLock<Duration>>,
 }
 
 impl DialPolicyManager {
@@ -186,40 +304,59 @@ impl DialPolicyManager {
         Self {
             peer_backoff: Arc::new(RwLock::new(HashMap::new())),
             concurrent_dials: Arc::new(RwLock::new(HashMap::new())),
+            success_rate: Arc::new(RwLock::new(0.5)),
+            clock_skew: Arc::new(RwLock::new(Duration::ZERO)),
         }
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now() + *self.clock_skew.read()
+    }
+
+    /// Advance the manager's clock (test hook for fake-clock scenarios).
+    #[doc(hidden)]
+    pub fn advance_clock(&self, by: Duration) {
+        let mut skew = self.clock_skew.write();
+        *skew = skew.saturating_add(by);
+    }
+
+    fn record_outcome(&self, success: bool) {
+        let mut rate = self.success_rate.write();
+        let sample = if success { 1.0 } else { 0.0 };
+        *rate = (1.0 - STABILITY_ALPHA) * *rate + STABILITY_ALPHA * sample;
+    }
+
+    /// Current backoff ceiling, derived from observed network stability.
+    pub fn current_ceiling(&self) -> Duration {
+        ceiling_for_success_rate(*self.success_rate.read())
     }
 
     /// Register the start of a dial attempt to a peer address.
     /// Returns true if the dial is allowed (backoff eligible + under concurrent limit).
-    /// Returns false if the peer is backed off or at the concurrent dial limit.
+    /// Returns false if the address is waiting out its backoff or at the
+    /// concurrent dial limit.
     pub fn register_dial_attempt(&self, addr_key: &str, peer_id: Option<PeerId>) -> bool {
+        let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let mut concurrent = self.concurrent_dials.write();
 
-        // Ensure the peer has a backoff state entry.
         let state = backoff.entry(addr_key.to_string()).or_insert_with(|| {
             debug!(addr_key=%addr_key, "[DIAL-POLICY] Registering new peer backoff state");
-            PerPeerBackoffState::new(peer_id)
+            PerPeerBackoffState::new_at(peer_id, now)
         });
 
-        // Bounded dead state: once the revive window has elapsed, clear the
-        // dead mark so a peer that came back is dialed again (nimble
-        // recovery instead of session-long exclusion).
-        state.maybe_revive();
-
-        // Check eligibility: not dead, attempt_count < 3, backoff elapsed.
-        if !state.is_eligible() {
+        if !state.is_eligible_at(now) {
             debug!(
                 addr_key=%addr_key,
                 attempt_count=state.attempt_count,
-                is_dead=state.is_dead,
-                backoff_secs=state.backoff_duration.as_secs(),
-                "[DIAL-POLICY] Peer is not eligible for dial attempt (backed off or dead)"
+                dormant=state.dormant,
+                backoff_ms=state.backoff_duration.as_millis() as u64,
+                "[DIAL-POLICY] Peer is waiting for backoff or a wake event"
             );
             return false;
         }
 
-        // Check concurrent dial limit (max 3 per peer).
+        // Check concurrent dial limit (max 3 per address).
         let dial_count = concurrent.entry(addr_key.to_string()).or_insert(0);
         if *dial_count >= 3 {
             debug!(
@@ -230,7 +367,6 @@ impl DialPolicyManager {
             return false;
         }
 
-        // Increment concurrent dial count and return success.
         *dial_count += 1;
         debug!(
             addr_key=%addr_key,
@@ -257,58 +393,58 @@ impl DialPolicyManager {
     }
 
     /// Record a transient dial failure for a peer address.
-    /// This increments the attempt count and applies exponential backoff.
+    /// Increments the attempt count and applies jittered exponential backoff.
     pub fn record_dial_failure(&self, addr_key: &str, peer_id: Option<PeerId>) {
+        self.record_outcome(false);
+        let now = self.now();
+        let ceiling = self.current_ceiling();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
-            .or_insert_with(|| PerPeerBackoffState::new(peer_id));
-        state.on_dial_failure();
+            .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.on_dial_failure_at(now, ceiling);
     }
 
-    /// Record a permanent dial failure for a peer address.
-    /// This marks the peer as dead for this session (no retry).
+    /// Record a permanent-looking dial failure for a peer address. The
+    /// address goes Dormant (wake event or backoff); it is never dead.
     pub fn record_permanent_failure(&self, addr_key: &str, peer_id: Option<PeerId>) {
+        self.record_outcome(false);
+        let now = self.now();
+        let ceiling = self.current_ceiling();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
-            .or_insert_with(|| PerPeerBackoffState::new(peer_id));
-        state.on_permanent_failure();
+            .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.on_permanent_failure_at(now, ceiling);
     }
 
     /// Reset backoff state for a peer after successful connection.
     pub fn reset_on_connection_established(&self, addr_key: &str, peer_id: Option<PeerId>) {
+        self.record_outcome(true);
+        let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let state = backoff
             .entry(addr_key.to_string())
-            .or_insert_with(|| PerPeerBackoffState::new(peer_id));
-        state.on_connection_established();
+            .or_insert_with(|| PerPeerBackoffState::new_at(peer_id, now));
+        state.on_connection_established_at(now);
     }
 
-    /// Reset backoff/dead state for EVERY address entry belonging to `peer_id`.
+    /// Reset backoff/dormant state for EVERY address entry belonging to `peer_id`.
     ///
     /// Backoff entries are keyed by address, but an INBOUND connection's remote
-    /// address (the peer's ephemeral port) differs from the address we dialed
-    /// and marked dead — so the addr-keyed reset misses it. An established
-    /// connection is proof of liveness regardless of transport path, so clear
-    /// every entry attributed to this peer.
-    ///
-    /// Deliberate scope (review A1, 2026-09-03): the reset clears address-scoped
-    /// dead marks when ANY path proves the peer is alive, rather than only the
-    /// address that showed liveness. The alternative (keeping a stale address
-    /// dead while the peer is demonstrably up) is exactly the 5-minute dead
-    /// cycle being fixed -- a NAT-reflected address's dead mark suppressed
-    /// hint-dials and relay pulls for a peer whose live path was fine. Cost of
-    /// the broad reset: at most one dial attempt per stale address per revive
-    /// window, immediately re-escalated by the failure path. Bounded: only
-    /// entries whose stored peer_id matches, and only entries with is_dead or
-    /// attempt_count > 0.
+    /// address (the peer's ephemeral port) differs from the address we dialed,
+    /// so the addr-keyed reset misses it. An established connection is proof
+    /// of liveness regardless of transport path, so clear every entry
+    /// attributed to this peer. Only entries whose stored peer_id matches and
+    /// that are dormant or have failures are touched.
     pub fn reset_peer_backoff(&self, peer_id: PeerId) {
+        self.record_outcome(true);
+        let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let mut reset_count = 0u32;
         for (key, state) in backoff.iter_mut() {
-            if state.peer_id == Some(peer_id) && (state.is_dead || state.attempt_count > 0) {
-                state.on_connection_established();
+            if state.peer_id == Some(peer_id) && (state.dormant || state.attempt_count > 0) {
+                state.on_connection_established_at(now);
                 reset_count += 1;
                 debug!(addr_key=%key, "[DIAL-POLICY] Peer-level liveness reset cleared backoff entry");
             }
@@ -322,21 +458,69 @@ impl DialPolicyManager {
         }
     }
 
+    /// Wake every address entry belonging to `peer_id`. Returns how many
+    /// entries were waiting and are now due (after the floor gap).
+    pub fn wake_peer(&self, peer_id: PeerId, trigger: WakeTrigger) -> usize {
+        let now = self.now();
+        let mut backoff = self.peer_backoff.write();
+        backoff
+            .values_mut()
+            .filter(|s| s.peer_id == Some(peer_id))
+            .map(|s| s.wake_at(now, trigger))
+            .filter(|changed| *changed)
+            .count()
+    }
+
+    /// Wake one address entry (for sightings that carry only an address,
+    /// for example an inbound dial or a BLE/mDNS sighting).
+    pub fn wake_addr(&self, addr_key: &str, trigger: WakeTrigger) -> bool {
+        let now = self.now();
+        let mut backoff = self.peer_backoff.write();
+        backoff
+            .get_mut(addr_key)
+            .is_some_and(|s| s.wake_at(now, trigger))
+    }
+
+    /// Wake every waiting entry (network-change events from the discovery
+    /// scheduler). Returns how many entries were woken.
+    pub fn wake_all(&self, trigger: WakeTrigger) -> usize {
+        let now = self.now();
+        let mut backoff = self.peer_backoff.write();
+        backoff
+            .values_mut()
+            .map(|s| s.wake_at(now, trigger))
+            .filter(|changed| *changed)
+            .count()
+    }
+
+    /// Consume a discovery-scheduler event: any event that resets a transport
+    /// to aggressive discovery also wakes waiting peers. Peer-loss events do
+    /// not (a loss is not a reason to expect reachability).
+    pub fn on_network_event(&self, event: &super::discovery_scheduler::NetworkEvent) -> usize {
+        use super::discovery_scheduler::NetworkEvent;
+        match event {
+            NetworkEvent::PeerDisconnected { .. } | NetworkEvent::AllPeersLost => 0,
+            NetworkEvent::BleStateChanged { on } if !*on => 0,
+            NetworkEvent::LedgerReceived { new_entries } if *new_entries == 0 => 0,
+            _ => self.wake_all(WakeTrigger::NetworkChange),
+        }
+    }
+
     /// Get the current backoff state for a peer (for diagnostics/testing).
     pub fn get_backoff_state(&self, addr_key: &str) -> Option<PerPeerBackoffState> {
         self.peer_backoff.read().get(addr_key).cloned()
     }
 
     /// Prune old backoff entries (e.g., peers we haven't seen in a long time).
-    /// Useful for memory hygiene.
+    /// Useful for memory hygiene; a pruned peer is simply dialed fresh.
     pub fn prune_old_entries(&self, max_age: Duration) {
-        let now = Instant::now();
+        let now = self.now();
         let mut backoff = self.peer_backoff.write();
         let mut concurrent = self.concurrent_dials.write();
 
         let stale_peers: Vec<String> = backoff
             .iter()
-            .filter(|(_, state)| now.duration_since(state.last_attempt_ts) > max_age)
+            .filter(|(_, state)| now.saturating_duration_since(state.last_attempt_ts) > max_age)
             .map(|(key, _)| key.clone())
             .collect();
 
@@ -495,44 +679,69 @@ mod tests {
         let state = PerPeerBackoffState::new(None);
         assert_eq!(state.attempt_count, 0);
         assert_eq!(state.backoff_duration, Duration::from_secs(1));
-        assert!(!state.is_dead);
+        assert!(!state.dormant);
+        assert!(state.is_eligible());
     }
 
     #[test]
     fn test_exponential_backoff_progression() {
         let mut state = PerPeerBackoffState::new(None);
 
-        // 1st failure: 1s → 2s
+        // 1st failure: 1s -> 2s
         state.on_dial_failure();
         assert_eq!(state.attempt_count, 1);
         assert_eq!(state.backoff_duration, Duration::from_secs(2));
 
-        // 2nd failure: 2s → 4s
+        // 2nd failure: 2s -> 4s
         state.on_dial_failure();
         assert_eq!(state.attempt_count, 2);
         assert_eq!(state.backoff_duration, Duration::from_secs(4));
+        assert!(!state.dormant);
 
-        // 3rd failure: 4s → 8s
+        // 3rd failure: 4s -> 8s, peer goes Dormant (not dead).
         state.on_dial_failure();
         assert_eq!(state.attempt_count, 3);
         assert_eq!(state.backoff_duration, Duration::from_secs(8));
-        assert!(state.is_dead); // Marked as dead after 3 attempts
+        assert!(state.dormant);
     }
 
     #[test]
-    fn test_backoff_cap_at_30s() {
+    fn test_backoff_cap_at_ceiling_and_never_stops() {
         let mut state = PerPeerBackoffState::new(None);
-
-        // Simulate many failures to reach the 30s cap.
-        for _ in 0..10 {
+        for _ in 0..50 {
             state.on_dial_failure();
-            if state.is_dead {
-                break;
-            }
         }
+        // Default ceiling is the base; the backoff never exceeds it and the
+        // failure counter keeps counting (no give-up threshold).
+        assert!(state.backoff_duration <= BACKOFF_CEILING_BASE);
+        assert_eq!(state.attempt_count, 50);
+    }
 
-        // Check that backoff never exceeds 30s.
-        assert!(state.backoff_duration <= Duration::from_secs(30));
+    #[test]
+    fn test_jittered_backoff_within_bounds() {
+        let t0 = Instant::now();
+        for _ in 0..200 {
+            let mut state = PerPeerBackoffState::new_at(None, t0);
+            state.on_dial_failure_at(t0, BACKOFF_CEILING_BASE);
+            // nominal 2s, jitter uniform(0.5, 1.0) => wait in [1s, 2s].
+            let wait = state.next_attempt_at.duration_since(t0);
+            assert!(wait >= Duration::from_secs(1), "wait too short: {wait:?}");
+            assert!(wait <= Duration::from_secs(2), "wait too long: {wait:?}");
+        }
+    }
+
+    #[test]
+    fn test_ceiling_follows_stability() {
+        let stable = ceiling_for_success_rate(1.0);
+        let flaky = ceiling_for_success_rate(0.0);
+        assert_eq!(stable, BACKOFF_CEILING_BASE);
+        assert_eq!(flaky, BACKOFF_CEILING_BASE * 4);
+        assert!(ceiling_for_success_rate(0.5) > stable);
+        assert!(ceiling_for_success_rate(0.5) < flaky);
+        assert_eq!(
+            ceiling_for_success_rate(f64::NAN),
+            ceiling_for_success_rate(0.5)
+        );
     }
 
     #[test]
@@ -544,7 +753,11 @@ mod tests {
         state.on_dial_failure();
         state.on_dial_failure();
         state.on_dial_failure();
-        assert!(!state.is_eligible()); // Dead after 3 attempts
+        // Dormant: waiting for a wake event or its jittered backoff.
+        assert!(state.dormant);
+        assert!(!state.is_eligible());
+        // The backoff alone brings it back; it is never permanently out.
+        assert!(state.is_eligible_at(state.next_attempt_at));
     }
 
     #[test]
@@ -557,65 +770,169 @@ mod tests {
         state.on_connection_established();
         assert_eq!(state.attempt_count, 0);
         assert_eq!(state.backoff_duration, Duration::from_secs(1));
-        assert!(!state.is_dead);
+        assert!(!state.dormant);
+        assert!(state.is_eligible());
     }
 
     #[test]
-    fn test_permanent_failure() {
+    fn test_permanent_failure_goes_dormant_not_dead() {
         let mut state = PerPeerBackoffState::new(None);
-        state.on_permanent_failure();
-        assert!(state.is_dead);
+        let t0 = Instant::now();
+        state.on_permanent_failure_at(t0, BACKOFF_CEILING_BASE);
+        assert!(state.dormant);
         assert_eq!(state.attempt_count, 3);
+        assert!(!state.is_eligible_at(t0));
+        // Backoff expiry alone revives eligibility.
+        assert!(state.is_eligible_at(t0 + BACKOFF_CEILING_BASE));
     }
 
     #[test]
-    fn test_dead_revive_after_window() {
-        let mut state = PerPeerBackoffState::new(None);
-        state.on_dial_failure();
-        state.on_dial_failure();
-        state.on_dial_failure();
-        assert!(state.is_dead);
-        assert!(state.dead_since.is_some());
-        assert!(!state.is_eligible()); // within the revive window
+    fn test_wake_pulls_next_attempt_forward_and_clears_dormant() {
+        let t0 = Instant::now();
+        let mut state = PerPeerBackoffState::new_at(None, t0);
+        for _ in 0..8 {
+            state.on_dial_failure_at(t0, BACKOFF_CEILING_BASE);
+        }
+        assert!(state.dormant);
+        assert!(!state.is_eligible_at(t0 + BACKOFF_FLOOR));
 
-        // Simulate the revive window elapsing (clock is wall-time based).
-        state.dead_since = Some(Instant::now() - DEAD_REVIVE_AFTER - Duration::from_secs(1));
-        assert!(state.is_eligible()); // bounded dead: eligible again after the window
+        assert!(state.wake_at(t0, WakeTrigger::Identify));
+        assert!(!state.dormant);
+        assert_eq!(state.backoff_duration, BACKOFF_FLOOR);
+        // Due after the floor gap, not before: wake storms stay bounded.
+        assert!(!state.is_eligible_at(t0));
+        assert!(state.is_eligible_at(t0 + BACKOFF_FLOOR));
 
-        // maybe_revive clears the dead mark persistently and resets strikes.
-        assert!(state.maybe_revive());
-        assert!(!state.is_dead);
-        assert_eq!(state.attempt_count, 0);
-        assert_eq!(state.backoff_duration, Duration::from_secs(1));
-        assert!(!state.maybe_revive()); // already alive: no-op
+        // A fresh entry has nothing to wake.
+        let mut fresh = PerPeerBackoffState::new_at(None, t0);
+        assert!(!fresh.wake_at(t0, WakeTrigger::Identify));
     }
 
     #[test]
-    fn test_manager_revives_dead_entry_on_register() {
+    fn test_manager_unreachable_for_hours_is_redialed_on_wake() {
         let manager = DialPolicyManager::new();
-        let key = "/ip4/10.0.0.9/tcp/9000".to_string();
-        manager.register_dial_attempt(&key, None);
-        manager.record_dial_failure(&key, None);
-        manager.record_dial_failure(&key, None);
-        manager.record_dial_failure(&key, None);
-        let dead = manager.get_backoff_state(&key).expect("state");
-        assert!(dead.is_dead);
-        assert!(!manager.register_dial_attempt(&key, None)); // window not elapsed
+        let key = "/ip4/10.0.0.9/tcp/9000";
+        assert!(manager.register_dial_attempt(key, None));
+        manager.complete_dial_attempt(key);
 
-        // Force the dead_since back so the window has elapsed.
-        {
-            let mut backoff = manager.peer_backoff.write();
-            if let Some(st) = backoff.get_mut(&key) {
-                st.dead_since =
-                    Some(web_time::Instant::now() - DEAD_REVIVE_AFTER - Duration::from_secs(1));
+        // Unreachable "for hours": a failure, then a long fake-clock stretch
+        // with a failed attempt each time it is due.
+        let mut attempts = 0u32;
+        for _ in 0..200 {
+            manager.record_dial_failure(key, None);
+            manager.advance_clock(manager.current_ceiling()); // backoff alone suffices
+            assert!(
+                manager.register_dial_attempt(key, None),
+                "backoff alone must always bring the peer back"
+            );
+            manager.complete_dial_attempt(key);
+            attempts += 1;
+        }
+        assert_eq!(attempts, 200);
+        let st = manager.get_backoff_state(key).expect("state");
+        assert!(st.dormant);
+        assert!(st.backoff_duration <= manager.current_ceiling());
+
+        // Now backed off with the peer unreachable; a wake event makes it
+        // eligible again at the floor, long before the ceiling.
+        manager.record_dial_failure(key, None);
+        assert!(!manager.register_dial_attempt(key, None));
+        assert!(manager.wake_addr(key, WakeTrigger::InboundDial));
+        manager.advance_clock(BACKOFF_FLOOR);
+        assert!(manager.register_dial_attempt(key, None));
+    }
+
+    #[test]
+    fn test_attempts_per_minute_bounded_under_wake_flood() {
+        let manager = DialPolicyManager::new();
+        let key = "/ip4/10.0.0.10/tcp/9000";
+        let mut attempts = 0u32;
+        // Simulate 60 s in 100 ms steps; every step wakes the peer and every
+        // granted attempt fails.
+        for _ in 0..600 {
+            manager.wake_addr(key, WakeTrigger::NetworkChange);
+            if manager.register_dial_attempt(key, None) {
+                manager.complete_dial_attempt(key);
+                manager.record_dial_failure(key, None);
+                attempts += 1;
+            }
+            manager.advance_clock(Duration::from_millis(100));
+        }
+        // Floor of 1 s between attempts => at most 60 per minute (+1 for the
+        // initial immediate attempt).
+        assert!(
+            attempts <= 61,
+            "attempts per minute not bounded: {attempts}"
+        );
+        assert!(attempts >= 1);
+    }
+
+    #[test]
+    fn test_each_wake_trigger_wakes_a_dormant_peer() {
+        use libp2p::identity::Keypair;
+        let triggers = [
+            WakeTrigger::InboundConnection,
+            WakeTrigger::InboundDial,
+            WakeTrigger::Identify,
+            WakeTrigger::AddressLearned,
+            WakeTrigger::NetworkChange,
+            WakeTrigger::OutboundQueued,
+        ];
+        for trigger in triggers {
+            let manager = DialPolicyManager::new();
+            let pid = Keypair::generate_ed25519().public().to_peer_id();
+            let key = "/ip4/192.168.1.77/tcp/4001";
+            for _ in 0..6 {
+                manager.record_dial_failure(key, Some(pid));
+            }
+            assert!(manager.get_backoff_state(key).expect("state").dormant);
+            assert!(!manager.register_dial_attempt(key, Some(pid)));
+
+            assert_eq!(manager.wake_peer(pid, trigger), 1, "{}", trigger.as_str());
+            assert!(!manager.get_backoff_state(key).expect("state").dormant);
+            manager.advance_clock(BACKOFF_FLOOR);
+            assert!(
+                manager.register_dial_attempt(key, Some(pid)),
+                "trigger {} did not make the peer dialable",
+                trigger.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn test_network_event_wakes_all_but_peer_loss_does_not() {
+        use super::super::discovery_scheduler::NetworkEvent;
+        let manager = DialPolicyManager::new();
+        for k in ["a", "b", "c"] {
+            for _ in 0..4 {
+                manager.record_dial_failure(k, None);
             }
         }
-        assert!(manager.register_dial_attempt(&key, None)); // revived -> allowed
-        let revived = manager.get_backoff_state(&key).expect("state");
-        assert!(!revived.is_dead);
-        assert_eq!(revived.attempt_count, 0);
+        assert_eq!(
+            manager.on_network_event(&NetworkEvent::PeerDisconnected { count_now: 2 }),
+            0
+        );
+        assert_eq!(manager.on_network_event(&NetworkEvent::AllPeersLost), 0);
+        assert_eq!(
+            manager.on_network_event(&NetworkEvent::LedgerReceived { new_entries: 0 }),
+            0
+        );
+        assert_eq!(manager.on_network_event(&NetworkEvent::WifiChanged), 3);
+        for k in ["a", "b", "c"] {
+            assert!(!manager.get_backoff_state(k).expect("state").dormant);
+        }
     }
 
+    #[test]
+    fn test_record_permanent_failure_is_not_terminal() {
+        let manager = DialPolicyManager::new();
+        let key = "10.0.0.1:4001";
+        manager.record_permanent_failure(key, None);
+        assert!(!manager.register_dial_attempt(key, None));
+        assert!(manager.get_backoff_state(key).expect("state").dormant);
+        manager.advance_clock(manager.current_ceiling());
+        assert!(manager.register_dial_attempt(key, None));
+    }
     #[test]
     fn test_dial_policy_manager_registration() {
         let manager = DialPolicyManager::new();
@@ -665,13 +982,13 @@ mod tests {
     }
 
     #[test]
-    fn test_reset_peer_backoff_clears_dead_state_on_any_addr_entry() {
+    fn test_reset_peer_backoff_clears_dormant_state_on_any_addr_entry() {
         use libp2p::identity::Keypair;
 
         let manager = DialPolicyManager::new();
         let pid = Keypair::generate_ed25519().public().to_peer_id();
 
-        // Peer gets marked dead after 3 failures on its dialed LAN address.
+        // Peer goes Dormant after repeated failures on its dialed LAN address.
         let lan_addr = "/ip4/192.168.1.50/tcp/4001";
         for _ in 0..3 {
             manager.record_dial_failure(lan_addr, Some(pid));
@@ -679,19 +996,18 @@ mod tests {
         assert!(!manager.register_dial_attempt(lan_addr, Some(pid)));
 
         // An INBOUND connection arrives from an ephemeral remote address:
-        // resetting only that address must NOT revive the dead LAN entry.
+        // resetting only that address must NOT touch the dormant LAN entry.
         let ephemeral = "/ip4/192.168.1.50/tcp/51234";
         manager.reset_on_connection_established(ephemeral, Some(pid));
         assert!(!manager.register_dial_attempt(lan_addr, Some(pid)));
 
-        // Peer-wide liveness reset (what ConnectionEstablished now does) must.
+        // Peer-wide liveness reset (what ConnectionEstablished does) must.
         manager.reset_peer_backoff(pid);
         let state = manager.get_backoff_state(lan_addr).expect("entry exists");
         assert_eq!(state.attempt_count, 0);
-        assert!(!state.is_dead);
+        assert!(!state.dormant);
         assert!(manager.register_dial_attempt(lan_addr, Some(pid)));
     }
-
     #[test]
     fn test_circuit_relay_ladder() {
         let ladder = CircuitRelayLadder::new();

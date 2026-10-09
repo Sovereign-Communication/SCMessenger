@@ -2417,11 +2417,11 @@ fn try_envelope_hint_dial(
         if let Some(state) = dial_policy_manager.get_backoff_state(&addr_key) {
             if !state.is_eligible() {
                 tracing::debug!(
-                    "[HINT-DIAL] Skipping backed-off hint candidate {} for {} (attempt_count={}, dead={})",
+                    "[HINT-DIAL] Skipping backed-off hint candidate {} for {} (attempt_count={}, dormant={})",
                     addr_key,
                     peer_id,
                     state.attempt_count,
-                    state.is_dead
+                    state.dormant
                 );
                 continue;
             }
@@ -3080,6 +3080,11 @@ pub enum SwarmCommand {
     ConnectToSeedPeers {
         reply: mpsc::Sender<Result<(), String>>,
     },
+    /// Network-change event from the discovery scheduler; wakes dormant peers
+    /// so their next dial is not left waiting on backoff.
+    NetworkChange {
+        event: super::discovery_scheduler::NetworkEvent,
+    },
     /// Shutdown the swarm
     Shutdown,
 }
@@ -3622,6 +3627,19 @@ impl SwarmHandle {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))
+    }
+
+    /// Forward a discovery-scheduler network event to the swarm so dormant
+    /// peers are woken (non-blocking; dropped if the command queue is full,
+    /// since the next event or the jittered backoff wakes them anyway).
+    pub fn notify_network_event(&self, event: super::discovery_scheduler::NetworkEvent) {
+        if self
+            .command_tx
+            .try_send(SwarmCommand::NetworkChange { event })
+            .is_err()
+        {
+            tracing::debug!("[DIAL] network event not forwarded (swarm queue full or stopped)");
+        }
     }
 
     /// Shut down the swarm
@@ -6403,6 +6421,11 @@ pub async fn start_swarm_with_config(
                             )) => {
                                 for (peer_id, addr) in peers {
                                     tracing::info!("mDNS discovered peer: {} at {}", peer_id, addr);
+                                    // Wake event: a (re)sighting of the peer on the LAN.
+                                    dial_policy_manager.wake_peer(
+                                        peer_id,
+                                        super::dial_policy::WakeTrigger::AddressLearned,
+                                    );
                                     // V040-T14: mDNS is an unauthenticated LAN broadcast — the
                                     // (peer_id, addr) pair is asserted by the broadcaster, not
                                     // proven by our store. Per the corrected-pair doctrine (T13
@@ -7557,6 +7580,14 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
+                                // Wake event: the peer tried to dial us (even a denied or
+                                // failed inbound attempt proves it is up and trying).
+                                if let Some(inbound_peer) = peer_id {
+                                    dial_policy_manager.wake_peer(
+                                        inbound_peer,
+                                        super::dial_policy::WakeTrigger::InboundDial,
+                                    );
+                                }
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a
@@ -7680,6 +7711,13 @@ pub async fn start_swarm_with_config(
                         match command {
                             #[cfg(not(target_arch = "wasm32"))]
                             SwarmCommand::SendMessage { peer_id, envelope_data, recipient_identity_id, intended_device_id, reply } => {
+                                // Wake event: an outbound message is queued for this peer,
+                                // so any dormant/backed-off address for it is due again.
+                                dial_policy_manager.wake_peer(
+                                    peer_id,
+                                    super::dial_policy::WakeTrigger::OutboundQueued,
+                                );
+
                                 // ENVELOPE-HINT DIALING: when the routing table only knows
                                 // stale candidates (live-cell failure 2026-08-25:
                                 // `route=direct relay=- candidate=1/1` against a peer that
@@ -8007,12 +8045,14 @@ pub async fn start_swarm_with_config(
                                 let addr_key = multiaddr_to_key(&addr);
                                 if !dial_policy_manager.register_dial_attempt(&addr_key, target_peer_id) {
                                     let policy_error = if let Some(state) = dial_policy_manager.get_backoff_state(&addr_key) {
-                                        if state.is_dead {
-                                            "Peer marked as dead after 3 failed dial attempts (session)".to_string()
-                                        } else {
-                                            format!("Peer is backed off (attempt_count={}/3, backoff={}s)",
+                                        if state.dormant {
+                                            format!("Peer is dormant (attempt_count={}, waiting for wake event or backoff={}ms)",
                                                     state.attempt_count,
-                                                    state.backoff_duration.as_secs())
+                                                    state.backoff_duration.as_millis())
+                                        } else {
+                                            format!("Peer is backed off (attempt_count={}, backoff={}ms)",
+                                                    state.attempt_count,
+                                                    state.backoff_duration.as_millis())
                                         }
                                     } else {
                                         "Peer is at concurrent dial limit (3/3)".to_string()
@@ -8583,6 +8623,9 @@ pub async fn start_swarm_with_config(
                                 let paths = multi_path_delivery.get_best_paths(&target, count);
                                 let _ = reply.send(paths).await;
                             }
+                            SwarmCommand::NetworkChange { event } => {
+                                dial_policy_manager.on_network_event(&event);
+                            }
                             SwarmCommand::Shutdown => {
                                 tracing::info!("Swarm shutting down");
                                 break;
@@ -9127,6 +9170,7 @@ pub async fn start_swarm_with_config(
                                     ))
                                     .await;
                             }
+                            SwarmCommand::NetworkChange { .. } => {}
                             SwarmCommand::Shutdown => {
                                 tracing::info!("WASM swarm shutting down");
                                 break;
