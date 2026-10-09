@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.scmessenger.android.service.ManagedResource
 import com.scmessenger.android.service.MeshForegroundService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
