@@ -67,6 +67,28 @@ use web_time::{Duration, Instant, UNIX_EPOCH};
 
 /// Blocked peers must not reach any protocol that can disclose topology or
 /// consume relay/custody resources. Missing core state fails closed.
+/// Static variant name of a relay control message for `[RX-DROP]` markers.
+/// Never formats message contents.
+fn relay_message_kind(msg: &crate::relay::protocol::RelayMessage) -> &'static str {
+    use crate::relay::protocol::RelayMessage as R;
+    match msg {
+        R::Handshake { .. } => "handshake",
+        R::HandshakeAck { .. } => "handshake_ack",
+        R::StoreRequest { .. } => "store_request",
+        R::StoreAck { .. } => "store_ack",
+        R::PullRequest { .. } => "pull_request",
+        R::PullResponse { .. } => "pull_response",
+        R::PeerExchange { .. } => "peer_exchange",
+        R::PeerJoined { .. } => "peer_joined",
+        R::PeerLeft { .. } => "peer_left",
+        R::PeerListRequest => "peer_list_request",
+        R::PeerListResponse { .. } => "peer_list_response",
+        R::Ping => "ping",
+        R::Pong => "pong",
+        R::Disconnect { .. } => "disconnect",
+    }
+}
+
 fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> bool {
     core_handle
         .as_ref()
@@ -4878,10 +4900,15 @@ pub async fn start_swarm_with_config(
                                         // root cause, HERMES_FARM_AUDIT 2026-07-16).
                                         let envelope_payload = match DriftFrame::from_bytes(&request.envelope_data) {
                                             Ok(frame) => {
-                                                tracing::debug!(
-                                                    "Received DriftFrame type: {:?} from {}",
+                                                // INFO so an inbound frame is visible even when
+                                                // it dies later (RCA of a lost inbound frame). The
+                                                // envelope is still encrypted here, so there is no
+                                                // message id to report; length is a safe proxy.
+                                                tracing::info!(
+                                                    "[RX] drift_frame type={:?} payload_len={} from={}",
                                                     frame.frame_type,
-                                                    peer
+                                                    frame.payload.len(),
+                                                    crate::message_events::short_peer(&peer.to_string())
                                                 );
                                                 frame.payload
                                             }
@@ -4910,7 +4937,7 @@ pub async fn start_swarm_with_config(
                                             match relay_msg {
                                                 crate::relay::protocol::RelayMessage::PeerJoined { peer_info } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerJoined from non-relay peer {}", peer);
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_joined_from_non_relay");
                                                         let _ = swarm.behaviour_mut().messaging.send_response(
                                                             channel,
                                                             Libp2pMessageResponse { accepted: true, error: None },
@@ -4956,7 +4983,7 @@ pub async fn start_swarm_with_config(
                                                 }
                                                 crate::relay::protocol::RelayMessage::PeerListResponse { peers } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerListResponse from non-relay peer {}", peer);
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_list_response_from_non_relay");
                                                         let _ = swarm.behaviour_mut().messaging.send_response(
                                                             channel,
                                                             Libp2pMessageResponse { accepted: true, error: None },
@@ -5013,18 +5040,27 @@ pub async fn start_swarm_with_config(
                                                     );
                                                     continue;
                                                 }
-                                                _ => {
+                                                other => {
                                                     // Other relay messages, fall through to normal handling
+                                                    crate::message_events::log_rx_drop_kind(
+                                                        "swarm_unhandled",
+                                                        relay_message_kind(&other),
+                                                    );
                                                 }
                                             }
                                         }
                                         }
 
                                         // Received a message from a peer
-                                        let _ = event_tx.send(SwarmEvent2::MessageReceived {
+                                        if event_tx.send(SwarmEvent2::MessageReceived {
                                             peer_id: peer,
                                             envelope_data: envelope_payload,
-                                        }).await;
+                                        }).await.is_err() {
+                                            // Receiver side of the swarm event channel is gone;
+                                            // the frame is lost. (An awaited bounded send never
+                                            // reports "full", it back-pressures instead.)
+                                            crate::message_events::log_rx_drop(None, "swarm_event_tx", "channel_closed");
+                                        }
 
                                         // Send acceptance response
                                         let _ = swarm.behaviour_mut().messaging.send_response(
