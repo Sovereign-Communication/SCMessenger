@@ -21,8 +21,11 @@ runs:
         WANT: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-        export PATH="$HOME/.cargo/bin:$PATH"
+        # Follow CARGO_HOME: each runner has its own cargo home, so never
+        # hardcode ~/.cargo here (that would re-share a sibling runner's bin).
+        CH="${CARGO_HOME:-$HOME/.cargo}"
+        echo "$CH/bin" >> "$GITHUB_PATH"
+        export PATH="$CH/bin:$PATH"
         echo "arch: $(uname -m)"
         got="$(rustc --version)"
         echo "$got"
