@@ -29,6 +29,7 @@ runs:
         missing=()
         pkg-config --exists dbus-1 || missing+=(libdbus-1-dev)
         command -v pkg-config >/dev/null 2>&1 || missing+=(pkg-config)
+        command -v protoc >/dev/null 2>&1 || missing+=(protobuf-compiler)
         if [ "$NEED_RG" = "true" ]; then
           command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
         fi
