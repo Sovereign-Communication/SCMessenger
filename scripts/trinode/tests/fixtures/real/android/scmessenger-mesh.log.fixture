@@ -1,0 +1,30 @@
+{"timestamp":"2026-09-29T21:02:51.943153Z","level":"DEBUG","fields":{"message":"Connection established to [aa, aa, aa, aa, bb, bb, bb, bb] via Internet"}}
+{"timestamp":"2026-09-29T21:02:51.943578Z","level":"INFO","fields":{"message":"Peer identified; triggering outbox flush","event":"outbox_reconnect_detected","peer_id":"aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111"}}
+{"timestamp":"2026-09-29T21:02:51.948059Z","level":"DEBUG","fields":{"message":"Started core ledger exchange with newly connected peer 12D3KooWFixtureWindowsNode000000000000000000000"}}
+{"timestamp":"2026-09-29T21:02:52.002043Z","level":"INFO","fields":{"message":"Identified peer 12D3KooWFixtureWindowsNode000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureWindowsNode000000000000000000000, protocols: 15, discoverable_addrs: 12"}}
+{"timestamp":"2026-09-29T21:02:52.012083Z","level":"DEBUG","fields":{"message":"Connection established to [aa, aa, aa, aa, bb, bb, bb, bb] via Internet"}}
+{"timestamp":"2026-09-29T21:02:52.022114Z","level":"INFO","fields":{"message":"Ledger exchange from 12D3KooWFixtureWindowsNode000000000000000000000: offered 1 peer entries (v1, allowed=true)"}}
+{"timestamp":"2026-09-29T21:02:52.022943Z","level":"DEBUG","fields":{"message":"Ledger exchange reply to 12D3KooWFixtureWindowsNode000000000000000000000: sending 1 peer entries"}}
+{"timestamp":"2026-09-29T21:02:52.033021Z","level":"INFO","fields":{"message":"Ledger exchange response from 12D3KooWFixtureWindowsNode000000000000000000000: they learned 0 new peers, sent 1 back"}}
+{"timestamp":"2026-09-29T21:02:53.051704Z","level":"DEBUG","fields":{"message":"Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet"}}
+{"timestamp":"2026-09-29T21:02:53.051729Z","level":"INFO","fields":{"message":"Peer identified; triggering outbox flush","event":"outbox_reconnect_detected","peer_id":"69805e175cdc59b244f36001303e0b2e735f729557d2069a02688c0e69764a7c"}}
+{"timestamp":"2026-09-29T21:02:53.053298Z","level":"DEBUG","fields":{"message":"Started core ledger exchange with newly connected peer 12D3KooWFixtureAwsRelay00000000000000000000000"}}
+{"timestamp":"2026-09-29T21:02:53.190926Z","level":"INFO","fields":{"message":"Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 23"}}
+{"timestamp":"2026-09-29T21:02:53.197149Z","level":"DEBUG","fields":{"message":"Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet"}}
+{"timestamp":"2026-09-29T21:02:53.332601Z","level":"INFO","fields":{"message":"Ledger exchange from 12D3KooWFixtureAwsRelay00000000000000000000000: offered 0 peer entries (v1, allowed=true)"}}
+{"timestamp":"2026-09-29T21:02:53.332696Z","level":"DEBUG","fields":{"message":"Ledger exchange reply to 12D3KooWFixtureAwsRelay00000000000000000000000: sending 1 peer entries"}}
+{"timestamp":"2026-09-29T21:02:53.797391Z","level":"INFO","fields":{"message":"Ledger exchange response from 12D3KooWFixtureAwsRelay00000000000000000000000: they learned 0 new peers, sent 0 back"}}
+{"timestamp":"2026-09-29T21:03:53.433442Z","level":"INFO","fields":{"message":"Identified peer 12D3KooWFixtureAwsRelay00000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureAwsRelay00000000000000000000000, protocols: 16, discoverable_addrs: 24"}}
+{"timestamp":"2026-09-29T21:03:53.487139Z","level":"DEBUG","fields":{"message":"Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet"}}
+{"timestamp":"2026-09-29T21:03:57.953062Z","level":"DEBUG","fields":{"message":"Ledger exchange with 12D3KooWFixtureWindowsNode000000000000000000000 re-armed after outbound failure: Connection was closed before a response was received"}}
+{"timestamp":"2026-09-29T21:06:43.811664Z","level":"DEBUG","fields":{"message":"Connection established to [aa, aa, aa, aa, bb, bb, bb, bb] via Internet"}}
+{"timestamp":"2026-09-29T21:06:43.811672Z","level":"INFO","fields":{"message":"Peer identified; triggering outbox flush","event":"outbox_reconnect_detected","peer_id":"aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111"}}
+{"timestamp":"2026-09-29T21:06:43.812170Z","level":"DEBUG","fields":{"message":"Started core ledger exchange with newly connected peer 12D3KooWFixtureWindowsNode000000000000000000000"}}
+{"timestamp":"2026-09-29T21:06:43.841956Z","level":"INFO","fields":{"message":"Identified peer 12D3KooWFixtureWindowsNode000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureWindowsNode000000000000000000000, protocols: 16, discoverable_addrs: 12"}}
+{"timestamp":"2026-09-29T21:06:43.843548Z","level":"DEBUG","fields":{"message":"Connection established to [aa, aa, aa, aa, bb, bb, bb, bb] via Internet"}}
+{"timestamp":"2026-09-29T21:06:43.875205Z","level":"INFO","fields":{"message":"Ledger exchange from 12D3KooWFixtureWindowsNode000000000000000000000: offered 1 peer entries (v1, allowed=true)"}}
+{"timestamp":"2026-09-29T21:06:43.875387Z","level":"DEBUG","fields":{"message":"Ledger exchange reply to 12D3KooWFixtureWindowsNode000000000000000000000: sending 1 peer entries"}}
+{"timestamp":"2026-09-29T21:06:43.910466Z","level":"INFO","fields":{"message":"Ledger exchange response from 12D3KooWFixtureWindowsNode000000000000000000000: they learned 0 new peers, sent 1 back"}}
+{"timestamp":"2026-09-29T21:07:43.867588Z","level":"INFO","fields":{"message":"Identified peer 12D3KooWFixtureWindowsNode000000000000000000000 - agent: scmessenger/0.4.0/full/relay/12D3KooWFixtureWindowsNode000000000000000000000, protocols: 16, discoverable_addrs: 12"}}
+{"timestamp":"2026-09-29T21:07:43.895624Z","level":"DEBUG","fields":{"message":"Connection established to [aa, aa, aa, aa, bb, bb, bb, bb] via Internet"}}
+{"timestamp":"2026-09-29T21:07:54.272934Z","level":"DEBUG","fields":{"message":"Connection established to [69, 80, 5e, 17, 5c, dc, 59, b2] via Internet"}}

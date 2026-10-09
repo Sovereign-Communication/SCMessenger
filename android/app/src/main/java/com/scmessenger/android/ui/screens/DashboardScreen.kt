@@ -152,13 +152,9 @@ fun DashboardScreen(
 
             // UNIFICATION_V2: single unified sorted list — classification via badge, not section
             // Clickable: mesh nodes open peer detail / conversation
-            if (sortedPeers.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.dashboard_empty_state_discovered),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
+            // #469 T9: no absence message when the list is empty; the node
+            // indicators above already present connectivity state.
+            if (sortedPeers.isNotEmpty()) {
                 // CHURN-001 (RCA-COMPOSE-TEARDOWN-2026-09-16): this list is a plain
                 // Column, not a LazyColumn, and none of its items hold per-item
                 // remembered state (PeerItem is Row/text/Identicon; Identicon is

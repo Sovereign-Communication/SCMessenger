@@ -130,6 +130,10 @@ fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
     }
 }
 
+/// Longest raw peer-id string `routing_peer_seen` will even attempt to parse
+/// (a 32-byte id is 64 hex chars; allows prefixes and libp2p base58 forms).
+const MAX_ROUTING_PEER_ID_STR_LEN: usize = 128;
+
 /// Parse a peer identifier string to a 32-byte peer id if possible. Accepts
 /// raw hex, `public_key:` / `identity_id:` / `0x`-prefixed hex, or a libp2p
 /// PeerId encoding.
@@ -159,6 +163,25 @@ fn parse_peer_id_32(peer_id_str: &str) -> Option<[u8; 32]> {
     }
 
     None
+}
+
+/// Validate an untrusted peer-id string for the routing entry points: bound its
+/// raw length, parse it to 32 bytes, and reject the all-zero id. Fails closed
+/// (returns `None`) so hostile ids never reach engine maps.
+fn validate_routing_peer_id(caller: &str, raw: &str) -> Option<[u8; 32]> {
+    if raw.len() > MAX_ROUTING_PEER_ID_STR_LEN {
+        tracing::warn!(caller, len = raw.len(), "oversized peer id rejected");
+        return None;
+    }
+    let Some(peer_id) = parse_peer_id_32(raw) else {
+        tracing::warn!(caller, "unparseable peer id rejected");
+        return None;
+    };
+    if peer_id == [0u8; 32] {
+        tracing::warn!(caller, "all-zero peer id rejected");
+        return None;
+    }
+    Some(peer_id)
 }
 
 /// The main entry point for the SCMessenger core.
@@ -1212,6 +1235,20 @@ impl IronCore {
             identity_id,
             Some(recipient_id.to_string()),
             None,
+        );
+
+        // G6: sender-side marker, same line shape as Android's delivery_state.
+        crate::message_events::record(
+            &message_id,
+            crate::message_events::MessageEventKind::Sent,
+            true,
+        );
+        tracing::info!(
+            "{}",
+            crate::message_events::fmt_delivery_state_pending(
+                &message_id,
+                "core_envelope_prepared"
+            )
         );
 
         Ok(crate::PreparedMessage {
@@ -2543,12 +2580,13 @@ impl IronCore {
         &self,
     ) -> Result<crate::contacts_bridge::ContactManager, crate::IronCoreError> {
         let path = self.storage_path.clone().unwrap_or_default();
-        crate::contacts_bridge::ContactManager::new(path.clone())
-            .or_else(|_| crate::contacts_bridge::ContactManager::new(path))
-            .or_else(|e| {
-                tracing::error!("Failed to create contact manager: {:?}", e);
-                crate::contacts_bridge::ContactManager::new("".to_string())
-            })
+        // #413 review F1: `ContactManager::new` already retries lock
+        // contention for its own ~5 s budget; a second `.or_else` retry here
+        // doubled that (~10 s) for no benefit, so it was removed.
+        crate::contacts_bridge::ContactManager::new(path).or_else(|e| {
+            tracing::error!("Failed to create contact manager: {:?}", e);
+            crate::contacts_bridge::ContactManager::new("".to_string())
+        })
     }
 
     /// Return the federated nickname for a contact (the nickname advertised by the peer).
@@ -2855,37 +2893,44 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     /// Record that a peer was seen on a given transport.
+    ///
+    /// Untrusted-input contract: `peer_id_hex` must parse to a 32-byte peer id
+    /// (via `parse_peer_id_32`) and its raw form is length-bounded before any
+    /// decoding. Anything else is dropped (fail closed) and never reaches the
+    /// engine, so a hostile transport cannot grow the adaptive-TTL or
+    /// negative-cache maps with arbitrary strings.
     pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
+        let Some(peer_id) = validate_routing_peer_id("routing_peer_seen", &peer_id_hex) else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            let transport_type = parse_transport_type(&transport);
-            if let Some(peer_id) = parse_peer_id_32(&peer_id_hex) {
-                engine.peer_seen(peer_id, transport_type);
-            } else {
-                engine.record_message_activity(&peer_id_hex);
-                engine.clear_unreachable_peer(&peer_id_hex);
-            }
+            engine.peer_seen(peer_id, parse_transport_type(&transport));
         }
     }
 
     /// Update peer hint vectors for routing table.
+    ///
+    /// Same untrusted-input contract as `routing_peer_seen`: the id is
+    /// length-bounded and parsed to 32 bytes before it touches the engine, and
+    /// adaptive-TTL state is keyed by the canonical hex form.
     pub fn routing_update_peer_hints(&self, peer_id_hex: String, hints: Vec<Vec<u8>>) {
+        let Some(peer_id) = validate_routing_peer_id("routing_update_peer_hints", &peer_id_hex)
+        else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
-            engine.record_message_activity(&peer_id_hex);
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    let parsed_hints: Vec<[u8; 8]> = hints
-                        .into_iter()
-                        .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
-                        .collect();
-                    // LocalCell intentionally updates only peers already known to
-                    // the local topology; an announcement cannot create a peer.
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_peer_hints(&peer_id, parsed_hints);
-                }
-            }
+            engine.record_message_activity(&hex::encode(peer_id));
+            let parsed_hints: Vec<[u8; 8]> = hints
+                .into_iter()
+                .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
+                .collect();
+            // LocalCell intentionally updates only peers already known to
+            // the local topology; an announcement cannot create a peer.
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .update_peer_hints(&peer_id, parsed_hints);
         }
     }
 
@@ -2905,20 +2950,24 @@ impl IronCore {
     }
 
     /// Update reliability score for a peer based on success/failure.
+    ///
+    /// Same untrusted-input contract as `routing_peer_seen`; the negative cache
+    /// and adaptive-TTL maps are keyed by the canonical hex of the parsed id.
     pub fn routing_update_reliability(&self, peer_id_hex: String, success: bool) {
+        let Some(peer_id) = validate_routing_peer_id("routing_update_reliability", &peer_id_hex)
+        else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-                if let Ok(peer_id) = <[u8; 32]>::try_from(peer_id_bytes.as_slice()) {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .update_reliability(&peer_id, success);
-                }
-            }
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .update_reliability(&peer_id, success);
+            let key = hex::encode(peer_id);
             if success {
-                engine.record_message_activity(&peer_id_hex);
+                engine.record_message_activity(&key);
             } else {
-                engine.record_unreachable_peer(&peer_id_hex);
+                engine.record_unreachable_peer(&key);
             }
         }
     }
@@ -3333,6 +3382,40 @@ impl IronCore {
     /// delivered message as Failed.
     pub(crate) const OUTBOX_EGRESS_GRACE_SECS: u64 = 120;
 
+    /// #413 review F2: ceiling of the per-entry re-dispatch interval. The
+    /// interval grows with the entry's attempt count (see
+    /// [`egress_grace_secs`](Self::egress_grace_secs)) so a receipt that never
+    /// arrives cannot make the sweep re-send the same envelope every 120 s
+    /// forever; it never gives up either.
+    pub(crate) const OUTBOX_EGRESS_GRACE_MAX_SECS: u64 = 3600;
+
+    /// #413 review F2: sweep caps. At most this many entries are re-dispatched
+    /// for one peer, and across all peers, in a single sweep tick, so a large
+    /// backlog drains over several ticks instead of a burst of synchronous
+    /// store writes on the swarm event loop.
+    pub(crate) const OUTBOX_SWEEP_MAX_PER_PEER: usize = 16;
+    pub(crate) const OUTBOX_SWEEP_MAX_PER_TICK: usize = 64;
+
+    /// Grace window after the `attempt`-th swarm dispatch of `message_id`:
+    /// bounded exponential in the attempt count (`GRACE * 2^(attempt-1)`,
+    /// capped at `OUTBOX_EGRESS_GRACE_MAX_SECS`) minus a deterministic
+    /// per-entry jitter of up to 20% derived from the message id and attempt,
+    /// so entries stranded together do not all come due on the same tick.
+    /// The first dispatch is within `(0.8 * GRACE, GRACE]`.
+    pub(crate) fn egress_grace_secs(message_id: &str, attempt: u32) -> u64 {
+        let exp = attempt.saturating_sub(1).min(16);
+        let base = Self::OUTBOX_EGRESS_GRACE_SECS
+            .saturating_mul(1u64 << exp)
+            .min(Self::OUTBOX_EGRESS_GRACE_MAX_SECS);
+        // FNV-1a over (message id, attempt): stable, no RNG, no dependency.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in message_id.bytes().chain(attempt.to_le_bytes()) {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        base - (h % (base / 5 + 1))
+    }
+
     pub(crate) fn retry_outbox_message_now(&self, message_id: &str) -> bool {
         self.outbox.write().retry_now(message_id)
     }
@@ -3344,6 +3427,32 @@ impl IronCore {
         skip_flush: bool,
         egress: &mut dyn FnMut(&str, &[u8]) -> bool,
     ) {
+        self.flush_peer_with_egress_limited(peer_id, connected, skip_flush, usize::MAX, egress);
+    }
+
+    /// Bounded re-flush used by the periodic outbox sweep (#413 review F2):
+    /// drains and re-dispatches at most `max_messages` due entries for a
+    /// connected peer and returns how many were drained (the caller subtracts
+    /// it from its per-tick budget).
+    pub(crate) fn sweep_peer_outbox_with_egress(
+        &self,
+        peer_id: &str,
+        max_messages: usize,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
+    ) -> usize {
+        self.flush_peer_with_egress_limited(peer_id, true, false, max_messages, egress)
+    }
+
+    /// Shared flush body. `limit` caps how many due entries are drained
+    /// (`usize::MAX` for the reconnect gate). Returns the drained count.
+    fn flush_peer_with_egress_limited(
+        &self,
+        peer_id: &str,
+        connected: bool,
+        skip_flush: bool,
+        limit: usize,
+        egress: &mut dyn FnMut(&str, &[u8]) -> bool,
+    ) -> usize {
         if !connected || skip_flush {
             // R3-C1: an explicit skip (duplicate connect event for a
             // connection that already flushed, or the losing site of the
@@ -3357,8 +3466,9 @@ impl IronCore {
                 skip_flush = skip_flush,
                 "Flush skipped for this connection; entries remain in the outbox"
             );
-            return;
+            return 0;
         }
+        let mut drained_count = 0usize;
         if connected {
             tracing::info!(
                 event = "outbox_reconnect_detected",
@@ -3366,7 +3476,10 @@ impl IronCore {
                 "Peer identified; triggering outbox flush"
             );
 
-            let messages = self.outbox.write().flush_peer_messages(peer_id);
+            let messages = self
+                .outbox
+                .write()
+                .flush_peer_messages_limited(peer_id, limit);
             if messages.is_empty() {
                 tracing::debug!(
                     event = "outbox_flush_completed",
@@ -3374,8 +3487,9 @@ impl IronCore {
                     pending_count = 0,
                     "No pending messages to flush"
                 );
-                return;
+                return 0;
             }
+            drained_count = messages.len();
 
             tracing::info!(
                 event = "outbox_flush_started",
@@ -3432,7 +3546,10 @@ impl IronCore {
                                 .duration_since(web_time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
-                            msg.next_retry_at = Some(now_secs + Self::OUTBOX_EGRESS_GRACE_SECS);
+                            // #413 review F2: grows with attempts (bounded,
+                            // jittered per entry); first dispatch stays ~120 s.
+                            msg.next_retry_at =
+                                Some(now_secs + Self::egress_grace_secs(&msg_id, current_attempt));
                             let restore = msg.clone();
                             if let Err(e) = self.outbox.write().enqueue(msg) {
                                 tracing::error!(
@@ -3532,6 +3649,7 @@ impl IronCore {
                 );
             }
         }
+        drained_count
     }
 }
 
@@ -3823,6 +3941,24 @@ impl IronCore {
                     IronCoreError::CryptoError
                 })?;
 
+        // G2: explicit decrypt marker (id + truncated sender only; no content).
+        {
+            let kind = match message.message_type {
+                crate::MessageType::Text => "text",
+                crate::MessageType::Receipt => "receipt",
+                _ => "other",
+            };
+            crate::message_events::record(
+                &message.id,
+                crate::message_events::MessageEventKind::Decrypt,
+                true,
+            );
+            tracing::info!(
+                "{}",
+                crate::message_events::fmt_rx_decrypt(&message.id, &canonical_peer_id, kind)
+            );
+        }
+
         // Also check device-specific blocks using the sender's last known device ID
         // Try the authenticated public key and its canonical identity_id; first
         // hit wins. A contact read error must fail closed rather than becoming
@@ -3937,6 +4073,11 @@ impl IronCore {
                     };
 
                     if authorized {
+                        crate::message_events::record(
+                            &receipt.message_id,
+                            crate::message_events::MessageEventKind::Receipt,
+                            true,
+                        );
                         let status = match receipt.status {
                             crate::DeliveryStatus::Sent => "Sent",
                             crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read => {
@@ -3976,9 +4117,10 @@ impl IronCore {
             .duration_since(web_time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        {
+        let duplicate = {
             let mut inbox = self.inbox.write();
-            if !inbox.is_duplicate(&message.id) {
+            let duplicate = inbox.is_duplicate(&message.id);
+            if !duplicate {
                 inbox.receive(ReceivedMessage {
                     version: 1,
                     message_id: message.id.clone(),
@@ -3988,7 +4130,8 @@ impl IronCore {
                     sender_public_key_hex: Some(hex::encode(&sender_pubkey)),
                 });
             }
-        }
+            duplicate
+        };
 
         let content = String::from_utf8(message.payload.clone()).unwrap_or_default();
         // Ordering fix (P1_ANDROID_CHAT_ORDER_CROSS_CLOCK): this store's row is
@@ -4002,7 +4145,7 @@ impl IronCore {
             .duration_since(web_time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = self.history_manager.add(MessageRecord {
+        let history_result = self.history_manager.add(MessageRecord {
             id: message.id.clone(),
             direction: MessageDirection::Received,
             peer_id: canonical_peer_id.clone(),
@@ -4012,6 +4155,26 @@ impl IronCore {
             delivered: true,
             hidden: any_blocked,
         });
+        // G3: history-write result (receiver-side durable-write evidence).
+        {
+            let ok = history_result.is_ok();
+            crate::message_events::record(
+                &message.id,
+                crate::message_events::MessageEventKind::History,
+                ok,
+            );
+            let line = crate::message_events::fmt_rx_history(
+                &message.id,
+                &canonical_peer_id,
+                ok,
+                duplicate,
+                any_blocked,
+            );
+            match &history_result {
+                Ok(()) => tracing::info!("{}", line),
+                Err(e) => tracing::error!("{} error={:?}", line, e),
+            }
+        }
 
         self.audit_log.write().append(
             AuditEventType::MessageReceived,
@@ -4224,9 +4387,9 @@ impl IronCore {
             .unwrap_or_default()
     }
 
-    /// Get fallback relay addresses from the bootstrap manager: the
-    /// hardcoded `CORE_BOOTSTRAP_NODES` plus any environment-variable
-    /// overrides, available immediately without needing live swarm events.
+    /// Get fallback relay addresses from the bootstrap manager: candidates
+    /// added at runtime from the ledger (no static or env-supplied seeds),
+    /// available immediately without needing live swarm events.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn get_fallback_relays(&self) -> Vec<libp2p::Multiaddr> {
         self.relay_bootstrap_manager
@@ -5826,6 +5989,68 @@ mod tests {
     }
 
     #[test]
+    fn egress_grace_grows_with_attempts_is_bounded_and_deterministic() {
+        let id = "grace-msg";
+        let mut prev_upper = 0;
+        for attempt in 1..=40u32 {
+            let g = IronCore::egress_grace_secs(id, attempt);
+            let base = (IronCore::OUTBOX_EGRESS_GRACE_SECS << attempt.saturating_sub(1).min(16))
+                .min(IronCore::OUTBOX_EGRESS_GRACE_MAX_SECS);
+            assert!(g <= base, "attempt {attempt}: {g} above base {base}");
+            assert!(g * 5 >= base * 4, "attempt {attempt}: jitter above 20%");
+            assert!(base >= prev_upper, "bound must not shrink");
+            prev_upper = base;
+            assert_eq!(g, IronCore::egress_grace_secs(id, attempt), "deterministic");
+        }
+        assert_eq!(prev_upper, IronCore::OUTBOX_EGRESS_GRACE_MAX_SECS);
+        assert!(IronCore::egress_grace_secs(id, 1) <= IronCore::OUTBOX_EGRESS_GRACE_SECS);
+        // Jitter actually differs per entry.
+        let distinct: std::collections::BTreeSet<u64> = (0..50)
+            .map(|i| IronCore::egress_grace_secs(&format!("m-{i}"), 6))
+            .collect();
+        assert!(distinct.len() > 5, "per-entry jitter must desynchronise");
+    }
+
+    #[test]
+    fn sweep_peer_outbox_caps_messages_per_call() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        for i in 0..10 {
+            core.prepare_message(
+                recipient.clone(),
+                format!("sweep-cap-{i}"),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        }
+        let mut first: Vec<String> = Vec::new();
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 3, &mut |id, _| {
+            first.push(id.to_string());
+            true
+        });
+        assert_eq!(drained, 3);
+        assert_eq!(first.len(), 3);
+        assert_eq!(core.outbox_count(), 10, "dispatch is not delivery");
+
+        // Dispatched entries are inside their grace window: the next capped
+        // sweep takes different entries, never re-sending the first three.
+        let mut second: Vec<String> = Vec::new();
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 3, &mut |id, _| {
+            second.push(id.to_string());
+            true
+        });
+        assert_eq!(drained, 3);
+        assert!(second.iter().all(|id| !first.contains(id)));
+
+        // A zero budget touches nothing.
+        let drained = core.sweep_peer_outbox_with_egress(&recipient, 0, &mut |_, _| true);
+        assert_eq!(drained, 0);
+    }
+
+    #[test]
     fn reconnect_flush_egresses_over_live_link() {
         // R1-A2: with an egress path the flush hands the drained envelope to
         // the caller's live send path and keeps the entry Enqueued pending the
@@ -6245,6 +6470,79 @@ mod tests {
             "relayed-circuit sighting must be recorded distinctly, got {:?}",
             stored.transports
         );
+    }
+
+    #[test]
+    fn routing_peer_seen_rejects_hostile_peer_ids() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let peer_count = |core: &IronCore| {
+            core.routing_engine
+                .write()
+                .as_mut()
+                .expect("engine set")
+                .base_engine_mut()
+                .local_cell_mut()
+                .peer_count()
+        };
+
+        let hostile = [
+            String::new(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+        ];
+        for id in hostile {
+            core.routing_peer_seen(id, "tcp".to_string());
+        }
+        assert_eq!(peer_count(&core), 0, "hostile ids must not create peers");
+
+        core.routing_peer_seen(hex::encode([7u8; 32]), "tcp".to_string());
+        assert_eq!(peer_count(&core), 1, "a valid 32-byte id is still accepted");
+    }
+
+    #[test]
+    fn routing_update_hints_and_reliability_reject_hostile_peer_ids() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let counts = |core: &IronCore| {
+            let mut guard = core.routing_engine.write();
+            let engine = guard.as_mut().expect("engine set");
+            (
+                engine.adaptive_ttl().len(),
+                engine.negative_cache_stats().entry_count,
+            )
+        };
+
+        let hostile = [
+            String::new(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+        ];
+        for id in hostile {
+            core.routing_update_peer_hints(id.clone(), vec![vec![0u8; 8]]);
+            core.routing_update_reliability(id.clone(), true);
+            core.routing_update_reliability(id, false);
+        }
+        assert_eq!(
+            counts(&core),
+            (0, 0),
+            "hostile ids must not grow adaptive-TTL or negative-cache maps"
+        );
+
+        let peer = hex::encode([9u8; 32]);
+        core.routing_update_reliability(peer.clone(), true);
+        core.routing_update_reliability(peer, false);
+        assert_eq!(counts(&core), (1, 1), "a valid id is keyed once by hex");
     }
 
     #[test]

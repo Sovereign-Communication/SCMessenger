@@ -116,9 +116,11 @@ pub struct RoutingEngine {
 impl RoutingEngine {
     /// Create a new routing engine
     pub fn new(local_id: PeerId, local_hint: [u8; 8]) -> Self {
+        let mut neighborhood = NeighborhoodTable::new();
+        neighborhood.set_local_peer_id(local_id);
         RoutingEngine {
             local: LocalCell::new(local_id),
-            neighborhood: NeighborhoodTable::new(),
+            neighborhood,
             global: GlobalRoutes::new(),
             _local_id: local_id,
             local_hint,
