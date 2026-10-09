@@ -60,25 +60,17 @@ jobs:
       - name: Check for ignored parameters in the merge-blocked perimeter
         run: python3 scripts/check_perimeter_underscore_params.py
 
-      - name: Check for unwrap() in library code
+      # Pure python3 (no ripgrep: it is absent on GitHub-hosted runners, which
+      # made the old rg-based greps silently pass). Strips #[cfg(test)] items,
+      # #[test] fns and test/bench/example paths before matching. Exceptions:
+      # scripts/prod_unwrap_allowlist.cfg (file:line + reason). The gate FAILS
+      # if python3 is missing or the script cannot run.
+      - name: Check for unwrap() and println! in production library code
         if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
-          echo "Checking for unwrap() in library code (core/src, mobile/src)..."
-          if rg -n '\.unwrap\(\)' core/src mobile/src --glob '!*test*' --glob '!*bench*'; then
-            echo "ERROR: unwrap() found in library code. Use ? or expect() with context instead."
-            exit 1
-          fi
-          echo "[OK] No unwrap() found in library code"
-      
-      - name: Check for println! in library code
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-        run: |
-          echo "Checking for println! in library code (core/src, mobile/src)..."
-          if rg -n 'println!' core/src mobile/src --glob '!*test*' --glob '!*bench*'; then
-            echo "ERROR: println! found in library code. Use tracing macros (info!, debug!, etc.) instead."
-            exit 1
-          fi
-          echo "[OK] No println! found in library code"
+          command -v python3 >/dev/null 2>&1 || { echo "[FAIL] python3 missing; cannot run unwrap/println gate"; exit 1; }
+          python3 -m unittest scripts/test_check_prod_unwrap_println.py
+          python3 scripts/check_prod_unwrap_println.py
 
   kotlin:
     name: Kotlin Linting

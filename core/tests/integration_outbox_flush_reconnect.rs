@@ -442,3 +442,87 @@ fn test_outbox_flush_peer_isolation() {
 
     tracing::info!("Correctly isolated messages per peer during flush");
 }
+
+/// OUTBOX-SWEEP-001 (2026-09-23): an entry dispatched over a live connection
+/// (egress=true) is re-enqueued with a grace timer, NOT removed. The sweep
+/// must be able to re-drain it once that timer expires, because a lost
+/// receipt on a still-open connection otherwise strands it forever (Windows
+/// node: outbox_count 118 / undelivered 259 with all links healthy).
+///
+/// The sweep re-invokes flush_peer_messages on a timer; these assertions pin
+/// the exact due-semantics it relies on: entries inside their grace window
+/// are left alone, expired ones are drained, custody entries are never
+/// touched (see also the R3-C2 grace contract in core/src/iron_core.rs).
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn test_sweep_reflushes_entry_after_grace_expiry_on_live_connection() {
+    let peer = "sweep_grace_peer";
+
+    // 1) The flush drained and the egress path re-enqueued with a live grace
+    //    timer (exactly what handle_peer_connection_event_with_egress does:
+    //    state=Enqueued, attempts+=1, next_retry_at=now+120).
+    let mut outbox = Outbox::new();
+    let mut redispatched = make_test_message("sweep-msg-1", peer);
+    redispatched.attempts = 1;
+    redispatched.next_retry_at = Some(
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + 120, // OUTBOX_EGRESS_GRACE_SECS
+    );
+    outbox.enqueue(redispatched).expect("enqueue with grace");
+
+    // 2) A sweep flush while the grace window is still open must NOT drain.
+    let immediate = outbox.flush_peer_messages(peer);
+    assert_eq!(
+        immediate.len(),
+        0,
+        "sweep must not re-drain an entry inside its grace window"
+    );
+    assert_eq!(
+        outbox.total_count(),
+        1,
+        "entry survives the premature sweep"
+    );
+
+    // 3) Once the timer expires, the next sweep flush re-drains it.
+    let mut outbox_expired = Outbox::new();
+    let mut stale = make_test_message("sweep-msg-1", peer);
+    stale.attempts = 1;
+    stale.next_retry_at = Some(
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(1),
+    );
+    outbox_expired
+        .enqueue(stale)
+        .expect("enqueue expired-grace entry");
+    let after_expiry = outbox_expired.flush_peer_messages(peer);
+    assert_eq!(
+        after_expiry.len(),
+        1,
+        "sweep re-drains the entry once its grace timer expires"
+    );
+}
+
+/// OUTBOX-SWEEP-001: entries in custody are never swept (the sweep drains
+/// only Enqueued AND due entries).
+#[test]
+#[allow(clippy::disallowed_methods)]
+fn test_sweep_never_drains_custody_entries() {
+    let mut outbox = Outbox::new();
+    let peer = "sweep_custody_peer";
+    let mut msg = make_test_message("sweep-custody-1", peer);
+    msg.in_custody = true;
+    outbox.enqueue(msg).expect("enqueue custody entry");
+
+    let drained = outbox.flush_peer_messages(peer);
+    assert!(
+        drained.is_empty(),
+        "custody entries are owned by the custody retry lifecycle, never swept"
+    );
+    assert_eq!(outbox.total_count(), 1, "custody entry stays in the outbox");
+}
