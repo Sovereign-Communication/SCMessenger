@@ -1221,19 +1221,37 @@ impl IronCore {
         });
 
         if handoff_to_drift {
-            // Bind the message to its recipient BEFORE custody changes hands. A
-            // peer that only ever receives the envelope could otherwise return an
-            // application receipt for a message we no longer hold retry state
-            // for; the binding is what makes a receipt actionable.
+            // Defect A (cell test 2026-10-10): StoreAndCarry used to bypass the
+            // outbox entirely, so nothing ever retried the send and a peer we
+            // were already connected to never received it. Drift custody is an
+            // ADDITIONAL path now; the outbox keeps the durable pending entry so
+            // the reconnect flush and the periodic sweep (dynamic, receipt-gated
+            // backoff, no attempt cap) keep retrying. Enqueue also binds the
+            // message to its recipient, which makes a later receipt actionable,
+            // so it replaces the bare authorize_recipient call.
             self.outbox
                 .write()
-                .authorize_recipient(&message_id, recipient_id)
+                .enqueue(QueuedMessage {
+                    version: 1,
+                    message_id: message_id.clone(),
+                    recipient_id: recipient_id.to_string(),
+                    envelope_data: envelope_data.clone(),
+                    queued_at: web_time::SystemTime::now()
+                        .duration_since(web_time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    attempts: 0,
+                    next_retry_at: None,
+                    in_custody: false,
+                    custody_established_at: 0,
+                    state: crate::store::outbox::MessageState::Enqueued,
+                })
                 .map_err(|error| {
                     tracing::error!(
-                        event = "receipt_authorization_store_failed",
+                        event = "outbox_enqueue_failed",
                         message_id = %message_id,
                         error = %error,
-                        "Aborting custody handoff because receipt authorization could not be retained"
+                        "Aborting custody handoff because retry state could not be retained"
                     );
                     IronCoreError::StorageError
                 })?;
@@ -1251,7 +1269,7 @@ impl IronCore {
                     .as_secs(),
             };
             self.drift_store.write().insert(stored_env);
-            tracing::info!("StoreAndCarry route resolved for {}. Handoff to Drift custody and bypassed active outbox.", message_id);
+            tracing::info!("StoreAndCarry route resolved for {}. Held in Drift custody and kept in the outbox for event-driven retry.", message_id);
         } else {
             let connected = self
                 .transport_manager
