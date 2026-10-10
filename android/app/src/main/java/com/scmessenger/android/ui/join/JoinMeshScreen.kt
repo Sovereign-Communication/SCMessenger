@@ -444,6 +444,11 @@ private suspend fun parseAndJoin(
             }
         }
 
+        Timber.i(
+            "[INVITE] imported source=join_bundle peers=${bootstrapPeers.size} " +
+                "dialed=$successCount topics=${topics.size}"
+        )
+
         if (successCount == 0) {
             withContext(Dispatchers.Main) {
                 onError("Failed to connect to any bootstrap peers")

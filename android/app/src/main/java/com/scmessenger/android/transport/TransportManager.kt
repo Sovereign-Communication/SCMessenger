@@ -352,6 +352,25 @@ class TransportManager @JvmOverloads constructor(
     }
 
     /**
+     * Connected-peer counts for the local radios, keyed by the `[TRANSPORT]` kind name.
+     * INTERNET peers live in the swarm and are counted separately.
+     */
+    fun peerCountsByKind(): Map<String, Int> {
+        val counts = HashMap<String, Int>()
+        for (t in peerTransports.values) {
+            val kind = when (t) {
+                TransportType.BLE -> "ble"
+                TransportType.WIFI_AWARE -> "wifi_aware"
+                TransportType.WIFI_DIRECT -> "wifi_direct"
+                TransportType.TCP_MDNS -> "mdns"
+                else -> null
+            } ?: continue
+            counts[kind] = (counts[kind] ?: 0) + 1
+        }
+        return counts
+    }
+
+    /**
      * Get available transports for AutoAdjustEngine.
      */
     fun getAvailableTransports(): List<String> {

@@ -2179,6 +2179,14 @@ impl LedgerManager {
     /// dialable locally, never re-exported. Returns the number of entries
     /// that were newly added.
     pub fn merge_shared_entries(&self, entries: &[SharedPeerEntry]) -> usize {
+        self.merge_shared_entries_via(entries, "unknown")
+    }
+
+    /// Same as [`Self::merge_shared_entries`], but records `via` (the peer or
+    /// channel the rows arrived from, e.g. `ledger_exchange:<peer16>`) in the
+    /// `ledger_address_learned` marker so the learn path is verifiable from
+    /// logs. `via` is sanitized by the marker formatter.
+    pub fn merge_shared_entries_via(&self, entries: &[SharedPeerEntry], via: &str) -> usize {
         let mut added = 0usize;
         for shared in entries {
             let stripped = strip_peer_id_component(&shared.multiaddr);
@@ -2280,14 +2288,15 @@ impl LedgerManager {
                     });
                     added += 1;
                     // G1 (store part): proof this node learned an address from a
-                    // peer ledger. `via` is not plumbed into the store (it needs a
-                    // transport-side change), so it is "unknown" for now.
+                    // peer ledger. `via` is supplied by the caller of
+                    // `merge_shared_entries_via` ("unknown" for the legacy entry
+                    // point), so no transport-module edit is needed.
                     tracing::info!(
                         event = "ledger_address_learned",
                         "{}",
                         crate::message_events::fmt_ledger_address_learned(
                             shared.last_peer_id.as_deref().unwrap_or("unknown"),
-                            "unknown",
+                            via,
                             &stripped
                         )
                     );
@@ -2736,6 +2745,24 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    #[test]
+    fn merge_shared_entries_via_adds_row_like_legacy_entry_point() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let merged = mgr.merge_shared_entries_via(
+            &[SharedPeerEntry {
+                multiaddr: addr.clone(),
+                last_peer_id: Some(peer()),
+                last_seen: 1,
+                known_topics: Vec::new(),
+            }],
+            "ledger_exchange:abcd
+rx_history",
+        );
+        assert_eq!(merged, 1);
+        assert!(mgr.entry_for_multiaddr(&addr).is_some());
     }
 
     /// V040-T13 F2 (revised per Rule-8 F-5): `last_seen` is a RANKING key --

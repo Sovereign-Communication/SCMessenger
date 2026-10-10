@@ -82,7 +82,8 @@ def decide(messages: Sequence[dict], steps: Sequence[dict], nodes_with_events: S
 def write_run(run_dir: str, *, run_id: str, repo_root: str, params: dict, collected: Sequence[object],
               events: Sequence[dict], ids: Dict[str, str], id_warnings: Sequence[str], skew: dict,
               messages: Sequence[dict], steps: Sequence[dict], ledger: dict, verdict: dict,
-              corroboration: dict) -> None:
+              corroboration: dict, transports: dict = None, routing: dict = None,
+              drops_stops: dict = None) -> None:
     os.makedirs(run_dir, exist_ok=True)
     nodes: Dict[str, dict] = {}
     for c in collected:
@@ -128,7 +129,8 @@ def write_run(run_dir: str, *, run_id: str, repo_root: str, params: dict, collec
             {"path": rel, "sha256": sha256_file(os.path.join(run_dir, rel))})
     vj = {"schema_version": SCHEMA_VERSION, "run_id": run_id, **verdict,
           "messages": list(messages), "scenario_steps": list(steps), "ledger": ledger,
-          "clock_skew": skew}
+          "clock_skew": skew, "transport_availability": transports or {},
+          "routing_summary": routing or {}, "drops_and_stops": drops_stops or {}}
     with open(os.path.join(run_dir, "verdict.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(vj, fh, indent=2, sort_keys=True)
     with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
@@ -161,6 +163,8 @@ def render_md(v: dict, manifest: dict) -> str:
     for n, s in sorted(sk["nodes"].items()):
         L.append(f"| {n} | {s['offset_s']:.3f} | {s['spread_s']:.3f} | {s['n']} | {s['method']} |")
     L.append("")
+    L += _render_transports(v.get("transport_availability") or {})
+    L += _render_routing_drops(v.get("routing_summary") or {}, v.get("drops_and_stops") or {})
     if v["scenario_steps"]:
         L.append("## Scenario steps")
         for s in v["scenario_steps"]:
@@ -199,3 +203,64 @@ def render_md(v: dict, manifest: dict) -> str:
     L.append("## Manifest")
     L.append(f"See `manifest.json` ({len(manifest['nodes'])} node(s), sha256 of every raw file).")
     return "\n".join(L) + "\n"
+
+
+def _cell(row: dict) -> str:
+    if row["state"] == "no-marker":
+        return "NO-MARKER"
+    txt = row["state"] or "?"
+    if row["detail"]:
+        txt += f" ({row['detail'][:48]})"
+    if row["max_peers"] is not None:
+        txt += f" peers<={row['max_peers']}"
+    if row["changes"] > 1:
+        txt += f" [{row['changes']} changes]"
+    return txt.replace("|", "/")
+
+
+def _render_transports(table: dict) -> List[str]:
+    """Per-node transport availability: what each node's own log says about each
+    transport. NO-MARKER means the log is silent (older build / never initialised)."""
+    from .correlate import TRANSPORT_KINDS
+    nodes = sorted(table)
+    if not nodes:
+        return []
+    L = ["## Transport availability per node (from `[TRANSPORT]` markers)", "",
+         "| transport | " + " | ".join(nodes) + " |",
+         "|---|" + "---|" * len(nodes)]
+    for kind in TRANSPORT_KINDS:
+        L.append(f"| {kind} | " + " | ".join(_cell(table[n][kind]) for n in nodes) + " |")
+    silent = [n for n in nodes if all(table[n][k]["state"] == "no-marker" for k in TRANSPORT_KINDS)]
+    for n in silent:
+        L.append("")
+        L.append(f"- [WARNING] node `{n}` logged no `[TRANSPORT]` marker: its build predates "
+                 "transport observability or logs were not captured; transport state is UNKNOWN.")
+    L.append("")
+    return L
+
+
+def _render_routing_drops(routing: dict, ds: dict) -> List[str]:
+    L: List[str] = []
+    if any(r["events"] for r in routing.values()):
+        L += ["## Routing feed (`[ROUTING] peer_seen`)", ""]
+        for n, r in sorted(routing.items()):
+            if r["events"]:
+                src = ", ".join(f"{k}={c}" for k, c in r["sources"].items())
+                L.append(f"- {n}: {r['events']} line(s), {r['distinct_peers']} distinct peer(s); sources: {src}")
+        L.append("")
+    drops = {n: d for n, d in (ds.get("rx_drops") or {}).items() if d}
+    if drops:
+        L += ["## Receiver drops (`[RX-DROP]`)", ""]
+        for n, d in sorted(drops.items()):
+            L.append(f"- {n}: " + ", ".join(f"{k}={c}" for k, c in sorted(d.items())))
+        L.append("")
+    stops = {n: s for n, s in (ds.get("mesh_stop") or {}).items() if s["sequence"]}
+    if stops:
+        L += ["## Mesh stop sequences (`[MESH-STOP]`)", ""]
+        for n, s in sorted(stops.items()):
+            seq = " > ".join(
+                x["phase"] + (f" {x['result']}" if x["result"] else "") + (f" {x['ms']}ms" if x["ms"] else "")
+                for x in s["sequence"])
+            L.append(f"- {n}: {'CLEAN' if s['clean'] else 'NOT CLEAN'}: {seq}")
+        L.append("")
+    return L

@@ -1,7 +1,7 @@
 # Runbook: Tri-node log triangulation verifier
 
 Status: Active
-Last updated: 2026-10-07
+Last updated: 2026-10-08
 Created: 2026-10-07
 Tool: `scripts/tri_node_verify.py` (package `scripts/trinode/`, stdlib only, Python 3.11+)
 Device authority: `HANDOFF/RUNBOOK_PIXEL_PASSIVE_VERIFICATION_2026-09-11.md` -- the
@@ -40,7 +40,7 @@ Run from a checkout of this branch. Never build locally for this: use the CI APK
 ```bash
 adb connect <pixel-ip>:<port>            # wireless ADB, port from Developer options
 adb devices -l
-curl -s http://localhost:9001/api/diagnostics | head -c 300     # Windows node alive
+curl -s http://localhost:9876/api/diagnostics | head -c 300     # Windows node alive (CLI control API port 9876, NOT 9001)
 ```
 
 2. Note the three libp2p peer ids (they make skew estimation and scenario steps exact):
@@ -88,7 +88,8 @@ Useful options: `--require-msg <id>` (must be VERIFIED), `--tol-s 2` (ordering
 tolerance), `--strict-markers` (reject inferred / weak scenario evidence),
 `--android-tz-offset-min N` (zone-less Android `mesh_diagnostics.log` stamps;
 logcat from this tool is UTC), `--aws-diag-url` (evaluated on the AWS host; default is
-the local API port from the 2026-09-29 probe), `--win-log-dir`.
+the local API port 9876), `--win-diag-url` (default `http://localhost:9876/api/diagnostics`;
+the CLI control API listens on 9876, the old default 9001 was wrong), `--win-log-dir`.
 
 Read the result: open `verdict.md`. Every scenario step shows its evidence lines as
 `node:event@timestamp [marker] raw/<node>/<file>:<line>`. If a step says INFERRED or
@@ -103,6 +104,29 @@ logs any message id on receive, and the Android diagnostics excerpt contains non
 today's code a first-time inbound message cannot reach VERIFIED, because the durable
 history write is never logged. That is a code gap, not a tool bug; the tool reports
 PARTIAL with the exact missing leg instead of guessing.
+
+## Observability markers (transport status, routing feed, drops, stop)
+
+Added by the 2026-10-08 passive-audit follow-up so every transport and message leg is
+checkable from pulled logs alone, with no manual radio toggling. All of them are parsed by
+`scripts/trinode/markers.py`; `verdict.md` gains a per-node **Transport availability**
+table. A transport row reads `NO-MARKER` when that node's log never mentioned it (older
+build, or the transport never initialised): the log is silent, so its state is UNKNOWN,
+not "off".
+
+| Marker | Emitted by | Meaning |
+|---|---|---|
+| `[TRANSPORT] kind=<tcp4\|tcp6\|quic|circuit|dcutr\|relay\|dcutr\|mdns\|ble\|wifi_direct\|wifi_aware\|cellular> state=<unavailable\|available\|listening\|connected\|error> [peers=<n>] detail=<reason>` | CLI/AWS `cli/src/transport_status.rs`; Android `transport/TransportStatus*.kt` | State at startup and on every change; `peers=` lines are the connected-peer count per transport every 5 min. `detail` spaces become `_`. BLE reasons include `no adapter`, `no D-Bus`, `adapter off`, `permission ... not granted`. |
+| `[ROUTING] peer_seen peer=<short> source=<transport>` | `core/src/iron_core.rs routing_peer_seen` | The routing engine was fed a sighting. First per peer, then at most every 5 min. |
+| `ledger_address_learned peer=<id> via=<ledger_exchange:peer16\|unknown> addr=<multiaddr>` | `core/src/store/ledger_entry.rs merge_shared_entries_via` | A node learned `peer`'s address from `via`'s ledger. The CLI now passes the source peer. |
+| `rx_decrypt` / `rx_history` / `custody_accept` | `core/src/message_events.rs` | Receiver decrypt, durable history (`result=ok\|failed`), relay custody. Scored legs; a failed history write is NOT the history leg. |
+| `[RX-DROP] msg=<id> stage=<stage> reason=<r>` | sibling PR | Receiver dropped a message. Shown as a note on the message and in a drops table; never changes the class. |
+| `[MESH-STOP] requested\|swarm_shutdown ok\|timeout ms=\|rust_stop ok\|timeout ms=\|foreground_removed\|complete` | sibling PR | Stop sequence; `verdict.md` flags a sequence containing a timeout or lacking `complete` as NOT CLEAN. |
+| `[INVITE] imported source=<join_bundle\|seed_import> ...` | Android `JoinMeshScreen.kt`, `MeshRepository.importSeedAddresses` | Invite redeemed (counts only). The CLI/FFI invite redeem path is #486/#501 and has no marker until it lands. |
+| `[LOG-DEDUPE] key=<k> suppressed=<n> window_ms=<ms>` | Android `LogDeduper` | Spam lines (address snapshots, stats, mDNS) were rate-limited; this line says how many. |
+
+Android `mesh_diagnostics.log` now rotates at 2 MB with 4 history files (10 MB total)
+instead of 100 KB x 5 (about one rotation a minute), so a normal day stays on the device.
 
 ## Gap list: log markers that do not exist on origin/main yet
 
