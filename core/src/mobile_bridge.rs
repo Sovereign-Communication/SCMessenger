@@ -2244,12 +2244,19 @@ impl MeshService {
         // Only a real 32-byte peer id (parsed by the core's single parser) may
         // reach routing state; opaque platform handles (BLE UUID/MAC) are not
         // routable identities and are skipped.
-        if !is_valid_transport_peer_handle(peer_id)
-            || crate::iron_core::parse_transport_peer_id(peer_id).is_none()
-        {
+        // `parse_transport_peer_id` is the canonical `validate_routing_peer_id`
+        // (bounded, 32 bytes, non-zero); the canonical hex it yields is what
+        // both the block lookup and the routing feed see, so spelling variants
+        // (`0x`, `public_key:` prefixes, whitespace) cannot dodge either.
+        let canonical = if is_valid_transport_peer_handle(peer_id) {
+            crate::iron_core::parse_transport_peer_id(peer_id).map(hex::encode)
+        } else {
+            None
+        };
+        let Some(peer_id) = canonical.as_deref() else {
             tracing::debug!(transport, "Non-peer-id handle; routing feed skipped");
             return;
-        }
+        };
         let Some(core) = self.get_core() else {
             tracing::debug!(peer_id, transport, "No core handle; routing feed skipped");
             return;
@@ -7304,5 +7311,118 @@ mod tests {
             hex::encode([3u8; 32]),
             vec![ProximityTransport::Ble; MAX_PEER_TRANSPORT_ENTRIES + 1],
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Ingress -> canonical guard -> routing_peer_seen table (JEV routing)
+    // -----------------------------------------------------------------------
+
+    /// Non-key peer handles every routing-capable ingress must refuse: opaque
+    /// platform handles, wrong lengths, non-hex, all-zero, oversized, control
+    /// characters, blank, and an injected multiaddr tail.
+    fn non_key_peer_handles() -> Vec<String> {
+        vec![
+            String::new(),
+            "   ".to_string(),
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            "E621E1F8-C36C-495A-93FC-0C247A3E6E5F".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 16]),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            format!("0x{}", hex::encode([0u8; 32])),
+            "A".repeat(100_000),
+            format!("{}\0", hex::encode([5u8; 32])),
+            format!("{}/tcp/1/p2p/12D3KooWAbc", hex::encode([5u8; 32])),
+        ]
+    }
+
+    type RoutingIngress = (&'static str, fn(&MeshService, String));
+
+    fn link_proof_ingresses() -> [RoutingIngress; 6] {
+        [
+            ("on_ble_data_received", |s, id| {
+                s.on_ble_data_received(id, vec![1, 2, 3])
+            }),
+            ("on_proximity_data_received/wifi_aware", |s, id| {
+                s.on_proximity_data_received(id, ProximityTransport::WifiAware, vec![1, 2, 3])
+            }),
+            ("on_proximity_data_received/wifi_direct", |s, id| {
+                s.on_proximity_data_received(id, ProximityTransport::WifiDirect, vec![1, 2, 3])
+            }),
+            ("on_wifi_aware_data_path_confirmed", |s, id| {
+                s.on_wifi_aware_data_path_confirmed(id, "10.0.0.2".to_string(), 4242)
+            }),
+            ("on_wifi_direct_connection_info", |s, id| {
+                s.on_wifi_direct_connection_info(id, "192.168.49.1".to_string(), true)
+            }),
+            ("record_data_link_for_routing", |s, id| {
+                s.record_data_link_for_routing(&id, "tcp")
+            }),
+        ]
+    }
+
+    #[test]
+    fn routing_ingress_table_malformed_ids_leave_routing_unchanged() {
+        for (name, ingress) in link_proof_ingresses() {
+            let (service, core) = routing_feed_fixture();
+            for id in non_key_peer_handles() {
+                ingress(&service, id);
+            }
+            assert_eq!(
+                routing_peer_count(&core),
+                0,
+                "{name}: a non-key id must not reach routing state"
+            );
+        }
+    }
+
+    #[test]
+    fn routing_ingress_table_discovery_paths_never_feed_routing() {
+        // Adverts are not links: even a perfectly valid 32-byte id must not
+        // reach routing_peer_seen from a discovery callback.
+        let (service, core) = routing_feed_fixture();
+        let bridge =
+            PlatformWifiAwareBridge::new_platform_ref(std::sync::Arc::new(Mutex::new(None)));
+        let mut ids = non_key_peer_handles();
+        ids.push(hex::encode([42u8; 32]));
+        for id in ids {
+            service.on_peer_discovered(id.clone());
+            service.on_wifi_aware_peer_discovered(id.clone(), vec![1], -50);
+            service.on_wifi_direct_peer_discovered(
+                id.clone(),
+                "dev".to_string(),
+                "02:00:00:00:00:00".to_string(),
+                -50,
+            );
+            bridge.handle_service_discovered(id, vec![1], -50);
+        }
+        assert_eq!(routing_peer_count(&core), 0);
+    }
+
+    #[test]
+    fn routing_ingress_table_valid_ids_reach_routing_peer_seen() {
+        // Control for the table above: each link-proof ingress, given a valid
+        // 32-byte id, reaches IronCore::routing_peer_seen; spelling variants
+        // canonicalise to the same peer rather than minting new ones.
+        let key = hex::encode([42u8; 32]);
+        for (name, ingress) in link_proof_ingresses() {
+            let (service, core) = routing_feed_fixture();
+            ingress(&service, key.clone());
+            assert_eq!(
+                routing_peer_count(&core),
+                1,
+                "{name}: valid id reaches routing"
+            );
+            ingress(&service, format!("0x{key}"));
+            ingress(&service, format!("public_key:{key}"));
+            ingress(&service, format!(" {key} "));
+            assert_eq!(
+                routing_peer_count(&core),
+                1,
+                "{name}: spellings of one id must not mint extra peers"
+            );
+        }
     }
 }

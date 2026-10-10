@@ -111,11 +111,13 @@ pub enum ConsentState {
     Granted,
 }
 
-/// Crate-visible entry to the single peer-id parser, for transport-ingress
-/// guards (mobile bridge) that must decide whether a platform-supplied peer
-/// string is a real 32-byte peer id before it may touch routing state.
+/// Crate-visible entry to the canonical routing peer-id validator, for
+/// transport-ingress guards (mobile bridge) that must decide whether a
+/// platform-supplied peer string is a real, non-zero 32-byte peer id before it
+/// may touch routing state. It is `validate_routing_peer_id` (length bound,
+/// `parse_peer_id_32`, all-zero rejection), not a weaker parallel parser.
 pub(crate) fn parse_transport_peer_id(peer_id_str: &str) -> Option<[u8; 32]> {
-    parse_peer_id_32(peer_id_str)
+    validate_routing_peer_id("transport_ingress", peer_id_str)
 }
 
 /// Longest peer / identity / device handle string accepted from platform code
@@ -3079,19 +3081,14 @@ impl IronCore {
 
     /// Mark a peer as a gateway (relay-capable) or not.
     pub fn routing_mark_gateway(&self, peer_id_hex: String, is_gateway: bool) {
-        if !is_bounded_ffi_handle(&peer_id_hex) {
+        let Some(peer_id) = validate_routing_peer_id("routing_mark_gateway", &peer_id_hex) else {
             return;
-        }
-        if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-            if peer_id_bytes.len() == 32 {
-                let peer_id: crate::routing::PeerId = peer_id_bytes.try_into().unwrap_or([0u8; 32]);
-                if let Some(engine) = self.routing_engine.write().as_mut() {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .mark_as_gateway(&peer_id, is_gateway);
-                }
-            }
+        };
+        if let Some(engine) = self.routing_engine.write().as_mut() {
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .mark_as_gateway(&peer_id, is_gateway);
         }
     }
 
@@ -3209,11 +3206,13 @@ impl IronCore {
 
     /// Clear an unreachable peer from the routing table.
     pub fn routing_clear_unreachable_peer(&self, peer_id_hex: String) {
-        if !is_bounded_ffi_handle(&peer_id_hex) {
+        let Some(peer_id) =
+            validate_routing_peer_id("routing_clear_unreachable_peer", &peer_id_hex)
+        else {
             return;
-        }
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.clear_unreachable_peer(&peer_id_hex);
+            engine.clear_unreachable_peer(&hex::encode(peer_id));
         }
     }
 
@@ -3296,12 +3295,13 @@ impl IronCore {
     /// Records the path in the multipath delivery manager (Phase 2) and
     /// notes message activity for adaptive TTL tracking.
     pub fn routing_register_path(&self, peer_id_hex: String, path_id: u64, latency_ms: u64) {
-        if !is_bounded_ffi_handle(&peer_id_hex) {
+        let Some(peer_id) = validate_routing_peer_id("routing_register_path", &peer_id_hex) else {
             return;
-        }
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.record_message_activity(&peer_id_hex);
-            engine.multipath_register_path(peer_id_hex.clone(), path_id, latency_ms);
+            let key = hex::encode(peer_id);
+            engine.record_message_activity(&key);
+            engine.multipath_register_path(key, path_id, latency_ms);
         }
     }
 
@@ -4512,8 +4512,11 @@ impl IronCore {
     /// Called when a previously-unreachable peer is successfully reconnected,
     /// so future routing decisions consider it reachable again.
     pub fn clear_unreachable_peer(&self, peer_id: &str) {
+        let Some(canonical) = validate_routing_peer_id("clear_unreachable_peer", peer_id) else {
+            return;
+        };
         if let Some(ref mut engine) = self.routing_engine.write().as_mut() {
-            engine.clear_unreachable_peer(peer_id);
+            engine.clear_unreachable_peer(&hex::encode(canonical));
         }
     }
 
@@ -7427,6 +7430,76 @@ mod tests {
                 .map(|c| c.len() <= MAX_FFI_LOG_LINE_LEN)
                 .unwrap_or(true)),
             "no stored log line may exceed the cap"
+        );
+    }
+
+    /// Every routing write entry point must reject the same hostile id set and
+    /// leave all routing state (peers, adaptive TTL, negative cache, multipath)
+    /// untouched, while a valid id still reaches the engine.
+    #[test]
+    fn routing_ingress_table_all_entry_points_reject_non_key_ids_and_accept_valid() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let hint_of = |peer: [u8; 32]| -> [u8; 8] {
+            blake3::hash(&peer).as_bytes()[0..8]
+                .try_into()
+                .expect("8 byte hint")
+        };
+        let snapshot = |core: &IronCore| {
+            let mut guard = core.routing_engine.write();
+            let engine = guard.as_mut().expect("engine set");
+            let peers = engine.base_engine_mut().local_cell_mut().peer_count();
+            let ttl = engine.adaptive_ttl().len();
+            let neg = engine.negative_cache_stats().entry_count;
+            // A zero-padded bypass of the id parser would register under the
+            // all-zero peer's hint, so watch that bucket explicitly.
+            let zero_paths = engine.active_paths(&hint_of([0u8; 32])).len();
+            (peers, ttl, neg, zero_paths)
+        };
+        let baseline = snapshot(&core);
+
+        let hostile = [
+            String::new(),
+            "   ".to_string(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 16]),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            format!("0x{}", hex::encode([0u8; 32])),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+            "192.168.49.1/tcp/1/p2p/12D3KooWAbc".to_string(),
+        ];
+        for id in &hostile {
+            core.routing_peer_seen(id.clone(), "tcp".to_string());
+            core.routing_update_peer_hints(id.clone(), vec![vec![0u8; 8]]);
+            core.routing_mark_gateway(id.clone(), true);
+            core.routing_update_reliability(id.clone(), true);
+            core.routing_update_reliability(id.clone(), false);
+            core.routing_clear_unreachable_peer(id.clone());
+            core.clear_unreachable_peer(id);
+            core.routing_register_path(id.clone(), 1, 10);
+        }
+        assert_eq!(
+            snapshot(&core),
+            baseline,
+            "no routing write entry point may change state for a non-key id"
+        );
+
+        let peer = [9u8; 32];
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        core.routing_register_path(hex::encode(peer), 1, 10);
+        let (peers, ttl, _neg, _zero) = snapshot(&core);
+        assert_eq!(peers, 1, "valid id reaches routing_peer_seen");
+        assert_eq!(ttl, 1, "valid id is keyed once in adaptive TTL");
+        let mut guard = core.routing_engine.write();
+        let engine = guard.as_mut().expect("engine set");
+        assert_eq!(
+            engine.active_paths(&hint_of(peer)).len(),
+            1,
+            "valid id registers its multipath path"
         );
     }
 }
