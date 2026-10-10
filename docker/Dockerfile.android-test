@@ -46,13 +46,29 @@ RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
 RUN yes | sdkmanager --licenses || true
 
 # Install Android SDK components
-RUN sdkmanager --update && \
-    sdkmanager \
-    "platform-tools" \
-    "platforms;android-34" \
-    "build-tools;34.0.0" \
-    "ndk;26.1.10909125" \
-    "cmake;3.22.1"
+# The NDK archive (~600 MB) is intermittently truncated/corrupted in transit
+# ("Archive is not a ZIP archive"), which failed CI runs 37709483143 and
+# 37639098157. Retry the install up to 4 times with increasing backoff, wiping
+# the partial download (.temp) and any half-extracted NDK dir between attempts,
+# and fail loudly if every attempt fails. The NDK version is unchanged.
+RUN set -eu; \
+    n=0; \
+    until sdkmanager --update && sdkmanager \
+        "platform-tools" \
+        "platforms;android-34" \
+        "build-tools;34.0.0" \
+        "ndk;26.1.10909125" \
+        "cmake;3.22.1"; do \
+        n=$((n+1)); \
+        if [ "$n" -ge 4 ]; then \
+            echo "[FAIL] sdkmanager install failed after $n attempts" >&2; \
+            exit 1; \
+        fi; \
+        echo "[WARNING] sdkmanager attempt $n failed; cleaning partial downloads and retrying in $((n*15))s" >&2; \
+        rm -rf "$ANDROID_HOME/.temp" "$ANDROID_HOME/ndk/26.1.10909125" "$ANDROID_HOME/ndk/.installer"; \
+        sleep $((n*15)); \
+    done; \
+    test -d "$ANDROID_HOME/ndk/26.1.10909125"
 
 ENV ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125
 
