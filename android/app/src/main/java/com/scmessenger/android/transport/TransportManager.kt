@@ -38,6 +38,18 @@ class TransportManager @JvmOverloads constructor(
     private val onWifiDirectConnectionInfo: ((peerId: String, groupOwnerIp: String, isGroupOwner: Boolean) -> Unit)? = null
 ) {
 
+    /**
+     * #469 T8: scheduler-driven cadence for LAN discovery. Set by the owner
+     * before [startAll]; null keeps each component's legacy fixed behaviour.
+     */
+    @Volatile var discoveryCadences: com.scmessenger.android.transport.discovery.DiscoveryCadences? = null
+
+    /** The core scheduler reset the LAN lane: restart mDNS and sweep the subnets now. */
+    fun onLanDiscoveryReset() {
+        mdnsDiscovery?.restartDiscovery()
+        subnetProbe?.triggerNow()
+    }
+
     // Transport health monitor for health-aware transport selection
     private val transportHealthMonitor = TransportHealthMonitor()
 
@@ -168,7 +180,8 @@ class TransportManager @JvmOverloads constructor(
                     onLanAddressResolved?.invoke(multiaddr)
                     onPeerDiscovered(peerId, TransportType.TCP_MDNS)
                 },
-                getLocalPeerId = getLocalPeerId
+                getLocalPeerId = getLocalPeerId,
+                cadence = discoveryCadences?.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.LAN)
             )
             mdnsDiscovery = mdns
         }
@@ -195,7 +208,8 @@ class TransportManager @JvmOverloads constructor(
                     onLanAddressResolved?.invoke(multiaddr)
                     activeTransports[TransportType.TCP_MDNS] = true
                 },
-                getLocalPeerId = getLocalPeerId
+                getLocalPeerId = getLocalPeerId,
+                cadence = discoveryCadences?.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.LAN)
             )
             subnetProbe = probe
         }

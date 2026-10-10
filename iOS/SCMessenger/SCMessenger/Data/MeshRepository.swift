@@ -12,6 +12,9 @@ import Foundation
 import Combine
 import os
 import Security
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Default settings for mesh service configuration
 private enum DefaultSettings {
@@ -163,6 +166,9 @@ final class MeshRepository {
 
     // Transport Managers
     private var bleCentralManager: BLECentralManager?
+    /// #469 T7/T8: event-driven discovery. Core owns the cadence policy.
+    @ObservationIgnored private var discoveryDriverStorage: DiscoveryDriver?
+    @ObservationIgnored private var discoveryForeground: Bool = false
     private var blePeripheralManager: BLEPeripheralManager?
     private var multipeerTransport: MultipeerTransport?
     private var mdnsDiscovery: mDNSServiceDiscovery?
@@ -963,6 +969,10 @@ final class MeshRepository {
                 }
             }
         }
+        // #469 T8: a failed browse retries on the scheduler's cadence, forever.
+        discovery.retryDelayProvider = { [weak self] in
+            self?.discoveryDelaySeconds(.lan)
+        }
         discovery.startBrowsing()
         discovery.startAdvertising(port: 9001)
         mdnsDiscovery = discovery
@@ -1077,6 +1087,10 @@ final class MeshRepository {
 
         stopMdnsDiscovery()
         stopBleTransport()
+        // Release the discovery driver's wake streams (#469 T8); the next
+        // start recreates it lazily.
+        discoveryDriverStorage?.shutdown()
+        discoveryDriverStorage = nil
         multipeerTransport?.disconnect()
         multipeerTransport = nil
 
@@ -3292,25 +3306,124 @@ final class MeshRepository {
         ledgerManager.recordFailure(multiaddr: multiaddr)
     }
 
-    /// Persist bootstrap addresses learned from an invite or QR join bundle.
-    /// Seeds remain lower-confidence until an active transport session
-    /// identifies the peer, but they must survive this screen and app launch.
-    @discardableResult
-    func importSeedAddresses(_ multiaddrs: [String]) -> Int {
-        guard let ledgerManager = ledgerManager else {
-            logger.warning("Cannot import ledger seeds before LedgerManager initialization")
-            return 0
+    // MARK: - Signed SCI1 invites (#469 T3)
+
+    /// Redeem a signed `SCI1:` invite (QR scan, pasted or shared text). Core
+    /// verifies the Ed25519 signature and imports the seed ledger as unproven
+    /// entries; the returned addresses are dialed here and an InviteRedeemed
+    /// event puts every discovery transport into its aggressive phase.
+    /// A seed that cannot be dialed yet is not a failure: discovery keeps going.
+    func redeemInvite(_ raw: String?) async -> InviteRedeemOutcome {
+        guard let raw = raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure(.empty)
         }
+        guard let token = InviteText.extract(raw) else {
+            return .failure(.notAnInvite)
+        }
+        guard let core = ironCore else {
+            return .failure(.noIdentity)
+        }
+        let report: RedeemReport
+        do {
+            report = try core.redeemInviteQr(payload: token)
+        } catch let error as IronCoreError {
+            logger.warning("Invite rejected: \(error.localizedDescription)")
+            return .failure(InviteRedeemFailure.from(error))
+        } catch {
+            logger.warning("Invite rejected: \(error.localizedDescription)")
+            return .failure(.unknown)
+        }
+        // Tell the scheduler before dialing so a slow dial cannot delay the reset.
+        reportDiscoveryEvent(.inviteRedeemed)
+        var dialed = 0
+        for addr in report.dialAddrs {
+            await connectToPeer("", addresses: [addr])
+            dialed += 1
+        }
+        logger.info("[INVITE] redeemed seeds=\(report.addressesOffered) imported=\(report.addressesImported) dialed=\(dialed) inviter=\(String(report.inviterId.prefix(8)))")
+        return .success(
+            offered: Int(report.addressesOffered),
+            imported: Int(report.addressesImported),
+            dialed: dialed
+        )
+    }
 
-        let seeds = multiaddrs
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .map { SeedLedgerEntry(multiaddr: $0) }
-        guard !seeds.isEmpty else { return 0 }
+    /// Mint a signed `SCI1:` invite from this node's reachable addresses, or
+    /// nil when there is no dialable address or identity yet.
+    func createInvite(ttlSecs: UInt64 = 3600) async -> String? {
+        guard let core = ironCore else { return nil }
+        let external = await getExternalAddresses()
+        let listening = await getListeningAddresses()
+        var seen = Set<String>()
+        let addrs = (external + listening).filter { seen.insert($0).inserted }
+        do {
+            return try core.createInviteQr(reachableAddrs: addrs, ttlSecs: ttlSecs)
+        } catch {
+            logger.warning("Invite creation failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
 
-        let added = Int(ledgerManager.importSeedEntries(entries: seeds))
-        logger.info("Ledger: imported \(added) bootstrap seed(s) from join bundle")
-        return added
+    // MARK: - Discovery events (#469 T7/T8)
+
+    private var discoveryDriver: DiscoveryDriver {
+        if let driver = discoveryDriverStorage { return driver }
+        let driver = DiscoveryDriver()
+        driver.onReset = { [weak self] transports in
+            Task { @MainActor [weak self] in
+                self?.applyDiscoveryReset(transports)
+            }
+        }
+        discoveryDriverStorage = driver
+        return driver
+    }
+
+    /// Report a platform event to the core discovery scheduler.
+    func reportDiscoveryEvent(_ event: DiscoveryEvent) {
+        discoveryDriver.report(event)
+    }
+
+    /// Feed the observed conditions that bound every transport's decay ceiling:
+    /// connected peers, power, and foreground. `foreground` updates the stored
+    /// flag (app lifecycle); nil keeps the last value.
+    func updateDiscoveryInputs(foreground: Bool? = nil) {
+        if let foreground = foreground { discoveryForeground = foreground }
+        var power: DiscoveryPower = .normal
+        #if canImport(UIKit)
+        let device: UIDevice = UIDevice.current
+        device.isBatteryMonitoringEnabled = true
+        if device.batteryState == .charging || device.batteryState == .full {
+            power = .charging
+        } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            power = .low
+        }
+        #endif
+        discoveryDriver.setInputs(
+            connectedPeers: UInt32(connectedEmissionCache.count),
+            power: power,
+            foreground: discoveryForeground
+        )
+    }
+
+    /// Seconds until the next attempt on a transport, from the core scheduler.
+    func discoveryDelaySeconds(_ transport: DiscoveryTransport) -> TimeInterval {
+        return discoveryDriver.nextDelaySeconds(transport)
+    }
+
+    /// Wake the scan loops whose transport the scheduler just reset.
+    private func applyDiscoveryReset(_ transports: Set<DiscoveryTransport>) {
+        if transports.contains(.ledger) {
+            Task { @MainActor [weak self] in
+                await self?.primeRelayBootstrapConnections()
+            }
+            dispatchFlushPendingOutbox(reason: "discovery_reset")
+        }
+        if transports.contains(.ble) {
+            bleCentralManager?.onDiscoveryReset()
+        }
+        if transports.contains(.lan) {
+            mdnsDiscovery?.restartBrowsing()
+        }
     }
 
     func getDialableAddresses() throws -> [LedgerEntry] {
@@ -3949,9 +4062,13 @@ final class MeshRepository {
 
     func reportNetwork(wifi: Bool, cellular: Bool) {
         let previousWifi = networkStatus.wifi
+        let previousCellular = networkStatus.cellular
         logger.debug("Network: wifi=\(wifi) cellular=\(cellular)")
         networkStatus.wifi = wifi
         networkStatus.cellular = cellular
+        // #469 T7: every real radio change resets discovery to aggressive.
+        if wifi != previousWifi { reportDiscoveryEvent(.wifiChanged) }
+        if cellular != previousCellular { reportDiscoveryEvent(.cellularChanged) }
 
         // Report to Rust
         let profile = DeviceProfile(
@@ -4223,6 +4340,11 @@ final class MeshRepository {
         }
         connectedEmissionCache.removeValue(forKey: trimmedId)
         mdnsLanPeers.removeValue(forKey: trimmedId)
+        updateDiscoveryInputs()
+        if connectedEmissionCache.isEmpty {
+            // #469 T7: losing the last peer resets discovery to aggressive.
+            reportDiscoveryEvent(.allPeersLost)
+        }
         pruneDisconnectedPeer(peerId)
     }
 
@@ -4691,7 +4813,13 @@ final class MeshRepository {
            now.timeIntervalSince(previous) < connectedReemitInterval {
             return
         }
+        let isNewPeer: Bool = connectedEmissionCache[normalizedPeerId] == nil
         connectedEmissionCache[normalizedPeerId] = now
+        if isNewPeer {
+            // #469 T7: a peer not seen before resets discovery to aggressive.
+            updateDiscoveryInputs()
+            reportDiscoveryEvent(.newPeerConnected)
+        }
         MeshEventBus.shared.peerEvents.send(.connected(peerId: normalizedPeerId))
         if !isBootstrapRelayPeer(normalizedPeerId) {
             triggerPendingSyncForPeerIds([normalizedPeerId], reason: "peer_connected:\(normalizedPeerId)")
@@ -4872,7 +5000,9 @@ final class MeshRepository {
                 await self?.primeRelayBootstrapConnections()
 
                 await self?.flushPendingOutbox(reason: "periodic")
-                try? await Task.sleep(nanoseconds: 8_000_000_000) // 8s loop
+                // #469 T8: cadence from the core scheduler; an event wakes the wait.
+                guard let driver = await self?.discoveryDriver else { return }
+                _ = await driver.awaitNextAttempt(.ledger)
             }
         }
     }
@@ -7289,4 +7419,53 @@ struct PeerIdValidator {
     static func isSame(_ id1: String, _ id2: String) -> Bool {
         return normalize(id1) == normalize(id2)
     }
+}
+
+// MARK: - Invite redeem types (#469 T3)
+
+/// Extracts an `SCI1:` token from pasted, scanned, or shared text.
+enum InviteText {
+    static let prefix: String = "SCI1:"
+
+    static func extract(_ raw: String?) -> String? {
+        guard let raw = raw, let range = raw.range(of: prefix) else { return nil }
+        let tail = raw[range.lowerBound...]
+        let token = tail.prefix { !$0.isWhitespace }
+        let cleaned = String(token).trimmingCharacters(in: CharacterSet(charactersIn: ".,;)]>\"'"))
+        return cleaned.count > prefix.count ? cleaned : nil
+    }
+}
+
+enum InviteRedeemFailure: Error, Equatable {
+    case empty
+    case notAnInvite
+    case invalid
+    case badSignature
+    case noIdentity
+    case unknown
+
+    static func from(_ error: IronCoreError) -> InviteRedeemFailure {
+        switch error {
+        case .InvalidInput: return .invalid
+        case .CryptoError: return .badSignature
+        case .NotInitialized: return .noIdentity
+        default: return .unknown
+        }
+    }
+
+    var userMessage: String {
+        switch self {
+        case .empty: return "Nothing to redeem. Scan an invite QR code or paste the invite text."
+        case .notAnInvite: return "That text does not contain an SCMessenger invite."
+        case .invalid: return "This invite is invalid, expired, or was issued by this device."
+        case .badSignature: return "The invite signature could not be verified. Ask for a new invite."
+        case .noIdentity: return "Create your identity first, then redeem the invite."
+        case .unknown: return "The invite could not be redeemed. Try again."
+        }
+    }
+}
+
+enum InviteRedeemOutcome: Equatable {
+    case success(offered: Int, imported: Int, dialed: Int)
+    case failure(InviteRedeemFailure)
 }

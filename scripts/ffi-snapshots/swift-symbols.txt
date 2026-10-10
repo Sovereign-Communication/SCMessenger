@@ -1,5 +1,6 @@
 open class AutoAdjustEngine: AutoAdjustEngineProtocol, @unchecked Sendable {
 open class ContactManager: ContactManagerProtocol, @unchecked Sendable {
+open class DiscoveryCoordinator: DiscoveryCoordinatorProtocol, @unchecked Sendable {
 open class HistoryManager: HistoryManagerProtocol, @unchecked Sendable {
 open class IronCore: IronCoreProtocol, @unchecked Sendable {
 open class LedgerManager: LedgerManagerProtocol, @unchecked Sendable {
@@ -11,6 +12,7 @@ open func add(contact: Contact)throws   {try rustCallWithError(FfiConverterTypeI
 open func add(record: MessageRecord)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func allKnownTopics() -> [String]  {
 open func annotateIdentity(multiaddr: String, peerId: String, publicKey: String?, nickname: String?)  {try! rustCall() {
+open func applyPendingReset(transport: DiscoveryTransport) -> Bool  {
 open func blockAndDeletePeer(peerId: String, deviceId: String?, reason: String?)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func blockPeer(peerId: String, deviceId: String?, reason: String?)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func blockedCount()throws  -> UInt32  {
@@ -105,7 +107,6 @@ open func historyManager()throws  -> HistoryManager  {
 open func identityId() -> String?  {
 open func importIdentityBackup(backup: String, passphrase: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func importIdentityBackup(backup: String, passphrase: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
-open func importSeedEntries(entries: [SeedLedgerEntry]) -> UInt32  {
 open func inboxCount() -> UInt32  {
 open func initializeIdentity()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func inviteGetSignableData(tokenBytes: Data)throws  -> Data  {
@@ -125,6 +126,7 @@ open func markDelivered(id: String)throws   {try rustCallWithError(FfiConverterT
 open func markMessageSent(messageId: String) -> Bool  {
 open func markVerified(peerId: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func mergeRemoteContacts(remoteContacts: [Contact])throws  -> UInt32  {
+open func nextDelayMs(transport: DiscoveryTransport) -> UInt64  {
 open func notifyPeerDisconnected(peerId: String)  {try! rustCall() {
 open func notifyPeerDiscovered(peerId: String)  {try! rustCall() {
 open func onAppBackground()  {try! rustCall() {
@@ -134,6 +136,7 @@ open func onBleDataReceived(peerId: String, data: Data)  {try! rustCall() {
 open func onDataReceived(peerId: String, data: Data)  {try! rustCall() {
 open func onEnteringBackground()  {try! rustCall() {
 open func onEnteringForeground()  {try! rustCall() {
+open func onEvent(event: DiscoveryEvent) -> [DiscoveryTransport]  {
 open func onMotionChanged(motion: MotionState)  {try! rustCall() {
 open func onNetworkChanged(hasWifi: Bool, hasCellular: Bool)  {try! rustCall() {
 open func onPeerDisconnected(peerId: String)  {try! rustCall() {
@@ -154,6 +157,7 @@ open func peelOnionLayer(onionData: Data, relaySecretKey: Data)throws  -> PeelRe
 open func peelOnionLayer(onionData: Data, relaySecretKey: Data)throws  -> PeelResult  {
 open func peerRateLimitMultiplier(peerId: String) -> Double  {
 open func peerSpamScore(peerId: String) -> Double  {
+open func pendingResetDueMs(transport: DiscoveryTransport) -> UInt64?  {
 open func performMaintenance()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func prepareCoverTraffic(sizeBytes: UInt32)throws  -> Data  {
 open func prepareMessage(recipientPublicKeyHex: String, text: String, msgType: MessageType, ttl: TtlConfig?)throws  -> PreparedMessage  {
@@ -219,6 +223,7 @@ open func sendMessageStatus(peerId: String, data: Data, recipientIdentityId: Str
 open func sendToAllPeers(data: Data)async throws   {
 open func setDelegate(delegate: CoreDelegate?)  {try! rustCall() {
 open func setDelegate(delegate: CoreDelegate?)  {try! rustCall() {
+open func setInputs(connectedPeers: UInt32, power: DiscoveryPower, foreground: Bool)  {try! rustCall() {
 open func setLocalNickname(peerId: String, nickname: String?)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func setNickname(nickname: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func setNickname(peerId: String, nickname: String?)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
@@ -258,7 +263,10 @@ public enum AdjustmentProfile: Equatable, Hashable {
 public enum AuditEventType: Equatable, Hashable {
 public enum ConnectionPathState: Equatable, Hashable {
 public enum DeliveryStatus: Equatable, Hashable {
+public enum DiscoveryEvent: Equatable, Hashable {
 public enum DiscoveryMode: Equatable, Hashable {
+public enum DiscoveryPower: Equatable, Hashable {
+public enum DiscoveryTransport: Equatable, Hashable {
 public enum IronCoreError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 public enum MessageDirection: Equatable, Hashable {
 public enum MessageStatus: Equatable, Hashable {
@@ -298,8 +306,16 @@ public func FfiConverterTypeDeviceProfile_lift(_ buf: RustBuffer) throws -> Devi
 public func FfiConverterTypeDeviceProfile_lower(_ value: DeviceProfile) -> RustBuffer {
 public func FfiConverterTypeDeviceState_lift(_ buf: RustBuffer) throws -> DeviceState {
 public func FfiConverterTypeDeviceState_lower(_ value: DeviceState) -> RustBuffer {
+public func FfiConverterTypeDiscoveryCoordinator_lift(_ handle: UInt64) throws -> DiscoveryCoordinator {
+public func FfiConverterTypeDiscoveryCoordinator_lower(_ value: DiscoveryCoordinator) -> UInt64 {
+public func FfiConverterTypeDiscoveryEvent_lift(_ buf: RustBuffer) throws -> DiscoveryEvent {
+public func FfiConverterTypeDiscoveryEvent_lower(_ value: DiscoveryEvent) -> RustBuffer {
 public func FfiConverterTypeDiscoveryMode_lift(_ buf: RustBuffer) throws -> DiscoveryMode {
 public func FfiConverterTypeDiscoveryMode_lower(_ value: DiscoveryMode) -> RustBuffer {
+public func FfiConverterTypeDiscoveryPower_lift(_ buf: RustBuffer) throws -> DiscoveryPower {
+public func FfiConverterTypeDiscoveryPower_lower(_ value: DiscoveryPower) -> RustBuffer {
+public func FfiConverterTypeDiscoveryTransport_lift(_ buf: RustBuffer) throws -> DiscoveryTransport {
+public func FfiConverterTypeDiscoveryTransport_lower(_ value: DiscoveryTransport) -> RustBuffer {
 public func FfiConverterTypeDiskStats_lift(_ buf: RustBuffer) throws -> DiskStats {
 public func FfiConverterTypeDiskStats_lower(_ value: DiskStats) -> RustBuffer {
 public func FfiConverterTypeHistoryManager_lift(_ handle: UInt64) throws -> HistoryManager {
@@ -404,11 +420,13 @@ public func uniffiCloneHandle() -> UInt64 {
 public func uniffiCloneHandle() -> UInt64 {
 public func uniffiCloneHandle() -> UInt64 {
 public func uniffiCloneHandle() -> UInt64 {
+public func uniffiCloneHandle() -> UInt64 {
 public func uniffiEnsureScmessengerCoreInitialized() {
 public func updatePeerTransports(peerId: String, transports: [ProximityTransport])  {try! rustCall() {
 public protocol AutoAdjustEngineProtocol: AnyObject, Sendable {
 public protocol ContactManagerProtocol: AnyObject, Sendable {
 public protocol CoreDelegate: AnyObject, Sendable {
+public protocol DiscoveryCoordinatorProtocol: AnyObject, Sendable {
 public protocol HistoryManagerProtocol: AnyObject, Sendable {
 public protocol IronCoreProtocol: AnyObject, Sendable {
 public protocol LedgerManagerProtocol: AnyObject, Sendable {
@@ -437,7 +455,11 @@ public struct FfiConverterTypeContactManager: FfiConverter {
 public struct FfiConverterTypeDeliveryStatus: FfiConverterRustBuffer {
 public struct FfiConverterTypeDeviceProfile: FfiConverterRustBuffer {
 public struct FfiConverterTypeDeviceState: FfiConverterRustBuffer {
+public struct FfiConverterTypeDiscoveryCoordinator: FfiConverter {
+public struct FfiConverterTypeDiscoveryEvent: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiscoveryMode: FfiConverterRustBuffer {
+public struct FfiConverterTypeDiscoveryPower: FfiConverterRustBuffer {
+public struct FfiConverterTypeDiscoveryTransport: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiskStats: FfiConverterRustBuffer {
 public struct FfiConverterTypeHistoryManager: FfiConverter {
 public struct FfiConverterTypeHistoryStats: FfiConverterRustBuffer {
@@ -482,6 +504,7 @@ public struct MeshServiceConfig: Equatable, Hashable {
 public struct MeshSettings: Equatable, Hashable {
 public struct MessageRecord: Equatable, Hashable {
 public struct MessageRequest: Equatable, Hashable {
+public struct NoHandle {
 public struct NoHandle {
 public struct NoHandle {
 public struct NoHandle {

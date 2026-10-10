@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelUuid
+import com.scmessenger.android.transport.discovery.ScanCadence
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,7 +38,13 @@ class BleScanner(
     private val onDataReceived: (String, ByteArray) -> Unit,
     private val quotaManager: BleQuotaManager = BleQuotaManager(),
     private val backoffStrategy: BleBackoffStrategy = BleBackoffStrategy(),
-    private val onScanFailure: (() -> Unit)? = null
+    private val onScanFailure: (() -> Unit)? = null,
+    /**
+     * #469 T8: when set, the pause between scan windows comes from the core
+     * discovery scheduler (aggressive after an event, decaying, never
+     * stopping) instead of the fixed duty-cycle interval.
+     */
+    private val cadence: ScanCadence? = null
 ) {
     data class BleDiscoveryStats(
         val advertisementsSeen: Int,
@@ -72,6 +79,15 @@ class BleScanner(
     private val handler by lazy { Handler(bleThread.looper) }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var dutyCycleRunnable: Runnable? = null
+
+    // Scheduler-driven cadence (#469 T8). `cadenceActive` is separate from
+    // `isScanning`: a scan window that ended is a pause, not a stop.
+    @Volatile private var cadenceActive = false
+
+    // True between startScanning() and stopScanning(). A scheduler reset only
+    // (re)starts a scan the owner still wants; after stopScanning() it is a no-op.
+    @Volatile private var scanWanted = false
+    private var cadencePauseRunnable: Runnable? = null
 
     // Scan result caching to avoid duplicate processing
     private val recentlySeenPeers = ConcurrentHashMap<String, Long>()
@@ -264,6 +280,8 @@ class BleScanner(
      */
     fun setScanDutyCycle(windowMs: Long, intervalMs: Long) {
         scanWindowMs = windowMs
+        // With a scheduler cadence the interval argument is advisory only; the
+        // pause between windows always comes from the scheduler.
         scanIntervalMs = intervalMs
         Timber.d("Scan duty cycle updated: window=${windowMs}ms, interval=${intervalMs}ms")
 
@@ -295,6 +313,7 @@ class BleScanner(
 
     @SuppressLint("MissingPermission")
     suspend fun startScanning(): Boolean = scanLock.withLock {
+        scanWanted = true
         if (scanner == null) {
             Timber.w("Bluetooth Scanner not available")
             return@withLock false
@@ -362,8 +381,11 @@ class BleScanner(
             Timber.i("BLE Scanning started (background=$isBackgroundMode, fallback=$fallbackScanEnabled)")
             scheduleFallbackPromotion()
 
-            // Start duty cycle if intervals are configured
-            if (scanWindowMs < scanIntervalMs) {
+            // Scheduler-driven cadence when provided; otherwise the legacy
+            // fixed duty cycle (only when intervals are configured).
+            if (cadence != null) {
+                startCadenceCycle(cadence)
+            } else if (scanWindowMs < scanIntervalMs) {
                 startDutyCycle()
             }
 
@@ -421,6 +443,71 @@ class BleScanner(
     private fun stopDutyCycle() {
         dutyCycleRunnable?.let { handler.removeCallbacks(it) }
         dutyCycleRunnable = null
+        cadenceActive = false
+        cadencePauseRunnable?.let { handler.removeCallbacks(it) }
+        cadencePauseRunnable = null
+    }
+
+    private fun startCadenceCycle(c: ScanCadence) {
+        stopDutyCycle()
+        cadenceActive = true
+        scheduleCadenceWindowEnd(c)
+        Timber.i("[DISCOVERY] transport=ble cadence cycle started (window=${scanWindowMs}ms)")
+    }
+
+    /** End the current scan window after [scanWindowMs], then pause per the scheduler. */
+    private fun scheduleCadenceWindowEnd(c: ScanCadence) {
+        val windowEnd = Runnable {
+            if (!cadenceActive) return@Runnable
+            stopScanningInternal()
+            val pauseMs = c.nextDelayMs().coerceAtLeast(1L)
+            Timber.i("[DISCOVERY] transport=ble scan window ended; next window in ${pauseMs}ms")
+            val resume = Runnable {
+                cadencePauseRunnable = null
+                resumeCadenceScan(c)
+            }
+            cadencePauseRunnable = resume
+            handler.postDelayed(resume, pauseMs)
+        }
+        dutyCycleRunnable = windowEnd
+        handler.postDelayed(windowEnd, scanWindowMs)
+    }
+
+    private fun resumeCadenceScan(c: ScanCadence) {
+        if (!cadenceActive) return
+        startScanningInternal()
+        // Even if the radio refused (for example Bluetooth is off), keep the
+        // cycle alive: the scanner never gives up, it only decays.
+        scheduleCadenceWindowEnd(c)
+    }
+
+    /**
+     * Core discovery scheduler reset the BLE lane (Bluetooth turned on, app
+     * foregrounded, network change, ...): scan now instead of waiting out the
+     * decayed pause, and start scanning if the scanner was not running.
+     */
+    fun onDiscoveryReset() {
+        val c = cadence ?: return
+        handler.post {
+            if (!cadenceActive) {
+                if (!scanWanted) return@post
+                scope.launch {
+                    try {
+                        startScanning()
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to start BLE scan on discovery reset")
+                    }
+                }
+                return@post
+            }
+            val pending = cadencePauseRunnable
+            if (pending != null) {
+                handler.removeCallbacks(pending)
+                cadencePauseRunnable = null
+                Timber.i("[DISCOVERY] transport=ble reset: resuming scan immediately")
+                resumeCadenceScan(c)
+            }
+        }
     }
 
     private fun currentFilters(): List<ScanFilter> {
@@ -574,6 +661,11 @@ class BleScanner(
      */
     @SuppressLint("MissingPermission")
     private fun stopScanningLocked() {
+        scanWanted = false
+        // Cancel the cadence cycle first and unconditionally: during a
+        // scheduler pause isScanning is false, and the early return below
+        // would otherwise leave the pause/resume timers alive after Stop.
+        stopDutyCycle()
         if (currentScanSession == null || !isScanning) {
             // P1_ANDROID_022: even if we are not actively scanning, ensure any stale
             // peer cache is purged so re-discovery can occur on the next session.

@@ -18,6 +18,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.scmessenger.android.transport.discovery.DiscoveryEventKind
+import com.scmessenger.android.transport.discovery.NetworkEventFilter
+import com.scmessenger.android.transport.discovery.NetworkSignature
 import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -57,6 +60,36 @@ class NetworkDetector @Inject constructor(
 
     /** Network callback for real-time updates */
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * #469 T7: receives a discovery event for every real network-state change
+     * (Wi-Fi / cellular up, down, or re-validated). Fired immediately from the
+     * callback, not after the redetection debounce: the core scheduler owns
+     * flap damping, and discovery must react at once.
+     */
+    @Volatile var onDiscoveryEvent: ((DiscoveryEventKind) -> Unit)? = null
+    private val eventFilter = NetworkEventFilter()
+
+    private fun signatureOf(capabilities: NetworkCapabilities?): NetworkSignature? =
+        capabilities?.let {
+            NetworkSignature(
+                wifi = it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                cellular = it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+                validated = it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            )
+        }
+
+    private fun emitDiscoveryEvents(events: List<DiscoveryEventKind>) {
+        val sink = onDiscoveryEvent ?: return
+        events.forEach { event ->
+            try {
+                sink(event)
+            } catch (e: Exception) {
+                Timber.w(e, "Discovery event sink failed for %s", event)
+            }
+        }
+    }
 
     /** Debounce: coroutine scope for timed network state transitions */
     private val debounceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -115,18 +148,27 @@ class NetworkDetector @Inject constructor(
     }
 
     private fun startMonitoringInternal() {
+        // Idempotent open: a second start must not stack a second callback.
+        if (networkCallback != null) return
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                val caps = try {
+                    connectivityManager.getNetworkCapabilities(network)
+                } catch (e: Exception) {
+                    null
+                }
+                emitDiscoveryEvents(eventFilter.onAvailable(network.hashCode(), signatureOf(caps)))
                 scheduleNetworkRedetection()
             }
 
             override fun onLost(network: Network) {
                 networkCapabilities.remove(network)
                 Timber.d("Network lost: %s", network)
+                emitDiscoveryEvents(eventFilter.onLost(network.hashCode()))
                 scheduleNetworkRedetection()
             }
 
@@ -135,6 +177,9 @@ class NetworkDetector @Inject constructor(
                 capabilities: NetworkCapabilities
             ) {
                 networkCapabilities[network] = capabilities
+                signatureOf(capabilities)?.let {
+                    emitDiscoveryEvents(eventFilter.onCapabilitiesChanged(network.hashCode(), it))
+                }
                 scheduleNetworkRedetection()
             }
         }
@@ -152,10 +197,19 @@ class NetworkDetector @Inject constructor(
      * Stop monitoring network changes.
      */
     fun stopMonitoring() {
-        networkCallback?.let {
-            connectivityManager.unregisterNetworkCallback(it)
-        }
+        val cb = networkCallback
         networkCallback = null
+        if (cb != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(cb)
+            } catch (e: Exception) {
+                Timber.d(e, "NetworkCallback already unregistered")
+            }
+        }
+        // Drop the sink and tracked networks so a stopped detector cannot feed
+        // discovery or pin the repository through the lambda.
+        onDiscoveryEvent = null
+        eventFilter.clear()
         debounceJob?.cancel()
         debounceJob = null
         Timber.i("NetworkDetector monitoring stopped")

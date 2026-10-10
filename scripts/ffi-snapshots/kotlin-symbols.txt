@@ -67,7 +67,10 @@ enum class AdjustmentProfile {
 enum class AuditEventType {
 enum class ConnectionPathState {
 enum class DeliveryStatus {
+enum class DiscoveryEvent {
 enum class DiscoveryMode {
+enum class DiscoveryPower {
+enum class DiscoveryTransport {
 enum class MessageDirection {
 enum class MessageStatus {
 enum class MessageType {
@@ -81,6 +84,7 @@ fun `add`(`contact`: Contact)
 fun `add`(`record`: MessageRecord)
 fun `allKnownTopics`(): List<kotlin.String>
 fun `annotateIdentity`(`multiaddr`: kotlin.String, `peerId`: kotlin.String, `publicKey`: kotlin.String?, `nickname`: kotlin.String?)
+fun `applyPendingReset`(`transport`: DiscoveryTransport): kotlin.Boolean
 fun `autoBlockExemptPeer`(`peerId`: kotlin.String)
 fun `autoBlockIsExempt`(`peerId`: kotlin.String): kotlin.Boolean {
 fun `autoBlockUnexemptPeer`(`peerId`: kotlin.String)
@@ -181,7 +185,6 @@ fun `historyManager`(): HistoryManager
 fun `identityId`(): kotlin.String?
 fun `importIdentityBackup`(`backup`: kotlin.String, `passphrase`: kotlin.String)
 fun `importIdentityBackup`(`backup`: kotlin.String, `passphrase`: kotlin.String)
-fun `importSeedEntries`(`entries`: List<SeedLedgerEntry>): kotlin.UInt
 fun `inboxCount`(): kotlin.UInt
 fun `initializeIdentity`()
 fun `inviteGetSignableData`(`tokenBytes`: kotlin.ByteArray): kotlin.ByteArray
@@ -206,6 +209,7 @@ fun `markDelivered`(`id`: kotlin.String)
 fun `markMessageSent`(`messageId`: kotlin.String): kotlin.Boolean
 fun `markVerified`(`peerId`: kotlin.String)
 fun `mergeRemoteContacts`(`remoteContacts`: List<Contact>): kotlin.UInt
+fun `nextDelayMs`(`transport`: DiscoveryTransport): kotlin.ULong
 fun `notifyPeerDisconnected`(`peerId`: kotlin.String)
 fun `notifyPeerDiscovered`(`peerId`: kotlin.String)
 fun `onAppBackground`()
@@ -219,6 +223,7 @@ fun `onEnteringBackground`()
 fun `onEnteringBackground`()
 fun `onEnteringForeground`()
 fun `onEnteringForeground`()
+fun `onEvent`(`event`: DiscoveryEvent): List<DiscoveryTransport>
 fun `onMessageReceived`(`senderId`: kotlin.String, `senderPublicKeyHex`: kotlin.String, `messageId`: kotlin.String, `senderTimestamp`: kotlin.ULong, `data`: kotlin.ByteArray)
 fun `onMotionChanged`(`motion`: MotionState)
 fun `onMotionChanged`(`motion`: MotionState)
@@ -247,6 +252,7 @@ fun `peelOnionLayer`(`onionData`: kotlin.ByteArray, `relaySecretKey`: kotlin.Byt
 fun `peelOnionLayer`(`onionData`: kotlin.ByteArray, `relaySecretKey`: kotlin.ByteArray): PeelResult
 fun `peerRateLimitMultiplier`(`peerId`: kotlin.String): kotlin.Double
 fun `peerSpamScore`(`peerId`: kotlin.String): kotlin.Double
+fun `pendingResetDueMs`(`transport`: DiscoveryTransport): kotlin.ULong?
 fun `performMaintenance`()
 fun `prepareCoverTraffic`(`sizeBytes`: kotlin.UInt): kotlin.ByteArray
 fun `prepareMessageInternal`(`recipientId`: kotlin.String, `content`: kotlin.String, `msgType`: MessageType, `ttl`: TtlConfig?): PreparedMessage
@@ -314,6 +320,7 @@ fun `sendMessageStatus`(`peerId`: kotlin.String, `data`: kotlin.ByteArray, `reci
 fun `sendProximityPacket`(`peerId`: kotlin.String, `transport`: ProximityTransport, `data`: kotlin.ByteArray)
 fun `setDelegate`(`delegate`: CoreDelegate?)
 fun `setDelegate`(`delegate`: CoreDelegate?)
+fun `setInputs`(`connectedPeers`: kotlin.UInt, `power`: DiscoveryPower, `foreground`: kotlin.Boolean)
 fun `setLocalNickname`(`peerId`: kotlin.String, `nickname`: kotlin.String?)
 fun `setNickname`(`nickname`: kotlin.String)
 fun `setNickname`(`peerId`: kotlin.String, `nickname`: kotlin.String?)
@@ -420,6 +427,7 @@ fun read(buf: ByteBuffer): KotlinType
 fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable
 fun remove(handle: Long): T {
 fun toUtf8(value: String): ByteBuffer {
+fun uniffiCloneHandle(): Long {
 fun uniffiCloneHandle(): Long {
 fun uniffiCloneHandle(): Long {
 fun uniffiCloneHandle(): Long {

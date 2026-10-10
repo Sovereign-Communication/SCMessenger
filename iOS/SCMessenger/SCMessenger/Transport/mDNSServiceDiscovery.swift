@@ -38,6 +38,17 @@ final class mDNSServiceDiscovery: NSObject {
     /// The caller can construct a peer-specific multiaddr and dial via SwarmBridge.
     var onLanPeerResolved: ((String, String, Int32) -> Void)?
 
+    /// #469 T8: seconds until the next browse retry after a failure, from the
+    /// core scheduler. Returns nil when no scheduler is available (no retry).
+    var retryDelayProvider: (() -> TimeInterval?)?
+
+    /// Scheduled browse retry (#469 T8). Cancelled by `stopBrowsing()` so a
+    /// stopped service cannot restart browsing from a stale timer.
+    private var pendingRetry: DispatchWorkItem?
+    /// True between startBrowsing() and stopBrowsing(); scheduler resets and
+    /// retries only act while the owner still wants browsing.
+    private var browsingRequested: Bool = false
+
     init(meshRepository: MeshRepository?) {
         self.meshRepository = meshRepository
         super.init()
@@ -46,6 +57,7 @@ final class mDNSServiceDiscovery: NSObject {
     // MARK: - Public API
 
     func startBrowsing() {
+        browsingRequested = true
         guard !isBrowsing else {
             logger.debug("Already browsing for mDNS services")
             return
@@ -61,7 +73,21 @@ final class mDNSServiceDiscovery: NSObject {
         isBrowsing = true
     }
 
+    /// The scheduler reset the LAN transport (Wi-Fi changed, app foreground,
+    /// ...): drop the browse session bound to the old network and start fresh.
+    func restartBrowsing() {
+        guard browsingRequested else { return }
+        logger.info("[DISCOVERY] transport=lan reset: restarting mDNS browsing")
+        stopBrowsing()
+        startBrowsing()
+    }
+
     func stopBrowsing() {
+        browsingRequested = false
+        // Cancel before the isBrowsing guard: after a failed browse isBrowsing
+        // is already false while a retry is still queued.
+        pendingRetry?.cancel()
+        pendingRetry = nil
         guard isBrowsing else { return }
         logger.info("Stopping mDNS browsing")
         netServiceBrowsers.forEach { $0.stop() }
@@ -174,6 +200,17 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         logger.error("mDNS browser failed: \(errorDict)")
         isBrowsing = false
+        // Never give up: retry on the scheduler's cadence.
+        if browsingRequested, let delay = retryDelayProvider?() {
+            pendingRetry?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.browsingRequested, !self.isBrowsing else { return }
+                self.pendingRetry = nil
+                self.startBrowsing()
+            }
+            pendingRetry = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
     }
 }
 
