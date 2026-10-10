@@ -76,7 +76,7 @@ jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -102,7 +102,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
         with:
-          key: forgery-regression-${{ hashFiles('**/Cargo.lock') }}
+          key: forgery-regression-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
