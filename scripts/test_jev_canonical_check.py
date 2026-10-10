@@ -2,6 +2,8 @@
 """Hermetic tests for the bucketed JEV completion gate (no network, no harness)."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -492,6 +494,240 @@ class MainSchemaTests(unittest.TestCase):
         self.assertIn("infra", payload["buckets_selected"])
         self.assertNotIn("testplan", payload["buckets_selected"])
         self.assertIn("infra.ci_run_evidence", cap["questions"])
+
+
+def _multi_hunk_diff(path: str, hunk_lines: list, body: str = "let x = 1;") -> str:
+    """Multi-hunk diff for `path`; each hunk adds `body` repeated `hunk_lines` times."""
+    out = [f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}"]
+    for i, n in enumerate(hunk_lines):
+        out.append(f"@@ -{i * 100 + 1},0 +{i * 100 + 1},{n} @@")
+        out.extend(f"+{body} // h{i}-{j}" for j in range(n))
+    return "\n".join(out) + "\n"
+
+
+class ScopedDiffTests(unittest.TestCase):
+    ARC = "let m = Arc::new(Mutex::new(0));"
+
+    def big_state(self, extra_files=()):
+        d = (_diff("core/src/store/outbox.rs", self.ARC)
+             + _diff("android/app/src/main/java/A.kt", "val s = socket.open()")
+             + _diff("docs/notes.md", "plain doc line")
+             + "".join(extra_files))
+        return {"instruction": "x", "files": ["core/src/store/outbox.rs"], "evidence": ["ok"],
+                "evidence_map": ALL_CITED, "diff": d}
+
+    def plan(self, state, budget):
+        info = jc.resolve_paths(types.SimpleNamespace(changed_paths_from=None, repo_root="."), state)
+        sel = jc.select_buckets(info["paths"], deleted=info["deleted"],
+                                removed_symbols=info["removed_symbols"],
+                                added_text=info["added_text"], added_by_path=info["added_by_path"])
+        return sel, jc.plan_calls(state, sel, info, budget)
+
+    def test_small_state_is_a_single_unscoped_call(self):
+        state = self.big_state()
+        sel, calls = self.plan(state, 10_000_000)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].bucket, "*")
+        self.assertEqual(calls[0].state["diff"], state["diff"])
+        self.assertEqual(set(calls[0].questions), set(jc.build_questions(sel)))
+
+    def test_parse_file_diffs_keeps_whole_hunks(self):
+        fds = jc.parse_file_diffs(_multi_hunk_diff("core/a.rs", [2, 3]) + _diff("core/b.rs", "z"))
+        self.assertEqual([f.path for f in fds], ["core/a.rs", "core/b.rs"])
+        self.assertEqual(len(fds[0].hunks), 2)
+        self.assertEqual(fds[0].stats["added"], 5)
+
+    def test_parse_file_diffs_deleted_file_path(self):
+        d = "diff --git a/x/old.rs b/x/old.rs\n--- a/x/old.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-fn old() {}\n"
+        fd = jc.parse_file_diffs(d)[0]
+        self.assertEqual((fd.path, fd.deleted), ("x/old.rs", True))
+
+    def test_bucket_scoped_hunk_routing(self):
+        sel, calls = self.plan(self.big_state(), 1)  # force scoping
+        by = {c.bucket: c for c in calls}
+        self.assertIn("core/src/store/outbox.rs", by["concurrency"].state["diff"])
+        self.assertNotIn("A.kt", by["concurrency"].state["diff"])
+        self.assertIn("A.kt", by["lifecycle"].state["diff"])
+        self.assertNotIn("outbox.rs", by["lifecycle"].state["diff"])
+        self.assertNotIn("notes.md", by["concurrency"].state["diff"])
+        for c in calls:
+            self.assertEqual(set(c.questions), set(jc.build_questions([c.bucket])))
+
+    def test_instruction_gets_summary_not_hunks(self):
+        sel, calls = self.plan(self.big_state(), 1)
+        ins = next(c for c in calls if c.bucket == "instruction")
+        self.assertNotIn("diff", ins.state)
+        self.assertIn("3 files changed", ins.state["diff_summary"])
+        self.assertIn("docs/notes.md", ins.state["diff_summary"])
+        self.assertNotIn("Arc::new", json.dumps(ins.state))
+        self.assertEqual(ins.state["instruction"], "x")
+
+    def test_chunking_stays_under_budget_without_cutting_hunks(self):
+        diffs = [_multi_hunk_diff(f"core/src/m{i}.rs", [5, 5, 5], body=self.ARC + f" // file{i}") for i in range(6)]
+        fds = jc.parse_file_diffs("".join(diffs))
+        budget = max(len(f.render()) for f in fds) + 50  # about one file per chunk
+        chunks = jc.chunk_file_diffs(fds, budget)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(c) <= budget for c in chunks))
+        for f in fds:
+            for h in f.hunks:
+                self.assertEqual(sum(c.count(h) for c in chunks), 1)
+
+    def test_oversize_file_splits_between_hunks_and_oversize_hunk_kept_whole(self):
+        fd = jc.parse_file_diffs(_multi_hunk_diff("core/big.rs", [3, 3, 3, 40]))[0]
+        head = "".join(fd.header)
+        budget = len(head) + len(fd.hunks[0]) * 2 + 10
+        chunks = jc.chunk_file_diffs([fd], budget)
+        self.assertGreater(len(chunks), 1)
+        for h in fd.hunks:
+            self.assertEqual(sum(c.count(h) for c in chunks), 1, "hunk cut or duplicated")
+        for c in chunks:
+            self.assertTrue(c.startswith("diff --git a/core/big.rs"))
+        # the 40-line hunk alone exceeds the budget: kept whole, never truncated
+        self.assertTrue(any(len(c) > budget and fd.hunks[3] in c for c in chunks))
+        tiny = jc.chunk_file_diffs([fd], 10)
+        for h in fd.hunks:
+            self.assertEqual(sum(c.count(h) for c in tiny), 1)
+
+    def test_oversize_bucket_splits_into_multiple_calls(self):
+        extra = [_multi_hunk_diff(f"core/src/q{i}.rs", [60], body=self.ARC) for i in range(8)]
+        sel, calls = self.plan(self.big_state(extra), jc.JEV_MIN_DIFF_CHARS + 3000)
+        conc = [c for c in calls if c.bucket == "concurrency"]
+        self.assertGreater(len(conc), 1)
+        self.assertEqual({c.chunks for c in conc}, {len(conc)})
+        joined = "".join(c.state["diff"] for c in conc)
+        for i in range(8):
+            self.assertIn(f"core/src/q{i}.rs", joined)
+
+
+class _Res:
+    def __init__(self, answers, fallback=False, verdict="pass"):
+        self.answers, self.is_fallback, self.verdict = answers, fallback, verdict
+        self.supported, self.confidence, self.cost = 0.9, 0.9, 0.01
+        self.input_tokens, self.output_tokens, self.model = 10, 1, "fake"
+        self.reasons = []
+
+
+class ScopedMainTests(unittest.TestCase):
+    ARC = ScopedDiffTests.ARC
+
+    def run_main(self, state, respond, extra=()):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sf, rf = Path(tmp.name, "s.json"), Path(tmp.name, "r.json")
+        sf.write_text(json.dumps(state), encoding="utf-8")
+        seen = []
+
+        class FakeTransport:
+            def post(self, *a, **k):
+                return 400, {"error": {"type": "max_tokens_exceeded", "message": "too many tokens"}}
+
+        evaluator = types.SimpleNamespace(transport=FakeTransport())
+
+        def fake_eval(ev, st, questions):
+            seen.append((st, list(questions)))
+            res = respond(st, list(questions))
+            if res.is_fallback:
+                ev.transport.post("u", "k", {})  # what the real evaluator does before falling back
+            return res, {"endpoint": "typesafe", "fallback_used": False}
+
+        fake = types.ModuleType("local_harness")
+        fake.evaluate_jev_with_openrouter_fallback = fake_eval
+        fake.import_harness = lambda: {
+            "source": types.SimpleNamespace(root="r", sha="s", status="PRODUCTION", pinned=True),
+            "key": "k", "openrouter_key": None}
+        fake.make_policy = lambda: (types.SimpleNamespace(evaluator=evaluator), None)
+        out = io.StringIO()
+        with mock.patch.dict(sys.modules, {"local_harness": fake}), contextlib.redirect_stdout(out):
+            rc = jc.main(["--wp", "WPX", "--state-file", str(sf), "--result-file", str(rf), *extra])
+        return rc, json.loads(rf.read_text(encoding="utf-8")), seen, out.getvalue()
+
+    @staticmethod
+    def good(st, ids):
+        return _Res({q: (noul(0.95) if q.startswith("instruction.") else choice("yes")) for q in ids})
+
+    def state(self):
+        d = _diff("core/src/store/outbox.rs", self.ARC) + _diff("android/app/src/main/java/A.kt", "val s = socket.open()")
+        return {"instruction": "x", "files": [], "evidence": ["ok"], "evidence_map": ALL_CITED, "diff": d}
+
+    def test_aggregate_verdict_unchanged_for_small_diff(self):
+        rc, payload, seen, _ = self.run_main(self.state(), self.good)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(payload["scoped"])
+        self.assertIsNone(payload["fallback_reason"])
+        self.assertTrue(payload["is_passing"])
+
+    def test_scoped_run_matches_single_call_verdict_and_buckets(self):
+        rc1, p1, _, _ = self.run_main(self.state(), self.good)
+        rc2, p2, seen, _ = self.run_main(self.state(), self.good, extra=("--max-state-chars", "1"))
+        self.assertTrue(p2["scoped"])
+        self.assertGreater(len(seen), 1)
+        self.assertEqual((rc1, p1["is_passing"]), (rc2, p2["is_passing"]))
+        self.assertEqual(p1["buckets_selected"], p2["buckets_selected"])
+        self.assertEqual(set(p1["answers"]), set(p2["answers"]))
+        self.assertEqual({n: b["verdict"] for n, b in p1["buckets"].items()},
+                         {n: b["verdict"] for n, b in p2["buckets"].items()})
+
+    def test_scoped_no_in_one_bucket_fails_gate(self):
+        def respond(st, ids):
+            a = self.good(st, ids).answers
+            if "lifecycle.resources_closed" in a:
+                a["lifecycle.resources_closed"] = choice("no", 0.95)
+            return _Res(a)
+
+        rc, payload, _, _ = self.run_main(self.state(), respond, extra=("--max-state-chars", "1"))
+        self.assertEqual(rc, 1)
+        self.assertEqual(payload["buckets"]["lifecycle"]["verdict"], "fail")
+        self.assertEqual(payload["buckets"]["concurrency"]["verdict"], "pass")
+
+    def test_fallback_reason_surfaced_and_fails_closed(self):
+        def respond(st, ids):
+            if "concurrency.shared_state_safe" in ids:
+                return _Res({"mechanical_checks": "passed"}, fallback=True)
+            return self.good(st, ids)
+
+        rc, payload, _, out = self.run_main(self.state(), respond, extra=("--max-state-chars", "1"))
+        self.assertEqual(rc, 1)
+        self.assertIn("HTTP 400", payload["fallback_reason"])
+        self.assertIn("max_tokens_exceeded", payload["fallback_reason"])
+        self.assertIn("max_tokens_exceeded", out)
+        self.assertIn("UNVERIFIED-JEV", out)
+        bad = [c for c in payload["calls"] if c["is_fallback"]]
+        self.assertEqual([c["bucket"] for c in bad], ["concurrency"])
+        self.assertEqual(bad[0]["typesafe_http"], 400)
+        self.assertEqual(bad[0]["typesafe_error_type"], "max_tokens_exceeded")
+        self.assertFalse(payload["is_passing"])
+
+    def test_fallback_still_exits_zero_only_with_allow_fallback(self):
+        respond = lambda st, ids: _Res({"mechanical_checks": "passed"}, fallback=True)  # noqa: E731
+        rc, payload, _, _ = self.run_main(self.state(), respond, extra=("--allow-fallback",))
+        self.assertEqual(rc, 0)
+        self.assertFalse(payload["is_passing"])
+        self.assertIn("HTTP 400", payload["fallback_reason"])
+
+    def test_openrouter_error_in_fallback_reason(self):
+        res = _Res({"mechanical_checks": "passed"}, fallback=True)
+        meta = {"endpoint": "typesafe", "fallback_used": False, "openrouter_http": 403,
+                "openrouter_error": {"message": "provider not allowed"}}
+        text = jc.fallback_reason(res, meta, {"http": 400, "error_type": "max_tokens_exceeded", "message": "m"})
+        self.assertIn("TypeSafe HTTP 400 error_type=max_tokens_exceeded", text)
+        self.assertIn("OpenRouter HTTP 403", text)
+        self.assertIn("provider not allowed", text)
+        self.assertIsNone(jc.fallback_reason(_Res({}), {}, None))
+
+    def test_recording_transport_keeps_status_and_error_type(self):
+        inner = types.SimpleNamespace(post=lambda *a, **k: (400, {"error": {"type": "max_tokens_exceeded", "message": "big"}}))
+        rec = jc.RecordingTransport(inner)
+        self.assertEqual(rec.post("u", "k", {})[0], 400)
+        self.assertEqual(rec.records[-1]["http"], 400)
+        self.assertEqual(rec.records[-1]["error_type"], "max_tokens_exceeded")
+
+    def test_merge_chunk_answers_worst_wins_and_na_ignored(self):
+        merged = jc.merge_chunk_answers([choice("yes", 0.95), choice("na"), choice("no", 0.9)])
+        self.assertEqual(merged["choice"], "no")
+        self.assertEqual(jc.merge_chunk_answers([choice("na"), choice("na")])["choice"], "na")
+        self.assertEqual(jc.merge_chunk_answers([noul(0.9), noul(0.6)])["noul"], 0.6)
 
 
 if __name__ == "__main__":
