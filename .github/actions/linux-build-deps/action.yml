@@ -1,0 +1,50 @@
+name: Linux build dependencies
+description: >-
+  Installs the system packages the Rust workspace needs on Linux. On
+  GitHub-hosted runners this is the same apt-get call the workflows always
+  made. On the self-hosted OCI ARM runner the step runs in verify-only mode:
+  it checks that every required package and toolchain component is present
+  (pkg-config, libdbus-1-dev, protoc, rustc/clippy/rustfmt 1.99.0) and fails
+  naming anything missing. It never runs sudo or apt on self-hosted.
+
+inputs:
+  ripgrep:
+    description: "Also require ripgrep (rg). Preinstalled on GitHub-hosted runners."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install or verify Linux build dependencies
+      shell: bash
+      env:
+        NEED_RG: ${{ inputs.ripgrep }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
+          sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+          exit 0
+        fi
+        # Self-hosted: verify only. No sudo, no apt. Missing items fail the job.
+        missing=()
+        pkg-config --exists dbus-1 || missing+=(libdbus-1-dev)
+        command -v pkg-config >/dev/null 2>&1 || missing+=(pkg-config)
+        command -v protoc >/dev/null 2>&1 || missing+=(protobuf-compiler)
+        if [ "$NEED_RG" = "true" ]; then
+          command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
+        fi
+        rustc_version="$(rustc --version 2>/dev/null || true)"
+        case "$rustc_version" in
+          "rustc 1.99.0 "*) ;;
+          *) missing+=("rustc-1.99.0") ;;
+        esac
+        cargo clippy --version >/dev/null 2>&1 || missing+=("clippy-1.99.0")
+        cargo fmt --version >/dev/null 2>&1 || missing+=("rustfmt-1.99.0")
+        if [ "${#missing[@]}" -eq 0 ]; then
+          echo "[OK] self-hosted runner ($(uname -m)) has all required build dependencies (verify-only)"
+          exit 0
+        fi
+        echo "[FAIL] self-hosted runner is missing: ${missing[*]}"
+        echo "[FAIL] verify-only step: install these on the runner host; this step does not run sudo or apt"
+        exit 1

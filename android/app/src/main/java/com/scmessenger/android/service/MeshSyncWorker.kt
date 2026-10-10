@@ -27,6 +27,9 @@ class MeshSyncWorker(
 
     override suspend fun doWork(): Result {
         Timber.i("MeshSyncWorker: background maintenance cycle triggered")
+        // The mesh must keep running unless the user stopped it: re-ensure on
+        // every periodic run, before (and independent of) the maintenance cycle.
+        MeshAutoRestart.ensure(applicationContext, MeshStartTrigger.WORKER)
         return try {
             val entryPoint = EntryPointAccessors.fromApplication(
                 applicationContext,

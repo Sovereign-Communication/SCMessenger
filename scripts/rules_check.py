@@ -83,8 +83,9 @@ def is_blocked_emoji_codepoint(codepoint: int) -> bool:
 
 def staged_files():
     out = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
         capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
     )
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
@@ -110,8 +111,9 @@ def whitespace_only_staged() -> set:
     """
     try:
         listed = subprocess.run(
-            ["git", "diff", "--cached", "-w", "--numstat"],
+            ["git", "-c", "core.quotepath=false", "diff", "--cached", "-w", "--numstat"],
             capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
         )
     except (subprocess.CalledProcessError, OSError):
         return set()
@@ -148,7 +150,7 @@ def check(path: str, skip_content: bool = False) -> list:
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-    except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError, PermissionError):
+    except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError, PermissionError, OSError):
         return fails
 
     hits = [char for char in text if is_blocked_emoji_codepoint(ord(char))]
@@ -214,7 +216,20 @@ def naming_failures() -> list:
     return fails
 
 
+def _force_utf8_streams() -> None:
+    """Make stdout/stderr UTF-8 regardless of the Windows ANSI code page.
+
+    Without this, printing a path or message containing non-cp1252 characters
+    raises UnicodeEncodeError under the git hook on Windows.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _force_utf8_streams()
     args = sys.argv[1:]
     staged_mode = args == ["--staged"]
     files = staged_files() if staged_mode else args
