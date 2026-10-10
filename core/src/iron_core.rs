@@ -1123,6 +1123,9 @@ impl IronCore {
         }
 
         let message_id = uuid::Uuid::new_v4().to_string();
+        // Captured before `_msg_type` moves into the message: a receipt is
+        // queued as fire-and-forget (see the enqueue below).
+        let is_receipt = _msg_type == crate::MessageType::Receipt;
         // CRITICAL FIX: Use public_key_hex as sender_id, NOT identity_id.
         // identity_id is a blake3 hash and cannot be used for encryption.
         // The recipient needs the actual public key to decrypt messages.
@@ -1276,7 +1279,15 @@ impl IronCore {
                 self.outbox
                     .write()
                     .enqueue(QueuedMessage {
-                        version: 1,
+                        // A receipt is never acknowledged, so it is queued as
+                        // fire-and-forget and cleared on first dispatch rather
+                        // than re-sent every grace window waiting for a receipt
+                        // that cannot come.
+                        version: if is_receipt {
+                            crate::store::outbox::QUEUED_VERSION_FIRE_AND_FORGET
+                        } else {
+                            crate::store::outbox::QUEUED_VERSION_STANDARD
+                        },
                         message_id: message_id.clone(),
                         recipient_id: recipient_id.to_string(),
                         envelope_data: envelope_data.clone(),
@@ -2541,7 +2552,10 @@ impl IronCore {
 
     pub fn perform_maintenance(&self) -> Result<(), IronCoreError> {
         // Remove expired outbox messages older than 7 days
-        let removed = self.outbox.write().remove_expired(604800);
+        let removed = self
+            .outbox
+            .write()
+            .remove_expired(crate::store::outbox::MESSAGE_RETENTION_SECS);
         tracing::info!("Maintenance removed {} expired outbox messages", removed);
         // Extract identity_id BEFORE acquiring audit_log (lock ordering: identity → audit_log)
         let identity_id = self.identity.read().identity_id();
@@ -3842,9 +3856,40 @@ impl IronCore {
                             message_id = %msg_id,
                             peer_id = %peer_id,
                             attempt = current_attempt,
-                            "Attempting delivery (attempt #{}/12)",
+                            "Attempting delivery (attempt #{})",
                             current_attempt
                         );
+
+                        // A receipt is useful only while the message it confirms
+                        // can still matter to the sender: drop it once that
+                        // message is past protocol retention, or when the sender
+                        // is blocked. No attempt-count cap; attempts are driven by
+                        // reconnect events.
+                        if msg.is_fire_and_forget() {
+                            let now_secs = web_time::SystemTime::now()
+                                .duration_since(web_time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let expired = msg.receipt_expired(now_secs);
+                            let blocked = !expired
+                                && self
+                                    .blocked_manager
+                                    .read()
+                                    .is_blocked_resolved(peer_id, None)
+                                    .unwrap_or(false);
+                            if expired || blocked {
+                                tracing::warn!(
+                                    event = "outbox_receipt_expired",
+                                    message_id = %msg_id,
+                                    peer_id = %peer_id,
+                                    attempt = current_attempt,
+                                    reason = if expired { "target_message_expired" } else { "sender_blocked" },
+                                    "Dropping delivery receipt that can no longer matter to the sender"
+                                );
+                                failed += 1;
+                                continue;
+                            }
+                        }
 
                         // R1-A2: real egress when the caller owns a live send
                         // path (native swarm loop). The transport-manager
@@ -3854,6 +3899,22 @@ impl IronCore {
                         // entry stays Enqueued until an application-level
                         // receipt calls mark_message_sent.
                         if egress(&msg_id, &msg.envelope_data) {
+                            if msg.is_fire_and_forget() {
+                                // Delivery receipts are never acknowledged. The
+                                // entry was drained from the outbox above and is
+                                // deliberately NOT re-enqueued: re-arming a grace
+                                // window for a receipt that cannot arrive re-sent
+                                // the same receipt forever.
+                                tracing::info!(
+                                    event = "outbox_receipt_dispatched_cleared",
+                                    message_id = %msg_id,
+                                    peer_id = %peer_id,
+                                    attempt = current_attempt,
+                                    "Delivery receipt dispatched over live swarm link; cleared (receipts are not awaited)"
+                                );
+                                succeeded += 1;
+                                continue;
+                            }
                             // R3-C2: a real dispatch runs NO failure ladder --
                             // never Failed, never exponential backoff. The entry
                             // stays Enqueued with a fixed grace window (re-flush
@@ -4422,7 +4483,16 @@ impl IronCore {
                         }
                     }
 
-                    if positive_receipt {
+                    if positive_receipt && !authorized {
+                        // Idempotent: the entry is already cleared (duplicate or
+                        // late receipt for a delivered message), or the sender
+                        // is not the queued recipient. Nothing to do.
+                        tracing::debug!(
+                            event = "receipt_duplicate_noop",
+                            message_id = %receipt.message_id,
+                            "Receipt for an already-delivered or unknown message; no-op"
+                        );
+                    } else if positive_receipt {
                         tracing::info!(
                             event = "receipt_outbox_cleared",
                             message_id = %receipt.message_id,
@@ -5961,6 +6031,146 @@ mod tests {
         // outbox until an application receipt clears it.
         assert_eq!(core.transport_manager.read().pending_sends().len(), 0);
         assert!(core.mark_message_sent(prepared.message_id));
+    }
+
+    /// Receipt re-send loop (Windows node, 2026-10-08): a delivery receipt
+    /// queued for an offline peer used to wait for an application receipt of
+    /// its own, which never comes, so every grace window re-sent the same
+    /// envelope forever. A receipt must clear on first dispatch; an ordinary
+    /// message must still be retained until its receipt arrives.
+    #[test]
+    fn receipt_clears_on_dispatch_but_text_is_retained() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+
+        let receipt = core
+            .prepare_message(
+                recipient.clone(),
+                "{}".to_string(),
+                crate::MessageType::Receipt,
+                None,
+            )
+            .unwrap();
+        let text = core
+            .prepare_message(
+                recipient.clone(),
+                "hello".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &receipt.message_id));
+        assert!(core.outbox_contains_for_recipient(&recipient, &text.message_id));
+
+        let mut dispatched = Vec::new();
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |id, _| {
+            dispatched.push(id.to_string());
+            true
+        });
+        assert_eq!(dispatched.len(), 2, "both entries are dispatched once");
+        assert!(
+            !core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
+            "a dispatched receipt must not stay queued awaiting a receipt of its own"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &text.message_id),
+            "a real message stays queued until its receipt arrives"
+        );
+
+        // Re-sweep: only the real message is ever re-dispatched.
+        assert!(core.retry_outbox_message_now(&text.message_id));
+        let mut again = Vec::new();
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |id, _| {
+            again.push(id.to_string());
+            true
+        });
+        assert_eq!(again, vec![text.message_id.clone()]);
+    }
+
+    /// An undeliverable receipt is kept (no attempt-count cap) while the
+    /// message it confirms is within protocol retention, and dropped once that
+    /// message has aged out. An undeliverable text message is never dropped.
+    #[test]
+    fn undeliverable_receipt_expires_with_target_message_not_attempt_count() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        let receipt = core
+            .prepare_message(
+                recipient.clone(),
+                "{}".to_string(),
+                crate::MessageType::Receipt,
+                None,
+            )
+            .unwrap();
+        let text = core
+            .prepare_message(
+                recipient.clone(),
+                "hello".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+            .unwrap();
+
+        // Far more failed reconnect attempts than the old fixed cap of 12.
+        for _ in 0..60 {
+            core.retry_outbox_message_now(&receipt.message_id);
+            core.retry_outbox_message_now(&text.message_id);
+            core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |_, _| {
+                false
+            });
+        }
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
+            "receipt for an unexpired target must be kept regardless of attempt count"
+        );
+
+        // Same kind of entry, but its target message is past retention.
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let stale_id = "stale-receipt".to_string();
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                version: crate::store::outbox::QUEUED_VERSION_FIRE_AND_FORGET,
+                message_id: stale_id.clone(),
+                recipient_id: recipient.clone(),
+                envelope_data: vec![1, 2, 3],
+                queued_at: now - crate::store::outbox::MESSAGE_RETENTION_SECS - 1,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: crate::store::outbox::MessageState::Enqueued,
+            })
+            .unwrap();
+        assert!(core.outbox_contains_for_recipient(&recipient, &stale_id));
+        let mut dispatched = Vec::new();
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |id, _| {
+            dispatched.push(id.to_string());
+            false
+        });
+        assert!(
+            !dispatched.contains(&stale_id),
+            "an expired receipt is never dispatched"
+        );
+        assert!(
+            !core.outbox_contains_for_recipient(&recipient, &stale_id),
+            "receipt for an expired target must be dropped"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &receipt.message_id),
+            "the unexpired receipt is still kept"
+        );
+        assert!(
+            core.outbox_contains_for_recipient(&recipient, &text.message_id),
+            "a real message is never given up on"
+        );
     }
 
     // -----------------------------------------------------------------------
