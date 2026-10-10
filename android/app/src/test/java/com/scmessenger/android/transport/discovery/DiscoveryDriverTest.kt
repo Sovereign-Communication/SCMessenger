@@ -18,7 +18,7 @@ class DiscoveryDriverTest {
 
     private class FakePolicy : DiscoveryPolicy {
         val events = mutableListOf<DiscoveryEventKind>()
-        val ledgerReceived = mutableListOf<Int>()
+        var closeCalls = 0
         var inputs: Triple<Int, DiscoveryPowerLevel, Boolean>? = null
         val resetMap = mutableMapOf<DiscoveryEventKind, Set<DiscoveryLane>>()
         var delayMs: Long = 60_000L
@@ -29,11 +29,6 @@ class DiscoveryDriverTest {
         override fun onEvent(event: DiscoveryEventKind): Set<DiscoveryLane> {
             events.add(event)
             return resetMap[event] ?: emptySet()
-        }
-
-        override fun onLedgerReceived(newEntries: Int): Set<DiscoveryLane> {
-            ledgerReceived.add(newEntries)
-            return if (newEntries > 0) setOf(DiscoveryLane.LEDGER) else emptySet()
         }
 
         override fun setInputs(connectedPeers: Int, power: DiscoveryPowerLevel, foreground: Boolean) {
@@ -51,6 +46,10 @@ class DiscoveryDriverTest {
             appliedPending.incrementAndGet()
             pendingDue = null
             return true
+        }
+
+        override fun close() {
+            closeCalls++
         }
     }
 
@@ -79,20 +78,6 @@ class DiscoveryDriverTest {
         driver.onEvent(DiscoveryEventKind.BLE_OFF)
 
         assertFalse(notified)
-    }
-
-    @Test
-    fun `ledger received with new entries resets the ledger lane`() {
-        val policy = FakePolicy()
-        val driver = DiscoveryDriver(policy)
-        val seen = mutableListOf<Set<DiscoveryLane>>()
-        driver.addListener { _, lanes -> seen.add(lanes) }
-
-        driver.onLedgerReceived(3)
-        driver.onLedgerReceived(0)
-
-        assertEquals(listOf(3, 0), policy.ledgerReceived)
-        assertEquals(listOf(setOf(DiscoveryLane.LEDGER)), seen)
     }
 
     @Test
@@ -200,5 +185,80 @@ class DiscoveryDriverTest {
         driver.setInputs(4, DiscoveryPowerLevel.LOW, false)
 
         assertEquals(Triple(4, DiscoveryPowerLevel.LOW, false), policy.inputs)
+    }
+
+    // ---- Lifecycle pairing (#469): every driver is closed exactly once ----
+
+    @Test
+    fun `close releases the policy once and is idempotent`() {
+        val policy = FakePolicy()
+        val driver = DiscoveryDriver(policy)
+
+        driver.close()
+        driver.close()
+
+        assertEquals(1, policy.closeCalls)
+    }
+
+    @Test
+    fun `a closed driver ignores events and inputs`() {
+        val policy = FakePolicy()
+        policy.resetMap[DiscoveryEventKind.WIFI_CHANGED] = setOf(DiscoveryLane.LAN)
+        val driver = DiscoveryDriver(policy)
+        var notified = false
+        driver.addListener { _, _ -> notified = true }
+        driver.close()
+
+        val reset = driver.onEvent(DiscoveryEventKind.WIFI_CHANGED)
+        driver.setInputs(1, DiscoveryPowerLevel.NORMAL, true)
+
+        assertTrue(reset.isEmpty())
+        assertFalse(notified)
+        assertTrue(policy.events.isEmpty())
+        assertEquals(null, policy.inputs)
+    }
+
+    @Test
+    fun `a wait in flight ends with cancellation when the driver closes`() = runBlocking {
+        val policy = FakePolicy()
+        policy.delayMs = 60_000L
+        val driver = DiscoveryDriver(policy)
+        val waiter = async {
+            try {
+                driver.awaitNextAttempt(DiscoveryLane.LEDGER)
+                "returned"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                "cancelled"
+            }
+        }
+        delay(50)
+
+        driver.close()
+
+        assertEquals("cancelled", waiter.await())
+    }
+
+    @Test
+    fun `awaiting on a closed driver cancels instead of spinning`() = runBlocking {
+        val driver = DiscoveryDriver(FakePolicy())
+        driver.close()
+
+        val outcome = try {
+            driver.awaitNextAttempt(DiscoveryLane.BLE)
+            "returned"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            "cancelled"
+        }
+
+        assertEquals("cancelled", outcome)
+    }
+
+    @Test
+    fun `a cadence handed out before close stays finite after close`() {
+        val driver = DiscoveryDriver(FakePolicy())
+        val cadence = driver.cadenceFor(DiscoveryLane.LAN)
+        driver.close()
+
+        assertTrue(cadence.nextDelayMs() >= 1L)
     }
 }

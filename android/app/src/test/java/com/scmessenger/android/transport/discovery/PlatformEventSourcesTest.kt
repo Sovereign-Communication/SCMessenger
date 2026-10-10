@@ -1,8 +1,11 @@
 package com.scmessenger.android.transport.discovery
 
 import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.net.wifi.WifiManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,5 +98,113 @@ class PlatformEventSourcesTest {
         val filter = NetworkEventFilter()
         val other = NetworkSignature(wifi = false, cellular = false, validated = true)
         assertEquals(listOf(DiscoveryEventKind.LAN_INTERFACE_CHANGED), filter.onAvailable(3, other))
+    }
+
+    @Test
+    fun `clearing the filter forgets tracked networks`() {
+        val filter = NetworkEventFilter()
+        filter.onAvailable(1, wifi)
+        filter.clear()
+        filter.clear()
+        // Unknown network after clear: the radio cannot be told, so both report.
+        assertEquals(
+            listOf(DiscoveryEventKind.WIFI_CHANGED, DiscoveryEventKind.CELLULAR_CHANGED),
+            filter.onLost(1)
+        )
+    }
+
+    // ---- RadioStateReceiver register/unregister pairing (#469 T7) ----
+
+    private class FakeRegistrar : ReceiverRegistrar {
+        var registered = 0
+        var unregistered = 0
+        var failRegister = false
+        var failUnregister = false
+        val live: Int get() = registered - unregistered
+
+        override fun register(receiver: BroadcastReceiver) {
+            if (failRegister) throw SecurityException("denied")
+            registered++
+        }
+
+        override fun unregister(receiver: BroadcastReceiver) {
+            unregistered++
+            if (failUnregister) throw IllegalArgumentException("Receiver not registered")
+        }
+    }
+
+    private fun receiverWith(registrar: FakeRegistrar) =
+        RadioStateReceiver({ _: Context -> registrar }) { }
+
+    private val anyContext: Context get() = io.mockk.mockk<Context>(relaxed = true)
+
+    @Test
+    fun `register then unregister is paired`() {
+        val registrar = FakeRegistrar()
+        val receiver = receiverWith(registrar)
+
+        receiver.register(anyContext)
+        assertEquals(1, registrar.live)
+
+        receiver.unregister()
+        assertEquals(0, registrar.live)
+        assertEquals(1, registrar.registered)
+        assertEquals(1, registrar.unregistered)
+    }
+
+    @Test
+    fun `registering twice registers once`() {
+        val registrar = FakeRegistrar()
+        val receiver = receiverWith(registrar)
+
+        receiver.register(anyContext)
+        receiver.register(anyContext)
+
+        assertEquals(1, registrar.registered)
+    }
+
+    @Test
+    fun `unregistering twice or before registering never double-unregisters`() {
+        val registrar = FakeRegistrar()
+        val receiver = receiverWith(registrar)
+
+        receiver.unregister()
+        receiver.register(anyContext)
+        receiver.unregister()
+        receiver.unregister()
+
+        assertEquals(1, registrar.unregistered)
+        assertEquals(0, registrar.live)
+    }
+
+    @Test
+    fun `a failed registration leaves the receiver closed and retryable`() {
+        val registrar = FakeRegistrar()
+        registrar.failRegister = true
+        val receiver = receiverWith(registrar)
+
+        receiver.register(anyContext)
+        assertEquals(0, registrar.live)
+        receiver.unregister()
+        assertEquals(0, registrar.unregistered)
+
+        registrar.failRegister = false
+        receiver.register(anyContext)
+        assertEquals(1, registrar.live)
+    }
+
+    @Test
+    fun `a throwing unregister still marks the receiver closed`() {
+        val registrar = FakeRegistrar()
+        registrar.failUnregister = true
+        val receiver = receiverWith(registrar)
+
+        receiver.register(anyContext)
+        receiver.unregister()
+
+        // Re-registering after a failed unregister works.
+        registrar.failUnregister = false
+        receiver.register(anyContext)
+        assertEquals(2, registrar.registered)
     }
 }

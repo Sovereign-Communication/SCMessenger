@@ -107,7 +107,6 @@ open func historyManager()throws  -> HistoryManager  {
 open func identityId() -> String?  {
 open func importIdentityBackup(backup: String, passphrase: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func importIdentityBackup(backup: String, passphrase: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
-open func importSeedEntries(entries: [SeedLedgerEntry]) -> UInt32  {
 open func inboxCount() -> UInt32  {
 open func initializeIdentity()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func inviteGetSignableData(tokenBytes: Data)throws  -> Data  {
@@ -138,7 +137,6 @@ open func onDataReceived(peerId: String, data: Data)  {try! rustCall() {
 open func onEnteringBackground()  {try! rustCall() {
 open func onEnteringForeground()  {try! rustCall() {
 open func onEvent(event: DiscoveryEvent) -> [DiscoveryTransport]  {
-open func onLedgerReceived(newEntries: UInt32) -> [DiscoveryTransport]  {
 open func onMotionChanged(motion: MotionState)  {try! rustCall() {
 open func onNetworkChanged(hasWifi: Bool, hasCellular: Bool)  {try! rustCall() {
 open func onPeerDisconnected(peerId: String)  {try! rustCall() {
@@ -188,7 +186,6 @@ open func recordAbuseSignal(peerId: String, signal: String)  {try! rustCall() {
 open func recordConnection(multiaddr: String, peerId: String)  {try! rustCall() {
 open func recordFailure(multiaddr: String)  {try! rustCall() {
 open func recordLog(line: String)  {try! rustCall() {
-open func recordSuccess(transport: DiscoveryTransport)  {try! rustCall() {
 open func redeemInviteQr(payload: String)throws  -> RedeemReport  {
 open func registerBlockedDevice(peerId: String, deviceId: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func relayJitterDelay(severity: String) -> UInt64  {
@@ -236,7 +233,6 @@ open func setRelayBudget(messagesPerHour: UInt32)async   {
 open func setSwarmPeerConnection(publicKeyHex: String, connected: Bool)  {try! rustCall() {
 open func shutdown()async   {
 open func signData(data: Data)throws  -> SignatureResult  {
-open func snapshot(transport: DiscoveryTransport) -> DiscoverySnapshot  {
 open func start()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func start()throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func startSwarm(listenAddr: String, bootstrapAddrs: [String])throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
@@ -318,8 +314,6 @@ public func FfiConverterTypeDiscoveryMode_lift(_ buf: RustBuffer) throws -> Disc
 public func FfiConverterTypeDiscoveryMode_lower(_ value: DiscoveryMode) -> RustBuffer {
 public func FfiConverterTypeDiscoveryPower_lift(_ buf: RustBuffer) throws -> DiscoveryPower {
 public func FfiConverterTypeDiscoveryPower_lower(_ value: DiscoveryPower) -> RustBuffer {
-public func FfiConverterTypeDiscoverySnapshot_lift(_ buf: RustBuffer) throws -> DiscoverySnapshot {
-public func FfiConverterTypeDiscoverySnapshot_lower(_ value: DiscoverySnapshot) -> RustBuffer {
 public func FfiConverterTypeDiscoveryTransport_lift(_ buf: RustBuffer) throws -> DiscoveryTransport {
 public func FfiConverterTypeDiscoveryTransport_lower(_ value: DiscoveryTransport) -> RustBuffer {
 public func FfiConverterTypeDiskStats_lift(_ buf: RustBuffer) throws -> DiskStats {
@@ -447,7 +441,6 @@ public struct BlockedIdentity: Equatable, Hashable {
 public struct Contact: Equatable, Hashable {
 public struct DeviceProfile: Equatable, Hashable {
 public struct DeviceState: Equatable, Hashable {
-public struct DiscoverySnapshot: Equatable, Hashable {
 public struct DiskStats: Equatable, Hashable {
 public struct FfiConverterTypeAdjustmentProfile: FfiConverterRustBuffer {
 public struct FfiConverterTypeAuditEvent: FfiConverterRustBuffer {
@@ -466,7 +459,6 @@ public struct FfiConverterTypeDiscoveryCoordinator: FfiConverter {
 public struct FfiConverterTypeDiscoveryEvent: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiscoveryMode: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiscoveryPower: FfiConverterRustBuffer {
-public struct FfiConverterTypeDiscoverySnapshot: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiscoveryTransport: FfiConverterRustBuffer {
 public struct FfiConverterTypeDiskStats: FfiConverterRustBuffer {
 public struct FfiConverterTypeHistoryManager: FfiConverter {

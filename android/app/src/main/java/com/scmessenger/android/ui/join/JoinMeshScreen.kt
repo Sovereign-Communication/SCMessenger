@@ -165,6 +165,13 @@ private fun QrScannerView(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    // The Google Code Scanner is a separate activity whose Task listeners are
+    // not lifecycle-bound. Once this view leaves composition a late result
+    // must be dropped, not delivered into a screen that no longer exists.
+    val viewActive = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    DisposableEffect(Unit) {
+        onDispose { viewActive.set(false) }
+    }
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -208,6 +215,7 @@ private fun QrScannerView(
 
                 scanner.startScan()
                     .addOnSuccessListener { barcode ->
+                        if (!viewActive.get()) return@addOnSuccessListener
                         val rawValue = barcode.rawValue
                         if (rawValue.isNullOrBlank()) {
                             onScanError(qrEmptyError)
@@ -217,6 +225,7 @@ private fun QrScannerView(
                     }
                     .addOnFailureListener { e ->
                         Timber.w(e, "Join QR scan failed")
+                        if (!viewActive.get()) return@addOnFailureListener
                         if (e is MlKitException && e.errorCode == CommonStatusCodes.CANCELED) {
                             return@addOnFailureListener
                         }

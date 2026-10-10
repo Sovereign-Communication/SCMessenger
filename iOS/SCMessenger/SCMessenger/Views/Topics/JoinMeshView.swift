@@ -24,6 +24,9 @@ struct JoinMeshView: View {
     @State private var isRedeeming: Bool = false
     @State private var myInvite: String?
     @State private var inviteUnavailable: Bool = false
+    /// In-flight redeem / invite-creation tasks, cancelled when the view disappears.
+    @State private var redeemTask: Task<Void, Never>?
+    @State private var inviteTask: Task<Void, Never>?
 
     private var canUseQrScanner: Bool {
         if #available(iOS 16.0, *) {
@@ -144,6 +147,12 @@ struct JoinMeshView: View {
                     topicManager = TopicManager(meshRepository: repository)
                 }
             }
+            .onDisappear {
+                redeemTask?.cancel()
+                redeemTask = nil
+                inviteTask?.cancel()
+                inviteTask = nil
+            }
             .sheet(isPresented: $showingQrScanner) {
                 if canUseQrScanner {
                     QRCodeScannerSheetInline(
@@ -193,7 +202,8 @@ struct JoinMeshView: View {
         isRedeeming = true
         error = nil
         statusMessage = "Verifying invite..."
-        Task {
+        redeemTask?.cancel()
+        redeemTask = Task {
             let outcome = await repository.redeemInvite(raw)
             isRedeeming = false
             switch outcome {
@@ -209,7 +219,8 @@ struct JoinMeshView: View {
     private func showMyInvite() {
         myInvite = nil
         inviteUnavailable = false
-        Task {
+        inviteTask?.cancel()
+        inviteTask = Task {
             if let invite = await repository.createInvite() {
                 myInvite = invite
             } else {

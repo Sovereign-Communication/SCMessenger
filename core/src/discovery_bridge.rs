@@ -108,21 +108,6 @@ impl From<DiscoveryPower> for PowerState {
     }
 }
 
-/// Read-only scheduler view for the node indicators (never an absence claim).
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct DiscoverySnapshot {
-    /// `true` right after a reset, before the first decayed re-arm.
-    pub aggressive: bool,
-    /// Current un-jittered interval in milliseconds.
-    pub interval_ms: u64,
-    /// Ceiling computed from the live inputs, in milliseconds.
-    pub ceiling_ms: u64,
-    /// Attempts since the last reset.
-    pub attempts: u32,
-    /// Total resets since creation.
-    pub resets: u64,
-}
-
 /// One scheduler per transport class, driven by platform events.
 #[derive(uniffi::Object)]
 pub struct DiscoveryCoordinator {
@@ -174,16 +159,6 @@ impl DiscoveryCoordinator {
             .collect()
     }
 
-    /// A ledger exchange delivered `new_entries` entries (only > 0 matters).
-    pub fn on_ledger_received(&self, new_entries: u32) -> Vec<DiscoveryTransport> {
-        let ev = NetworkEvent::LedgerReceived { new_entries };
-        self.schedulers
-            .iter()
-            .filter(|(_, s)| s.on_event(ev))
-            .map(|(t, _)| DiscoveryTransport::from(*t))
-            .collect()
-    }
-
     /// Replace the observed conditions that drive every scheduler's ceiling.
     pub fn set_inputs(&self, connected_peers: u32, power: DiscoveryPower, foreground: bool) {
         let inputs = DiscoveryInputs {
@@ -220,36 +195,6 @@ impl DiscoveryCoordinator {
         self.scheduler(transport)
             .is_some_and(|s| s.apply_pending_reset())
     }
-
-    /// Record a proven-stable connection (clears flap-damping history).
-    pub fn record_success(&self, transport: DiscoveryTransport) {
-        if let Some(s) = self.scheduler(transport) {
-            s.record_success();
-        }
-    }
-
-    /// Current scheduler state for the node indicators.
-    pub fn snapshot(&self, transport: DiscoveryTransport) -> DiscoverySnapshot {
-        match self.scheduler(transport) {
-            Some(s) => {
-                let snap = s.snapshot();
-                DiscoverySnapshot {
-                    aggressive: snap.phase == crate::transport::Phase::Aggressive,
-                    interval_ms: snap.interval_ms,
-                    ceiling_ms: snap.ceiling_ms,
-                    attempts: snap.attempts,
-                    resets: snap.resets,
-                }
-            }
-            None => DiscoverySnapshot {
-                aggressive: true,
-                interval_ms: SchedulerFallback::DELAY_MS,
-                ceiling_ms: SchedulerFallback::DELAY_MS,
-                attempts: 0,
-                resets: 0,
-            },
-        }
-    }
 }
 
 /// Unreachable in practice (the coordinator always builds all four classes);
@@ -263,7 +208,7 @@ impl SchedulerFallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::{SchedulerClock, SchedulerConfig};
+    use crate::transport::{Phase, SchedulerClock, SchedulerConfig, SchedulerSnapshot};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct FakeClock(AtomicU64);
@@ -278,6 +223,17 @@ mod tests {
         fn next_unit(&self) -> f64 {
             1.0
         }
+    }
+
+    /// Test-only view of a transport's scheduler state (no platform needs it).
+    fn snapshot(c: &DiscoveryCoordinator, t: DiscoveryTransport) -> SchedulerSnapshot {
+        c.scheduler(t)
+            .map(|s| s.snapshot())
+            .expect("coordinator builds all four classes")
+    }
+
+    fn is_aggressive(c: &DiscoveryCoordinator, t: DiscoveryTransport) -> bool {
+        snapshot(c, t).phase == Phase::Aggressive
     }
 
     fn coordinator(clock: Arc<FakeClock>) -> DiscoveryCoordinator {
@@ -306,7 +262,7 @@ mod tests {
         let reset = c.on_event(DiscoveryEvent::BleOn);
         assert!(reset.contains(&DiscoveryTransport::Ble));
         assert!(!reset.contains(&DiscoveryTransport::Ledger));
-        assert!(c.snapshot(DiscoveryTransport::Ble).aggressive);
+        assert!(is_aggressive(&c, DiscoveryTransport::Ble));
     }
 
     #[test]
@@ -328,8 +284,8 @@ mod tests {
             assert!(last >= 1);
         }
         assert!(last >= first, "decay is monotone with jitter pinned high");
-        let snap = c.snapshot(DiscoveryTransport::Ble);
-        assert!(!snap.aggressive);
+        let snap = snapshot(&c, DiscoveryTransport::Ble);
+        assert!(snap.phase != Phase::Aggressive);
         assert!(snap.interval_ms <= snap.ceiling_ms);
     }
 
@@ -341,12 +297,12 @@ mod tests {
         for _ in 0..10 {
             c.next_delay_ms(DiscoveryTransport::Ble);
         }
-        let decayed = c.snapshot(DiscoveryTransport::Ble).interval_ms;
+        let decayed = snapshot(&c, DiscoveryTransport::Ble).interval_ms;
         clock.0.fetch_add(10 * 60 * 1000, Ordering::SeqCst);
         let reset = c.on_event(DiscoveryEvent::BleOn);
         assert!(reset.contains(&DiscoveryTransport::Ble));
-        let snap = c.snapshot(DiscoveryTransport::Ble);
-        assert!(snap.aggressive);
+        let snap = snapshot(&c, DiscoveryTransport::Ble);
+        assert!(snap.phase == Phase::Aggressive);
         assert!(snap.interval_ms < decayed);
     }
 
@@ -359,22 +315,57 @@ mod tests {
     }
 
     #[test]
-    fn ledger_received_with_zero_entries_resets_nothing_for_ledger() {
-        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
-        let c = coordinator(clock);
-        assert!(!c
-            .on_ledger_received(0)
-            .contains(&DiscoveryTransport::Ledger));
-    }
-
-    #[test]
     fn set_inputs_changes_ceiling() {
         let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
         let c = coordinator(clock);
         c.set_inputs(0, DiscoveryPower::Charging, true);
-        let low = c.snapshot(DiscoveryTransport::Lan).ceiling_ms;
+        let low = snapshot(&c, DiscoveryTransport::Lan).ceiling_ms;
         c.set_inputs(12, DiscoveryPower::Low, false);
-        let high = c.snapshot(DiscoveryTransport::Lan).ceiling_ms;
+        let high = snapshot(&c, DiscoveryTransport::Lan).ceiling_ms;
         assert!(high > low);
+    }
+
+    #[test]
+    fn dropping_the_coordinator_releases_every_scheduler() {
+        // Lifecycle pairing (#469): the coordinator spawns no task and owns no
+        // OS handle, so dropping the last reference must free its schedulers.
+        // A leaked clone would keep the strong count above one.
+        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let held: Vec<Arc<DiscoveryScheduler>> = TransportClass::ALL
+            .iter()
+            .map(|t| {
+                Arc::new(DiscoveryScheduler::new(
+                    *t,
+                    SchedulerConfig::for_transport(*t),
+                    clock.clone(),
+                    Arc::new(MidJitter),
+                ))
+            })
+            .collect();
+        let c = DiscoveryCoordinator::with_schedulers(
+            TransportClass::ALL
+                .iter()
+                .copied()
+                .zip(held.iter().cloned())
+                .collect(),
+        );
+        assert!(held.iter().all(|s| Arc::strong_count(s) == 2));
+        drop(c);
+        assert!(held.iter().all(|s| Arc::strong_count(s) == 1));
+    }
+
+    #[test]
+    fn events_after_many_cycles_keep_delays_positive() {
+        // Repeated start/stop style churn (event, drain delays, event) never
+        // yields a zero delay and never panics: no give-up state accumulates.
+        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let c = coordinator(clock.clone());
+        for _ in 0..20 {
+            c.on_event(DiscoveryEvent::WifiChanged);
+            for _ in 0..5 {
+                assert!(c.next_delay_ms(DiscoveryTransport::Lan) >= 1);
+            }
+            clock.0.fetch_add(60_000, Ordering::SeqCst);
+        }
     }
 }

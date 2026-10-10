@@ -98,12 +98,15 @@ struct SCMessengerApp: App {
         // direct device update rather than a normal foreground relaunch.
         meshRepository.checkpointPersistentState(reason: "app_backgrounding")
         meshRepository.setNotificationAppInForeground(false)
+        // Backgrounded: the scheduler's decay ceiling relaxes (#469 T8).
+        meshRepository.updateDiscoveryInputs(foreground: false)
         backgroundService?.onEnteringBackground()
     }
 
     private func handleEnteringForeground() {
         meshRepository.setNotificationAppInForeground(true)
         // #469 T7: returning to the foreground resets discovery to aggressive.
+        meshRepository.updateDiscoveryInputs(foreground: true)
         meshRepository.reportDiscoveryEvent(.appForeground)
         backgroundService?.onEnteringForeground()
         refreshOnboardingGate()

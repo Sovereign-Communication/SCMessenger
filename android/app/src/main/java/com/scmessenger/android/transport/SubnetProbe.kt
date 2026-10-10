@@ -102,6 +102,7 @@ class SubnetProbe(
 
     /** Core scheduler reset the LAN lane: sweep now instead of waiting out the decay. */
     fun triggerNow() {
+        if (!isRunning) return
         wakeSignal.trySend(Unit)
     }
 
@@ -154,6 +155,8 @@ class SubnetProbe(
         isRunning = false
         sweepJob?.cancel()
         sweepJob = null
+        // Drop a stale wake so the next start() does not sweep twice.
+        wakeSignal.tryReceive()
         Timber.i("SubnetProbe stopped")
     }
 
@@ -163,6 +166,7 @@ class SubnetProbe(
      */
     fun cleanup() {
         stop()
+        wakeSignal.close()
         scope.cancel()
     }
 

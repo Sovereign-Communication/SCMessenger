@@ -13,11 +13,6 @@ class CoreDiscoveryPolicy(
     override fun onEvent(event: DiscoveryEventKind): Set<DiscoveryLane> =
         core.onEvent(toCoreEvent(event)).map(::fromCoreTransport).toSet()
 
-    override fun onLedgerReceived(newEntries: Int): Set<DiscoveryLane> =
-        core.onLedgerReceived(newEntries.coerceAtLeast(0).toUInt())
-            .map(::fromCoreTransport)
-            .toSet()
-
     override fun setInputs(connectedPeers: Int, power: DiscoveryPowerLevel, foreground: Boolean) {
         core.setInputs(
             connectedPeers.coerceAtLeast(0).toUInt(),
@@ -38,6 +33,11 @@ class CoreDiscoveryPolicy(
 
     override fun applyPendingReset(lane: DiscoveryLane): Boolean =
         core.applyPendingReset(toCoreTransport(lane))
+
+    /** Frees the Rust scheduler. `destroy()` is idempotent in generated UniFFI objects. */
+    override fun close() {
+        core.destroy()
+    }
 
     private fun toCoreEvent(event: DiscoveryEventKind): uniffi.api.DiscoveryEvent = when (event) {
         DiscoveryEventKind.BLE_ON -> uniffi.api.DiscoveryEvent.BLE_ON

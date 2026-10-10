@@ -395,16 +395,20 @@ final class DiscoveryDriver: @unchecked Sendable {
         return reset
     }
 
-    /// A ledger exchange delivered `newEntries` entries.
-    @discardableResult
-    func reportLedgerReceived(newEntries: UInt32) -> Set<DiscoveryTransport> {
-        let reset: Set<DiscoveryTransport> = Set(coordinator.onLedgerReceived(newEntries: newEntries))
-        publish(reset, label: "ledgerReceived")
-        return reset
-    }
-
     func setInputs(connectedPeers: UInt32, power: DiscoveryPower, foreground: Bool) {
         coordinator.setInputs(connectedPeers: connectedPeers, power: power, foreground: foreground)
+    }
+
+    /// Release the wake streams and the reset hook. Idempotent. Owner:
+    /// `MeshRepository.stopMeshService()`. A waiter parked on a stream ends when
+    /// its stream finishes; later waits fall back to a plain bounded sleep.
+    func shutdown() {
+        onReset = nil
+        for continuation in wakeContinuations.values {
+            continuation.finish()
+        }
+        wakeContinuations.removeAll()
+        wakeStreams.removeAll()
     }
 
     /// Seconds to wait before the next attempt on `transport`; advances the decay.

@@ -36,6 +36,10 @@ final class BLECentralManager: NSObject {
     private var scanTimer: Timer?
     private var isScanning: Bool = false
     private var pendingScanOnReady: Bool = false  // P3: Defer scan until BLE is poweredOn
+    /// True between startScanning() and stopScanning(). Scheduler resets and
+    /// queued timer arms only act while the owner still wants a scan; this is
+    /// what keeps a reset arriving after Stop from restarting the radio.
+    private var wantsScan: Bool = false
     private var lastReportedCentralState: CBManagerState = .unknown
 
     // Write queue (mirrors Android BleGattClient pattern - CRITICAL)
@@ -76,6 +80,7 @@ final class BLECentralManager: NSObject {
 
     func startScanning() {
         logger.info("Starting BLE scanning")
+        wantsScan = true
         guard centralManager.state == .poweredOn else {
             logger.warning("Cannot start scanning: BLE not powered on (state=\(self.centralManager.state.rawValue)), will auto-start when ready")
             // P3: Don't log as failure — just defer until BLE is ready
@@ -95,6 +100,7 @@ final class BLECentralManager: NSObject {
 
     func stopScanning() {
         logger.info("Stopping BLE scanning")
+        wantsScan = false
         scanTimer?.invalidate()
         scanTimer = nil
         centralManager.stopScan()
@@ -294,7 +300,7 @@ final class BLECentralManager: NSObject {
         // Timer MUST run on the main RunLoop — background dispatch queues don't
         // have a running RunLoop, so Timer.scheduledTimer would silently never fire.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.wantsScan else { return }
             self.scanTimer?.invalidate()
             self.performScanCycle() // Start immediately
             self.armNextScanCycle()
@@ -307,6 +313,8 @@ final class BLECentralManager: NSObject {
     /// is gone.
     private func armNextScanCycle() {
         scanTimer?.invalidate()
+        scanTimer = nil
+        guard wantsScan else { return }
         // Always entered on the main thread (main-queue dispatch or a timer
         // on RunLoop.main), which is MeshRepository's actor.
         let repository = meshRepository
@@ -326,6 +334,7 @@ final class BLECentralManager: NSObject {
     /// The scheduler reset the BLE transport (Bluetooth on, app foreground,
     /// network change, ...): scan now instead of waiting out a decayed pause.
     func onDiscoveryReset() {
+        guard wantsScan else { return }
         guard centralManager.state == .poweredOn else {
             pendingScanOnReady = true
             return

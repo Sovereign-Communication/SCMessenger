@@ -41,7 +41,6 @@ data class BlockedIdentity (
 data class Contact (
 data class DeviceProfile (
 data class DeviceState (
-data class DiscoverySnapshot (
 data class DiskStats (
 data class HistoryStats (
 data class IdentityInfo (
@@ -186,7 +185,6 @@ fun `historyManager`(): HistoryManager
 fun `identityId`(): kotlin.String?
 fun `importIdentityBackup`(`backup`: kotlin.String, `passphrase`: kotlin.String)
 fun `importIdentityBackup`(`backup`: kotlin.String, `passphrase`: kotlin.String)
-fun `importSeedEntries`(`entries`: List<SeedLedgerEntry>): kotlin.UInt
 fun `inboxCount`(): kotlin.UInt
 fun `initializeIdentity`()
 fun `inviteGetSignableData`(`tokenBytes`: kotlin.ByteArray): kotlin.ByteArray
@@ -226,7 +224,6 @@ fun `onEnteringBackground`()
 fun `onEnteringForeground`()
 fun `onEnteringForeground`()
 fun `onEvent`(`event`: DiscoveryEvent): List<DiscoveryTransport>
-fun `onLedgerReceived`(`newEntries`: kotlin.UInt): List<DiscoveryTransport>
 fun `onMessageReceived`(`senderId`: kotlin.String, `senderPublicKeyHex`: kotlin.String, `messageId`: kotlin.String, `senderTimestamp`: kotlin.ULong, `data`: kotlin.ByteArray)
 fun `onMotionChanged`(`motion`: MotionState)
 fun `onMotionChanged`(`motion`: MotionState)
@@ -285,7 +282,6 @@ fun `recordAbuseSignal`(`peerId`: kotlin.String, `signal`: kotlin.String)
 fun `recordConnection`(`multiaddr`: kotlin.String, `peerId`: kotlin.String)
 fun `recordFailure`(`multiaddr`: kotlin.String)
 fun `recordLog`(`line`: kotlin.String)
-fun `recordSuccess`(`transport`: DiscoveryTransport)
 fun `redeemInviteQr`(`payload`: kotlin.String): RedeemReport
 fun `registerBlockedDevice`(`peerId`: kotlin.String, `deviceId`: kotlin.String)
 fun `registerDeviceId`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {
@@ -332,7 +328,6 @@ fun `setPlatformBridge`(`bridge`: PlatformBridge?)
 fun `setPrivacyConfig`(`json`: kotlin.String)
 fun `setSwarmPeerConnection`(`publicKeyHex`: kotlin.String, `connected`: kotlin.Boolean)
 fun `signData`(`data`: kotlin.ByteArray): SignatureResult
-fun `snapshot`(`transport`: DiscoveryTransport): DiscoverySnapshot
 fun `startSwarm`(`listenAddr`: kotlin.String, `bootstrapAddrs`: List<kotlin.String>)
 fun `start`()
 fun `start`()

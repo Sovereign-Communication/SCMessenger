@@ -645,6 +645,9 @@ class MdnsServiceDiscovery(
         }
 
         isRunning = false
+        // Cancel the scheduled retry / restart posts (#469 T8) so a stopped
+        // session cannot restart discovery or pin this object via the Handler.
+        handler.removeCallbacksAndMessages(null)
 
         try {
             multicastLock?.let {

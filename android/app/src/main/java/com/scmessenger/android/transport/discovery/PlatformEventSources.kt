@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
+import com.scmessenger.android.service.ManagedResource
 import androidx.core.content.ContextCompat
 import timber.log.Timber
 
@@ -31,6 +32,12 @@ data class NetworkSignature(
  */
 class NetworkEventFilter {
     private val known = HashMap<Int, NetworkSignature>()
+
+    /** Forget every tracked network (monitoring stopped). Idempotent. */
+    @Synchronized
+    fun clear() {
+        known.clear()
+    }
 
     @Synchronized
     fun onAvailable(networkId: Int, signature: NetworkSignature?): List<DiscoveryEventKind> {
@@ -85,17 +92,66 @@ object RadioStateMapper {
     }
 }
 
+/** OS registration seam for [RadioStateReceiver] so pairing is testable on the JVM. */
+internal interface ReceiverRegistrar {
+    fun register(receiver: BroadcastReceiver)
+    fun unregister(receiver: BroadcastReceiver)
+}
+
+/** Registers on the application context as a not-exported receiver. */
+internal class ContextReceiverRegistrar(context: Context) : ReceiverRegistrar {
+    private val appContext: Context = context.applicationContext
+
+    override fun register(receiver: BroadcastReceiver) {
+        val filter = IntentFilter().apply {
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
+        }
+        ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    override fun unregister(receiver: BroadcastReceiver) {
+        appContext.unregisterReceiver(receiver)
+    }
+}
+
 /**
  * Bluetooth adapter and Wi-Fi radio state receiver (#469 T7).
  *
  * Turning Bluetooth on reports [DiscoveryEventKind.BLE_ON], which the core
  * scheduler turns into aggressive BLE discovery that then decays.
+ *
+ * Lifecycle: [register] and [unregister] are an idempotent open/close pair
+ * (ManagedResource, the #519 pattern). The owner calls [unregister] from
+ * `MeshRepository.stopMeshService()`.
  */
-class RadioStateReceiver(
+class RadioStateReceiver internal constructor(
+    private val registrarFor: (Context) -> ReceiverRegistrar,
     private val onEvent: (DiscoveryEventKind) -> Unit
 ) : BroadcastReceiver() {
 
-    private var registeredContext: Context? = null
+    constructor(onEvent: (DiscoveryEventKind) -> Unit) : this(
+        { ctx -> ContextReceiverRegistrar(ctx) },
+        onEvent
+    )
+
+    private var registrar: ReceiverRegistrar? = null
+
+    private val registration = ManagedResource(
+        onOpen = {
+            val r = registrar ?: throw IllegalStateException("no registrar")
+            r.register(this)
+            Timber.i("RadioStateReceiver registered (Bluetooth + Wi-Fi state)")
+        },
+        onClose = {
+            try {
+                registrar?.unregister(this)
+            } catch (e: Exception) {
+                Timber.d(e, "RadioStateReceiver already unregistered")
+            }
+            registrar = null
+        }
+    )
 
     override fun onReceive(context: Context?, intent: Intent?) {
         val event = mapIntent(intent?.action, intent) ?: return
@@ -118,36 +174,18 @@ class RadioStateReceiver(
         else -> null
     }
 
-    @Synchronized
     fun register(context: Context) {
-        if (registeredContext != null) return
         try {
-            val filter = IntentFilter().apply {
-                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-                addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
-            }
-            ContextCompat.registerReceiver(
-                context.applicationContext,
-                this,
-                filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
-            )
-            registeredContext = context.applicationContext
-            Timber.i("RadioStateReceiver registered (Bluetooth + Wi-Fi state)")
+            if (registrar == null) registrar = registrarFor(context)
+            registration.open()
         } catch (e: Exception) {
             // Discovery degrades to NetworkCallback-only events; never abort startup.
             Timber.w(e, "RadioStateReceiver registration failed")
+            registrar = null
         }
     }
 
-    @Synchronized
     fun unregister() {
-        val ctx = registeredContext ?: return
-        try {
-            ctx.unregisterReceiver(this)
-        } catch (e: Exception) {
-            Timber.d(e, "RadioStateReceiver already unregistered")
-        }
-        registeredContext = null
+        registration.close()
     }
 }

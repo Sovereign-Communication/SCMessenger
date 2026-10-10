@@ -12,6 +12,9 @@ import Foundation
 import Combine
 import os
 import Security
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Default settings for mesh service configuration
 private enum DefaultSettings {
@@ -165,6 +168,7 @@ final class MeshRepository {
     private var bleCentralManager: BLECentralManager?
     /// #469 T7/T8: event-driven discovery. Core owns the cadence policy.
     @ObservationIgnored private var discoveryDriverStorage: DiscoveryDriver?
+    @ObservationIgnored private var discoveryForeground: Bool = false
     private var blePeripheralManager: BLEPeripheralManager?
     private var multipeerTransport: MultipeerTransport?
     private var mdnsDiscovery: mDNSServiceDiscovery?
@@ -1083,6 +1087,10 @@ final class MeshRepository {
 
         stopMdnsDiscovery()
         stopBleTransport()
+        // Release the discovery driver's wake streams (#469 T8); the next
+        // start recreates it lazily.
+        discoveryDriverStorage?.shutdown()
+        discoveryDriverStorage = nil
         multipeerTransport?.disconnect()
         multipeerTransport = nil
 
@@ -3375,6 +3383,28 @@ final class MeshRepository {
         discoveryDriver.report(event)
     }
 
+    /// Feed the observed conditions that bound every transport's decay ceiling:
+    /// connected peers, power, and foreground. `foreground` updates the stored
+    /// flag (app lifecycle); nil keeps the last value.
+    func updateDiscoveryInputs(foreground: Bool? = nil) {
+        if let foreground = foreground { discoveryForeground = foreground }
+        var power: DiscoveryPower = .normal
+        #if canImport(UIKit)
+        let device: UIDevice = UIDevice.current
+        device.isBatteryMonitoringEnabled = true
+        if device.batteryState == .charging || device.batteryState == .full {
+            power = .charging
+        } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            power = .low
+        }
+        #endif
+        discoveryDriver.setInputs(
+            connectedPeers: UInt32(connectedEmissionCache.count),
+            power: power,
+            foreground: discoveryForeground
+        )
+    }
+
     /// Seconds until the next attempt on a transport, from the core scheduler.
     func discoveryDelaySeconds(_ transport: DiscoveryTransport) -> TimeInterval {
         return discoveryDriver.nextDelaySeconds(transport)
@@ -4310,6 +4340,11 @@ final class MeshRepository {
         }
         connectedEmissionCache.removeValue(forKey: trimmedId)
         mdnsLanPeers.removeValue(forKey: trimmedId)
+        updateDiscoveryInputs()
+        if connectedEmissionCache.isEmpty {
+            // #469 T7: losing the last peer resets discovery to aggressive.
+            reportDiscoveryEvent(.allPeersLost)
+        }
         pruneDisconnectedPeer(peerId)
     }
 
@@ -4778,7 +4813,13 @@ final class MeshRepository {
            now.timeIntervalSince(previous) < connectedReemitInterval {
             return
         }
+        let isNewPeer: Bool = connectedEmissionCache[normalizedPeerId] == nil
         connectedEmissionCache[normalizedPeerId] = now
+        if isNewPeer {
+            // #469 T7: a peer not seen before resets discovery to aggressive.
+            updateDiscoveryInputs()
+            reportDiscoveryEvent(.newPeerConnected)
+        }
         MeshEventBus.shared.peerEvents.send(.connected(peerId: normalizedPeerId))
         if !isBootstrapRelayPeer(normalizedPeerId) {
             triggerPendingSyncForPeerIds([normalizedPeerId], reason: "peer_connected:\(normalizedPeerId)")

@@ -86,6 +86,9 @@ open class MeshRepository(
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
         const val DEFAULT_INVITE_TTL_SECS: ULong = 3600UL
 
+        /** At or below this battery percentage discovery uses the LOW power ceiling. */
+        private const val LOW_BATTERY_PERCENT = 15
+
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
          * stored key is NON-BLANK and differs from the verified incoming key. A
@@ -551,11 +554,17 @@ open class MeshRepository(
     // (Rust); this driver feeds it platform events and wakes scan loops.
     // Lazy so JVM unit tests that never touch discovery never load the native
     // library.
-    val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver by lazy {
+    // Closed (native scheduler freed, wake channels closed) by cleanup().
+    private val discoveryDriverLazy = lazy {
         com.scmessenger.android.transport.discovery.DiscoveryDriver(com.scmessenger.android.transport.discovery.CoreDiscoveryPolicy()).also { driver ->
             driver.addListener { _, lanes -> applyDiscoveryReset(lanes) }
         }
     }
+    val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver
+        get() = discoveryDriverLazy.value
+
+    // Foreground flag fed to the scheduler's ceiling (MainActivity onResume/onPause).
+    @Volatile private var discoveryForeground = false
     private val radioStateReceiver = com.scmessenger.android.transport.discovery.RadioStateReceiver { event ->
         reportDiscoveryEvent(event)
     }
@@ -1899,7 +1908,7 @@ open class MeshRepository(
 	                                transport = com.scmessenger.android.service.TransportType.INTERNET
 	                            )
 	                            transportToCanonicalMap[peerId] = peerId // Relay counts as its own canonical
-	                            activeSessions[peerId] = System.currentTimeMillis()
+	                            noteSessionStarted(peerId)
 	                        } else {
 	                            if (isHeadless && transportIdentity != null) {
 	                                Timber.i("Promoting peer $peerId to full node: identity resolved despite headless agent $agentVersion")
@@ -1909,7 +1918,7 @@ open class MeshRepository(
 	                        }
                             val canonicalId = transportIdentity?.canonicalPeerId ?: peerId
                             transportToCanonicalMap[peerId] = canonicalId
-                            activeSessions[peerId] = System.currentTimeMillis()
+                            noteSessionStarted(peerId)
 
                             val discoveredNickname = prepopulateDiscoveryNickname(
                                 nickname = transportIdentity?.nickname,
@@ -2079,6 +2088,7 @@ open class MeshRepository(
                     repoScope.launch {
                         val canonicalId = transportToCanonicalMap.remove(peerId) ?: peerId
                         activeSessions.remove(peerId)
+                        noteSessionEnded()
 
                         // NODE-RETENTION-001: keep the peer visible marked offline
                         // instead of removing it from the discovery map.
@@ -4315,7 +4325,11 @@ open class MeshRepository(
         pendingReceiptSendJobs.clear()
 
         try {
-            repoScope.launch { bleScanner?.stopScanning() }
+            // Capture first: the field is nulled below, before this coroutine
+            // runs, and a missed stop would leave the scheduler-driven scan
+            // cycle (#469 T8) rescheduling itself after the mesh stopped.
+            val scannerToStop = bleScanner
+            repoScope.launch { scannerToStop?.stopScanning() }
         } catch (e: Exception) {
             Timber.w(e, "Failed to stop BLE scanner")
         }
@@ -6752,6 +6766,48 @@ open class MeshRepository(
         } catch (e: Throwable) {
             // Never let a scheduler fault break a platform callback.
             Timber.w(e, "Discovery event %s could not be delivered", event)
+        }
+    }
+
+    /** A transport session for [peerId] began; a peer not seen before is a discovery event. */
+    private fun noteSessionStarted(peerId: String) {
+        val isNew = activeSessions.put(peerId, System.currentTimeMillis()) == null
+        if (isNew) {
+            updateDiscoveryInputs()
+            reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.NEW_PEER_CONNECTED)
+        }
+    }
+
+    /** A transport session ended; losing the last peer resets discovery to aggressive. */
+    private fun noteSessionEnded() {
+        updateDiscoveryInputs()
+        if (activeSessions.isEmpty()) {
+            reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.ALL_PEERS_LOST)
+        }
+    }
+
+    /**
+     * Feed the observed conditions that bound every lane's decay ceiling:
+     * connected peers, power, and foreground. [foreground] updates the stored
+     * flag (MainActivity onResume / onPause); null keeps the last value.
+     */
+    open fun updateDiscoveryInputs(foreground: Boolean? = null) {
+        if (foreground != null) discoveryForeground = foreground
+        try {
+            discoveryDriver.setInputs(activeSessions.size, discoveryPowerLevel(), discoveryForeground)
+        } catch (e: Throwable) {
+            Timber.w(e, "Discovery inputs could not be delivered")
+        }
+    }
+
+    private fun discoveryPowerLevel(): com.scmessenger.android.transport.discovery.DiscoveryPowerLevel {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            ?: return com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.NORMAL
+        return when {
+            bm.isCharging -> com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.CHARGING
+            bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) in 1..LOW_BATTERY_PERCENT ->
+                com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.LOW
+            else -> com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.NORMAL
         }
     }
 
@@ -12108,6 +12164,8 @@ open class MeshRepository(
         try {
             stopMeshService()
             saveLedger()
+            // Final release of the Rust DiscoveryCoordinator (#469 T7/T8).
+            if (discoveryDriverLazy.isInitialized()) discoveryDriverLazy.value.close()
             pendingOutboxRetryJob?.cancel()
             pendingOutboxRetryJob = null
             coverTrafficJob?.cancel()

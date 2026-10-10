@@ -83,6 +83,10 @@ class BleScanner(
     // Scheduler-driven cadence (#469 T8). `cadenceActive` is separate from
     // `isScanning`: a scan window that ended is a pause, not a stop.
     @Volatile private var cadenceActive = false
+
+    // True between startScanning() and stopScanning(). A scheduler reset only
+    // (re)starts a scan the owner still wants; after stopScanning() it is a no-op.
+    @Volatile private var scanWanted = false
     private var cadencePauseRunnable: Runnable? = null
 
     // Scan result caching to avoid duplicate processing
@@ -309,6 +313,7 @@ class BleScanner(
 
     @SuppressLint("MissingPermission")
     suspend fun startScanning(): Boolean = scanLock.withLock {
+        scanWanted = true
         if (scanner == null) {
             Timber.w("Bluetooth Scanner not available")
             return@withLock false
@@ -485,6 +490,7 @@ class BleScanner(
         val c = cadence ?: return
         handler.post {
             if (!cadenceActive) {
+                if (!scanWanted) return@post
                 scope.launch {
                     try {
                         startScanning()
@@ -655,6 +661,11 @@ class BleScanner(
      */
     @SuppressLint("MissingPermission")
     private fun stopScanningLocked() {
+        scanWanted = false
+        // Cancel the cadence cycle first and unconditionally: during a
+        // scheduler pause isScanning is false, and the early return below
+        // would otherwise leave the pause/resume timers alive after Stop.
+        stopDutyCycle()
         if (currentScanSession == null || !isScanning) {
             // P1_ANDROID_022: even if we are not actively scanning, ensure any stale
             // peer cache is purged so re-discovery can occur on the next session.

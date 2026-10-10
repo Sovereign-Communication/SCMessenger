@@ -148,6 +148,8 @@ class NetworkDetector @Inject constructor(
     }
 
     private fun startMonitoringInternal() {
+        // Idempotent open: a second start must not stack a second callback.
+        if (networkCallback != null) return
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
@@ -195,10 +197,19 @@ class NetworkDetector @Inject constructor(
      * Stop monitoring network changes.
      */
     fun stopMonitoring() {
-        networkCallback?.let {
-            connectivityManager.unregisterNetworkCallback(it)
-        }
+        val cb = networkCallback
         networkCallback = null
+        if (cb != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(cb)
+            } catch (e: Exception) {
+                Timber.d(e, "NetworkCallback already unregistered")
+            }
+        }
+        // Drop the sink and tracked networks so a stopped detector cannot feed
+        // discovery or pin the repository through the lambda.
+        onDiscoveryEvent = null
+        eventFilter.clear()
         debounceJob?.cancel()
         debounceJob = null
         Timber.i("NetworkDetector monitoring stopped")
