@@ -1,0 +1,11 @@
+--------- beginning of events
+2026-10-10 21:54:17.885 +0000 32464 32464 D MdnsServiceDiscovery: mDNS service resolved: REDACTED at 192.0.2.10:9001
+2026-10-10 21:54:25.688 +0000 32464  3836 I MeshRepository$startMeshService: Message from REDACTED: f1159fea-bf0d-4547-80ee-bb33d1ed1360
+2026-10-10 21:54:25.704 +0000 32464  4936 I SmartTransportRouter: Message first receipt: msg=f1159fea transport=core
+2026-10-10 21:54:25.704 +0000 32464  4936 I MeshRepository: delivery_attempt msg=f1159fea-bf0d-4547-80ee-bb33d1ed1360 medium=core phase=rx outcome=received detail=sender=REDACTED
+2026-10-10 21:54:25.734 +0000 32464  4936 I MeshRepository$startMeshService$1$2$onMessageReceived: UNIFICATION onMessageReceived pairing: sender=REDACTED canonical=REDACTED routePeerId=REDACTED messageId=f1159fea-bf0d-4547-80ee-bb33d1ed1360 kind=text transport=INTERNET isKnownContact=true isChatEvent=true publicKey=REDACTED
+2026-10-10 21:54:25.866 +0000 32464  4936 I MeshRepository$startMeshService$1$2$onMessageReceived: rx_history msg=f1159fea-bf0d-4547-80ee-bb33d1ed1360 from=REDACTED result=ok dup=false hidden=false
+2026-10-10 21:54:25.867 +0000 32464  4936 I MeshRepository: delivery_attempt msg=f1159fea-bf0d-4547-80ee-bb33d1ed1360 medium=core phase=rx outcome=processed detail=stored_in_history sender=REDACTED
+2026-10-10 21:54:25.889 +0000 32464  4936 I MeshRepository: delivery_attempt msg=f1159fea-bf0d-4547-80ee-bb33d1ed1360 medium=receipt phase=encode outcome=success detail=encoded_bytes=515 attempt=1
+2026-10-10 21:54:26.264 +0000 32464  4936 I MeshRepository: delivery_attempt msg=f1159fea-bf0d-4547-80ee-bb33d1ed1360 medium=receipt phase=aggregate outcome=acked detail=ctx=receipt_send sender=REDACTED attempt=1
+2026-10-10 21:54:26.264 +0000 32464  4936 I MeshRepository$sendDeliveryReceiptAsync$candidateJob: Targeted delivery receipt sent for f1159fea-bf0d-4547-80ee-bb33d1ed1360 to REDACTED
