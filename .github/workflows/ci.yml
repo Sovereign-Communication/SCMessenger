@@ -10,16 +10,33 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # One cheap classification for the whole workflow. Required jobs below keep
+  # starting on every run (so their check always reports) and gate their STEPS on
+  # these outputs; optional macOS/Windows/doc/FFI work is gated at job level so a
+  # runner is never acquired just to learn it has nothing to do.
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust_relevant: ${{ steps.platform.outputs.rust_relevant }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
   handoff-scope:
     name: Handoff ownership scope
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -57,7 +74,8 @@ jobs:
 
   naming-policy:
     name: Naming policy
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,37 +115,46 @@ jobs:
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
+  # Canonical clippy + cargo-deny gate. lint.yml's "Rust Linting" no longer repeats
+  # clippy (this --all-features run is a strict superset) or compiles anything.
+  # fmt also lives only in "Rust Linting". Hosted: OCI queue waits for this job
+  # were 1-2 hours, and rust-cache restores main's cache on hosted runners.
   lint:
     name: Lint
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    needs: changes
+    # Required check: always run so it reports a real result; a failed `changes`
+    # job must fail this check, not skip it (a skipped required check is green).
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "[FAIL] changes job result: ${{ needs.changes.result }}"
+          exit 1
       - uses: actions/checkout@v7
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.docs_only.outputs.is_docs_only != 'true' && runner.environment != 'self-hosted'
+        if: needs.changes.outputs.rust_relevant == 'true'
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: needs.changes.outputs.rust_relevant == 'true'
+        with:
+          key: lint-clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: needs.changes.outputs.rust_relevant == 'true'
         uses: ./.github/actions/linux-build-deps
-      - run: cargo fmt --check
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-      - run: cargo clippy --workspace --all-features -- -D warnings
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+      - run: cargo clippy --workspace --all-features -- -D warnings -A clippy::empty_line_after_doc_comments
+        if: needs.changes.outputs.rust_relevant == 'true'
       # Pin version + lockfile: an unpinned install re-resolves transitive
       # deps against the live index, and tinyvec 1.13.0 fails to compile on
       # the runner toolchain, killing the Lint gate (tinyvec 1.11.0 in
-      # cargo-deny 0.20.2's shipped Cargo.lock is known-good).
-      # The self-hosted runner keeps ~/.cargo/bin between jobs, so reuse a
-      # matching cargo-deny instead of recompiling it on every run.
+      # cargo-deny 0.20.2's shipped Cargo.lock is known-good). rust-cache
+      # restores ~/.cargo/bin, so a cached cargo-deny is reused.
       - name: Install cargo-deny 0.20.2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: needs.changes.outputs.rust_relevant == 'true'
         run: |
           if cargo deny --version 2>/dev/null | grep -q '0\.20\.2'; then
             echo "[OK] cargo-deny 0.20.2 already installed"
@@ -135,14 +162,11 @@ jobs:
             cargo install cargo-deny --version 0.20.2 --locked
           fi
       - run: cargo deny check
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
+        if: needs.changes.outputs.rust_relevant == 'true'
   orchestration:
     name: Orchestration control plane
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Runs on every pull request and every push, on the default merge checkout.
@@ -164,38 +188,40 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    needs: changes
+    # Static matrix so 'Test (ubuntu-latest)' is statically resolvable. The
+    # ubuntu leg always runs (required); macOS/Windows legs run only when the
+    # diff can change the Rust workspace.
+    # matrix.* is not available at job level; non-ubuntu legs are gated per step.
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu-latest is the required context and always starts, so it always
+        # reports. The macOS (10x billing) and Windows (2x) legs are only
+        # scheduled when the diff can change the Rust workspace.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success' && matrix.os == 'ubuntu-latest'
+        run: |
+          echo "[FAIL] changes job result: ${{ needs.changes.result }}"
+          exit 1
       - uses: actions/checkout@v7
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-      # Non-ubuntu legs additionally need Rust-relevant input: macos-latest and
-      # windows-latest run the same Rust workspace tests, and a diff that changes
-      # no Rust input cannot change what they compile. ubuntu-latest is the
-      # required context and keeps its existing condition exactly -- the
-      # 'matrix.os == ubuntu-latest' disjunct below short-circuits the new clause
-      # for that leg, so nothing about the required check changes.
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
+        if: matrix.os == 'ubuntu-latest' || needs.changes.outputs.rust_relevant == 'true'
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true') && runner.environment != 'self-hosted'
+        if: needs.changes.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
+        if: needs.changes.outputs.rust_relevant == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install libdbus-1-dev (Ubuntu)
-        if: matrix.os == 'ubuntu-latest' && steps.docs_only.outputs.is_docs_only != 'true'
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true'
         uses: ./.github/actions/linux-build-deps
-      # Only Windows runners lack a preinstalled/vendored protoc; matches the
-      # manual cross-platform-test.yml dispatch workflow's test-windows job.
+      # Only Windows runners lack a preinstalled/vendored protoc.
       - name: Install protoc (Windows)
-        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && steps.platform.outputs.rust_relevant == 'true'
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -204,62 +230,48 @@ jobs:
       # more readily, so keep only this platform's workspace test process
       # serialized while retaining normal parallelism on Unix runners.
       - name: Run workspace tests (Windows serialized)
-        if: matrix.os == 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && steps.platform.outputs.rust_relevant == 'true'
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils -- --test-threads=1
       - name: Run workspace tests
-        if: matrix.os != 'windows-latest' && steps.docs_only.outputs.is_docs_only != 'true' && (matrix.os == 'ubuntu-latest' || steps.platform.outputs.rust_relevant == 'true')
+        if: matrix.os != 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   docs:
     name: Docs
+    needs: changes
+    if: needs.changes.outputs.rust_relevant == 'true'
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
-      # One owner decides: the platform gate subsumes the docs-only gate, because
-      # a docs-only diff reports every platform flag false (lint.yml's rust job
-      # relies on the same equivalence). This job's work is pure Rust tooling, so
-      # rust_relevant is its input.
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
       - name: Use preinstalled Rust (self-hosted)
         uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
-        if: steps.platform.outputs.rust_relevant == 'true'
         uses: ./.github/actions/linux-build-deps
       - run: cargo doc --workspace --no-deps
-        if: steps.platform.outputs.rust_relevant == 'true'
       - name: Clean self-hosted workspace
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
   ffi-surface:
     name: FFI Surface Contract
+    needs: changes
+    if: needs.changes.outputs.rust_relevant == 'true'
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
-      # One owner decides: the platform gate subsumes the docs-only gate, because
-      # a docs-only diff reports every platform flag false (lint.yml's rust job
-      # relies on the same equivalence). This job's work is pure Rust tooling, so
-      # rust_relevant is its input.
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
       - name: Use preinstalled Rust (self-hosted)
         uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
-        if: steps.platform.outputs.rust_relevant == 'true'
         uses: ./.github/actions/linux-build-deps
       # gen_kotlin/gen_swift locate the compiled cdylib by filesystem path at
       # runtime rather than through a Cargo dependency edge, so `cargo run`
@@ -267,47 +279,35 @@ jobs:
       # cdylib and re-running `cargo run --bin gen_kotlin` reproduces the
       # "cdylib not found" panic even though nothing else changed).
       - run: cargo build -p scmessenger-core --features gen-bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
       - run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
       - run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
       - run: scripts/ffi_surface.sh
-        if: steps.platform.outputs.rust_relevant == 'true'
       - name: Clean self-hosted workspace
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
 
   windows-cli-artifact:
     name: Windows CLI Artifact
+    needs: changes
+    if: needs.changes.outputs.rust_relevant == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      # One owner decides: the platform gate subsumes the docs-only gate, because
-      # a docs-only diff reports every platform flag false (lint.yml's rust job
-      # relies on the same equivalence). This job's work is pure Rust tooling, so
-      # rust_relevant is its input.
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Same protoc setup as the Test job's windows-latest leg: only Windows
       # runners lack a preinstalled/vendored protoc.
       - name: Install protoc (Windows)
-        if: steps.platform.outputs.rust_relevant == 'true'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build release CLI binary
-        if: steps.platform.outputs.rust_relevant == 'true'
         run: cargo build -p scmessenger-cli --release
       # clap serves --version at arg-parse time, before any runtime or network
       # startup, so running the freshly built exe here is cheap and safe.
       - name: Write build provenance
-        if: steps.platform.outputs.rust_relevant == 'true'
         timeout-minutes: 5
         run: |
           $sha = git rev-parse HEAD
@@ -315,7 +315,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "git-sha: $sha", "cli-version: $ver" | Set-Content .\target\release\cli-provenance.txt
       - name: Upload CLI artifact
-        if: steps.platform.outputs.rust_relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: windows-cli-${{ github.sha }}
