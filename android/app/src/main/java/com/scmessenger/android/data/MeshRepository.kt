@@ -669,6 +669,9 @@ open class MeshRepository(
      */
     private val RESET_SHUTDOWN_TIMEOUT_MS = 5_000L
 
+    /** Bounds every blocking wait on the stop and reset paths; see [StopTeardown]. */
+    private val stopTeardown = StopTeardown()
+
     /**
      * STOP-TEARDOWN-TIMEOUT-001: bound for the [getTopics] bridge query. A wedged
      * swarm must not be able to block a synchronous topic read forever.
@@ -4375,20 +4378,12 @@ open class MeshRepository(
         // only watches the main thread and this one is a Dispatchers.Default
         // coroutine. Bound it so a missing acknowledgement costs one timeout
         // instead of the whole lifecycle.
-        kotlin.runCatching {
-            kotlinx.coroutines.runBlocking {
-                val acknowledged = kotlinx.coroutines.withTimeoutOrNull(SWARM_SHUTDOWN_TIMEOUT_MS) {
-                    swarmBridge?.shutdown()
-                    true
-                }
-                if (acknowledged == null) {
-                    Timber.w(
-                        "Swarm shutdown not acknowledged within %d ms; continuing teardown",
-                        SWARM_SHUTDOWN_TIMEOUT_MS
-                    )
-                }
-            }
-        }.onFailure { Timber.w(it, "Failed to shutdown swarm bridge") }
+        // Bounded by [StopTeardown.shutdownSwarm]: the shutdown runs on a daemon
+        // thread under a coroutine timeout, so neither a suspended nor a blocked
+        // acknowledgement can hold [serviceLifecycleLock]. Emits
+        // "[MESH-STOP] swarm_shutdown ok|timeout|failed ms=N" to the file log.
+        val capturedSwarm = swarmBridge
+        stopTeardown.shutdownSwarm(SWARM_SHUTDOWN_TIMEOUT_MS) { capturedSwarm?.shutdown() }
 
         // STOP-TEARDOWN-TIMEOUT-001: same hazard one line further down.
         // MeshService::stop() (core/src/mobile_bridge.rs:527-551) sets Stopping
@@ -4398,21 +4393,9 @@ open class MeshRepository(
         // on a daemon thread and bound the JOIN. A teardown that does not confirm
         // in time is logged and the stop continues -- the user's ability to stop
         // the mesh must not depend on the Rust side agreeing to finish.
-        val rustStopConfirmed = kotlin.runCatching {
-            val stopThread = java.lang.Thread { meshService?.stop() }
-            stopThread.isDaemon = true
-            stopThread.name = "mesh-rust-stop"
-            stopThread.start()
-            stopThread.join(RUST_STOP_TIMEOUT_MS)
-            !stopThread.isAlive
-        }.onFailure { Timber.w(it, "Failed to stop Rust mesh service") }
-            .getOrDefault(false)
-        if (!rustStopConfirmed) {
-            Timber.w(
-                "Rust mesh service stop not confirmed within %d ms; continuing teardown",
-                RUST_STOP_TIMEOUT_MS
-            )
-        }
+        // Emits "[MESH-STOP] rust_stop ok|timeout|failed ms=N".
+        val capturedMeshService = meshService
+        stopTeardown.stopBlocking("rust_stop", RUST_STOP_TIMEOUT_MS) { capturedMeshService?.stop() }
 
         identitySyncSentPeers.clear()
         historySyncSentPeers.clear()
@@ -6624,26 +6607,17 @@ open class MeshRepository(
         // did not implement, and the same unbounded await in stopMeshService is
         // what made the mesh impossible to stop on the Pixel. A reset that is
         // waiting on an acknowledgement must degrade, not wedge.
-        kotlin.runCatching {
-            val acknowledged = kotlinx.coroutines.runBlocking {
-                kotlinx.coroutines.withTimeoutOrNull(RESET_SHUTDOWN_TIMEOUT_MS) {
-                    swarmBridge?.shutdown()
-                    true
-                }
-            }
-            if (acknowledged == null) {
-                Timber.w(
-                    "Swarm shutdown not acknowledged within %d ms; reset will continue",
-                    RESET_SHUTDOWN_TIMEOUT_MS
-                )
-            }
-        }.onFailure { Timber.w(it, "Swarm shutdown failed during reset") }
+        val resetSwarm = swarmBridge
+        stopTeardown.shutdownSwarm(RESET_SHUTDOWN_TIMEOUT_MS) { resetSwarm?.shutdown() }
         swarmBridge = null
 
-        meshService?.stop()
+        // Blocking Rust FFI: bound both, a reset must not wedge on them either.
+        val resetMeshService = meshService
+        stopTeardown.stopBlocking("reset_rust_stop", RUST_STOP_TIMEOUT_MS) { resetMeshService?.stop() }
         meshService = null
 
-        ironCore?.stop()
+        val resetCore = ironCore
+        stopTeardown.stopBlocking("reset_core_stop", RESET_SHUTDOWN_TIMEOUT_MS) { resetCore?.stop() }
         try {
             contactManager?.flush()
             historyManager?.flush()
