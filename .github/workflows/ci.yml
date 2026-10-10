@@ -122,9 +122,17 @@ jobs:
   lint:
     name: Lint
     needs: changes
+    # Required check: always run so it reports a real result; a failed `changes`
+    # job must fail this check, not skip it (a skipped required check is green).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "[FAIL] changes job result: ${{ needs.changes.result }}"
+          exit 1
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
         if: needs.changes.outputs.rust_relevant == 'true'
@@ -138,7 +146,7 @@ jobs:
       - name: Install Linux build dependencies
         if: needs.changes.outputs.rust_relevant == 'true'
         uses: ./.github/actions/linux-build-deps
-      - run: cargo clippy --workspace --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-features -- -D warnings -A clippy::empty_line_after_doc_comments
         if: needs.changes.outputs.rust_relevant == 'true'
       # Pin version + lockfile: an unpinned install re-resolves transitive
       # deps against the live index, and tinyvec 1.13.0 fails to compile on
@@ -181,6 +189,10 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: changes
+    # Static matrix so 'Test (ubuntu-latest)' is statically resolvable. The
+    # ubuntu leg always runs (required); macOS/Windows legs run only when the
+    # diff can change the Rust workspace.
+    if: ${{ !cancelled() && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.rust_relevant == 'true') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -188,8 +200,13 @@ jobs:
         # ubuntu-latest is the required context and always starts, so it always
         # reports. The macOS (10x billing) and Windows (2x) legs are only
         # scheduled when the diff can change the Rust workspace.
-        os: ${{ fromJSON(needs.changes.outputs.rust_relevant == 'true' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "[FAIL] changes job result: ${{ needs.changes.result }}"
+          exit 1
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
         if: needs.changes.outputs.rust_relevant == 'true'
