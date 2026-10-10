@@ -117,6 +117,22 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
         }
     }
 
+    /**
+     * Write every queued line to disk on the CALLER's thread. Used by the stop
+     * path ([com.scmessenger.android.data.MeshStopLog]) so a lifecycle marker is
+     * durable before the next step -- which may wedge -- begins, instead of
+     * waiting on the low-priority writer thread. Safe to race with that thread:
+     * both go through the same monitor, so lines are never torn, only possibly
+     * interleaved by a few milliseconds.
+     */
+    fun flushPending() {
+        var entry = writeQueue.poll()
+        while (entry != null) {
+            try { writeEntry(entry) } catch (_: Throwable) {}
+            entry = writeQueue.poll()
+        }
+    }
+
     private fun writeEntry(entry: LogEntry) {
         synchronized(this) {
             try {

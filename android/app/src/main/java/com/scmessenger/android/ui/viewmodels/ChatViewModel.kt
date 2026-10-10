@@ -275,7 +275,7 @@ class ChatViewModel @Inject constructor(
                     is MessageEvent.Received -> {
                         // Reload if message is for current peer (consistent ID comparison)
                         val currentPeer = _peerId.value.orEmpty()
-                        if (PeerIdValidator.isSame(event.messageRecord.peerId, currentPeer)) {
+                        if (isSamePeer(event.messageRecord.peerId, currentPeer)) {
                             loadMessages()
                         }
                     }
@@ -310,6 +310,13 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
+     * Same-peer check across id spellings (public key hex, identity_id,
+     * libp2p peer id) via the repository's canonical resolver.
+     */
+    private fun isSamePeer(id1: String, id2: String): Boolean =
+        PeerIdValidator.isSameIdentity(id1, id2) { meshRepository.canonicalContactIdPublic(it) }
+
+    /**
      * Observe message updates (sent messages).
      * FIX: isActive guard to prevent emit after destroy.
      */
@@ -317,7 +324,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             meshRepository.messageUpdates.collect { message ->
                 if (!viewModelScope.isActive) return@collect
-                if (PeerIdValidator.isSame(message.peerId, _peerId.value.orEmpty())) {
+                if (isSamePeer(message.peerId, _peerId.value.orEmpty())) {
                     // Replace or add the message
                     val currentMessages = _messages.value.toMutableList()
 
