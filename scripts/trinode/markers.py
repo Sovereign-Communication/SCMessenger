@@ -71,6 +71,20 @@ MARKERS: List[Marker] = [
        inferred=True,
        note="only fires for a re-delivery of a message already in history "
             "(second site at :2455 is debug); first-time history write is silent (gap G3)"),
+    # Explicit receiver-side history evidence as emitted on the 2026-10 Pixel
+    # build (real capture: tests/fixtures/real/android/logcat_rx_sanitized.log.fixture).
+    # The first-time store is logged twice: rx_history result=ok (MeshRepository.kt:2527,
+    # dup=true at :2488) and delivery_attempt ... detail=stored_in_history (:2537).
+    _m("android_rx_history_ok", "rx_history",
+       r"rx_history msg=(?P<msg>\S+) from=\S+ result=ok dup=(?P<dup>true|false)",
+       "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:2527"),
+    _m("android_rx_stored_in_history", "rx_history",
+       r"delivery_attempt msg=(?P<msg>\S+) medium=\S+ phase=rx outcome=processed detail=stored_in_history",
+       "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:2537"),
+    _m("android_mdns_resolved", "mdns_resolved",
+       r"mDNS service resolved: (?P<svc>\S+) at (?P<addr>\S+)",
+       "android/app/src/main/java/com/scmessenger/android/transport/MdnsServiceDiscovery.kt:296",
+       evidence=False, note="LAN discovery only; never scored, never used for id resolution"),
     _m("android_receipt_rx", "receipt_received",
        r"\[RECEIPT-RX\] Received from core: msg=(?P<msg>\S+) status=(?P<status>\S+)",
        "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt:2522"),

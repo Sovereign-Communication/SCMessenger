@@ -480,5 +480,73 @@ class TestEndToEnd(unittest.TestCase):
             self.assertIn(code, (1, 2))
 
 
+class TestRealPixelLogcat(unittest.TestCase):
+    """Real 2026-10-10 Pixel `logcat -d -v threadtime -v year -v UTC` lines, sanitized
+    (peer/sender/key ids replaced by REDACTED; message ids kept)."""
+
+    FIXTURE = os.path.join(REAL, "android", "logcat_rx_sanitized.log.fixture")
+
+    def _events(self, text):
+        return parse.parse_text("android", "raw/android/logcat.txt", text, 2026, 0)
+
+    def test_fixture_is_sanitized(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("12D3KooW", text)
+        self.assertNotIn("publicKey=69", text)
+
+    def test_crlf_and_buffer_header_accepted(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            text = fh.read().replace("\n", "\r\n")
+        ev = self._events(text)
+        self.assertTrue(ev)
+        self.assertTrue(all(e["ts_utc"].startswith("2026-10-10T21:") for e in ev))
+
+    def test_receiver_history_is_explicit_evidence(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            ev = self._events(fh.read())
+        hist = [e for e in ev if e["event"] == "rx_history" and e["msg_id"] == "f1159fea-bf0d-4547-80ee-bb33d1ed1360"]
+        self.assertEqual({e["detail"]["marker"] for e in hist},
+                         {"android_rx_history_ok", "android_rx_stored_in_history"})
+        self.assertFalse(any(e["detail"].get("inferred") for e in hist))
+        self.assertEqual(hist[0]["ts_utc"][:23], "2026-10-10T21:54:25.866")
+
+    def test_decrypt_receipt_and_mdns_events(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            ev = self._events(fh.read())
+        names = {e["event"] for e in ev}
+        self.assertIn("rx_decrypted", names)
+        self.assertIn("receipt_sent", names)
+        self.assertIn("transport_ack", names)
+        self.assertIn("mdns_resolved", names)
+        self.assertNotIn("mdns_resolved", {e["event"] for e in ev if e["detail"].get("evidence") is True})
+
+    def test_real_format_has_no_unmatched_envelopes(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            lines = [l for l in fh.read().splitlines() if l.strip()]
+        for l in lines[1:]:
+            self.assertIsNotNone(parse.parse_envelope(l, 2026), l)
+
+    def test_passive_refuses_device_sources(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as root:
+            code = cli.run(["--passive", "--android", "--repo-root", root, "--run-id", "p1"], out=err)
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(os.path.join(root, "tmp")))
+
+    def test_passive_from_dir_never_calls_runner(self):
+        calls = []
+        def spy(argv, timeout):
+            calls.append(list(argv))
+            raise AssertionError("runner must not be called in passive mode")
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(src, "logcat.txt"), "w", encoding="utf-8") as fh:
+                with open(self.FIXTURE, encoding="utf-8") as src_fh:
+                    fh.write(src_fh.read())
+            cli.run(["--passive", "--from-dir", src, "--map", "android=logcat.txt",
+                     "--repo-root", root, "--run-id", "p2"], runner=spy, out=io.StringIO())
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
