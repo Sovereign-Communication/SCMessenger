@@ -1,0 +1,17 @@
+name: Self-hosted workspace cleanup
+description: >-
+  Self-hosted runners keep the workspace between jobs. Remove untracked and
+  ignored scratch files so the next job starts clean. target/ is left in place
+  on purpose: Swatinem/rust-cache saves it in its post step, which runs after
+  this one, and the next actions/checkout (clean: true) removes it. Use with
+  `if: always()`. A no-op on GitHub-hosted runners.
+
+runs:
+  using: composite
+  steps:
+    - name: Clean workspace
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        git clean -ffdxq -e target || true

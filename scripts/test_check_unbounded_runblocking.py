@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from scripts.check_unbounded_runblocking import (  # noqa: E402
+    check_ffi_stop_calls,
     check_file,
     main,
     strip_comments_and_strings,
@@ -143,6 +144,58 @@ class TestGateFindings(unittest.TestCase):
             """
         )
         self.assertEqual(1, len(check_file(path)))
+
+
+class TestFfiStopCalls(unittest.TestCase):
+    """Direct blocking-FFI stop calls must go through StopTeardown."""
+
+    def test_direct_mesh_service_stop_is_flagged(self):
+        path = write_kt(
+            """
+            fun reset() {
+                meshService?.stop()
+            }
+            """
+        )
+        findings = check_ffi_stop_calls(path)
+        self.assertEqual(1, len(findings), findings)
+        self.assertIn(":2:", findings[0])
+
+    def test_direct_core_stop_and_swarm_shutdown_are_flagged(self):
+        path = write_kt(
+            """
+            fun f() {
+                ironCore.stop()
+                swarmBridge?.shutdown()
+            }
+            """
+        )
+        self.assertEqual(2, len(check_ffi_stop_calls(path)))
+
+    def test_call_on_a_local_inside_stop_teardown_is_clean(self):
+        path = write_kt(
+            """
+            fun f() {
+                val m = meshService
+                stopTeardown.stopBlocking("rust_stop", 1L) { m?.stop() }
+            }
+            """
+        )
+        self.assertEqual([], check_ffi_stop_calls(path))
+
+    def test_opt_out_marker_on_the_line_is_honoured(self):
+        path = write_kt(
+            """
+            fun f() {
+                meshService?.stop() // unbounded-ffi-stop-ok: test double
+            }
+            """
+        )
+        self.assertEqual([], check_ffi_stop_calls(path))
+
+    def test_comment_mention_is_not_a_call(self):
+        path = write_kt("// meshService.stop() here\nfun f() { }")
+        self.assertEqual([], check_ffi_stop_calls(path))
 
 
 class TestRealRepoIsClean(unittest.TestCase):

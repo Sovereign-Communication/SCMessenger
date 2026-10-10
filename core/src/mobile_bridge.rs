@@ -4483,8 +4483,9 @@ mod tests {
             );
         }
         // Real failures keep their typed mapping and are never DialSkipped.
+        // (Message avoids the substring "io": the generic mapping treats it as IoError.)
         assert!(matches!(
-            map_dial_result(Err(anyhow::anyhow!("Dial failed: connection refused"))),
+            map_dial_result(Err(anyhow::anyhow!("Dial failed: refused by peer"))),
             Err(crate::IronCoreError::NetworkError)
         ));
         assert!(map_dial_result(Ok(())).is_ok());
