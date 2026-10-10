@@ -3,6 +3,10 @@ name: Docker Publish
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'HANDOFF/**'
+      - 'docs/**'
   workflow_dispatch:
 
 env:
