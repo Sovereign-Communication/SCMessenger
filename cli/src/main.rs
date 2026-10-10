@@ -10,6 +10,7 @@ pub mod ble_ids;
 mod ble_mesh;
 mod bootstrap;
 mod config;
+mod invite;
 mod ledger;
 mod platform_signals;
 mod seed_dial;
@@ -337,6 +338,11 @@ enum Commands {
     Swarm {
         #[command(subcommand)]
         action: SwarmAction,
+    },
+    /// Create or redeem a signed SCI1 invite (the only bootstrap source)
+    Invite {
+        #[command(subcommand)]
+        action: invite::InviteAction,
     },
     /// Manage local network discovery (BLE, mDNS, WiFi-Aware)
     Discovery {
@@ -1251,6 +1257,7 @@ async fn main() -> Result<()> {
         Commands::Test => cmd_test().await,
         Commands::Audit { action } => cmd_audit(action).await,
         Commands::Swarm { action } => cmd_swarm(action).await,
+        Commands::Invite { action } => invite::run(action).await,
         Commands::Discovery { action } => cmd_discovery(action).await,
         Commands::ShareApk {
             apk_path,

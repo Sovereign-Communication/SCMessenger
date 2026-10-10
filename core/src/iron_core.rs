@@ -2788,6 +2788,180 @@ impl IronCore {
     }
 
     // -----------------------------------------------------------------------
+    // Issue #469 T1: invite QR create / redeem
+    // -----------------------------------------------------------------------
+
+    /// Mint a signed `SCI1:` invite for this node.
+    ///
+    /// `reachable_addrs` are this node's current dialable multiaddrs, supplied
+    /// by the caller that owns the swarm (listeners / external addresses);
+    /// nothing is hardcoded. The first valid address becomes the inviter's own
+    /// seed entry (never evicted); the remainder of the seed ledger is this
+    /// node's locally verified peers. The token is Ed25519-signed by this
+    /// node's identity key.
+    ///
+    /// `ttl_secs` must be in `1..=30 days`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn create_invite_qr(
+        &self,
+        reachable_addrs: Vec<String>,
+        ttl_secs: u64,
+    ) -> Result<String, IronCoreError> {
+        use crate::relay::invite::{build_seed_ledger, InviteToken, SeedLedgerEntry};
+        use crate::transport::addr_filter::{is_dialable_multiaddr, DnsPolicy, NetworkMode};
+
+        const MAX_TTL_SECS: u64 = 30 * 24 * 3600;
+        if ttl_secs == 0 || ttl_secs > MAX_TTL_SECS {
+            tracing::warn!("[INVITE] rejected reason=bad_ttl");
+            return Err(IronCoreError::InvalidInput);
+        }
+
+        let mut own: Vec<SeedLedgerEntry> = Vec::new();
+        for addr in reachable_addrs {
+            let stripped = match addr.find("/p2p/") {
+                Some(idx) => addr[..idx].to_string(),
+                None => addr,
+            };
+            if is_dialable_multiaddr(&stripped, NetworkMode::Local, DnsPolicy::Reject)
+                && !own.iter().any(|e| e.multiaddr == stripped)
+            {
+                own.push(SeedLedgerEntry {
+                    multiaddr: stripped,
+                });
+            }
+        }
+        if own.is_empty() {
+            tracing::warn!("[INVITE] rejected reason=no_reachable_addresses");
+            return Err(IronCoreError::NoAddresses);
+        }
+        let inviter_entry = own.remove(0);
+        let mut ranked = own;
+        ranked.extend(
+            self.ledger_manager
+                .export_seed_entries(crate::relay::invite::MAX_SEED_LEDGER_ENTRIES as u32),
+        );
+
+        let inviter_id = self.identity_id().ok_or(IronCoreError::NotInitialized)?;
+        let (token, peer_id) = {
+            let identity = self.identity.read();
+            let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
+            let public_key =
+                hex::decode(keys.public_key_hex()).map_err(|_| IronCoreError::CryptoError)?;
+            let unsigned = InviteToken::new(inviter_id, public_key, "open".to_string())
+                .with_expiry(ttl_secs)
+                .with_seed_ledger(build_seed_ledger(inviter_entry, ranked));
+            let signable = unsigned
+                .get_signable_data()
+                .map_err(|_| IronCoreError::Internal)?;
+            let signature = keys
+                .sign(&signable)
+                .map_err(|_| IronCoreError::CryptoError)?;
+            (
+                unsigned.with_signature(signature),
+                keys.to_libp2p_peer_id().ok(),
+            )
+        };
+
+        let payload = token.to_qr_payload().map_err(|e| {
+            tracing::warn!("[INVITE] rejected reason=encode_failed detail={}", e);
+            IronCoreError::InvalidInput
+        })?;
+        tracing::info!(
+            "[INVITE] created peer={} addrs={}",
+            peer_id.unwrap_or_default(),
+            token.seed_ledger.len()
+        );
+        Ok(payload)
+    }
+
+    /// Verify and redeem an `SCI1:` invite.
+    ///
+    /// Fails closed: a payload that does not decode, is expired, unsigned or
+    /// carries a bad signature is rejected before anything touches the ledger.
+    /// Verified seed addresses are imported through
+    /// `LedgerManager::import_seed_entries` as UNPROVEN entries (promoted only
+    /// by a later successful dial). `IronCore` owns no swarm handle, so the
+    /// returned `dial_addrs` must be dialed immediately by the caller via the
+    /// existing dial path (the inviter's address carries `/p2p/<peer id>` so the
+    /// dial is pinned to the signing identity).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn redeem_invite_qr(&self, payload: String) -> Result<crate::RedeemReport, IronCoreError> {
+        use crate::relay::invite::{InviteError, InviteToken};
+        use crate::transport::addr_filter::{is_dialable_multiaddr, DnsPolicy, NetworkMode};
+
+        fn reject(reason: &str, err: IronCoreError) -> IronCoreError {
+            tracing::warn!("[INVITE] rejected reason={}", reason);
+            err
+        }
+
+        let token = InviteToken::from_qr_payload(payload.trim()).map_err(|e| match e {
+            InviteError::PayloadTooLarge(..) => reject("too_large", IronCoreError::InvalidInput),
+            _ => reject("malformed", IronCoreError::InvalidInput),
+        })?;
+        token.verify_with_policy(false).map_err(|e| match e {
+            InviteError::TokenExpired => reject("expired", IronCoreError::InvalidInput),
+            InviteError::MissingSignature => reject("unsigned", IronCoreError::CryptoError),
+            InviteError::VerificationFailed | InviteError::PqVerificationFailed => {
+                reject("bad_signature", IronCoreError::CryptoError)
+            }
+            _ => reject("malformed", IronCoreError::InvalidInput),
+        })?;
+
+        if self.identity.read().keys().is_some_and(|k| {
+            hex::decode(k.public_key_hex()).ok().as_deref() == Some(&token.inviter_public_key[..])
+        }) {
+            return Err(reject("self_invite", IronCoreError::InvalidInput));
+        }
+
+        let inviter_peer_id =
+            libp2p::identity::ed25519::PublicKey::try_from_bytes(&token.inviter_public_key)
+                .ok()
+                .map(|pk| {
+                    libp2p::identity::PublicKey::from(pk)
+                        .to_peer_id()
+                        .to_string()
+                });
+
+        let offered: Vec<String> = token
+            .seed_ledger
+            .iter()
+            .map(|e| e.multiaddr.clone())
+            .filter(|a| is_dialable_multiaddr(a, NetworkMode::Local, DnsPolicy::Reject))
+            .collect();
+        if offered.is_empty() {
+            return Err(reject("no_addresses", IronCoreError::NoAddresses));
+        }
+
+        let imported = self
+            .ledger_manager
+            .import_seed_entries(token.seed_ledger.clone());
+
+        // The first seed entry is the inviter's own address (see
+        // `build_seed_ledger`); pin it to the signing identity for the dial.
+        let dial_addrs: Vec<String> = offered
+            .iter()
+            .enumerate()
+            .map(|(i, a)| match (&inviter_peer_id, i) {
+                (Some(pid), 0) => format!("{}/p2p/{}", a, pid),
+                _ => a.clone(),
+            })
+            .collect();
+
+        tracing::info!(
+            "[INVITE] redeemed peer={} addrs={}",
+            inviter_peer_id.as_deref().unwrap_or(&token.inviter_id),
+            offered.len()
+        );
+        Ok(crate::RedeemReport {
+            inviter_id: token.inviter_id,
+            inviter_peer_id,
+            addresses_offered: offered.len() as u32,
+            addresses_imported: imported,
+            dial_addrs,
+        })
+    }
+
+    // -----------------------------------------------------------------------
     // B2 wiring: DSPy signature verification
     // -----------------------------------------------------------------------
 
