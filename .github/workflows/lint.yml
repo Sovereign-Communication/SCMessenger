@@ -47,7 +47,7 @@ jobs:
           exit 1
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
           toolchain: 1.99.0
