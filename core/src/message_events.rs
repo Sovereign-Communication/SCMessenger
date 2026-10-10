@@ -133,13 +133,32 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+const MAX_DETAIL_CHARS: usize = 128;
+
 fn clamp_id(id: &str) -> String {
-    id.chars().take(MAX_ID_CHARS).collect()
+    sanitize_log_field(id, MAX_ID_CHARS)
 }
 
-/// Truncate a peer id for logging (first `PEER_LOG_CHARS` chars).
+/// Make an untrusted string safe to embed as a single `key=value` token in a
+/// triangulation marker line: keep at most `max_chars` chars and replace
+/// control characters, whitespace and `=` (the marker grammar delimiters)
+/// with `_`, so a field can neither break the line nor add key=value pairs.
+pub(crate) fn sanitize_log_field(s: &str, max_chars: usize) -> String {
+    s.chars()
+        .take(max_chars)
+        .map(|c| {
+            if c.is_control() || c.is_whitespace() || c == '=' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Truncate a peer id for logging (first `PEER_LOG_CHARS` chars, sanitized).
 pub fn short_peer(peer: &str) -> String {
-    peer.chars().take(PEER_LOG_CHARS).collect()
+    sanitize_log_field(peer, PEER_LOG_CHARS)
 }
 
 /// Record an event in the process-wide bounded ring.
@@ -166,7 +185,8 @@ pub fn recent_message_events(
 pub fn fmt_delivery_state_pending(msg_id: &str, detail: &str) -> String {
     format!(
         "delivery_state msg={} state=pending detail={}",
-        msg_id, detail
+        sanitize_log_field(msg_id, MAX_ID_CHARS),
+        sanitize_log_field(detail, MAX_DETAIL_CHARS)
     )
 }
 
@@ -174,9 +194,9 @@ pub fn fmt_delivery_state_pending(msg_id: &str, detail: &str) -> String {
 pub fn fmt_rx_decrypt(msg_id: &str, peer: &str, kind: &str) -> String {
     format!(
         "rx_decrypt msg={} from={} type={} result=ok",
-        msg_id,
+        sanitize_log_field(msg_id, MAX_ID_CHARS),
         short_peer(peer),
-        kind
+        sanitize_log_field(kind, 32)
     )
 }
 
@@ -184,7 +204,7 @@ pub fn fmt_rx_decrypt(msg_id: &str, peer: &str, kind: &str) -> String {
 pub fn fmt_rx_history(msg_id: &str, peer: &str, ok: bool, dup: bool, hidden: bool) -> String {
     format!(
         "rx_history msg={} from={} result={} dup={} hidden={}",
-        msg_id,
+        sanitize_log_field(msg_id, MAX_ID_CHARS),
         short_peer(peer),
         if ok { "ok" } else { "failed" },
         dup,
@@ -196,7 +216,7 @@ pub fn fmt_rx_history(msg_id: &str, peer: &str, ok: bool, dup: bool, hidden: boo
 pub fn fmt_custody_accept(msg_id: &str, from: &str, dest: &str) -> String {
     format!(
         "custody_accept msg={} from={} dest={}",
-        msg_id,
+        sanitize_log_field(msg_id, MAX_ID_CHARS),
         short_peer(from),
         short_peer(dest)
     )
@@ -207,8 +227,8 @@ pub fn fmt_ledger_address_learned(peer: &str, via: &str, addr: &str) -> String {
     format!(
         "ledger_address_learned peer={} via={} addr={}",
         short_peer(peer),
-        via,
-        addr
+        sanitize_log_field(via, 64),
+        sanitize_log_field(addr, 256)
     )
 }
 
@@ -223,6 +243,60 @@ mod tests {
             ok: true,
             ts_ms: 0,
         }
+    }
+
+    #[test]
+    fn sanitize_blocks_newline_and_kv_injection() {
+        let evil = "a\nrx_history msg=x result=ok\r\tz";
+        let line = fmt_rx_history(evil, "peer\nfrom=evil", true, false, false);
+        assert_eq!(line.lines().count(), 1);
+        assert!(!line.contains('\r') && !line.contains('\t'));
+        // Exactly the 6 expected tokens: name + 5 key=value pairs.
+        assert_eq!(line.split(' ').count(), 6);
+        assert_eq!(line.matches('=').count(), 5);
+        for l in [
+            fmt_rx_decrypt(evil, evil, evil),
+            fmt_custody_accept(evil, evil, evil),
+            fmt_delivery_state_pending(evil, evil),
+        ] {
+            assert_eq!(l.lines().count(), 1);
+            assert!(!l.contains('\r') && !l.contains('\t'));
+        }
+    }
+
+    #[test]
+    fn sanitize_caps_length_and_keeps_normal_ids() {
+        let long = "x".repeat(1000);
+        assert_eq!(sanitize_log_field(&long, 128).chars().count(), 128);
+        assert_eq!(
+            fmt_rx_history("abc-123", "p", true, false, true),
+            "rx_history msg=abc-123 from=p result=ok dup=false hidden=true"
+        );
+        assert_eq!(
+            fmt_custody_accept("m1", "a", "b"),
+            "custody_accept msg=m1 from=a dest=b"
+        );
+    }
+
+    #[test]
+    fn ledger_marker_sanitizes_multiaddr() {
+        let addr = format!(
+            "/ip4/1.2.3.4/tcp/1\nrx_history msg=1 result=ok{}",
+            "y".repeat(500)
+        );
+        let line = fmt_ledger_address_learned("peer", "via x=1\n", &addr);
+        assert_eq!(line.lines().count(), 1);
+        assert_eq!(line.matches('=').count(), 3);
+        assert!(line.chars().count() < 400);
+        assert_eq!(
+            fmt_ledger_address_learned("p", "unknown", "/ip4/1.2.3.4/tcp/9"),
+            "ledger_address_learned peer=p via=unknown addr=/ip4/1.2.3.4/tcp/9"
+        );
+    }
+
+    #[test]
+    fn ring_ids_are_sanitized() {
+        assert_eq!(clamp_id("a\nb"), "a_b");
     }
 
     #[test]
