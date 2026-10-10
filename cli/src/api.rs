@@ -939,6 +939,33 @@ pub async fn stop_node_via_api() -> Result<()> {
     Ok(())
 }
 
+/// Whether `target` is in the set of peers we hold a live connection to.
+///
+/// A swarm `send_message` that resolves `Ok` is only a confirmation from the
+/// recipient when it went over a direct link. When the recipient is not
+/// connected, `Ok` means a relay node accepted custody of the envelope
+/// (store-and-carry), which says nothing about the recipient having received
+/// it. Callers use this to decide whether the transport ACK may release the
+/// outbox entry or whether it must stay until an application receipt arrives.
+pub(crate) fn recipient_in_connected_set(
+    connected: &[libp2p::PeerId],
+    target: &libp2p::PeerId,
+) -> bool {
+    connected.iter().any(|p| p == target)
+}
+
+/// Snapshot, before dispatch, whether `target` is directly connected.
+pub(crate) async fn recipient_directly_connected(
+    swarm: &scmessenger_core::transport::SwarmHandle,
+    target: &libp2p::PeerId,
+) -> bool {
+    swarm
+        .get_peers()
+        .await
+        .map(|peers| recipient_in_connected_set(&peers, target))
+        .unwrap_or(false)
+}
+
 // Axum handler functions
 
 async fn handle_send_message(
@@ -995,6 +1022,7 @@ async fn handle_send_message(
     // the peer is nearby + swarm), so it goes first; the raw BLE write below is
     // only a last-resort fallback when the swarm dispatch itself fails.
     let ble_fallback_data = prepared.envelope_data.clone();
+    let direct_link = recipient_directly_connected(&ctx.swarm_handle, &recipient.peer_id).await;
     let (http_status, status, warning) = match ctx
         .swarm_handle
         .send_message(
@@ -1012,7 +1040,14 @@ async fn handle_send_message(
             // delivered text whose Delivered receipt never arrives must still
             // release the sender's outbox entry. Never cleared on a buffer
             // enqueue -- send_message is the delivery layer, not the queue.
-            core.mark_message_sent(prepared.message_id.clone());
+            //
+            // Only when the recipient was directly connected. Otherwise Ok
+            // means a relay node accepted custody, not that the recipient
+            // got it; the entry must stay in the outbox so the reconnect
+            // flush and retry sweep can still deliver it (msg d10c45f8).
+            if direct_link {
+                core.mark_message_sent(prepared.message_id.clone());
+            }
             (StatusCode::OK, "accepted".to_string(), None)
         }
         Err(_swarm_err) => {
@@ -1944,7 +1979,9 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_api_recipient, ApiRecipient, SendMessageResponse};
+    use super::{
+        recipient_in_connected_set, resolve_api_recipient, ApiRecipient, SendMessageResponse,
+    };
     use scmessenger_core::identity::keys::KeyPair;
     use scmessenger_core::store::Contact;
 
@@ -1953,6 +1990,20 @@ mod tests {
         let public_key = hex::encode(key_pair.verifying_key().to_bytes());
         super::api_recipient_from_public_key(public_key)
             .expect("generated test key must resolve to an API recipient")
+    }
+
+    #[test]
+    fn relayed_ack_does_not_release_outbox_entry() {
+        // Regression (msg d10c45f8): the recipient was not directly connected,
+        // a relay node accepted custody and send_message returned Ok. The
+        // sender released its outbox entry, so the later reconnect flush found
+        // nothing. A recipient absent from the connected set must not count as
+        // a delivery confirmation.
+        let recipient = libp2p::PeerId::random();
+        let relay = libp2p::PeerId::random();
+        assert!(!recipient_in_connected_set(&[relay], &recipient));
+        assert!(!recipient_in_connected_set(&[], &recipient));
+        assert!(recipient_in_connected_set(&[relay, recipient], &recipient));
     }
 
     #[test]

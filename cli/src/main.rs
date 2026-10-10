@@ -3620,8 +3620,9 @@ async fn cmd_start(
                                          let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
                                           if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                                let ble_ok = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok();
+                                               let direct_link = crate::api::recipient_directly_connected(&swarm_handle, &target).await;
                                                let swarm_ok = swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
-                                               if swarm_ok {
+                                               if swarm_ok && direct_link {
                                                    // True transport ACK (R2): release the outbox entry without a
                                                    // Delivered receipt. BLE gatt is fire-and-forget, so only the
                                                    // swarm path marks sent.
@@ -3807,13 +3808,17 @@ async fn cmd_start(
                                         let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
         match core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                             Ok(prep) => {
+                                                let direct_link = crate::api::recipient_directly_connected(&swarm_handle, &target).await;
                                                 if swarm_handle
                                                     .send_message(target, prep.envelope_data, None, None)
                                                     .await
                                                     .is_ok()
                                                 {
-                                                    // True transport ACK (R2): release the outbox entry.
-                                                    core_rx.mark_message_sent(prep.message_id.clone());
+                                                    // True transport ACK (R2): release the outbox entry,
+                                                    // but only for a direct link (relay Ok = custody only).
+                                                    if direct_link {
+                                                        core_rx.mark_message_sent(prep.message_id.clone());
+                                                    }
                                                     let mid = msg_id.clone().unwrap_or_default();
                                                     let mut m = serde_json::Map::new();
                                                     m.insert("status".to_string(), "sent".into());
@@ -4823,15 +4828,19 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
 
     loop {
         attempts += 1;
+        let direct_link =
+            crate::api::recipient_directly_connected(&swarm_handle, &recipient_peer_id).await;
         match swarm_handle
             .send_message(recipient_peer_id, envelope_bytes.clone(), None, None)
             .await
         {
             Ok(_) => {
                 // True transport ACK (R2): release the outbox entry without a
-                // Delivered receipt. send_message() awaits the actual delivery,
-                // not a buffer enqueue.
-                core.mark_message_sent(prepared_message_id.clone());
+                // Delivered receipt, but only for a direct link; a relayed Ok
+                // is custody acceptance and the entry must await a receipt.
+                if direct_link {
+                    core.mark_message_sent(prepared_message_id.clone());
+                }
                 println!(
                     "{} Message sent successfully to {} (attempt {}/{})",
                     "[OK]".green(),
