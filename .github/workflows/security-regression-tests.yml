@@ -69,6 +69,11 @@ on:
 permissions:
   contents: read
 
+# One active run per pull request; main pushes are keyed on the SHA and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 

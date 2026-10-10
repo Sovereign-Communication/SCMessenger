@@ -18,6 +18,9 @@ outputs:
   rust_relevant:
     description: "true when the diff can affect the compiled Rust workspace (core/, mobile/, cli/, wasm/, desktop_bridge/, Cargo manifests, toolchain, cargo config) -- the input set for the Rust test legs, cargo doc, the FFI surface check and the CLI artifact, none of which a Kotlin-only or docs-only diff can change; always true when the diff cannot be computed or contains an unrecognised path"
     value: ${{ steps.detect.outputs.rust_relevant }}
+  kotlin_relevant:
+    description: "true when the diff can affect Kotlin linting (android/ only; the shared Rust core cannot change what ktlint reads); always true when the diff cannot be computed or contains an unrecognised path"
+    value: ${{ steps.detect.outputs.kotlin_relevant }}
 
 runs:
   using: composite
@@ -36,6 +39,7 @@ runs:
             echo "ios_relevant=true"
             echo "android_relevant=true"
             echo "rust_relevant=true"
+            echo "kotlin_relevant=true"
           } >> "$GITHUB_OUTPUT"
         }
 
@@ -74,6 +78,7 @@ runs:
           echo "ios_relevant=false" >> "$GITHUB_OUTPUT"
           echo "android_relevant=false" >> "$GITHUB_OUTPUT"
           echo "rust_relevant=false" >> "$GITHUB_OUTPUT"
+          echo "kotlin_relevant=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -123,3 +128,4 @@ runs:
         emit_flag ios_relevant "$IOS_PATHS"
         emit_flag android_relevant "$ANDROID_PATHS"
         emit_flag rust_relevant "$RUST_PATHS"
+        emit_flag kotlin_relevant '^android/'
