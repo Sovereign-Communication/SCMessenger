@@ -489,6 +489,7 @@
     <string name="notification_channel_messages_description">New messages from contacts</string>
     <string name="notification_channel_message_requests">Message Requests</string>
     <string name="notification_channel_message_requests_description">Messages from unknown senders</string>
+    <string name="notification_mesh_resuming">Restoring mesh connection</string>
     <string name="notification_channel_mesh_status">Mesh Status</string>
     <string name="notification_channel_mesh_status_description">Mesh network connection status</string>
     <string name="notification_channel_peer_events">Peer Events</string>
