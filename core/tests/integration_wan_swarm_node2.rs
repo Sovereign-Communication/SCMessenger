@@ -367,7 +367,7 @@ mod layer1_domain_assertions {
         // 2. Exponential backoff state machine
         let mut backoff_state = PerPeerBackoffState::new(Some(pid));
         assert_eq!(backoff_state.backoff_duration, Duration::from_secs(1));
-        assert!(!backoff_state.is_dead);
+        assert!(!backoff_state.dormant);
 
         // Failure 1: 1s -> 2s
         backoff_state.on_dial_failure();
@@ -379,17 +379,17 @@ mod layer1_domain_assertions {
         assert_eq!(backoff_state.attempt_count, 2);
         assert_eq!(backoff_state.backoff_duration, Duration::from_secs(4));
 
-        // Failure 3: 4s -> 8s, marked dead!
+        // Failure 3: 4s -> 8s, dormant (not dead)!
         backoff_state.on_dial_failure();
         assert_eq!(backoff_state.attempt_count, 3);
-        assert!(backoff_state.is_dead);
+        assert!(backoff_state.dormant);
         assert!(!backoff_state.is_eligible());
 
         // Connection established resets backoff
         backoff_state.on_connection_established();
         assert_eq!(backoff_state.attempt_count, 0);
         assert_eq!(backoff_state.backoff_duration, Duration::from_secs(1));
-        assert!(!backoff_state.is_dead);
+        assert!(!backoff_state.dormant);
         assert!(backoff_state.is_eligible());
 
         // 3. CircuitRelayLadder preference building
@@ -568,12 +568,12 @@ mod layer2_branch_coverage {
         let manager = DialPolicyManager::new();
         let peer_addr = "10.0.0.1:4001";
 
-        // Mark peer dead via permanent failure
+        // Park peer as dormant via permanent failure (never dead)
         manager.record_permanent_failure(peer_addr, None);
         assert!(!manager.register_dial_attempt(peer_addr, None));
 
         let state = manager.get_backoff_state(peer_addr).unwrap();
-        assert!(state.is_dead);
+        assert!(state.dormant);
 
         // Decrementing complete_dial_attempt on 0 count does not underflow
         manager.complete_dial_attempt(peer_addr);
@@ -711,7 +711,7 @@ mod layer3_panic_safety_and_boundaries {
 
         assert_eq!(state.attempt_count, 100);
         assert!(state.backoff_duration <= Duration::from_secs(30));
-        assert!(state.is_dead);
+        assert!(state.dormant);
 
         // 2. DialPolicyManager prune with Duration::ZERO and Duration::MAX
         let manager = DialPolicyManager::new();

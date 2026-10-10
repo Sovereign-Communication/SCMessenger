@@ -40,6 +40,9 @@ pub struct SeedDialClient {
     /// Signalled when an event is coalesced, so a wait in flight re-reads the
     /// scheduler's pending-reset due time.
     rearm: Notify,
+    /// Swarm handle (set once by `run`) so network events also wake dormant
+    /// peers in the dial policy, not only the seed-dial schedule.
+    swarm: std::sync::OnceLock<SwarmHandle>,
 }
 
 impl SeedDialClient {
@@ -55,6 +58,7 @@ impl SeedDialClient {
             scheduler,
             wake: Notify::new(),
             rearm: Notify::new(),
+            swarm: std::sync::OnceLock::new(),
         })
     }
 
@@ -62,6 +66,9 @@ impl SeedDialClient {
     /// reset to aggressive and any pending wait is cancelled.
     pub fn emit(&self, event: NetworkEvent) -> bool {
         let affected = self.scheduler.on_event(event);
+        if let Some(swarm) = self.swarm.get() {
+            swarm.notify_network_event(event);
+        }
         if affected {
             // notify_one stores a permit when nobody is waiting yet, so an
             // event that lands mid-sweep still wakes the next wait.
@@ -206,6 +213,7 @@ pub async fn sweep_once(swarm: &SwarmHandle, core: &IronCore, sweep: u32) -> usi
 /// Long-lived seed-dial loop. Never returns: sweeps, then waits the
 /// scheduler's delay or an affecting network event, whichever comes first.
 pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialClient>) {
+    let _ = client.swarm.set(swarm.clone());
     let mut sweep: u32 = 0;
     let mut previous_peers: usize = 0;
     // No battery (or an unread sample) means mains powered.
@@ -218,6 +226,13 @@ pub async fn run(swarm: SwarmHandle, core: Arc<IronCore>, client: Arc<SeedDialCl
         // computed right below.
         if let Some(event) = peer_transition(previous_peers, peers) {
             client.scheduler.on_event(event);
+            // Also forward to the dial policy so every NetworkEvent source
+            // takes the same path (real interface changes arrive through
+            // `SeedDialClient::emit` from `run_interface_monitor`). The
+            // policy deliberately does not wake on peer-count transitions
+            // (NewPeerConnected is remote-triggerable), so this is a no-op
+            // wake today and stays safe if the filter changes.
+            swarm.notify_network_event(event);
         }
         // A peer still connected across two consecutive sweeps is a proven
         // connection: restore normal reset responsiveness.

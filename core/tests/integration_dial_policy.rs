@@ -13,32 +13,32 @@ fn test_dial_policy_exponential_backoff() {
     // Initial state
     assert_eq!(state.attempt_count, 0);
     assert_eq!(state.backoff_duration, Duration::from_secs(1));
-    assert!(!state.is_dead);
+    assert!(!state.dormant);
     assert!(state.is_eligible());
 
     // 1st failure: 1s → 2s
     state.on_dial_failure();
     assert_eq!(state.attempt_count, 1);
     assert_eq!(state.backoff_duration, Duration::from_secs(2));
-    assert!(!state.is_dead);
+    assert!(!state.dormant);
     assert!(!state.is_eligible()); // Backoff not elapsed yet
 
     // 2nd failure: 2s → 4s
     state.on_dial_failure();
     assert_eq!(state.attempt_count, 2);
     assert_eq!(state.backoff_duration, Duration::from_secs(4));
-    assert!(!state.is_dead);
+    assert!(!state.dormant);
 
     // 3rd failure: 4s → 8s
     state.on_dial_failure();
     assert_eq!(state.attempt_count, 3);
     assert_eq!(state.backoff_duration, Duration::from_secs(8));
-    assert!(state.is_dead); // Marked dead after 3 attempts
+    assert!(state.dormant); // Dormant (waiting for wake/backoff), never dead
 
-    // 4th failure attempt (should still be dead)
+    // 4th failure: still counted, still retried later
     state.on_dial_failure();
     assert_eq!(state.attempt_count, 4);
-    assert!(state.is_dead);
+    assert!(state.dormant);
 }
 
 #[test]
@@ -49,15 +49,13 @@ fn test_backoff_cap_at_30_seconds() {
 
     // Simulate enough failures to reach and exceed 30s cap
     for _ in 0..15 {
-        if state.is_dead {
-            break;
-        }
         state.on_dial_failure();
     }
 
     // Backoff should never exceed 30s
     assert!(state.backoff_duration <= Duration::from_secs(30));
-    assert!(state.is_dead); // Should be marked dead after 3 attempts
+    assert!(state.dormant); // Dormant after repeated failures, never dead
+    assert_eq!(state.attempt_count, 15); // retries never stop
 }
 
 #[test]
@@ -76,19 +74,19 @@ fn test_connection_resets_backoff() {
     state.on_connection_established();
     assert_eq!(state.attempt_count, 0);
     assert_eq!(state.backoff_duration, Duration::from_secs(1));
-    assert!(!state.is_dead);
+    assert!(!state.dormant);
     assert!(state.is_eligible());
 }
 
 #[test]
-fn test_permanent_failure_marks_dead() {
+fn test_permanent_failure_goes_dormant_not_dead() {
     use scmessenger_core::transport::dial_policy::PerPeerBackoffState;
 
     let mut state = PerPeerBackoffState::new(None);
 
-    // Single permanent failure should mark as dead
+    // Permanent-looking failure parks the peer as Dormant, not dead
     state.on_permanent_failure();
-    assert!(state.is_dead);
+    assert!(state.dormant);
     assert_eq!(state.attempt_count, 3);
     assert!(!state.is_eligible());
 }
@@ -140,24 +138,29 @@ fn test_dial_policy_manager_backoff_rejection() {
 }
 
 #[test]
-fn test_dial_policy_manager_dead_peer() {
+fn test_dial_policy_manager_dormant_peer_is_revived_by_wake() {
     use scmessenger_core::transport::dial_policy::DialPolicyManager;
 
     let manager = DialPolicyManager::new();
     let addr = "test-peer";
 
-    // Register and fail 3 times to mark as dead
+    // Fail 3 times: the peer goes Dormant
     for _ in 0..3 {
         manager.record_dial_failure(addr, None);
     }
 
-    // Now the peer should be marked as dead
     let state = manager.get_backoff_state(addr);
     assert!(state.is_some());
-    assert!(state.unwrap().is_dead);
+    assert!(state.unwrap().dormant);
 
-    // Future dial attempts should be rejected
+    // Dial attempts wait for backoff or a wake event
     assert!(!manager.register_dial_attempt(addr, None));
+
+    // A wake event brings the peer back after the floor gap
+    use scmessenger_core::transport::dial_policy::{WakeTrigger, BACKOFF_FLOOR};
+    assert!(manager.wake_addr(addr, WakeTrigger::Identify));
+    manager.advance_clock(BACKOFF_FLOOR);
+    assert!(manager.register_dial_attempt(addr, None));
 }
 
 #[test]
@@ -282,10 +285,12 @@ fn test_backoff_eligibility_timing() {
 
     // Simulate backoff expiration by manually updating
     // (In real use, time passes naturally)
+    // Eligibility is gated by `next_attempt_at` (jittered), not `last_attempt_ts`.
     let now = Instant::now();
     state.last_attempt_ts = now - Duration::from_secs(3); // 3 seconds ago
+    state.next_attempt_at = now - Duration::from_secs(1);
 
-    // Now with backoff of 2 seconds, should be eligible again
+    // Scheduled attempt time has passed, so eligible again
     assert!(state.is_eligible());
 }
 

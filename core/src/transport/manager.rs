@@ -17,9 +17,10 @@ use crate::transport::health::TransportHealthMonitor;
 use crate::transport::observation::AddressObserver;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-use web_time::{Duration, SystemTime};
+use web_time::{Duration, Instant, SystemTime};
 
 /// State of a registered transport
 #[derive(Debug, Clone)]
@@ -116,18 +117,21 @@ impl Default for OutgoingQueue {
 /// Minimum backoff interval for reconnection attempts
 const RECONNECT_BASE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Maximum backoff interval (capped to prevent absurd waits)
-const RECONNECT_MAX_INTERVAL: Duration = Duration::from_secs(60);
+/// Scale for the stability-derived backoff ceiling. The live ceiling is this
+/// value times a factor in [1, 4] that grows as THIS peer's recent reconnect
+/// success rate falls (see `ceiling_for_success_rate`). Reconnection NEVER
+/// gives up: the ceiling only spaces attempts, and wake credits pull them
+/// forward.
+const RECONNECT_CEILING_BASE: Duration = Duration::from_secs(60);
+
+/// EWMA weight of the newest reconnect outcome in the stability estimate.
+const RECONNECT_STABILITY_ALPHA: f64 = 0.2;
+
+/// Consecutive failures after which a peer is reported Dormant (label only).
+const RECONNECT_DORMANT_AFTER: u32 = 3;
 
 /// Backoff multiplier per failed attempt
 const RECONNECT_BACKOFF_MULTIPLIER: u32 = 2;
-
-/// Maximum consecutive failures before giving up on a peer
-const RECONNECT_MAX_FAILURES: u32 = 10;
-
-/// Maximum peers to reconnect per tick cycle (prevents Resume Storm —
-/// all peers reconnecting simultaneously after app wake, overwhelming the OS)
-const RECONNECT_MAX_CONCURRENT: usize = 3;
 
 /// Number of consecutive ticks a peer must stay past the staleness window
 /// before it is pruned and synthetically disconnected. Guards against
@@ -137,6 +141,11 @@ const STALE_CONFIRM_TICKS: u32 = 3;
 
 /// Minimum interval between successive reconnection dials (stagger)
 const RECONNECT_STAGGER_INTERVAL: Duration = Duration::from_millis(200);
+
+/// First 4 bytes of a peer id as hex, for log markers.
+fn short_id(peer_id: &[u8; 32]) -> String {
+    peer_id[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
 
 /// Per-peer reconnection state with exponential backoff
 #[derive(Debug, Clone)]
@@ -153,6 +162,15 @@ pub struct ReconnectionState {
     pub next_attempt_at: SystemTime,
     /// When this peer was first lost
     pub disconnected_at: SystemTime,
+    /// Dormant: the next attempt waits for a wake event or the jittered
+    /// backoff. Never terminal.
+    pub dormant: bool,
+    /// Per-peer EWMA of reconnect outcomes in [0, 1]. Starts optimistic: a
+    /// queued peer was connected until it was lost. Only THIS peer's
+    /// failures stretch its own ceiling.
+    success_rate: f64,
+    /// Wake-credit buckets, one per trigger (bounded by the trigger count).
+    wake_buckets: HashMap<super::dial_policy::WakeTrigger, super::dial_policy::WakeBucket>,
 }
 
 impl ReconnectionState {
@@ -164,28 +182,113 @@ impl ReconnectionState {
             failures: 0,
             next_attempt_at: SystemTime::now() + RECONNECT_BASE_INTERVAL,
             disconnected_at: SystemTime::now(),
+            dormant: false,
+            success_rate: 1.0,
+            wake_buckets: HashMap::new(),
         }
     }
 
-    /// Calculate the next backoff interval after a failed attempt
+    /// Backoff ceiling for this peer from its own stability estimate.
+    fn ceiling(&self) -> Duration {
+        let rate = if self.success_rate.is_finite() {
+            self.success_rate.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        RECONNECT_CEILING_BASE.mul_f64(1.0 + 3.0 * (1.0 - rate))
+    }
+
+    /// Fold a reconnect outcome into this peer's stability estimate.
+    fn record_outcome(&mut self, success: bool) {
+        let sample = if success { 1.0 } else { 0.0 };
+        self.success_rate = (1.0 - RECONNECT_STABILITY_ALPHA) * self.success_rate
+            + RECONNECT_STABILITY_ALPHA * sample;
+    }
+
+    /// Nominal backoff interval at the default ceiling.
+    #[cfg(test)]
     fn backoff_interval(&self) -> Duration {
+        self.backoff_interval_with(RECONNECT_CEILING_BASE)
+    }
+
+    /// Nominal backoff interval (1 s doubling) capped at `ceiling`.
+    fn backoff_interval_with(&self, ceiling: Duration) -> Duration {
         let base = RECONNECT_BASE_INTERVAL.as_millis() as u64;
         let multiplier = RECONNECT_BACKOFF_MULTIPLIER
             .checked_pow(self.failures)
             .unwrap_or(u32::MAX) as u64;
         let interval_ms = base.saturating_mul(multiplier);
-        Duration::from_millis(interval_ms).min(RECONNECT_MAX_INTERVAL)
+        Duration::from_millis(interval_ms).min(ceiling.max(RECONNECT_BASE_INTERVAL))
     }
 
     /// Record a failed reconnection attempt, advancing the backoff
     pub fn record_failure(&mut self) {
-        self.failures += 1;
-        self.next_attempt_at = SystemTime::now() + self.backoff_interval();
+        self.record_failure_with_ceiling(RECONNECT_CEILING_BASE);
     }
 
-    /// Whether this peer has exceeded the maximum failure count
-    pub fn is_exhausted(&self) -> bool {
-        self.failures >= RECONNECT_MAX_FAILURES
+    /// Record a failed attempt with a stability-derived ceiling. The next
+    /// attempt is scheduled with full jitter (uniform 0.5..1.0 of nominal).
+    /// There is no failure limit: the peer stays queued until it connects
+    /// or is removed as a target.
+    pub fn record_failure_with_ceiling(&mut self, ceiling: Duration) {
+        self.failures = self.failures.saturating_add(1);
+        let wait = super::dial_policy::jittered(self.backoff_interval_with(ceiling));
+        self.next_attempt_at = SystemTime::now() + wait;
+        if self.failures >= RECONNECT_DORMANT_AFTER && !self.dormant {
+            self.dormant = true;
+            info!(
+                "[DIAL] dormant peer={} reason=reconnect_failures next_wake=event|backoff_ms={}",
+                short_id(&self.peer_id),
+                wait.as_millis()
+            );
+        }
+    }
+
+    /// Wake event: a ONE-SHOT credit. The next attempt is made due no later
+    /// than one floor interval from now, but the backoff ladder is NOT reset
+    /// (`failures` is kept), so a failed woken attempt resumes the ladder.
+    /// Credits are limited by a per-trigger token bucket whose refill period
+    /// is derived from the observed event frequency (see
+    /// `dial_policy::WakeBucket`). Returns true if a credit was granted.
+    pub fn wake(&mut self, trigger: super::dial_policy::WakeTrigger) -> bool {
+        if self.failures == 0 && !self.dormant {
+            return false;
+        }
+        let now = Instant::now();
+        let ceiling = self.ceiling();
+        let admitted = self
+            .wake_buckets
+            .entry(trigger)
+            .or_insert_with(|| super::dial_policy::WakeBucket::new(now))
+            .admit(now, ceiling);
+        if !admitted {
+            debug!(
+                "[DIAL] wake rate-limited peer={} trigger={}",
+                short_id(&self.peer_id),
+                trigger.as_str()
+            );
+            return false;
+        }
+        let due = SystemTime::now() + RECONNECT_BASE_INTERVAL;
+        if self.next_attempt_at > due {
+            self.next_attempt_at = due;
+        }
+        let was_dormant = self.dormant;
+        self.dormant = false;
+        if was_dormant {
+            info!(
+                "[DIAL] wake peer={} trigger={}",
+                short_id(&self.peer_id),
+                trigger.as_str()
+            );
+        } else {
+            debug!(
+                "[DIAL] wake peer={} trigger={}",
+                short_id(&self.peer_id),
+                trigger.as_str()
+            );
+        }
+        true
     }
 
     /// Whether enough time has passed to attempt reconnection
@@ -231,6 +334,10 @@ pub struct TransportManager {
     /// consecutive ticks they have stayed stale (review F2 grace counter).
     stale_candidates: Arc<RwLock<HashMap<[u8; 32], u32>>>,
 
+    /// Pending-dial headroom reported by the swarm layer; `usize::MAX` means
+    /// unreported (batch size is then derived from the ready set).
+    pending_dial_headroom: Arc<AtomicUsize>,
+
     /// Optional health monitor for stale connection cleanup
     health_monitor: Option<Arc<TransportHealthMonitor>>,
 
@@ -260,6 +367,7 @@ impl TransportManager {
             peer_last_seen: Arc::new(RwLock::new(HashMap::new())),
             target_peers: Arc::new(RwLock::new(HashMap::new())),
             reconnection_queue: Arc::new(RwLock::new(HashMap::new())),
+            pending_dial_headroom: Arc::new(AtomicUsize::new(usize::MAX)),
             stale_candidates: Arc::new(RwLock::new(HashMap::new())),
             health_monitor: None,
             address_observer: Arc::new(RwLock::new(AddressObserver::new())),
@@ -326,6 +434,12 @@ impl TransportManager {
 
                 let mut last_seen = self.peer_last_seen.write();
                 last_seen.insert(peer_id, SystemTime::now());
+
+                // Wake event: a fresh sighting/address for a queued peer.
+                // (reconnection_queue is last in the lock order.)
+                if let Some(state) = self.reconnection_queue.write().get_mut(&peer_id) {
+                    state.wake(super::dial_policy::WakeTrigger::AddressLearned);
+                }
 
                 debug!("Peer {:x?} discovered on {}", &peer_id[..8], transport);
             }
@@ -418,6 +532,8 @@ impl TransportManager {
         data: Vec<u8>,
         priority: u8,
     ) -> Result<SendResult, TransportError> {
+        // Wake event: an outbound message is queued for this peer.
+        self.wake_reconnect(&peer_id, super::dial_policy::WakeTrigger::OutboundQueued);
         let best = self.best_transport_for_peer(peer_id)?;
 
         // Structured tracing: Log transport handoff to hardware layer
@@ -560,26 +676,45 @@ impl TransportManager {
         debug!("Removed target peer {:x?}", &peer_id[..8]);
     }
 
+    /// Report how many more outbound dials the swarm can start right now
+    /// (pending-dial headroom). Reconnect batches are sized from it.
+    pub fn set_pending_dial_headroom(&self, headroom: usize) {
+        self.pending_dial_headroom
+            .store(headroom, Ordering::Relaxed);
+    }
+
     /// Returns peers that are due for a reconnection attempt.
     /// The caller is responsible for actually dialing these peers and then
     /// calling `record_reconnect_success` or `record_reconnect_failure`.
-    /// Returns peers ready for reconnection, rate-limited to prevent Resume Storm.
     ///
-    /// After app resume, all disconnected peers become ready simultaneously.
-    /// This method caps the batch to `RECONNECT_MAX_CONCURRENT` peers per tick,
-    /// with staggered `next_attempt_at` times applied to remaining peers so they
-    /// spread across subsequent ticks instead of all firing at once.
+    /// Rate-limited to prevent a Resume Storm (all peers reconnecting at
+    /// once after app wake). The batch size is derived, not fixed: it is the
+    /// pending-dial headroom reported via `set_pending_dial_headroom`, or,
+    /// when none was reported, the ceiling of the square root of the ready
+    /// set (small sets go mostly at once, large sets spread out). Peers over
+    /// the batch are staggered across subsequent ticks. No peer is ever
+    /// dropped: retries never stop.
     pub fn peers_needing_reconnect(&self) -> Vec<ReconnectionState> {
         let mut queue = self.reconnection_queue.write();
 
         let mut ready: Vec<[u8; 32]> = queue
             .iter()
-            .filter(|(_, state)| state.is_ready() && !state.is_exhausted())
+            .filter(|(_, state)| state.is_ready())
             .map(|(id, _)| *id)
             .collect();
 
-        // If more peers are ready than our concurrency limit, stagger the excess
-        if ready.len() > RECONNECT_MAX_CONCURRENT {
+        let reported = self.pending_dial_headroom.load(Ordering::Relaxed);
+        let batch = if reported == usize::MAX {
+            ((ready.len() as f64).sqrt().ceil() as usize).max(1)
+        } else {
+            // Zero reported headroom still lets one peer through per tick:
+            // never-give-up means a saturated swarm must not starve the
+            // queue entirely (the swarm's own limits still apply).
+            reported.max(1)
+        };
+
+        // If more peers are ready than the batch, stagger the excess
+        if ready.len() > batch {
             // Sort by disconnected_at so longest-waiting peers go first
             ready.sort_by(|a, b| {
                 let a_disc = queue
@@ -594,14 +729,14 @@ impl TransportManager {
             });
 
             // Stagger the ones we're NOT returning this tick
-            for (i, peer_id) in ready[RECONNECT_MAX_CONCURRENT..].iter().enumerate() {
+            for (i, peer_id) in ready[batch..].iter().enumerate() {
                 if let Some(state) = queue.get_mut(peer_id) {
                     state.next_attempt_at =
                         SystemTime::now() + RECONNECT_STAGGER_INTERVAL * (i as u32 + 1);
                 }
             }
 
-            ready.truncate(RECONNECT_MAX_CONCURRENT);
+            ready.truncate(batch);
         }
 
         ready
@@ -610,31 +745,65 @@ impl TransportManager {
             .collect()
     }
 
-    /// Record a successful reconnection — removes from reconnect queue.
+    /// Record a successful reconnection - removes from reconnect queue.
     pub fn record_reconnect_success(&self, peer_id: &[u8; 32]) {
         self.reconnection_queue.write().remove(peer_id);
         info!("Reconnected to peer {:x?}", &peer_id[..8]);
     }
 
-    /// Record a failed reconnection attempt — advances the backoff timer.
+    /// Record a failed reconnection attempt - advances the jittered backoff
+    /// timer. There is no failure limit; the peer stays queued.
     pub fn record_reconnect_failure(&self, peer_id: &[u8; 32]) {
         let mut queue = self.reconnection_queue.write();
         if let Some(state) = queue.get_mut(peer_id) {
-            state.record_failure();
-            if state.is_exhausted() {
-                warn!(
-                    "Peer {:x?} exhausted {} reconnection attempts — giving up",
-                    &peer_id[..8],
-                    RECONNECT_MAX_FAILURES
-                );
-            } else {
-                debug!(
-                    "Reconnection to {:x?} failed (attempt {}), next try in {:?}",
-                    &peer_id[..8],
-                    state.failures,
-                    state.backoff_interval()
-                );
-            }
+            state.record_outcome(false);
+            let ceiling = state.ceiling();
+            state.record_failure_with_ceiling(ceiling);
+            debug!(
+                "Reconnection to {:x?} failed (attempt {}), next try in {:?}",
+                &peer_id[..8],
+                state.failures,
+                state.backoff_interval_with(ceiling)
+            );
+        }
+    }
+
+    /// Wake event for one queued peer (identify, inbound connection or dial,
+    /// new address, outbound message queued). Returns true if it changed.
+    pub fn wake_reconnect(
+        &self,
+        peer_id: &[u8; 32],
+        trigger: super::dial_policy::WakeTrigger,
+    ) -> bool {
+        self.reconnection_queue
+            .write()
+            .get_mut(peer_id)
+            .is_some_and(|state| state.wake(trigger))
+    }
+
+    /// Wake every queued peer. Returns how many changed.
+    pub fn wake_all_reconnects(&self, trigger: super::dial_policy::WakeTrigger) -> usize {
+        self.reconnection_queue
+            .write()
+            .values_mut()
+            .map(|state| state.wake(trigger))
+            .filter(|changed| *changed)
+            .count()
+    }
+
+    /// Consume a discovery-scheduler event: genuine LOCAL change events wake
+    /// queued peers; peer-loss events do not, and neither does
+    /// `NewPeerConnected` (a remote party, including a Sybil, can trigger it
+    /// cheaply).
+    pub fn on_network_event(&self, event: &super::discovery_scheduler::NetworkEvent) -> usize {
+        use super::discovery_scheduler::NetworkEvent;
+        match event {
+            NetworkEvent::PeerDisconnected { .. }
+            | NetworkEvent::AllPeersLost
+            | NetworkEvent::NewPeerConnected => 0,
+            NetworkEvent::BleStateChanged { on } if !*on => 0,
+            NetworkEvent::LedgerReceived { new_entries } if *new_entries == 0 => 0,
+            _ => self.wake_all_reconnects(super::dial_policy::WakeTrigger::NetworkChange),
         }
     }
 
@@ -643,7 +812,8 @@ impl TransportManager {
         self.reconnection_queue.read().len()
     }
 
-    /// Maintenance: clean up stale peer entries and prune exhausted reconnections.
+    /// Maintenance: clean up stale peer entries (reconnection entries are never
+    /// pruned for failing; only `remove_target_peer` or success removes them).
     ///
     /// Stale peers (not seen for 5 minutes) are fully reconciled out of every
     /// state map -- including each transport's `connected_peers`, which the
@@ -767,19 +937,6 @@ impl TransportManager {
                 }
             }
         }
-
-        // Prune exhausted reconnection entries
-        self.reconnection_queue.write().retain(|peer_id, state| {
-            if state.is_exhausted() {
-                info!(
-                    "Pruning exhausted reconnection entry for {:x?}",
-                    &peer_id[..8]
-                );
-                false
-            } else {
-                true
-            }
-        });
 
         // Clean up stale connection stats from the health monitor
         if let Some(ref monitor) = self.health_monitor {
@@ -1672,20 +1829,188 @@ mod tests {
             state.record_failure();
         }
 
-        assert!(state.backoff_interval() <= RECONNECT_MAX_INTERVAL);
+        assert!(state.backoff_interval() <= RECONNECT_CEILING_BASE);
+    }
+
+    fn queue_target(manager: &TransportManager, peer_id: [u8; 32]) {
+        manager.add_target_peer(peer_id, vec![1]);
+        manager.handle_event(TransportEvent::PeerDiscovered {
+            peer_id,
+            transport: TransportType::BLE,
+            addr: vec![1],
+        });
+        manager.handle_event(TransportEvent::PeerDisconnected {
+            peer_id,
+            transport: TransportType::BLE,
+        });
     }
 
     #[test]
-    fn test_reconnection_exhaustion() {
-        let mut state = ReconnectionState::new(create_peer_id(1), HashSet::new(), vec![]);
+    fn test_reconnection_never_gives_up() {
+        let manager = TransportManager::new();
+        let peer_id = create_peer_id(1);
+        queue_target(&manager, peer_id);
 
-        assert!(!state.is_exhausted());
-
-        for _ in 0..RECONNECT_MAX_FAILURES {
-            state.record_failure();
+        // Far beyond the old 10-failure limit: still queued, still retried.
+        for _ in 0..100 {
+            manager.record_reconnect_failure(&peer_id);
         }
+        assert_eq!(manager.reconnection_queue_len(), 1);
+        manager.tick();
+        assert_eq!(manager.reconnection_queue_len(), 1);
 
-        assert!(state.is_exhausted());
+        // Jittered backoff never exceeds the stability-derived ceiling
+        // (at most 4x the base) and the peer is due once it elapses.
+        let due = {
+            let queue = manager.reconnection_queue.read();
+            let state = queue.get(&peer_id).expect("queued");
+            assert!(state.failures >= 100);
+            assert!(state.dormant);
+            state.next_attempt_at
+        };
+        let wait = due
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO);
+        assert!(wait <= RECONNECT_CEILING_BASE * 4);
+        {
+            let mut queue = manager.reconnection_queue.write();
+            let state = queue.get_mut(&peer_id).expect("queued");
+            state.next_attempt_at = SystemTime::now() - Duration::from_secs(1);
+        }
+        assert_eq!(manager.peers_needing_reconnect().len(), 1);
+    }
+
+    #[test]
+    fn test_reconnect_wake_triggers() {
+        use super::super::dial_policy::WakeTrigger;
+        let triggers = [
+            WakeTrigger::InboundConnection,
+            WakeTrigger::InboundDial,
+            WakeTrigger::Identify,
+            WakeTrigger::AddressLearned,
+            WakeTrigger::NetworkChange,
+            WakeTrigger::OutboundQueued,
+        ];
+        for trigger in triggers {
+            let manager = TransportManager::new();
+            let peer_id = create_peer_id(1);
+            queue_target(&manager, peer_id);
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer_id);
+            }
+            assert!(manager.peers_needing_reconnect().is_empty());
+            assert!(
+                manager.wake_reconnect(&peer_id, trigger),
+                "{}",
+                trigger.as_str()
+            );
+            let queue = manager.reconnection_queue.read();
+            let state = queue.get(&peer_id).expect("queued");
+            assert!(!state.dormant);
+            // One-shot credit: the ladder is kept.
+            assert_eq!(state.failures, 12);
+            let wait = state
+                .next_attempt_at
+                .duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO);
+            assert!(wait <= RECONNECT_BASE_INTERVAL, "wake must bound the wait");
+        }
+    }
+
+    #[test]
+    fn test_send_to_peer_and_discovery_wake_queued_peer() {
+        let manager = TransportManager::new();
+        let caps = TransportCapabilities::for_transport(TransportType::BLE);
+        manager.register_transport(TransportType::BLE, caps);
+        let peer_id = create_peer_id(1);
+        queue_target(&manager, peer_id);
+
+        // New sighting of the queued peer wakes it.
+        for _ in 0..12 {
+            manager.record_reconnect_failure(&peer_id);
+        }
+        manager.handle_event(TransportEvent::PeerDiscovered {
+            peer_id,
+            transport: TransportType::BLE,
+            addr: vec![2],
+        });
+        assert!(!manager.reconnection_queue.read()[&peer_id].dormant);
+        assert_eq!(manager.reconnection_queue.read()[&peer_id].failures, 12);
+
+        // An outbound message wakes it even when no transport can carry it.
+        for _ in 0..12 {
+            manager.record_reconnect_failure(&peer_id);
+        }
+        manager.handle_event(TransportEvent::PeerDisconnected {
+            peer_id,
+            transport: TransportType::BLE,
+        });
+        let _ = manager.send_to_peer(peer_id, vec![1], 5);
+        assert!(!manager.reconnection_queue.read()[&peer_id].dormant);
+    }
+
+    #[test]
+    fn test_network_event_wakes_queue_but_peer_loss_does_not() {
+        use super::super::discovery_scheduler::NetworkEvent;
+        let manager = TransportManager::new();
+        let peer_id = create_peer_id(1);
+        queue_target(&manager, peer_id);
+        for _ in 0..12 {
+            manager.record_reconnect_failure(&peer_id);
+        }
+        assert_eq!(
+            manager.on_network_event(&NetworkEvent::PeerDisconnected { count_now: 1 }),
+            0
+        );
+        assert_eq!(manager.on_network_event(&NetworkEvent::AllPeersLost), 0);
+        assert_eq!(manager.on_network_event(&NetworkEvent::NewPeerConnected), 0);
+        assert_eq!(manager.on_network_event(&NetworkEvent::WifiChanged), 1);
+        assert!(!manager.reconnection_queue.read()[&peer_id].dormant);
+        // A second wake from the same source is rate limited (one-shot credit).
+        assert_eq!(manager.on_network_event(&NetworkEvent::WifiChanged), 0);
+    }
+
+    #[test]
+    fn test_reconnect_batch_follows_headroom() {
+        let manager = TransportManager::new();
+        for n in 1..=8u8 {
+            queue_target(&manager, create_peer_id(n));
+        }
+        {
+            let mut queue = manager.reconnection_queue.write();
+            for state in queue.values_mut() {
+                state.next_attempt_at = SystemTime::now() - Duration::from_secs(1);
+            }
+        }
+        manager.set_pending_dial_headroom(5);
+        assert_eq!(manager.peers_needing_reconnect().len(), 5);
+
+        // Zero headroom still releases one peer (max(1)) and drops none.
+        {
+            let mut queue = manager.reconnection_queue.write();
+            for state in queue.values_mut() {
+                state.next_attempt_at = SystemTime::now() - Duration::from_secs(1);
+            }
+        }
+        manager.set_pending_dial_headroom(0);
+        assert_eq!(manager.peers_needing_reconnect().len(), 1);
+        assert_eq!(manager.reconnection_queue_len(), 8);
+    }
+
+    #[test]
+    fn test_dead_peer_does_not_stretch_other_peers_ceiling() {
+        let manager = TransportManager::new();
+        let dead = create_peer_id(1);
+        let healthy = create_peer_id(2);
+        queue_target(&manager, dead);
+        queue_target(&manager, healthy);
+        for _ in 0..40 {
+            manager.record_reconnect_failure(&dead);
+        }
+        manager.record_reconnect_failure(&healthy);
+        let queue = manager.reconnection_queue.read();
+        assert!(queue[&dead].ceiling() > queue[&healthy].ceiling());
+        assert!(queue[&healthy].ceiling() < RECONNECT_CEILING_BASE * 2);
     }
 
     #[test]
