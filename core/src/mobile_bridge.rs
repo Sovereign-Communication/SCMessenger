@@ -3956,6 +3956,70 @@ fn get_global_runtime() -> tokio::runtime::Handle {
     handle
 }
 
+/// True when a swarm dial error string is the core guard's neutral
+/// `skipped:` reply (see `SwarmCommand::Dial` handling in the swarm loop).
+fn dial_error_is_skip(err: &str) -> bool {
+    err.trim_start().starts_with("skipped:")
+}
+
+/// Bridge-level outcome of a swarm dial `skipped:` reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialSkipOutcome {
+    /// Exact socket / peer id already connected: genuine connectivity evidence.
+    AlreadyConnected,
+    /// Self / own address / rate-limited probe: no evidence either way.
+    Neutral,
+}
+
+/// Classify a swarm dial error string. `None` means it is a real failure.
+fn classify_dial_skip(err: &str) -> Option<DialSkipOutcome> {
+    if !dial_error_is_skip(err) {
+        return None;
+    }
+    if err.contains(crate::transport::swarm::DIAL_SKIP_CONNECTED_MARKER) {
+        Some(DialSkipOutcome::AlreadyConnected)
+    } else {
+        Some(DialSkipOutcome::Neutral)
+    }
+}
+
+/// Map a swarm dial result onto the FFI contract: `Ok` only for real
+/// dispatch or an already-connected skip; `DialSkipped` for non-evidence
+/// skips; the usual typed errors otherwise.
+fn map_dial_result(dial_result: anyhow::Result<()>) -> Result<(), crate::IronCoreError> {
+    if let Err(e) = &dial_result {
+        match classify_dial_skip(&e.to_string()) {
+            Some(DialSkipOutcome::AlreadyConnected) => {
+                tracing::debug!("Dial skipped (already connected): {}", e);
+                return Ok(());
+            }
+            Some(DialSkipOutcome::Neutral) => {
+                tracing::debug!("Dial skipped by swarm guard (no evidence): {}", e);
+                return Err(crate::IronCoreError::DialSkipped);
+            }
+            None => {}
+        }
+    }
+    dial_result.map_err(|e| {
+        let err_str = e.to_string().to_lowercase();
+        if err_str.contains("dialing self") || err_str.contains("dialself") {
+            crate::IronCoreError::DialSelf
+        } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
+            crate::IronCoreError::NoAddresses
+        } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
+            // TODO(#521): live today (behaviour.rs connection_limits); revisit
+            // and drop this mapping if #521 removes the deny path.
+            crate::IronCoreError::ConnectionLimit
+        } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported") {
+            crate::IronCoreError::MultiaddrNotSupported
+        } else if err_str.contains("io") {
+            crate::IronCoreError::IoError
+        } else {
+            crate::IronCoreError::NetworkError
+        }
+    })
+}
+
 #[uniffi::export]
 impl SwarmBridge {
     #[uniffi::constructor]
@@ -4122,23 +4186,11 @@ impl SwarmBridge {
         let addr =
             Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
 
-        handle.dial(addr).await.map_err(|e| {
-            let err_str = e.to_string().to_lowercase();
-            if err_str.contains("dialing self") || err_str.contains("dialself") {
-                crate::IronCoreError::DialSelf
-            } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
-                crate::IronCoreError::NoAddresses
-            } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
-                crate::IronCoreError::ConnectionLimit
-            } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported")
-            {
-                crate::IronCoreError::MultiaddrNotSupported
-            } else if err_str.contains("io") {
-                crate::IronCoreError::IoError
-            } else {
-                crate::IronCoreError::NetworkError
-            }
-        })
+        // A "skipped:" reply is a deliberate non-dispatch by the swarm guard.
+        // Already-connected skips (exact socket / peer id) are Ok: genuine
+        // connectivity evidence. Self / own-address / rate-limited skips are
+        // the typed `DialSkipped` error: neither success nor failure.
+        map_dial_result(handle.dial(addr).await)
     }
 
     pub async fn get_peers(&self) -> Vec<String> {
@@ -4637,6 +4689,65 @@ mod tests {
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
+
+    #[test]
+    fn dial_error_is_skip_matches_only_the_neutral_prefix() {
+        assert!(dial_error_is_skip(
+            "skipped: host already connected -- respond over existing link"
+        ));
+        assert!(dial_error_is_skip(
+            "skipped: target is self (local peer id)"
+        ));
+        assert!(!dial_error_is_skip("Dial failed: connection refused"));
+        assert!(!dial_error_is_skip("marked as dead, skipped: later"));
+    }
+
+    #[test]
+    fn dial_skip_ffi_contract_ok_only_for_connected_evidence() {
+        // Exact socket / peer id connected: Ok (evidence).
+        for msg in [
+            "skipped: exact socket already connected -- respond over existing link",
+            "skipped: peer already connected -- respond over existing link",
+        ] {
+            assert!(map_dial_result(Err(anyhow::anyhow!(msg))).is_ok(), "{msg}");
+        }
+        // Self / own address / rate-limited probe: typed DialSkipped.
+        for msg in [
+            "skipped: target is self (local peer id)",
+            "skipped: address is our own listener/external/interface addr -- self-dial",
+            "skipped: host already has a live direct link in this path class; different-port probe skipped",
+        ] {
+            assert!(
+                matches!(
+                    map_dial_result(Err(anyhow::anyhow!(msg))),
+                    Err(crate::IronCoreError::DialSkipped)
+                ),
+                "{msg}"
+            );
+        }
+        // Real failures keep their typed mapping and are never DialSkipped.
+        // (Message avoids the substring "io": the generic mapping treats it as IoError.)
+        assert!(matches!(
+            map_dial_result(Err(anyhow::anyhow!("Dial failed: refused by peer"))),
+            Err(crate::IronCoreError::NetworkError)
+        ));
+        assert!(map_dial_result(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn swarm_skip_reasons_classify_as_expected() {
+        assert_eq!(
+            classify_dial_skip(
+                "skipped: exact socket already connected -- respond over existing link"
+            ),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+        assert_eq!(
+            classify_dial_skip("skipped: target is self (local peer id)"),
+            Some(DialSkipOutcome::Neutral)
+        );
+        assert_eq!(classify_dial_skip("Network error"), None);
+    }
 
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests

@@ -3974,13 +3974,76 @@ open class MeshRepository(
         wifiTransportManager?.startDiscovery()
     }
 
-    private suspend fun initializeAndStartSwarm() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /**
+     * Serializes swarm starts. initializeAndStartSwarm has many triggers
+     * (startMeshService, permission grant, identity creation, setNickname,
+     * network recovery); fired concurrently they each entered the FFI start
+     * while the first had not yet installed its handle (3 swarm starts in the
+     * first 14 s after launch, 3-node run 2026-10-08). Callers now queue here
+     * and the gate turns every redundant one into a no-op.
+     */
+    private val swarmStartMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Whether the last successful swarm start already had a local identity. */
+    @Volatile
+    private var swarmStartedWithIdentity: Boolean? = null
+
+    private suspend fun initializeAndStartSwarm() {
+        swarmStartMutex.withLock {
+            var identityKnown = true
+            val identityNow = try {
+                !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
+            } catch (e: Exception) {
+                // Unknown, not "absent": assuming absent would silently miss a
+                // headless -> full upgrade until some later trigger. Assume an
+                // identity may exist so the gate re-allows the upgrade start; a
+                // persistently failing read therefore retries on each trigger.
+                identityKnown = false
+                Timber.w(e, "Swarm start gate: identity read failed; treating as possibly present")
+                true
+            }
+            if (!SwarmStartGate.shouldStart(
+                    bridgePresent = swarmBridge != null,
+                    startedWithIdentity = swarmStartedWithIdentity,
+                    identityNow = identityNow
+                )
+            ) {
+                Timber.d("Swarm already started; skipping redundant start trigger")
+                return
+            }
+            // Non-reentrant Mutex: nothing in initializeAndStartSwarmLocked may
+            // call initializeAndStartSwarm synchronously. Audited: it only calls
+            // ensureLocalIdentityFederation, startSwarm/getSwarmBridge FFI,
+            // dial(), and repoScope.launch'ed helpers (separate coroutines that
+            // would merely queue on this mutex).
+            val startSucceeded = initializeAndStartSwarmLocked()
+            // Record the flag only when this locked start really succeeded. A
+            // failed upgrade retry keeps the old bridge but must leave the flag
+            // unchanged so the next trigger retries. An unknown identity read
+            // records "started without identity" so the next trigger retries.
+            swarmStartedWithIdentity = SwarmStartGate.nextStartedWithIdentity(
+                previous = swarmStartedWithIdentity,
+                startSucceeded = startSucceeded,
+                identityKnown = identityKnown,
+                identityNow = identityNow
+            )
+        }
+    }
+
+    /** Returns true only when the swarm started and a bridge is wired. */
+    private suspend fun initializeAndStartSwarmLocked(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val settings = loadSettings()
         if (!settings.internetEnabled) {
             Timber.d("Swarm/Internet disabled in settings")
-            return@withContext
+            return@withContext false
         }
 
+        // A bridge wired by an earlier successful start belongs to a LIVE swarm.
+        // A retry whose startSwarm throws must not null it (core start_swarm is
+        // idempotent for the same mode), otherwise a healthy swarm is orphaned
+        // until the next trigger.
+        val hadLiveBridge = swarmBridge != null
+        var startSwarmThrew = false
         try {
             ensureLocalIdentityFederation()
             // Initiate swarm in Rust core.
@@ -3996,7 +4059,12 @@ open class MeshRepository(
             // first listener is actually bound, and throws NetworkException if the
             // bind fails or times out. That is why this function is a suspend fun
             // pinned to Dispatchers.IO — it must never run on the main thread.
-            meshService?.startSwarm("/ip4/0.0.0.0/tcp/9001", listOf())
+            try {
+                meshService?.startSwarm("/ip4/0.0.0.0/tcp/9001", listOf())
+            } catch (e: Exception) {
+                startSwarmThrew = true
+                throw e
+            }
 
             // Obtain the SwarmBridge managed by Rust MeshService — only after the
             // listener is confirmed bound, so a wired bridge implies real
@@ -4014,9 +4082,13 @@ open class MeshRepository(
             }
 
             Timber.i("[OK] Internet transport (Swarm) started and bridge wired; listeners=${getListeningAddresses()}")
+            swarmBridge != null
         } catch (e: Exception) {
-            swarmBridge = null
-            Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable")
+            if (startSwarmThrew && !hadLiveBridge) {
+                swarmBridge = null
+            }
+            Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable (liveBridgeKept=${hadLiveBridge})")
+            false
         }
     }
 
@@ -6046,6 +6118,13 @@ open class MeshRepository(
             swarmBridge?.dial(multiaddr)
             Timber.i("Dialed $multiaddr via SwarmBridge")
         } catch (e: Exception) {
+            if (DialSkip.isSkipped(e)) {
+                // Deliberate non-dispatch by the core guard: neither success
+                // nor failure, so no error log and no rethrow (callers book
+                // backoff/dead-marking on a throw).
+                Timber.d("Dial to $multiaddr skipped by core guard: ${e.message}")
+                return
+            }
             Timber.e(e, "Failed to dial $multiaddr")
             throw e
         }
@@ -11249,11 +11328,25 @@ open class MeshRepository(
                     anyBreakerBlocked = true
                     continue
                 }
-                anyDialAttempted = true
                 bridge.dial(addr)
+                // Reached only when the core dispatched a dial or reported the
+                // exact socket/peer already connected (Ok = evidence). Typed
+                // DialSkipped (self / own address / rate-limited probe) throws
+                // and is handled below as a neutral, non-evidence skip.
+                anyDialAttempted = true
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
             } catch (e: Exception) {
+                if (DialSkip.isSkipped(e)) {
+                    // Core guard declined to dispatch: no reachability
+                    // evidence either way. No breaker/metrics failure, no
+                    // success, and it does not count as a real dial attempt
+                    // (so an all-skipped round books no backoff).
+                    Timber.d("Bootstrap dial skipped by core guard for %s: %s", addr, e.message)
+                    anyBreakerBlocked = true
+                    continue
+                }
+                anyDialAttempted = true
                 // P1_ANDROID_013: Record failure metrics directly without triggering
                 // enhanceNetworkErrorLogging for each failure. The fallback protocol
                 // is now handled by the racing bootstrap, not per-dial error logging.
@@ -11442,6 +11535,10 @@ open class MeshRepository(
                             Timber.i("Bootstrap connected: %s", addr)
                             BootstrapAttempt.Success(addr)
                         } catch (e: Exception) {
+                            if (DialSkip.isSkipped(e)) {
+                                Timber.d("Bootstrap race dial skipped by core guard for $addr: ${e.message}")
+                                return@async BootstrapAttempt.Failure(addr, "skipped")
+                            }
                             // P1_ANDROID_013: Record failure metrics directly without triggering
                             // enhanceNetworkErrorLogging, which would cascade into fallback protocol
                             val detail = classifyBootstrapError(e, addr)
