@@ -10,49 +10,52 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust:
-    name: Rust Linting
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
-    timeout-minutes: 20
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust_relevant: ${{ steps.platform.outputs.rust_relevant }}
+      ios_relevant: ${{ steps.platform.outputs.ios_relevant }}
+      kotlin_relevant: ${{ steps.platform.outputs.kotlin_relevant }}
     steps:
       - uses: actions/checkout@v7
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
 
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
+  # Required context. Only the cheap, non-compiling checks live here: rustfmt and
+  # the two python perimeter/unwrap gates. clippy (--all-features, a strict
+  # superset of what ran here) is the canonical job "Lint" in ci.yml, so it is
+  # not compiled a second time. Hosted: nothing here needs the OCI warm cache.
+  rust:
+    name: Rust Linting
+    needs: changes
+    # Required check: always run and fail closed if `changes` failed.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "[FAIL] changes job result: ${{ needs.changes.result }}"
+          exit 1
+      - uses: actions/checkout@v7
 
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.docs_only.outputs.is_docs_only != 'true' && runner.environment != 'self-hosted'
+        if: needs.changes.outputs.rust_relevant == 'true'
         with:
           toolchain: 1.99.0
-          components: rustfmt, clippy
-      
-      - uses: Swatinem/rust-cache@v2
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-        with:
-          key: lint-rust-${{ hashFiles('**/Cargo.lock') }}
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install libdbus-1-dev (Ubuntu)
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-        uses: ./.github/actions/linux-build-deps
-        with:
-          ripgrep: 'true'
+          components: rustfmt
 
       - name: Check Rust formatting
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: needs.changes.outputs.rust_relevant == 'true'
         run: cargo fmt --all -- --check
-      
-      - name: Run Clippy
-        if: steps.docs_only.outputs.is_docs_only != 'true'
-        run: cargo clippy --workspace -- -D warnings -A clippy::empty_line_after_doc_comments
 
       # Blocking, not informational: no continue-on-error. Catches the class
       # of bug behind the historical sender-impersonation hole (a real input
@@ -60,7 +63,7 @@ jobs:
       # `unused_variables` (even at deny) cannot see this -- a leading
       # underscore is rustc's own sanctioned way to silence that lint, so it
       # needs a dedicated, AST-light scan. See the script's module docstring
-      # for the full rationale and the exact empirical proof.
+      # for the full rationale and the exact empirical proof. Always runs.
       - name: Check for ignored parameters in the merge-blocked perimeter
         run: python3 scripts/check_perimeter_underscore_params.py
 
@@ -70,35 +73,28 @@ jobs:
       # scripts/prod_unwrap_allowlist.cfg (file:line + reason). The gate FAILS
       # if python3 is missing or the script cannot run.
       - name: Check for unwrap() and println! in production library code
-        if: steps.docs_only.outputs.is_docs_only != 'true'
+        if: needs.changes.outputs.rust_relevant == 'true'
         run: |
           command -v python3 >/dev/null 2>&1 || { echo "[FAIL] python3 missing; cannot run unwrap/println gate"; exit 1; }
           python3 -m unittest scripts/test_check_prod_unwrap_println.py
           python3 scripts/check_prod_unwrap_println.py
 
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
   kotlin:
     name: Kotlin Linting
+    needs: changes
+    # Job-level skip: ktlint only reads android/, so it never starts for other diffs.
+    if: needs.changes.outputs.kotlin_relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      - name: Detect docs-only change
-        id: docs_only
-        uses: ./.github/actions/detect-docs-only
-
       - name: Setup Android SDK
-        if: steps.docs_only.outputs.is_docs_only != 'true'
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
       
       - name: Cache Gradle dependencies
-        if: steps.docs_only.outputs.is_docs_only != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -109,36 +105,25 @@ jobs:
             ${{ runner.os }}-gradle-
       
       - name: Run ktlint
-        if: steps.docs_only.outputs.is_docs_only != 'true'
         run: |
           cd android
           ./gradlew ktlintCheck
 
   swift:
     name: Swift Linting
+    needs: changes
+    # Job-level skip so a macOS runner (10x billing, scarce slots) is never acquired
+    # for a diff that cannot affect Swift.
+    if: needs.changes.outputs.ios_relevant == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      # WHY THERE IS ONLY ONE DETECTION STEP HERE
-      # ----------------------------------------
-      # detect-platform-change's inert set IS detect-docs-only's set (both use
-      # '^docs/|^HANDOFF/|\.md$'), so a docs-only diff reports
-      # ios_relevant=false by construction: the platform gate subsumes the
-      # docs-only gate in this job, and one owner now decides whether these
-      # steps run instead of two conditions that could drift apart. The job
-      # itself always starts and completes green, so the check still reports.
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-
       - name: Install swiftlint
-        if: steps.platform.outputs.ios_relevant == 'true'
         run: brew install swiftlint
       
       - name: Run swiftlint
-        if: steps.platform.outputs.ios_relevant == 'true'
         run: |
           cd iOS
           swiftlint lint --strict

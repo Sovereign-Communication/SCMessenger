@@ -58,6 +58,10 @@ name: Docker Integration Suite
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'HANDOFF/**'
+      - 'docs/**'
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:
