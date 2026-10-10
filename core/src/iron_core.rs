@@ -5811,7 +5811,7 @@ mod tests {
                 next_retry_at: None,
                 in_custody: false,
                 custody_established_at: 0,
-                state: MessageState::Enqueued,
+                state: crate::store::outbox::MessageState::Enqueued,
             })
             .unwrap();
         assert!(core.outbox_contains_for_recipient(&recipient, &stale_id));
