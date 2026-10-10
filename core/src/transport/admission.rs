@@ -1655,7 +1655,10 @@ mod tests {
             assert_eq!(b.ledger.live_paths(peer), 1, "honest path survives");
         }
         // Only unauthenticated idle peers were shed, and no more than exist.
-        assert!(closed.len() <= strangers.len());
+        // A stalled close is re-issued by design (`due_reissue`), so count
+        // distinct connections, not request repeats.
+        let distinct: HashSet<ConnectionId> = closed.iter().map(|(_, id)| *id).collect();
+        assert!(distinct.len() <= strangers.len());
         assert!(b.ledger.occupancy().0 >= honest.len());
 
         // Pending relief: the young pending set is bounded multiplicatively and
@@ -1696,7 +1699,10 @@ mod tests {
             b.tick_with(at(base, 1_500 * tick), Some(fd_limit_1000()), false);
         }
         let closes = drain(&mut b);
-        assert_eq!(closes.len(), 11, "every stranger shed, bound converged");
+        // A stalled close is re-issued by design (`due_reissue`), so count
+        // distinct connections, not request repeats.
+        let distinct: HashSet<ConnectionId> = closes.iter().map(|(_, id)| *id).collect();
+        assert_eq!(distinct.len(), 11, "every stranger shed, bound converged");
         assert!(!closes.iter().any(|(peer, _)| *peer == honest));
         assert_eq!(b.ledger.live_paths(&honest), 1);
     }
