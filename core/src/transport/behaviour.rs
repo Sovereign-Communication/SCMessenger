@@ -12,6 +12,7 @@
 // - relay: NAT traversal — all nodes are mandatory relays
 // - ledger_exchange: automatic peer list sharing for aggressive discovery
 
+use super::admission::AdmissionBehaviour;
 use super::discovery::DiscoveryConfig;
 use super::reflection::{AddressReflectionRequest, AddressReflectionResponse};
 use crate::identity::IdentityKeys;
@@ -21,7 +22,7 @@ use libp2p::mdns;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::{
-    autonat, connection_limits, dcutr, gossipsub, identify, kad, ping, relay,
+    autonat, dcutr, gossipsub, identify, kad, ping, relay,
     request_response::{self, ProtocolSupport},
     swarm::NetworkBehaviour,
     StreamProtocol,
@@ -29,52 +30,15 @@ use libp2p::{
 use uuid::Uuid;
 use web_time::Duration;
 
-/// Per-peer cap on simultaneously established connections.
-///
-/// Handover ghost slots (#417): when a mobile peer switches from Wi-Fi to
-/// cellular, its old sockets die without a FIN or RST. This node keeps counting
-/// them against the per-peer cap until the ping timeout reaps them, roughly
-/// 47-58 s later. A low cap (it was 4) fills up with those dead connections, so
-/// every fresh cellular connection from the same peer is accepted and then
-/// denied ("connection_limits: limit N reached") and the handover stalls for
-/// about a minute. The cap therefore has to sit far above the connection count
-/// of a healthy peer (direct path, relay circuit, retry headroom) plus the
-/// ghosts of several back-to-back handovers.
-///
-/// Keep this cap below the global inbound limit so one peer cannot book every
-/// inbound slot. Dial-candidate pre-filtering and dynamic tuning are tracked
-/// separately in #417 and #418.
-///
-/// A value below `MAX_ESTABLISHED_PER_PEER_FLOOR` or at least the global
-/// inbound limit fails the build.
-pub const MAX_ESTABLISHED_PER_PEER: u32 = 16;
-
-/// Global cap on simultaneously established inbound connections.
-const MAX_ESTABLISHED_INCOMING: u32 = 64;
-
-/// Lowest value `MAX_ESTABLISHED_PER_PEER` may take. Below this, one Wi-Fi to
-/// cellular handover can exhaust the per-peer cap with ghost sockets (#417).
-const MAX_ESTABLISHED_PER_PEER_FLOOR: u32 = 16;
-
-// Compile-time guard: preserve handover headroom without allowing one peer to
-// consume the entire global inbound capacity.
-const _: () = assert!(
-    MAX_ESTABLISHED_PER_PEER >= MAX_ESTABLISHED_PER_PEER_FLOOR,
-    "MAX_ESTABLISHED_PER_PEER is below its floor; see #417 (handover ghost slots)"
-);
-const _: () = assert!(
-    MAX_ESTABLISHED_PER_PEER < MAX_ESTABLISHED_INCOMING,
-    "MAX_ESTABLISHED_PER_PEER must be below MAX_ESTABLISHED_INCOMING"
-);
-
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
     /// Connection admission must run before stateful child behaviours. The
-    /// derive macro calls `handle_established_*_connection` in field order;
-    /// placing the limit guard first prevents request-response from recording
-    /// a connection that this behaviour later rejects.
-    pub connection_limits: connection_limits::Behaviour,
+    /// derive macro calls `handle_established_*_connection` in field order, so
+    /// keeping this first means no child ever sees a connection admission
+    /// rejected. Admission never denies an honest peer: it evicts surplus
+    /// paths instead (see `transport::admission` and `transport::path_budget`).
+    pub admission: AdmissionBehaviour,
     /// Circuit Relay v2 client for relay reservations and relayed dials.
     pub relay_client: relay::client::Behaviour,
     /// Circuit Relay v2 server - all nodes act as relays for NAT traversal.
@@ -558,21 +522,12 @@ impl IronCoreBehaviour {
         // Relay server - all nodes act as relays for NAT traversal
         let relay_server = relay::Behaviour::new(peer_id, relay::Config::default());
 
-        // Connection limits to prevent resource exhaustion
-        let connection_limits = connection_limits::Behaviour::new(
-            connection_limits::ConnectionLimits::default()
-                .with_max_pending_outgoing(Some(32))
-                .with_max_established_outgoing(Some(128))
-                .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
-                // Per-peer cap, see MAX_ESTABLISHED_PER_PEER. A mobile peer's
-                // Wi-Fi to cellular handover leaves its dead Wi-Fi sockets counted
-                // here for up to about a minute (until the ping timeout), and while
-                // they fill the cap the peer's fresh connections are denied (#417).
-                // The cap has to absorb those handover ghost slots.
-                .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER)),
-        );
+        // Admission: dynamic per-peer path budget, evict-don't-deny. No static
+        // connection caps exist anywhere in the transport.
+        let admission = AdmissionBehaviour::for_node(peer_id);
 
         Ok(Self {
+            admission,
             relay_client,
             relay_server,
             dcutr,
@@ -588,7 +543,6 @@ impl IronCoreBehaviour {
             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             mdns,
             identify,
-            connection_limits,
         })
     }
 }
@@ -719,5 +673,37 @@ mod tests {
         );
 
         assert_eq!(result, Err("deregistration_target_matches_source"));
+    }
+
+    /// Structural guard (dynamic admission): the static libp2p limiter and its
+    /// constants must stay gone, and admission must stay the FIRST field so the
+    /// derive macro consults it before any child behaviour. Needles are built
+    /// by concatenation so this test does not match itself.
+    #[test]
+    fn static_connection_limits_are_gone_and_admission_stays_first() {
+        let src = include_str!("behaviour.rs");
+        let forbidden = [
+            ["connection", "_limits::Behaviour"].concat(),
+            ["connection", "_limits::ConnectionLimits"].concat(),
+            ["MAX_ESTABLISHED", "_PER_PEER"].concat(),
+            ["MAX_ESTABLISHED", "_INCOMING"].concat(),
+            ["with_max_established", "_per_peer"].concat(),
+        ];
+        for needle in &forbidden {
+            assert!(
+                !src.contains(needle.as_str()),
+                "static limiter remnant found in behaviour.rs: {needle}"
+            );
+        }
+        let admission = src
+            .find("pub admission: AdmissionBehaviour")
+            .expect("admission field present");
+        let first_child = src
+            .find("pub relay_client:")
+            .expect("relay_client field present");
+        assert!(
+            admission < first_child,
+            "admission must be declared before every child behaviour"
+        );
     }
 }

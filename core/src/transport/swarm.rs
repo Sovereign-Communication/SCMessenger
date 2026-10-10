@@ -78,6 +78,117 @@ fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId)
         .unwrap_or(true)
 }
 
+/// What the local node knows about a peer, used to rank eviction victims when
+/// the derived total connection bound is exceeded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PeerStanding {
+    /// Authenticated history: a saved contact, or positive local reputation
+    /// (earned through validated exchanges). Sending requests never confers it.
+    authenticated: bool,
+    /// Local reputation. `f64::NEG_INFINITY` for a peer about which nothing is
+    /// known (no core attached, not a contact, neutral score): unknown peers
+    /// rank lowest.
+    reputation: f64,
+}
+
+impl PeerStanding {
+    const UNKNOWN: PeerStanding = PeerStanding {
+        authenticated: false,
+        reputation: f64::NEG_INFINITY,
+    };
+}
+
+fn peer_standing_in(core: &crate::IronCore, peer_id: PeerId) -> PeerStanding {
+    let key = peer_id.to_string();
+    let score = core.get_reputation_score(&key);
+    let contact = core
+        .contact_manager
+        .read()
+        .get(key)
+        .ok()
+        .flatten()
+        .is_some();
+    let neutral = crate::transport::reputation::ReputationScore::NEUTRAL;
+    let has_history = (score - neutral).abs() > f64::EPSILON;
+    PeerStanding {
+        authenticated: contact || score > neutral,
+        reputation: if contact || has_history {
+            score
+        } else {
+            f64::NEG_INFINITY
+        },
+    }
+}
+
+fn peer_standing(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> PeerStanding {
+    core_handle
+        .as_ref()
+        .and_then(|weak| weak.upgrade())
+        .map(|core| peer_standing_in(&core, peer_id))
+        .unwrap_or(PeerStanding::UNKNOWN)
+}
+
+/// True when the signer of a Drift envelope (signature verified) is a saved
+/// contact. A self-signed envelope from a stranger is not "a known identity".
+fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]) -> bool {
+    let Ok(envelope) = crate::drift::DriftEnvelope::from_bytes(envelope_data) else {
+        return false;
+    };
+    if envelope.verify().is_err() {
+        return false;
+    }
+    core.contact_manager
+        .read()
+        .get_by_public_key(&hex::encode(envelope.sender_public_key))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// Admission traffic validation for an inbound message request. Receipt alone
+/// proves nothing (a Sybil can send requests for free); traffic counts only
+/// when the sender is not blocked AND is a peer with authenticated history or
+/// the message is signed by a saved contact.
+fn inbound_message_is_validated(
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: PeerId,
+    envelope_data: &[u8],
+) -> bool {
+    let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
+        return false;
+    };
+    if core
+        .is_peer_blocked(peer_id.to_string(), None)
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    if peer_standing_in(&core, peer_id).authenticated {
+        return true;
+    }
+    let payload = match DriftFrame::from_bytes(envelope_data) {
+        Ok(frame) => frame.payload,
+        Err(_) => envelope_data.to_vec(),
+    };
+    envelope_signed_by_known_contact(&core, &payload)
+}
+
+/// Refresh the admission standing of a peer that just produced validated
+/// traffic. Standing is otherwise sampled only at `ConnectionEstablished`, so a
+/// peer that became a contact (or earned reputation) mid-connection would stay
+/// unprotected until it reconnected.
+fn refresh_admission_standing(
+    admission: &mut super::admission::AdmissionBehaviour,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: PeerId,
+) {
+    let standing = peer_standing(core_handle, peer_id);
+    admission.note_reputation(peer_id, standing.reputation);
+    if standing.authenticated {
+        admission.note_authenticated(peer_id);
+    }
+}
+
 fn empty_ledger_exchange_response() -> LedgerExchangeResponse {
     LedgerExchangeResponse {
         version_tag: 1,
@@ -1484,39 +1595,30 @@ fn extract_ip_component(addr: &str) -> Option<String> {
 
 /// Classified reason an inbound connection was denied, from the deny cause
 /// carried by libp2p 0.48's `ListenError::Denied { cause: ConnectionDenied }`.
-/// `Other` prints the raw cause so an unknown source still lands in the log.
+/// Admission never denies (it evicts), so a deny now always comes from some
+/// other behaviour or gate; the raw cause is printed so it lands in the log.
 enum DenyCause {
-    ConnectionLimits(u32),
     Other(String),
 }
 
 impl core::fmt::Display for DenyCause {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            DenyCause::ConnectionLimits(limit) => {
-                write!(f, "connection_limits: limit {} reached", limit)
-            }
             DenyCause::Other(raw) => write!(f, "other: {}", raw),
         }
     }
 }
 
-/// Extract the deny cause. Known sources are classified; anything else is
-/// reported verbatim. Never fails open into a generic string when a known
-/// source matches.
+/// Extract the deny cause. Never fails open into a generic string.
 fn classify_deny_cause(cause: &libp2p::swarm::ConnectionDenied) -> DenyCause {
-    if let Some(exceeded) = cause.downcast_ref::<libp2p::connection_limits::Exceeded>() {
-        DenyCause::ConnectionLimits(exceeded.limit())
-    } else {
-        // ConnectionDenied's own Display is the literal "connection denied"
-        // and does NOT chain its source -- printing it verbatim is exactly
-        // the black box the RCA hit. The real reason lives in `source()`.
-        let raw = cause
-            .source()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown deny cause".to_string());
-        DenyCause::Other(raw)
-    }
+    // ConnectionDenied's own Display is the literal "connection denied"
+    // and does NOT chain its source -- printing it verbatim is exactly
+    // the black box the RCA hit. The real reason lives in `source()`.
+    let raw = cause
+        .source()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown deny cause".to_string());
+    DenyCause::Other(raw)
 }
 
 const DELIVERY_CONVERGENCE_MAX_CLOCK_SKEW_MS: u64 = 24 * 60 * 60 * 1000;
@@ -4287,6 +4389,8 @@ pub async fn start_swarm_with_config(
                 bootstrap_addrs.len()
             );
             for addr in &bootstrap_addrs {
+                // Bootstrap nodes are known sources for pending-inbound admission.
+                swarm.behaviour_mut().admission.note_known_source(addr);
                 // Self-dial check: skip bootstrap addrs whose p2p component
                 // matches our own peer ID (e.g. portproxy loopback).
                 let is_self = addr.iter().any(|proto| {
@@ -4941,8 +5045,32 @@ pub async fn start_swarm_with_config(
                     event = swarm.select_next_some() => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(
-                                request_response::Event::Message { peer, message, .. }
+                                request_response::Event::Message { peer, connection_id, message }
                             )) => {
+                                // Admission: a path is stamped as carrying traffic only for
+                                // VALIDATED traffic: a request from a peer with authenticated
+                                // history or signed by a saved contact, or an accepted answer
+                                // to a request WE sent. Bare receipt proves nothing.
+                                let admission_validated = match &message {
+                                    request_response::Message::Request { request, .. } => {
+                                        inbound_message_is_validated(&core_handle, peer, &request.envelope_data)
+                                    }
+                                    request_response::Message::Response { request_id, response } => {
+                                        // An `accepted` reply from a peer we chose as a
+                                        // custody or relay target is free for a Sybil to
+                                        // give: it stamps only for saved contacts and
+                                        // peers with authenticated history.
+                                        response.accepted
+                                            && peer_standing(&core_handle, peer).authenticated
+                                            && (pending_custody_dispatches.contains_key(request_id)
+                                                || reconnect_request_to_message.contains_key(request_id)
+                                                || request_to_message.contains_key(request_id))
+                                    }
+                                };
+                                if admission_validated {
+                                    swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
+                                    refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, peer);
+                                }
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         // Block enforcement FIRST (before any parse or dial): a blocked
@@ -5363,6 +5491,10 @@ pub async fn start_swarm_with_config(
                                     message,
                                 }
                             )) => {
+                                // Admission: address-reflection requests are NEVER stamped as
+                                // traffic. Any stranger can send them for free, so they would
+                                // let a Sybil buy eviction immunity. Liveness comes from
+                                // ping / identify.
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
                                         if peer_is_blocked(&core_handle, peer) {
@@ -5870,6 +6002,13 @@ pub async fn start_swarm_with_config(
                                             .send_response(channel, empty_ledger_exchange_response());
                                     }
                                     continue;
+                                }
+                                // Admission: only after the block check, and only for a peer
+                                // with authenticated history. A stranger's ledger request is
+                                // free to produce and proves nothing.
+                                if peer_standing(&core_handle, peer).authenticated {
+                                    swarm.behaviour_mut().admission.stamp_traffic(&peer, &connection_id, web_time::Instant::now());
+                                    swarm.behaviour_mut().admission.note_authenticated(peer);
                                 }
                                 match message {
                                     request_response::Message::Request { request, channel, .. } => {
@@ -6470,6 +6609,7 @@ pub async fn start_swarm_with_config(
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Ping(event)) => {
                                 match event.result {
                                     Ok(rtt) => {
+                                        swarm.behaviour_mut().admission.stamp_ping(&event.peer, &event.connection, web_time::Instant::now());
                                         tracing::trace!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6481,6 +6621,7 @@ pub async fn start_swarm_with_config(
                                         zombie_tracker.note_liveness(&event.peer, marker_now_ms());
                                     }
                                     Err(ref failure) => {
+                                        swarm.behaviour_mut().admission.note_ping_failed(&event.peer, &event.connection);
                                         tracing::warn!(
                                             peer = %event.peer,
                                             connection_id = ?event.connection,
@@ -6584,8 +6725,9 @@ pub async fn start_swarm_with_config(
                             // Accept ANY peer identity, regardless of expected PeerID.
                             // Log the identity and add all addresses to Kademlia.
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_identify(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker: identify::Received is a liveness proof
                                 // (60s cadence per connection) -- keeps a healthy peer's
                                 // stamps fresh even where ping has nothing to say.
@@ -6932,6 +7074,16 @@ pub async fn start_swarm_with_config(
                                 // delivery storm when mDNS, relay, and ledger dials converge.
                                 let had_active_connection = connection_tracker.get_connection(&peer_id).is_some();
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // Admission: rank this peer for total-bound eviction by what we
+                                // know about it (contact / reputation); unknown ranks lowest.
+                                let standing = peer_standing(&core_handle, peer_id);
+                                swarm.behaviour_mut().admission.note_reputation(peer_id, standing.reputation);
+                                if standing.authenticated || known_relays.contains(&peer_id) {
+                                    swarm.behaviour_mut().admission.note_authenticated(peer_id);
+                                    // Its address is a known source: pending inbound from
+                                    // it keeps a reserved allowance under accept pressure.
+                                    swarm.behaviour_mut().admission.note_known_source(&remote_addr);
+                                }
 
                                 // ZOMBIE tracker: register the path (connection id +
                                 // remote addr) and stamp it live; reaped later only if
@@ -7329,10 +7481,17 @@ pub async fn start_swarm_with_config(
                                     &connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
+                                // Admission-initiated eviction: not a path failure, so no
+                                // failover ledger re-exchange.
+                                let evicted_close = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 // A different live path may now be selected. Force a
                                 // fresh ledger exchange so failover cannot leave this
                                 // peer with stale topology knowledge.
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                if !evicted_close
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -7376,7 +7535,11 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                let _ = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 tracing::info!(
                                     "[ERROR] Disconnected from {}",
                                     peer_id
@@ -8772,6 +8935,8 @@ pub async fn start_swarm_with_config(
                 bootstrap_addrs.len()
             );
             for addr in &bootstrap_addrs {
+                // Bootstrap nodes are known sources for pending-inbound admission.
+                swarm.behaviour_mut().admission.note_known_source(addr);
                 // Self-dial check: skip bootstrap addrs whose p2p component
                 // matches our own peer ID (e.g. portproxy loopback).
                 let is_self = addr.iter().any(|proto| {
@@ -9237,6 +9402,19 @@ pub async fn start_swarm_with_config(
                     event = swarm_fut => {
                         match event {
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Messaging(ev)) => {
+                                // Admission: stamp only VALIDATED inbound requests (see
+                                // `inbound_message_is_validated`).
+                                if let request_response::Event::Message {
+                                    peer,
+                                    connection_id,
+                                    message: request_response::Message::Request { request, .. },
+                                } = &ev
+                                {
+                                    if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data) {
+                                        swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
+                                        refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, *peer);
+                                    }
+                                }
                                 match ev {
                                     request_response::Event::Message { peer, message, .. } => match message {
                                         request_response::Message::Request { request, channel, .. } => {
@@ -9926,8 +10104,9 @@ pub async fn start_swarm_with_config(
                                 }
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::Identify(
-                                identify::Event::Received { peer_id, info, .. }
+                                identify::Event::Received { peer_id, connection_id, info, .. }
                             )) => {
+                                swarm.behaviour_mut().admission.stamp_identify(&peer_id, &connection_id, web_time::Instant::now());
                                 // ZOMBIE tracker (wasm): identify is this loop's only
                                 // liveness stamp (no ping arm); the 60s identify cadence
                                 // keeps a healthy peer's stamps fresh.
@@ -10007,6 +10186,14 @@ pub async fn start_swarm_with_config(
                                 // Clone the remote address before `endpoint` is consumed
                                 // (connection tracking consumes it below).
                                 let remote_addr = endpoint.get_remote_address().clone();
+                                // Admission: rank this peer for total-bound eviction by what we
+                                // know about it (contact / reputation); unknown ranks lowest.
+                                let standing = peer_standing(&core_handle, peer_id);
+                                swarm.behaviour_mut().admission.note_reputation(peer_id, standing.reputation);
+                                if standing.authenticated {
+                                    swarm.behaviour_mut().admission.note_authenticated(peer_id);
+                                    swarm.behaviour_mut().admission.note_known_source(&remote_addr);
+                                }
                                 // R8-F4: the zero-to-one connection transition drives the
                                 // reconnect flush on native; capture the same signal here
                                 // BEFORE this path joins the tracker.
@@ -10156,7 +10343,14 @@ pub async fn start_swarm_with_config(
                                     &                                    connection_id.to_string(),
                                 );
                                 zombie_tracker.note_connection_closed(&peer_id, &connection_id.to_string());
-                                if !peer_is_blocked(&core_handle, peer_id)
+                                // Admission-initiated eviction: not a path failure, so no
+                                // failover ledger re-exchange.
+                                let evicted_close = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
+                                if !evicted_close
+                                    && !peer_is_blocked(&core_handle, peer_id)
                                     && ledger_exchange_guardrails
                                         .allow_failover_reexchange(peer_id)
                                 {
@@ -10189,7 +10383,11 @@ pub async fn start_swarm_with_config(
                                     num_established
                                 );
                             }
-                            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, connection_id, .. } => {
+                                let _ = swarm
+                                    .behaviour_mut()
+                                    .admission
+                                    .take_eviction(&connection_id);
                                 tracing::info!("[ERROR] Disconnected from {} (WASM)", peer_id);
                                 connection_tracker.remove_connection(&peer_id);
                                 // Last connection for this peer is gone (num_established
@@ -10544,10 +10742,9 @@ mod tests {
         resolve_dial_target, select_drift_fallback_carrier,
         should_apply_delivery_convergence_marker, target_peer_id_from_multiaddr,
         validate_delivery_convergence_marker_shape, verify_registration_message,
-        wrap_in_drift_frame, DeliveryConvergenceMarker, DenyCause, PendingCustodyDispatch,
-        PendingMessage, RelayAbuseGuardrails, RelayRequest, ZombieTracker,
-        RELAY_DUPLICATE_WINDOW_MS, RELAY_PEER_BUCKET_BURST_CAPACITY,
-        RELAY_PEER_BUCKET_REFILL_PER_SEC,
+        wrap_in_drift_frame, DeliveryConvergenceMarker, PendingCustodyDispatch, PendingMessage,
+        RelayAbuseGuardrails, RelayRequest, ZombieTracker, RELAY_DUPLICATE_WINDOW_MS,
+        RELAY_PEER_BUCKET_BURST_CAPACITY, RELAY_PEER_BUCKET_REFILL_PER_SEC,
     };
     use crate::identity::IdentityKeys;
     use crate::store::relay_custody::RelayCustodyStore;
@@ -10727,15 +10924,6 @@ mod tests {
         assert!(
             other.to_string().contains("custom gate"),
             "an unknown deny cause must print verbatim, got: {other}"
-        );
-        // The per-peer cap is the limit that denied in the handover RCA (#417);
-        // derive it from the constant so the test tracks the real value.
-        let cap = crate::transport::behaviour::MAX_ESTABLISHED_PER_PEER;
-        let limits = DenyCause::ConnectionLimits(cap);
-        let s = limits.to_string();
-        assert!(
-            s.contains("connection_limits") && s.contains(&format!("limit {cap} reached")),
-            "the limit that denied must be named: {s}"
         );
     }
 
@@ -12463,5 +12651,69 @@ mod relay_per_peer_budget_tests {
             super::topic_subscribe_decision(&topic, &None, Some(own.as_str()), true),
             super::TopicSubscribeDecision::SkipAlreadySubscribed
         );
+    }
+}
+
+#[cfg(test)]
+mod admission_trust_tests {
+    use super::{peer_standing, PeerStanding};
+    use libp2p::PeerId;
+
+    const SOURCE: &str = include_str!("swarm.rs");
+    const ARM_START: &str = "SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::";
+
+    /// Text of the first native event arm that starts with `head`, up to the
+    /// next event arm.
+    fn arm(head: &str) -> &'static str {
+        let start = SOURCE.find(head).expect("event arm present");
+        let rest = &SOURCE[start + head.len()..];
+        let end = rest.find(ARM_START).unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    #[test]
+    fn a_peer_nothing_is_known_about_is_unauthenticated_and_ranks_lowest() {
+        let standing = peer_standing(&None, PeerId::random());
+        assert_eq!(standing, PeerStanding::UNKNOWN);
+        assert!(!standing.authenticated);
+        assert_eq!(standing.reputation, f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn address_reflection_requests_never_stamp_traffic() {
+        let reflection = arm("IronCoreBehaviourEvent::AddressReflection(\n");
+        let code: String = reflection
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !code.contains("stamp_traffic"),
+            "a free-to-send reflection request must not buy eviction immunity"
+        );
+    }
+
+    #[test]
+    fn ledger_exchange_traffic_is_stamped_only_after_the_block_check_and_for_known_peers() {
+        let ledger = arm("IronCoreBehaviourEvent::LedgerExchange(\n");
+        let blocked = ledger
+            .find("peer_is_blocked(&core_handle, peer)")
+            .expect("block check present");
+        let stamp = ledger.find("stamp_traffic").expect("stamp present");
+        assert!(blocked < stamp, "the block check precedes the stamp");
+        let gate = ledger[blocked..stamp]
+            .rfind("peer_standing(&core_handle, peer).authenticated")
+            .expect("stamp is gated on authenticated history");
+        assert!(gate > 0);
+    }
+
+    #[test]
+    fn message_traffic_is_stamped_only_when_validated() {
+        let messaging = arm("IronCoreBehaviourEvent::Messaging(\n");
+        let validated = messaging
+            .find("inbound_message_is_validated")
+            .expect("validation present");
+        let stamp = messaging.find("stamp_traffic").expect("stamp present");
+        assert!(validated < stamp, "validation precedes the stamp");
     }
 }

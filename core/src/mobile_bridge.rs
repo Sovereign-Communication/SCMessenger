@@ -1541,6 +1541,13 @@ impl MeshService {
         // Persist the new DeviceState.
         *self.device_state.write() = Some(new_state.clone());
 
+        // Feed the transport's derived connection bound: on battery every kept-alive
+        // path costs radio wakeups, so the total scales down (see conn_resources).
+        crate::transport::conn_resources::set_platform_power(
+            new_state.battery_level,
+            new_state.is_charging,
+        );
+
         // Also keep the legacy DeviceProfile for callers that still use it.
         *self.current_device_profile.lock() = Some(profile.clone());
 
