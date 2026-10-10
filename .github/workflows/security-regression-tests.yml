@@ -101,7 +101,7 @@ jobs:
       # alone it would turn this repo red on an unrelated diff one day.
       - name: Use preinstalled Rust (self-hosted)
         uses: ./.github/actions/self-hosted-rust
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
 
       - uses: Swatinem/rust-cache@v2
