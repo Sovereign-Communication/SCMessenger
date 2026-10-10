@@ -206,6 +206,7 @@ impl ReconnectionState {
     }
 
     /// Nominal backoff interval at the default ceiling.
+    #[cfg(test)]
     fn backoff_interval(&self) -> Duration {
         self.backoff_interval_with(RECONNECT_CEILING_BASE)
     }

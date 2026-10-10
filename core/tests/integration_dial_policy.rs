@@ -285,10 +285,12 @@ fn test_backoff_eligibility_timing() {
 
     // Simulate backoff expiration by manually updating
     // (In real use, time passes naturally)
+    // Eligibility is gated by `next_attempt_at` (jittered), not `last_attempt_ts`.
     let now = Instant::now();
     state.last_attempt_ts = now - Duration::from_secs(3); // 3 seconds ago
+    state.next_attempt_at = now - Duration::from_secs(1);
 
-    // Now with backoff of 2 seconds, should be eligible again
+    // Scheduled attempt time has passed, so eligible again
     assert!(state.is_eligible());
 }
 
