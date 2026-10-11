@@ -3460,6 +3460,7 @@ impl RegistrationGate {
         Self::default()
     }
 
+    #[cfg(test)]
     fn pending(&self) -> usize {
         self.in_flight.lock().len()
     }
