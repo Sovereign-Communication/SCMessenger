@@ -48,6 +48,19 @@ class NetworkDetector @Inject constructor(
     private val _networkType = MutableStateFlow(NetworkType.UNKNOWN)
     val networkType: StateFlow<NetworkType> = _networkType.asStateFlow()
 
+    /**
+     * Receives every real network type change (available, lost, WIFI <-> CELLULAR)
+     * as (hasWifi, hasCellular). Not invoked when a redetection settles on the
+     * same type. Set by MeshRepository to forward the signal into the core
+     * (MeshService.onNetworkChanged), which wakes event-driven dial revival.
+     */
+    fun interface NetworkChangeListener {
+        fun onNetworkChanged(hasWifi: Boolean, hasCellular: Boolean)
+    }
+
+    @Volatile
+    var networkChangeListener: NetworkChangeListener? = null
+
     /** Currently blocked ports (populated on cellular networks) */
     private val _blockedPorts = MutableStateFlow<Set<Int>>(emptySet())
     val blockedPorts: StateFlow<Set<Int>> = _blockedPorts.asStateFlow()
@@ -270,9 +283,12 @@ class NetworkDetector @Inject constructor(
     /**
      * Update the network type and blocked ports state.
      */
-    private fun updateNetworkType(newType: NetworkType) {
+    internal fun updateNetworkType(newType: NetworkType) {
         val previousType = _networkType.value
         _networkType.value = newType
+        if (newType != previousType) {
+            notifyNetworkChange(newType)
+        }
 
         // R3-F5b: one owner for the blocked-ports derivation. UNKNOWN (no
         // verified network evidence) must not silently retain a previous
@@ -290,6 +306,25 @@ class NetworkDetector @Inject constructor(
 
         Timber.i("Network type updated: %s → %s (stable for %dms), blocked ports: %s",
             previousType, newType, networkStabilityMs, _blockedPorts.value)
+    }
+
+    /**
+     * Forward a real type change to the listener. A listener failure must never
+     * break network classification, so it is contained here.
+     */
+    private fun notifyNetworkChange(newType: NetworkType) {
+        val listener = networkChangeListener ?: return
+        val hasWifi = newType == NetworkType.WIFI ||
+            newType == NetworkType.WIFI_RESTRICTED ||
+            newType == NetworkType.ETHERNET
+        val hasCellular = newType == NetworkType.CELLULAR ||
+            newType == NetworkType.CELLULAR_RESTRICTED ||
+            newType == NetworkType.CELLULAR_NO_INTERNET
+        try {
+            listener.onNetworkChanged(hasWifi, hasCellular)
+        } catch (e: Exception) {
+            Timber.w(e, "Network change listener failed")
+        }
     }
 
     /**

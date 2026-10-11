@@ -3949,6 +3949,7 @@ final class MeshRepository {
 
     func reportNetwork(wifi: Bool, cellular: Bool) {
         let previousWifi = networkStatus.wifi
+        let previousCellular = networkStatus.cellular
         logger.debug("Network: wifi=\(wifi) cellular=\(cellular)")
         networkStatus.wifi = wifi
         networkStatus.cellular = cellular
@@ -3963,6 +3964,12 @@ final class MeshRepository {
             motionState: currentMotionState
         )
         meshService?.updateDeviceState(profile: profile)
+        // Issue #523: forward only real interface changes (available, lost,
+        // WiFi <-> cellular) into the core so dial revival resets backoff and
+        // redials immediately. No-op path updates are not events.
+        if wifi != previousWifi || cellular != previousCellular {
+            meshService?.onNetworkChanged(hasWifi: wifi, hasCellular: cellular)
+        }
         Task { @MainActor [weak self] in
             await self?.applyPowerAdjustments(reason: "network_changed")
         }

@@ -1488,9 +1488,14 @@ impl MeshService {
         // report arriving while the bridge is hidden is stashed and
         // replayed once all windows close (R10-F2), so no state update
         // is ever dropped.
+        let last_cellular = self
+            .last_network
+            .lock()
+            .map(|(_, cellular)| cellular)
+            .unwrap_or(false);
         match self.dispatch_bridge_event(|bridge| {
             bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
-            bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
+            bridge.on_network_changed(profile.has_wifi, last_cellular);
             bridge.on_motion_changed(profile.motion_state);
         }) {
             BridgeDispatch::WindowOpen => {
@@ -1637,31 +1642,28 @@ impl MeshService {
     }
 
     pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
+        // Record the new report first so the device-state echo to the platform
+        // bridge carries the real cellular flag instead of a hardcoded false.
+        // A false echo made the platform see a "change" it never made and
+        // report it straight back (ping-pong).
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+
         let mut profile = self
             .current_device_profile
             .lock()
             .clone()
             .unwrap_or_default();
         profile.has_wifi = has_wifi;
-        // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
 
-        // Revival wake: a genuine interface change (for example the Wi-Fi to
-        // cellular handover) is a reason to expect previously unreachable
-        // peers may now be reachable. The first report only records the
-        // baseline; repeated identical reports are not events. The swarm
-        // rate limits wakes per source, so a flapping platform callback
-        // cannot hold addresses at the backoff floor.
-        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
-        if let Some((prev_wifi, prev_cellular)) = previous {
-            if prev_wifi != has_wifi {
-                self.swarm_bridge
-                    .notify_network_event(crate::transport::NetworkEvent::WifiChanged);
-            }
-            if prev_cellular != has_cellular {
-                self.swarm_bridge
-                    .notify_network_event(crate::transport::NetworkEvent::CellularChanged);
-            }
+        // Revival wake: a genuine interface change (available, lost, or the
+        // Wi-Fi to cellular handover) is a reason to expect previously
+        // unreachable peers may now be reachable. The first report only
+        // records the baseline; repeated identical reports are not events.
+        // The swarm rate limits wakes per source, so a flapping platform
+        // callback cannot hold addresses at the backoff floor.
+        for event in network_change_events(previous, (has_wifi, has_cellular)) {
+            self.swarm_bridge.notify_network_event(event);
         }
     }
 
@@ -4423,11 +4425,69 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
     (record.stored_at_millis != 0).then_some(record.stored_at_millis)
 }
 
+/// Map a platform network report onto discovery events. The first report
+/// (`previous == None`) only establishes the baseline and yields nothing; an
+/// identical report yields nothing; each flipped interface yields its event.
+fn network_change_events(
+    previous: Option<(bool, bool)>,
+    current: (bool, bool),
+) -> Vec<crate::transport::NetworkEvent> {
+    let mut events = Vec::new();
+    if let Some((prev_wifi, prev_cellular)) = previous {
+        if prev_wifi != current.0 {
+            events.push(crate::transport::NetworkEvent::WifiChanged);
+        }
+        if prev_cellular != current.1 {
+            events.push(crate::transport::NetworkEvent::CellularChanged);
+        }
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
+
+    #[test]
+    fn network_change_events_baseline_and_noop_emit_nothing() {
+        assert!(network_change_events(None, (true, false)).is_empty());
+        assert!(network_change_events(Some((true, false)), (true, false)).is_empty());
+    }
+
+    #[test]
+    fn network_change_events_cover_handover_and_loss() {
+        use crate::transport::NetworkEvent;
+        assert_eq!(
+            network_change_events(Some((true, false)), (false, true)),
+            vec![NetworkEvent::WifiChanged, NetworkEvent::CellularChanged]
+        );
+        // Lost: both interfaces down.
+        assert_eq!(
+            network_change_events(Some((false, true)), (false, false)),
+            vec![NetworkEvent::CellularChanged]
+        );
+        // Available again.
+        assert_eq!(
+            network_change_events(Some((false, false)), (true, false)),
+            vec![NetworkEvent::WifiChanged]
+        );
+    }
+
+    #[test]
+    fn network_change_events_reset_backoff_and_wake_redial() {
+        use crate::transport::dial_policy::DialPolicyManager;
+        let manager = DialPolicyManager::new();
+        let addr = "/ip4/203.0.113.7/tcp/9001";
+        for _ in 0..8 {
+            manager.record_dial_failure(addr, None);
+        }
+        let events = network_change_events(Some((true, false)), (false, true));
+        assert!(!events.is_empty());
+        let woken: usize = events.iter().map(|e| manager.on_network_event(e)).sum();
+        assert!(woken >= 1, "handover must wake the backed-off address");
+    }
 
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests

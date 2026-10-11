@@ -1674,6 +1674,21 @@ open class MeshRepository(
             Timber.i("TopicManager initialized for gossipsub topic management")
 
             // P0_NETWORK_001: Start network detection for cellular-aware fallback
+            // Forward every real network type change into the core so event-driven
+            // dial revival (backoff reset, immediate redial) reacts at once, and
+            // flush the outbox on the new network. The core echoes device state
+            // back through PlatformBridge; that path never calls this listener.
+            networkDetector.networkChangeListener =
+                NetworkDetector.NetworkChangeListener { hasWifi, hasCellular ->
+                    repoScope.launch(Dispatchers.IO) {
+                        try {
+                            meshService?.onNetworkChanged(hasWifi, hasCellular)
+                        } catch (e: Exception) {
+                            Timber.w(e, "Core onNetworkChanged failed")
+                        }
+                        flushPendingOutbox("network_changed")
+                    }
+                }
             networkDetector.startMonitoring()
             Timber.i("NetworkDetector started — cellular-aware transport fallback active")
 
@@ -4282,6 +4297,7 @@ open class MeshRepository(
     fun stopMeshService() {
         synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
+        networkDetector.networkChangeListener = null
         networkDetector.stopMonitoring()
         pendingOutboxRetryJob?.cancel()
         pendingOutboxRetryJob = null
