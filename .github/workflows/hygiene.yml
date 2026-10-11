@@ -326,6 +326,12 @@ jobs:
       - name: Prove the duplicate-key check can still fail
         run: python3 scripts/check_workflow_yaml.py --self-test
 
+      # CI_RUNNER selector (PR 557): evaluates the real runs-on expressions over
+      # every runner/scope/event combination and fails if any is empty, if an
+      # untrusted event leaves the hosted default, or if unset != legacy.
+      - name: Verify the CI_RUNNER selector weakens no check
+        run: python3 scripts/test_ci_runner_selector.py
+
       # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
       # ------------------------------------------
       # A queue ticket whose status line advertises an open PR that has already
