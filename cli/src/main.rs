@@ -3929,7 +3929,7 @@ fn should_ack_inbound(
     sender_public_key_hex: Option<&str>,
     local_public_key_hex: Option<&str>,
 ) -> bool {
-    let is_chat = envelope_kind.map_or(true, |kind| kind == "text");
+    let is_chat = envelope_kind.is_none_or(|kind| kind == "text");
     let has_target = sender_public_key_hex.is_some();
     let is_self_loop =
         sender_public_key_hex.is_some() && sender_public_key_hex == local_public_key_hex;
