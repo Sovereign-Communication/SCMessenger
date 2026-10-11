@@ -4148,9 +4148,7 @@ pub async fn start_swarm_with_config(
         // peer ID so routing can begin immediately.
         let local_peer_id_bytes_raw = local_peer_id.to_bytes();
         let local_peer_id_bytes: [u8; 32] = extract_peer_id_bytes(&local_peer_id_bytes_raw);
-        let local_hint = blake3::hash(&local_peer_id_bytes).as_bytes()[0..8]
-            .try_into()
-            .expect("blake3 hash should be at least 8 bytes");
+        let local_hint = crate::identity::keys::routing_hint_from_public_key(&local_peer_id_bytes);
         {
             let mut guard = routing_engine_handle.write();
             if guard.is_none() {
@@ -6633,9 +6631,6 @@ pub async fn start_swarm_with_config(
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                let _peer_hint: [u8; 8] = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
-                                    .try_into()
-                                    .expect("blake3 hash should be at least 8 bytes");
                                 // When identity protocol confirms a peer, use the Kademlia server
                                 // mode as the transport type basis since identity requires a
                                 // server-capable connection.
@@ -6643,10 +6638,10 @@ pub async fn start_swarm_with_config(
                                 {
                                     let mut guard = routing_engine_handle.write();
                                     if let Some(ref mut engine) = guard.as_mut() {
-                                        engine.base_engine_mut().local_cell_mut().peer_seen(
-                                            peer_id_bytes,
-                                            transport_type,
-                                        );
+                                        // Optimized `peer_seen` also binds the peer's canonical
+                                        // key-derived hint to it, so a connected, identified
+                                        // peer is directly routable without any announcement.
+                                        engine.peer_seen(peer_id_bytes, transport_type);
                                     }
                                 }
                                 // Update routing engine with peer hints from identify info
@@ -7801,9 +7796,7 @@ pub async fn start_swarm_with_config(
                                 // Convert libp2p PeerId to routing module format
                                 let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
                                 // Get recipient hint from peer_id (first 8 bytes of blake3 hash)
-                                let hint = blake3::hash(&peer_id_bytes).as_bytes()[0..8]
-                                    .try_into()
-                                    .expect("blake3 hash should be at least 8 bytes");
+                                let hint = crate::identity::keys::routing_hint_from_public_key(&peer_id_bytes);
 
                                 // Route message using mycorrhizal routing engine.
                                 //
