@@ -80,7 +80,12 @@ env:
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
+    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
+    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
+    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md.
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

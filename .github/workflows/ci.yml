@@ -194,7 +194,11 @@ jobs:
     # diff can change the Rust workspace.
     # matrix.* is not available at job level; non-ubuntu legs are gated per step.
     if: ${{ !cancelled() }}
-    runs-on: ${{ matrix.os }}
+    # Only the ubuntu leg is selectable via vars.CI_RUNNER (blacksmith|oci|hosted);
+    # unset = ubuntu-latest as before. Matrix value stays 'ubuntu-latest' so the
+    # required check name 'Test (ubuntu-latest)' is unchanged. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md. Rollback: CI_RUNNER=hosted or delete it.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404' || matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -240,7 +244,12 @@ jobs:
     name: Docs
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
+    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
+    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
+    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md.
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
@@ -261,7 +270,12 @@ jobs:
     name: FFI Surface Contract
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
+    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
+    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
+    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md.
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'blacksmith' && 'blacksmith-8vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
