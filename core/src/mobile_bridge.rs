@@ -1015,15 +1015,16 @@ impl MeshService {
                                             }
                                         });
                                     }
-                                    let registration_gate = RegistrationGate::new(
-                                        MAX_CONCURRENT_REGISTRATIONS,
-                                    );
+                                    let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
                                                 peer_id,
                                                 envelope_data,
                                             } => {
+                                                // Event-driven retry: an inbound from a peer whose
+                                                // registration is waiting out a backoff retries now.
+                                                registration_gate.kick(&peer_id.to_string());
                                                 // Clone the Arc and RELEASE the mutex before calling
                                                 // into the core. Holding it across receive_message
                                                 // serialises every other core user behind this call.
@@ -1200,12 +1201,15 @@ impl MeshService {
                                                     // swarm never reached receive_message). Detach it
                                                     // with a hard timeout.
                                                     let reg_handle = handle.clone();
-                                                    spawn_bounded_registration(
+                                                    spawn_registration(
                                                         &registration_gate,
                                                         peer_id.to_string(),
                                                         REGISTRATION_ATTEMPT_TIMEOUT,
-                                                        async move {
-                                                            reg_handle.register_identity(peer_id, request).await
+                                                        REGISTRATION_RETRY_BASE,
+                                                        move || {
+                                                            let h = reg_handle.clone();
+                                                            let req = request.clone();
+                                                            async move { h.register_identity(peer_id, req).await }
                                                         },
                                                     );
                                                 }
@@ -3433,28 +3437,44 @@ pub struct HistoryStats {
 /// Upper bound for one background identity-registration attempt.
 const REGISTRATION_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
-/// Maximum registration round trips in flight at once (PR #512 review F1).
-const MAX_CONCURRENT_REGISTRATIONS: usize = 8;
+/// First retry delay after a failed or timed-out registration attempt.
+const REGISTRATION_RETRY_BASE: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Bounds detached registration tasks: at most one per peer, and at most
-/// `cap` overall. Excess attempts are skipped, never queued.
-#[derive(Clone)]
+/// Ceiling for the exponential retry delay.
+const REGISTRATION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Coalescing per-peer single-flight for detached identity registration.
+///
+/// There is deliberately no global cap: concurrency is bounded by the number
+/// of distinct peers, each of which holds one parked task (a timer and a
+/// pending reply), not a thread. A duplicate request for a peer that already
+/// has a registration in flight merges into it and wakes it for an immediate
+/// retry instead of competing for a slot or being dropped.
+#[derive(Clone, Default)]
 struct RegistrationGate {
-    in_flight: Arc<Mutex<HashSet<String>>>,
-    permits: Arc<tokio::sync::Semaphore>,
+    in_flight: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>>,
 }
 
 impl RegistrationGate {
-    fn new(cap: usize) -> Self {
-        Self {
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
-            permits: Arc::new(tokio::sync::Semaphore::new(cap)),
-        }
+    fn new() -> Self {
+        Self::default()
     }
 
-    #[cfg(test)]
     fn pending(&self) -> usize {
         self.in_flight.lock().len()
+    }
+
+    /// Event-driven retry trigger (inbound from `peer`, connect, identify).
+    /// Wakes a registration that is waiting out its backoff. Returns true when
+    /// one was in flight.
+    fn kick(&self, peer: &str) -> bool {
+        match self.in_flight.lock().get(peer) {
+            Some(notify) => {
+                notify.notify_one();
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -3464,47 +3484,72 @@ fn short_peer(peer: &str) -> String {
     peer.chars().skip(skip).collect()
 }
 
-/// Run a registration round trip off the swarm-event drain loop, bounded by
-/// `timeout`, logging (never propagating) any failure. Returns immediately.
-/// Skipped (returns false) when `peer` already has a registration in flight or
-/// the global cap is reached.
-fn spawn_bounded_registration<F, E>(
+/// Run a registration round trip off the swarm-event drain loop. Returns
+/// immediately. Each attempt is bounded by `timeout`; a timeout or error is
+/// never a drop: it logs `[RX-DEFER]` and retries with exponential backoff
+/// (`retry_base` doubling up to `REGISTRATION_RETRY_MAX`) until it succeeds,
+/// waking early on `RegistrationGate::kick`. Returns true when a new task was
+/// started, false when the request coalesced into one already in flight (which
+/// is kicked to retry now).
+fn spawn_registration<F, Fut, E>(
     gate: &RegistrationGate,
     peer: String,
     timeout: std::time::Duration,
-    fut: F,
+    retry_base: std::time::Duration,
+    make_attempt: F,
 ) -> bool
 where
-    F: std::future::Future<Output = Result<(), E>> + Send + 'static,
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), E>> + Send + 'static,
     E: fmt::Debug,
 {
-    let Ok(permit) = gate.permits.clone().try_acquire_owned() else {
-        tracing::debug!(
-            "Registration with {} skipped: concurrency cap",
-            short_peer(&peer)
-        );
-        return false;
-    };
-    if !gate.in_flight.lock().insert(peer.clone()) {
-        return false;
+    let notify = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut map = gate.in_flight.lock();
+        if let Some(existing) = map.get(&peer) {
+            existing.notify_one();
+            return false;
+        }
+        map.insert(peer.clone(), notify.clone());
     }
     let in_flight = gate.in_flight.clone();
     tokio::spawn(async move {
-        let _permit = permit;
-        match tokio::time::timeout(timeout, fut).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!("Failed to register local identity with {}: {:?}", peer, err);
+        let mut delay = retry_base;
+        let mut attempt: u32 = 0;
+        loop {
+            attempt = attempt.saturating_add(1);
+            match tokio::time::timeout(timeout, make_attempt()).await {
+                Ok(Ok(())) => break,
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        "[RX-DEFER] register_identity peer={} attempt={} err={:?} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        err,
+                        delay.as_millis()
+                    );
+                }
+                Err(_) => {
+                    let pending = in_flight.lock().len();
+                    tracing::info!(
+                        "[RX-STALL] register_identity peer={} timeout_ms={} pending={}",
+                        short_peer(&peer),
+                        timeout.as_millis(),
+                        pending
+                    );
+                    tracing::info!(
+                        "[RX-DEFER] register_identity peer={} attempt={} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        delay.as_millis()
+                    );
+                }
             }
-            Err(_) => {
-                let pending = in_flight.lock().len();
-                tracing::info!(
-                    "[RX-STALL] register_identity peer={} timeout_ms={} pending={}",
-                    short_peer(&peer),
-                    timeout.as_millis(),
-                    pending
-                );
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = notify.notified() => {}
             }
+            delay = (delay * 2).min(REGISTRATION_RETRY_MAX);
         }
         in_flight.lock().remove(&peer);
     });
@@ -4743,74 +4788,129 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test(flavor = "current_thread")]
-    async fn stalled_registration_times_out_and_next_event_is_processed() {
-        // Models the drain loop: event 1 triggers a registration that never
-        // completes; event 2 (an inbound message) must still be processed, and
-        // the injected short timeout must fire and release the in-flight slot.
-        let gate = super::RegistrationGate::new(4);
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(8);
-        tx.send(1).await.expect("send 1");
-        tx.send(2).await.expect("send 2");
-        let mut processed = Vec::new();
-        for _ in 0..2 {
-            let ev = rx.recv().await.expect("event");
-            if ev == 1 {
-                assert!(super::spawn_bounded_registration(
-                    &gate,
-                    "peer-stall".to_string(),
-                    std::time::Duration::from_millis(50),
-                    std::future::pending::<Result<(), String>>(),
-                ));
-                assert_eq!(gate.pending(), 1);
-            }
-            processed.push(ev);
-        }
-        assert_eq!(processed, vec![1, 2]);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn wait_idle(gate: &super::RegistrationGate) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while gate.pending() != 0 {
-            assert!(std::time::Instant::now() < deadline, "timeout never fired");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            assert!(
+                std::time::Instant::now() < deadline,
+                "registrations never drained"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        assert_eq!(gate.permits.available_permits(), 4);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn registration_gate_dedups_per_peer_and_caps_globally() {
-        let gate = super::RegistrationGate::new(2);
-        let long = std::time::Duration::from_secs(30);
-        let spawn = |peer: &str| {
-            super::spawn_bounded_registration(
+    async fn burst_far_beyond_old_cap_loses_no_registration() {
+        let gate = super::RegistrationGate::new();
+        let done = std::sync::Arc::new(AtomicUsize::new(0));
+        let n = 200;
+        for i in 0..n {
+            let d = done.clone();
+            assert!(super::spawn_registration(
                 &gate,
-                peer.to_string(),
-                long,
-                std::future::pending::<Result<(), String>>(),
-            )
-        };
-        assert!(spawn("peer-a"));
-        assert!(!spawn("peer-a"), "same peer must be deduplicated");
-        assert!(spawn("peer-b"));
-        assert!(!spawn("peer-c"), "global cap of 2 must reject a third peer");
-        assert_eq!(gate.pending(), 2);
+                format!("peer-{i}"),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(5),
+                move || {
+                    let d = d.clone();
+                    async move {
+                        d.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), String>(())
+                    }
+                },
+            ));
+        }
+        wait_idle(&gate).await;
+        assert_eq!(done.load(Ordering::SeqCst), n);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn bounded_registration_runs_detached_and_reports_errors() {
-        let gate = super::RegistrationGate::new(2);
-        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = done.clone();
-        assert!(super::spawn_bounded_registration(
+    async fn same_identity_requests_coalesce() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let mk = |a: std::sync::Arc<AtomicUsize>| {
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    // Fail once so the task stays in flight long enough to coalesce.
+                    if n < 1 {
+                        Err("not yet".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        };
+        let long = std::time::Duration::from_secs(30);
+        assert!(super::spawn_registration(
             &gate,
-            "peer-err".to_string(),
-            std::time::Duration::from_secs(5),
-            async move {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                Err::<(), _>("rejected".to_string())
+            "peer-x".into(),
+            long,
+            long,
+            mk(attempts.clone())
+        ));
+        tokio::task::yield_now().await;
+        assert!(
+            !super::spawn_registration(&gate, "peer-x".into(), long, long, mk(attempts.clone())),
+            "duplicate must merge into the in-flight registration"
+        );
+        assert_eq!(gate.pending(), 1);
+        // The coalesced request kicked the 30s backoff, so the retry runs now.
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_defers_then_later_retry_succeeds() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        assert!(super::spawn_registration(
+            &gate,
+            "peer-slow".into(),
+            std::time::Duration::from_millis(30),
+            std::time::Duration::from_millis(10),
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if n == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok::<(), String>(())
+                }
             },
         ));
+        wait_idle(&gate).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "timeout must retry, not drop"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn kick_wakes_backoff_and_unknown_peer_is_noop() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        let long = std::time::Duration::from_secs(60);
+        super::spawn_registration(&gate, "peer-k".into(), long, long, move || {
+            let n = a.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Err("down".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(gate.pending(), 0, "slot must be released after an error");
+        assert!(gate.kick("peer-k"));
+        assert!(!gate.kick("peer-none"));
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     use super::*;
