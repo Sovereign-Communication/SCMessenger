@@ -2472,13 +2472,6 @@ fn wake_on_identify(
     woken
 }
 
-/// An inbound connection from a peer proves it is up and reaching for us:
-/// wake that peer's backed-off entries (coalesced per entry and trigger).
-#[cfg(not(target_arch = "wasm32"))]
-fn wake_on_inbound_connection(dial_policy_manager: &DialPolicyManager, peer_id: PeerId) -> usize {
-    dial_policy_manager.wake_peer(peer_id, super::dial_policy::WakeTrigger::InboundConnection)
-}
-
 /// Fire a hint-driven dial toward `peer_id` using envelope-sourced addresses.
 ///
 /// Candidates come from the hint store (fresh `connection_hints` /
@@ -7033,9 +7026,6 @@ pub async fn start_swarm_with_config(
                                 // attributed to this peer (inbound remote addrs are ephemeral
                                 // ports that never match the dialed addr_key).
                                 dial_policy_manager.reset_peer_backoff(peer_id);
-                                if !endpoint.is_dialer() {
-                                    wake_on_inbound_connection(&dial_policy_manager, peer_id);
-                                }
                                 // Complete the dial attempt since it succeeded
                                 dial_policy_manager.complete_dial_attempt(&addr_key);
 
@@ -12615,7 +12605,7 @@ mod relay_per_peer_budget_tests {
 /// inbound connection wake the peer's backed-off dial entries.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod event_driven_wake_tests {
-    use super::{wake_on_identify, wake_on_inbound_connection};
+    use super::wake_on_identify;
     use crate::transport::dial_policy::{multiaddr_to_key, DialPolicyManager, BACKOFF_FLOOR};
     use libp2p::{Multiaddr, PeerId};
 
@@ -12664,21 +12654,5 @@ mod event_driven_wake_tests {
         for _ in 0..50 {
             assert_eq!(wake_on_identify(&manager, peer, &[]), 0);
         }
-    }
-
-    #[test]
-    fn inbound_connection_wakes_only_that_peers_entries() {
-        let manager = DialPolicyManager::new();
-        let peer = PeerId::random();
-        let stranger = PeerId::random();
-        dormant_entry(&manager, "peer-entry", Some(peer));
-        dormant_entry(&manager, "stranger-entry", Some(stranger));
-
-        assert_eq!(wake_on_inbound_connection(&manager, peer), 1);
-        assert_eq!(wake_on_inbound_connection(&manager, peer), 0, "coalesced");
-
-        manager.advance_clock(BACKOFF_FLOOR);
-        assert!(manager.register_dial_attempt("peer-entry", Some(peer)));
-        assert!(!manager.register_dial_attempt("stranger-entry", Some(stranger)));
     }
 }
