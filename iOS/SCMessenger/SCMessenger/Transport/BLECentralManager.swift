@@ -101,6 +101,8 @@ final class BLECentralManager: NSObject {
     func stopScanning() {
         logger.info("Stopping BLE scanning")
         wantsScan = false
+        // A deferred start must not fire when Bluetooth later powers on.
+        pendingScanOnReady = false
         scanTimer?.invalidate()
         scanTimer = nil
         centralManager.stopScan()
@@ -348,7 +350,8 @@ final class BLECentralManager: NSObject {
             // Background: duty-cycle to preserve battery
             if !isScanning {
                 startScan()
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + scanWindow) { [weak self] in
+                // CBCentralManager and isScanning are confined to the main queue.
+                DispatchQueue.main.asyncAfter(deadline: .now() + scanWindow) { [weak self] in
                     self?.stopScan()
                 }
             }
@@ -411,7 +414,7 @@ extension BLECentralManager: CBCentralManagerDelegate {
         }
         if central.state == .poweredOn {
             // P3: If startScanning() was called before BLE was ready, start now
-            if pendingScanOnReady {
+            if pendingScanOnReady && wantsScan {
                 logger.info("BLE now powered on — starting deferred scan")
                 pendingScanOnReady = false
                 appendRepositoryDiagnostic("ble_central_scan_start_deferred")

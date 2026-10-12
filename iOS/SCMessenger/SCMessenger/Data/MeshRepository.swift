@@ -169,6 +169,10 @@ final class MeshRepository {
     /// #469 T7/T8: event-driven discovery. Core owns the cadence policy.
     @ObservationIgnored private var discoveryDriverStorage: DiscoveryDriver?
     @ObservationIgnored private var discoveryForeground: Bool = false
+    /// True between stopMeshService() and the next startMeshService(). While set,
+    /// late platform events (BLE state, path changes, timers) cannot recreate the
+    /// driver or reset transports that were just stopped. Main actor only.
+    @ObservationIgnored private var discoveryClosed: Bool = false
     private var blePeripheralManager: BLEPeripheralManager?
     private var multipeerTransport: MultipeerTransport?
     private var mdnsDiscovery: mDNSServiceDiscovery?
@@ -798,6 +802,7 @@ final class MeshRepository {
         }
 
         serviceState = .starting
+        discoveryClosed = false
         statusEvents.send(.serviceStateChanged(.starting))
 
         do {
@@ -1089,6 +1094,7 @@ final class MeshRepository {
         stopBleTransport()
         // Release the discovery driver's wake streams (#469 T8); the next
         // start recreates it lazily.
+        discoveryClosed = true
         discoveryDriverStorage?.shutdown()
         discoveryDriverStorage = nil
         multipeerTransport?.disconnect()
@@ -3308,6 +3314,9 @@ final class MeshRepository {
 
     // MARK: - Signed SCI1 invites (#469 T3)
 
+    /// Tokens already handed to core in this process. Main actor only.
+    @ObservationIgnored private var claimedInviteTokens: Set<String> = []
+
     /// Redeem a signed `SCI1:` invite (QR scan, pasted or shared text). Core
     /// verifies the Ed25519 signature and imports the seed ledger as unproven
     /// entries; the returned addresses are dialed here and an InviteRedeemed
@@ -3323,13 +3332,23 @@ final class MeshRepository {
         guard let core = ironCore else {
             return .failure(.noIdentity)
         }
+        // Single consumption: the scanner can deliver the same frame repeatedly
+        // and paste can race a scan. The claim and the sync core call below run
+        // with no suspension point between them (main actor), so exactly one
+        // caller per token proceeds; the token stays claimed once core accepted
+        // it, and is released on failure so a corrected retry is possible.
+        guard claimedInviteTokens.insert(token).inserted else {
+            return .failure(.alreadyRedeemed)
+        }
         let report: RedeemReport
         do {
             report = try core.redeemInviteQr(payload: token)
         } catch let error as IronCoreError {
+            claimedInviteTokens.remove(token)
             logger.warning("Invite rejected: \(error.localizedDescription)")
             return .failure(InviteRedeemFailure.from(error))
         } catch {
+            claimedInviteTokens.remove(token)
             logger.warning("Invite rejected: \(error.localizedDescription)")
             return .failure(.unknown)
         }
@@ -3366,7 +3385,9 @@ final class MeshRepository {
 
     // MARK: - Discovery events (#469 T7/T8)
 
-    private var discoveryDriver: DiscoveryDriver {
+    /// nil after stopMeshService() until the next start (use-after-close guard).
+    private var discoveryDriver: DiscoveryDriver? {
+        if discoveryClosed { return nil }
         if let driver = discoveryDriverStorage { return driver }
         let driver = DiscoveryDriver()
         driver.onReset = { [weak self] transports in
@@ -3380,7 +3401,7 @@ final class MeshRepository {
 
     /// Report a platform event to the core discovery scheduler.
     func reportDiscoveryEvent(_ event: DiscoveryEvent) {
-        discoveryDriver.report(event)
+        discoveryDriver?.report(event)
     }
 
     /// Feed the observed conditions that bound every transport's decay ceiling:
@@ -3398,7 +3419,7 @@ final class MeshRepository {
             power = .low
         }
         #endif
-        discoveryDriver.setInputs(
+        discoveryDriver?.setInputs(
             connectedPeers: UInt32(connectedEmissionCache.count),
             power: power,
             foreground: discoveryForeground
@@ -3406,12 +3427,13 @@ final class MeshRepository {
     }
 
     /// Seconds until the next attempt on a transport, from the core scheduler.
-    func discoveryDelaySeconds(_ transport: DiscoveryTransport) -> TimeInterval {
-        return discoveryDriver.nextDelaySeconds(transport)
+    func discoveryDelaySeconds(_ transport: DiscoveryTransport) -> TimeInterval? {
+        return discoveryDriver?.nextDelaySeconds(transport)
     }
 
     /// Wake the scan loops whose transport the scheduler just reset.
     private func applyDiscoveryReset(_ transports: Set<DiscoveryTransport>) {
+        guard !discoveryClosed else { return }
         if transports.contains(.ledger) {
             Task { @MainActor [weak self] in
                 await self?.primeRelayBootstrapConnections()
@@ -5001,8 +5023,13 @@ final class MeshRepository {
 
                 await self?.flushPendingOutbox(reason: "periodic")
                 // #469 T8: cadence from the core scheduler; an event wakes the wait.
-                guard let driver = await self?.discoveryDriver else { return }
-                _ = await driver.awaitNextAttempt(.ledger)
+                // A stopped service (nil driver) waits a plain bounded interval; the
+                // loop itself is ended only by task cancellation.
+                if let driver = await self?.discoveryDriver {
+                    _ = await driver.awaitNextAttempt(.ledger)
+                } else {
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                }
             }
         }
     }
@@ -7442,6 +7469,7 @@ enum InviteRedeemFailure: Error, Equatable {
     case invalid
     case badSignature
     case noIdentity
+    case alreadyRedeemed
     case unknown
 
     static func from(_ error: IronCoreError) -> InviteRedeemFailure {
@@ -7460,6 +7488,7 @@ enum InviteRedeemFailure: Error, Equatable {
         case .invalid: return "This invite is invalid, expired, or was issued by this device."
         case .badSignature: return "The invite signature could not be verified. Ask for a new invite."
         case .noIdentity: return "Create your identity first, then redeem the invite."
+        case .alreadyRedeemed: return "This invite is already being redeemed or was just used."
         case .unknown: return "The invite could not be redeemed. Try again."
         }
     }

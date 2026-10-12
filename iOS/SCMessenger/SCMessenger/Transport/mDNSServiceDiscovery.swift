@@ -90,7 +90,7 @@ final class mDNSServiceDiscovery: NSObject {
         pendingRetry = nil
         guard isBrowsing else { return }
         logger.info("Stopping mDNS browsing")
-        netServiceBrowsers.forEach { $0.stop() }
+        netServiceBrowsers.forEach { $0.stop(); $0.delegate = nil }
         netServiceBrowsers.removeAll()
         discoveredServices.removeAll()
         isBrowsing = false
@@ -199,7 +199,12 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         logger.error("mDNS browser failed: \(errorDict)")
+        // Ignore a failure reported by a browser from a session that
+        // restartBrowsing()/stopBrowsing() already replaced.
+        guard netServiceBrowsers.contains(where: { $0 === browser }) else { return }
         isBrowsing = false
+        netServiceBrowsers.forEach { $0.stop(); $0.delegate = nil }
+        netServiceBrowsers.removeAll()
         // Never give up: retry on the scheduler's cadence.
         if browsingRequested, let delay = retryDelayProvider?() {
             pendingRetry?.cancel()

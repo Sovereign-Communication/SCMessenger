@@ -199,13 +199,18 @@ struct JoinMeshView: View {
     /// join bundle). A seed that cannot be dialed yet is not a failure: the
     /// scheduler keeps retrying it.
     private func redeemInvite(_ raw: String?) {
+        // One redeem at a time: the scanner can fire repeatedly and paste can
+        // race a scan. The repository also refuses a token it already claimed.
+        guard !isRedeeming else { return }
         isRedeeming = true
         error = nil
         statusMessage = "Verifying invite..."
-        redeemTask?.cancel()
+        // Not cancelled on a new request (there is none while redeeming); only
+        // onDisappear cancels, and the flag is always cleared on completion.
         redeemTask = Task {
             let outcome = await repository.redeemInvite(raw)
             isRedeeming = false
+            redeemTask = nil
             switch outcome {
             case let .success(_, imported, _):
                 statusMessage = "Invite accepted. \(imported) nodes added. Connecting now; discovery keeps going in the background."
