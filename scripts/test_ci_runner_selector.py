@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Deterministic proof that the CI_RUNNER selector (PR 557) weakens no check.
 
+The `light` scope token (blacksmith-2vcpu-ubuntu-2404) covers the small gate jobs:
+ci.yml changes/handoff-scope/naming-policy/lint/orchestration, lint.yml
+changes/rust, hygiene.yml hygiene-checks. They fall back to ubuntu-latest.
+
 Evaluates the real `runs-on` expression of every affected job (ci.yml `test`,
 `docs`, `ffi-surface`; security-regression-tests.yml `forgery-regression`) with
 a small GitHub-Actions expression evaluator, for every combination of:
@@ -40,9 +44,21 @@ JOBS = [
     (".github/workflows/ci.yml", "docs", "Docs", "changes", "needs.changes.outputs.rust_relevant == 'true'", "oci"),
     (".github/workflows/ci.yml", "ffi-surface", "FFI Surface Contract", "changes", "needs.changes.outputs.rust_relevant == 'true'", "oci"),
     (".github/workflows/security-regression-tests.yml", "forgery-regression", "Forgery/Negative Security Regression Tests", None, None, "oci"),
+    # `light` token: small gate jobs, hosted by default, blacksmith-2vcpu when selected.
+    (".github/workflows/ci.yml", "changes", "Detect changed areas", None, None, "light"),
+    (".github/workflows/ci.yml", "handoff-scope", "Handoff ownership scope", None, None, "light"),
+    (".github/workflows/ci.yml", "naming-policy", "Naming policy", None, None, "light"),
+    (".github/workflows/ci.yml", "lint", "Lint", "changes", "${{ !cancelled() }}", "light"),
+    (".github/workflows/ci.yml", "orchestration", "Orchestration control plane", None, None, "light"),
+    (".github/workflows/lint.yml", "changes", "Detect changed areas", None, None, "light"),
+    (".github/workflows/lint.yml", "rust", "Rust Linting", "changes", "${{ !cancelled() }}", "light"),
+    (".github/workflows/hygiene.yml", "hygiene-checks", "Repository Hygiene Checks", None, None, "light"),
 ]
+# Light jobs whose required check must keep failing closed when `changes` failed.
+FAIL_CLOSED = {("ci.yml", "lint"), ("lint.yml", "rust")}
 HOSTED = "ubuntu-latest"
 BLACKSMITH = "blacksmith-4vcpu-ubuntu-2404"
+BLACKSMITH_LIGHT = "blacksmith-2vcpu-ubuntu-2404"
 OCI = ["self-hosted", "oci"]
 
 
@@ -174,6 +190,8 @@ def legacy(kind, ctx):
     """Runner each job used before the selector existed."""
     if kind == "matrix":
         return ctx["matrix.os"]
+    if kind == "light":
+        return HOSTED  # light jobs were always plain ubuntu-latest
     trusted = ctx["github.event_name"] == "push" or (
         ctx["github.event_name"] == "pull_request"
         and ctx["github.event.pull_request.head.repo.full_name"] == ctx["github.repository"]
@@ -185,7 +203,9 @@ def legacy(kind, ctx):
 
 def contexts():
     runners = [None, "blacksmith", "oci", "hosted"]
-    scopes = [None, "test", "pr", "test,pr", "docs,ffi,forgery,pr", "test,docs,ffi,forgery,pr", "docs", "garbage"]
+    scopes = [None, "test", "pr", "test,pr", "docs,ffi,forgery,pr", "test,docs,ffi,forgery,pr", "docs", "garbage",
+              "light", "light,pr", "test,light,pr", "light,docs,ffi,forgery,pr",
+              "test,docs,ffi,forgery,light,pr", "lightweight,pr", "Light,pr", " light,pr"]
     use_oci = [None, "false", "true"]
     events = {
         "push": ("push", REPO),
@@ -240,6 +260,9 @@ def check(base_ref=None):
         for st in job.get("steps", []):
             if st.get("continue-on-error") not in (None, False):
                 fails.append("%s: continue-on-error step %r" % (where, st.get("name")))
+        if kind == "light" and (os.path.basename(rel), jid) in FAIL_CLOSED:
+            if not any("Fail closed" in (st.get("name") or "") and "needs.changes.result != 'success'" in str(st.get("if")) for st in job.get("steps", [])):
+                fails.append("%s: fail-closed guard on `changes` result missing" % where)
         if kind == "matrix":
             m = job["strategy"]["matrix"]
             if "ubuntu-latest" not in m.get("os", []) or job["strategy"].get("fail-fast") is not False:
@@ -264,10 +287,24 @@ def check(base_ref=None):
             if not (isinstance(got, str) or (isinstance(got, list) and all(isinstance(x, str) for x in got))):
                 fails.append("INVALID runs-on %r: %s" % (got, tag))
                 continue
-            if got not in [HOSTED, BLACKSMITH, OCI, "macos-latest", "windows-latest"]:
+            if got not in [HOSTED, BLACKSMITH, BLACKSMITH_LIGHT, OCI, "macos-latest", "windows-latest"]:
                 fails.append("UNKNOWN runner %r: %s" % (got, tag))
             trusted = ev in ("push", "same_repo_pr")
             default = ctx["matrix.os"] if kind == "matrix" else HOSTED
+            scope = ctx.get("vars.CI_RUNNER_BLACKSMITH_JOBS") or "test"
+            toks = scope.lower().split(",")  # exact tokens (GitHub contains() ignores case); no substring/space matching
+            if kind == "light":
+                want = (
+                    BLACKSMITH_LIGHT
+                    if ctx.get("vars.CI_RUNNER") == "blacksmith"
+                    and "light" in toks
+                    and (ev == "push" or (ev == "same_repo_pr" and "pr" in toks))
+                    else HOSTED
+                )
+                if got != want:
+                    fails.append("light job got %r, expected %r: %s" % (got, want, tag))
+            elif got == BLACKSMITH_LIGHT:
+                fails.append("non-light job moved to the 2vcpu runner: " + tag)
             if not trusted and got != default:
                 fails.append("untrusted event got %r instead of %r: %s" % (got, default, tag))
             if kind == "matrix" and ctx["matrix.os"] != "ubuntu-latest" and got != ctx["matrix.os"]:
@@ -277,7 +314,9 @@ def check(base_ref=None):
                 fails.append("CI_RUNNER unset differs from legacy (%r vs %r): %s" % (got, legacy(kind, ctx), tag))
             if r == "hosted" and got != default:
                 fails.append("CI_RUNNER=hosted not default: " + tag)
-            if got == BLACKSMITH and r != "blacksmith":
+            if kind == "light" and got not in (HOSTED, BLACKSMITH_LIGHT):
+                fails.append("light job on unexpected runner %r: %s" % (got, tag))
+            if got in (BLACKSMITH, BLACKSMITH_LIGHT) and r != "blacksmith":
                 fails.append("blacksmith without CI_RUNNER=blacksmith: " + tag)
             if got == OCI and r not in ("oci", None):
                 fails.append("oci runner selected under CI_RUNNER=%s: %s" % (r, tag))
