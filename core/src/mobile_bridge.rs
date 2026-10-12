@@ -1030,7 +1030,7 @@ impl MeshService {
                                     {
                                         let progress = Arc::clone(&drain_progress_ms);
                                         let weak_tx = drain_watch_tx;
-                                        let _ = std::thread::Builder::new()
+                                        let spawn_result = std::thread::Builder::new()
                                             .name("rx-stall-watchdog".to_string())
                                             .spawn(move || loop {
                                                 std::thread::sleep(std::time::Duration::from_secs(5));
@@ -1051,6 +1051,12 @@ impl MeshService {
                                                     );
                                                 }
                                             });
+                                        if let Err(e) = spawn_result {
+                                            tracing::warn!(
+                                                "[RX-STALL] watchdog thread spawn failed, continuing without it: {}",
+                                                e
+                                            );
+                                        }
                                     }
                                     let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
