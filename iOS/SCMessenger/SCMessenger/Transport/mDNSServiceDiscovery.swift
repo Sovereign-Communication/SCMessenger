@@ -201,12 +201,17 @@ extension mDNSServiceDiscovery: NetServiceBrowserDelegate {
         logger.error("mDNS browser failed: \(errorDict)")
         // Ignore a failure reported by a browser from a session that
         // restartBrowsing()/stopBrowsing() already replaced.
-        guard netServiceBrowsers.contains(where: { $0 === browser }) else { return }
+        let action = MDNSBrowseFailurePolicy.decide(
+            browserIsCurrent: netServiceBrowsers.contains(where: { $0 === browser }),
+            browsingRequested: browsingRequested,
+            retryDelay: browsingRequested ? retryDelayProvider?() : nil
+        )
+        if action == .ignoreStale { return }
         isBrowsing = false
         netServiceBrowsers.forEach { $0.stop(); $0.delegate = nil }
         netServiceBrowsers.removeAll()
         // Never give up: retry on the scheduler's cadence.
-        if browsingRequested, let delay = retryDelayProvider?() {
+        if case let .resetAndRetry(delay) = action {
             pendingRetry?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.browsingRequested, !self.isBrowsing else { return }

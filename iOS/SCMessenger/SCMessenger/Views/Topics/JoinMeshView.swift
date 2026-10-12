@@ -21,7 +21,8 @@ struct JoinMeshView: View {
     @State private var error: String?
     @State private var showingQrScanner: Bool = false
     @State private var statusMessage: String?
-    @State private var isRedeeming: Bool = false
+    @State private var redeemGate = InviteRedeemInFlightGate()
+    private var isRedeeming: Bool { redeemGate.isRedeeming }
     @State private var myInvite: String?
     @State private var inviteUnavailable: Bool = false
     /// In-flight redeem / invite-creation tasks, cancelled when the view disappears.
@@ -201,15 +202,14 @@ struct JoinMeshView: View {
     private func redeemInvite(_ raw: String?) {
         // One redeem at a time: the scanner can fire repeatedly and paste can
         // race a scan. The repository also refuses a token it already claimed.
-        guard !isRedeeming else { return }
-        isRedeeming = true
+        guard redeemGate.begin() else { return }
         error = nil
         statusMessage = "Verifying invite..."
         // Not cancelled on a new request (there is none while redeeming); only
         // onDisappear cancels, and the flag is always cleared on completion.
         redeemTask = Task {
             let outcome = await repository.redeemInvite(raw)
-            isRedeeming = false
+            redeemGate.end()
             redeemTask = nil
             switch outcome {
             case let .success(_, imported, _):

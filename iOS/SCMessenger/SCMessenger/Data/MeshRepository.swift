@@ -3315,7 +3315,7 @@ final class MeshRepository {
     // MARK: - Signed SCI1 invites (#469 T3)
 
     /// Tokens already handed to core in this process. Main actor only.
-    @ObservationIgnored private var claimedInviteTokens: Set<String> = []
+    @ObservationIgnored private var inviteClaims = InviteClaimLedger()
 
     /// Redeem a signed `SCI1:` invite (QR scan, pasted or shared text). Core
     /// verifies the Ed25519 signature and imports the seed ledger as unproven
@@ -3337,19 +3337,17 @@ final class MeshRepository {
         // with no suspension point between them (main actor), so exactly one
         // caller per token proceeds; the token stays claimed once core accepted
         // it, and is released on failure so a corrected retry is possible.
-        guard claimedInviteTokens.insert(token).inserted else {
-            return .failure(.alreadyRedeemed)
-        }
         let report: RedeemReport
-        do {
-            report = try core.redeemInviteQr(payload: token)
-        } catch let error as IronCoreError {
-            claimedInviteTokens.remove(token)
+        switch inviteClaims.consume(token, { _ in try core.redeemInviteQr(payload: token) }) {
+        case .alreadyClaimed:
+            return .failure(.alreadyRedeemed)
+        case let .accepted(value):
+            report = value
+        case let .rejected(error):
             logger.warning("Invite rejected: \(error.localizedDescription)")
-            return .failure(InviteRedeemFailure.from(error))
-        } catch {
-            claimedInviteTokens.remove(token)
-            logger.warning("Invite rejected: \(error.localizedDescription)")
+            if let ironError = error as? IronCoreError {
+                return .failure(InviteRedeemFailure.from(ironError))
+            }
             return .failure(.unknown)
         }
         // Tell the scheduler before dialing so a slow dial cannot delay the reset.
