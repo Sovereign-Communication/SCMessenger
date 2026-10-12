@@ -954,16 +954,78 @@ pub(crate) fn recipient_in_connected_set(
     connected.iter().any(|p| p == target)
 }
 
-/// Snapshot, before dispatch, whether `target` is directly connected.
-pub(crate) async fn recipient_directly_connected(
-    swarm: &scmessenger_core::transport::SwarmHandle,
-    target: &libp2p::PeerId,
+/// Connected peer ids from the swarm. A failed query is logged and treated as
+/// "no direct link", which is the safe direction (the outbox entry is kept).
+async fn connected_peers(swarm: &scmessenger_core::transport::SwarmHandle) -> Vec<libp2p::PeerId> {
+    match swarm.get_peers().await {
+        Ok(peers) => peers,
+        Err(e) => {
+            tracing::warn!("get_peers failed; treating recipient as not directly connected: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Whether a transport ACK may release the sender's outbox entry.
+///
+/// Release only when the dispatch succeeded AND the recipient held a live
+/// connection both before and after it. A link that appeared or vanished
+/// during the send means the ACK may have come from a relay custody handoff,
+/// so the entry stays for the reconnect flush and retry sweep. The connected
+/// set cannot distinguish a relay circuit from a direct link, so that case
+/// remains a known limit until the swarm reply reports the route taken.
+pub(crate) fn should_release_outbox(
+    send_ok: bool,
+    direct_before: bool,
+    direct_after: bool,
 ) -> bool {
-    swarm
-        .get_peers()
-        .await
-        .map(|peers| recipient_in_connected_set(&peers, target))
-        .unwrap_or(false)
+    send_ok && direct_before && direct_after
+}
+
+/// Dispatch, then release the outbox entry only per `should_release_outbox`.
+/// Generic over the three effects so every send site shares one tested path.
+pub(crate) async fn dispatch_then_release<P, PF, S, SF, R>(
+    target: &libp2p::PeerId,
+    peers: P,
+    send: S,
+    release: R,
+) -> Result<()>
+where
+    P: Fn() -> PF,
+    PF: std::future::Future<Output = Vec<libp2p::PeerId>>,
+    S: FnOnce() -> SF,
+    SF: std::future::Future<Output = Result<()>>,
+    R: FnOnce(),
+{
+    let direct_before = recipient_in_connected_set(&peers().await, target);
+    let result = send().await;
+    if result.is_ok() {
+        let direct_after = recipient_in_connected_set(&peers().await, target);
+        if should_release_outbox(true, direct_before, direct_after) {
+            release();
+        }
+    }
+    result
+}
+
+/// Send over the swarm and release the outbox entry on a direct-link ACK.
+pub(crate) async fn swarm_send_releasing_on_direct_ack(
+    swarm: &scmessenger_core::transport::SwarmHandle,
+    core: &scmessenger_core::IronCore,
+    target: libp2p::PeerId,
+    envelope: Vec<u8>,
+    recipient_identity_id: Option<String>,
+    message_id: String,
+) -> Result<()> {
+    dispatch_then_release(
+        &target,
+        || connected_peers(swarm),
+        || swarm.send_message(target, envelope, recipient_identity_id, None),
+        || {
+            core.mark_message_sent(message_id);
+        },
+    )
+    .await
 }
 
 // Axum handler functions
@@ -1022,16 +1084,15 @@ async fn handle_send_message(
     // the peer is nearby + swarm), so it goes first; the raw BLE write below is
     // only a last-resort fallback when the swarm dispatch itself fails.
     let ble_fallback_data = prepared.envelope_data.clone();
-    let direct_link = recipient_directly_connected(&ctx.swarm_handle, &recipient.peer_id).await;
-    let (http_status, status, warning) = match ctx
-        .swarm_handle
-        .send_message(
-            recipient.peer_id,
-            prepared.envelope_data,
-            Some(recipient.identity_id.clone()),
-            None,
-        )
-        .await
+    let (http_status, status, warning) = match swarm_send_releasing_on_direct_ack(
+        &ctx.swarm_handle,
+        core,
+        recipient.peer_id,
+        prepared.envelope_data,
+        Some(recipient.identity_id.clone()),
+        prepared.message_id.clone(),
+    )
+    .await
     {
         Ok(()) => {
             // send_message().await == Ok is the transport's true-delivery ACK
@@ -1041,13 +1102,11 @@ async fn handle_send_message(
             // release the sender's outbox entry. Never cleared on a buffer
             // enqueue -- send_message is the delivery layer, not the queue.
             //
-            // Only when the recipient was directly connected. Otherwise Ok
-            // means a relay node accepted custody, not that the recipient
-            // got it; the entry must stay in the outbox so the reconnect
-            // flush and retry sweep can still deliver it (msg d10c45f8).
-            if direct_link {
-                core.mark_message_sent(prepared.message_id.clone());
-            }
+            // The outbox entry was released inside the helper, and only if
+            // the recipient stayed directly connected across the dispatch.
+            // Otherwise Ok may be relay custody, not recipient receipt; the
+            // entry stays so the reconnect flush and retry sweep can still
+            // deliver it (msg d10c45f8).
             (StatusCode::OK, "accepted".to_string(), None)
         }
         Err(_swarm_err) => {
@@ -1980,7 +2039,8 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::{
-        recipient_in_connected_set, resolve_api_recipient, ApiRecipient, SendMessageResponse,
+        dispatch_then_release, recipient_in_connected_set, resolve_api_recipient,
+        should_release_outbox, ApiRecipient, SendMessageResponse,
     };
     use scmessenger_core::identity::keys::KeyPair;
     use scmessenger_core::store::Contact;
@@ -1994,16 +2054,91 @@ mod tests {
 
     #[test]
     fn relayed_ack_does_not_release_outbox_entry() {
-        // Regression (msg d10c45f8): the recipient was not directly connected,
-        // a relay node accepted custody and send_message returned Ok. The
-        // sender released its outbox entry, so the later reconnect flush found
-        // nothing. A recipient absent from the connected set must not count as
-        // a delivery confirmation.
         let recipient = libp2p::PeerId::random();
         let relay = libp2p::PeerId::random();
         assert!(!recipient_in_connected_set(&[relay], &recipient));
         assert!(!recipient_in_connected_set(&[], &recipient));
         assert!(recipient_in_connected_set(&[relay, recipient], &recipient));
+    }
+
+    #[test]
+    fn release_decision_requires_ok_and_stable_direct_link() {
+        assert!(should_release_outbox(true, true, true));
+        assert!(!should_release_outbox(false, true, true));
+        assert!(!should_release_outbox(true, false, false));
+        assert!(!should_release_outbox(true, true, false));
+        assert!(!should_release_outbox(true, false, true));
+    }
+
+    /// Drives the shared helper that all five send sites use. `snapshots` is
+    /// the connected set returned by successive peer queries.
+    async fn run_dispatch(
+        snapshots: Vec<Vec<libp2p::PeerId>>,
+        send_ok: bool,
+        target: libp2p::PeerId,
+    ) -> (bool, bool) {
+        let queries = std::cell::Cell::new(0usize);
+        let released = std::cell::Cell::new(false);
+        let result = dispatch_then_release(
+            &target,
+            || {
+                let i = queries.get().min(snapshots.len() - 1);
+                queries.set(queries.get() + 1);
+                let snap = snapshots[i].clone();
+                async move { snap }
+            },
+            || async move {
+                if send_ok {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("dispatch failed"))
+                }
+            },
+            || released.set(true),
+        )
+        .await;
+        (result.is_ok(), released.get())
+    }
+
+    #[tokio::test]
+    async fn direct_ack_releases_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![target]], true, target).await;
+        assert!(ok);
+        assert!(released);
+    }
+
+    #[tokio::test]
+    async fn relay_only_ack_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let relay = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![relay], vec![relay]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn peer_dropping_mid_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn peer_appearing_mid_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![], vec![target]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn failed_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![target]], false, target).await;
+        assert!(!ok);
+        assert!(!released);
     }
 
     #[test]
