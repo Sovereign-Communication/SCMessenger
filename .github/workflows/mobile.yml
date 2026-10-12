@@ -17,6 +17,13 @@ on:
       - 'scripts/test_check_unbounded_runblocking.py'
       - 'core/src/api.udl'
       - 'mobile/**'
+      - 'cli/Cargo.toml'
+      - 'wasm/Cargo.toml'
+      - 'desktop_bridge/Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+  release:
+    types: [published]
   pull_request:
     paths:
       - 'android/**'
@@ -31,6 +38,11 @@ on:
       - 'scripts/test_check_unbounded_runblocking.py'
       - 'core/src/api.udl'
       - 'mobile/**'
+      - 'cli/Cargo.toml'
+      - 'wasm/Cargo.toml'
+      - 'desktop_bridge/Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
       # Docs under a trigger directory (core/README.md, android/*.md) cannot change a
       # mobile build. Last matching pattern wins, so this negation must stay last.
       - '!**.md'
@@ -39,13 +51,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios_relevant: ${{ steps.platform.outputs.ios_relevant }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Detect platform-relevant change
+        id: platform
+        uses: ./.github/actions/detect-platform-change
+
   wiring-gate:
     name: Android Wiring Gate
     runs-on: ubuntu-latest
@@ -86,11 +110,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-jvm-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
       - name: Install host Rust dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Run JVM unit tests
@@ -139,6 +168,7 @@ jobs:
         if: steps.platform.outputs.android_relevant == 'true'
         with:
           key: android-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install libdbus-1-dev
         if: steps.platform.outputs.android_relevant == 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
@@ -165,6 +195,7 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
       - name: Build Android APK
         if: steps.platform.outputs.android_relevant == 'true'
         working-directory: android
@@ -233,39 +264,63 @@ jobs:
           SCM_GIT_REF: ${{ github.ref_name }}
         run: ./gradlew :app:assembleDebugAndroidTest --no-daemon --stacktrace
 
+  # Release-profile coverage (formerly cross.yml). Not run per PR: only on push
+  # to main and on release/tag refs, to avoid the per-PR cost.
+  android-release:
+    name: Android Release Build
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+      - name: Build core (release) for all Android ABIs
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: >-
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86
+          build -p scmessenger-core --release
+
   ios:
     name: iOS Build
+    needs: changes
+    # Job-level skip: macOS is 10x billed and slot-limited, so it is not acquired
+    # just to learn that an Android-only diff has nothing for it to build.
+    if: needs.changes.outputs.ios_relevant == 'true'
     runs-on: macos-latest
-    # WHY THE STEPS ARE GATED AND THE JOB IS NOT
-    # -----------------------------------------
-    # This workflow triggers on the union of the Android and iOS path sets,
-    # because it owns jobs for both platforms, so an Android-only diff starts
-    # this macOS job. The job is kept so its check still reports -- a skipped
-    # check is not a passed one, and T12 section 3 records what that costs --
-    # while its expensive steps are short-circuited by detect-platform-change,
-    # which fails open: an uncomputable or unrecognised diff runs the build.
+    # Gated at job level by the `changes` job (detect-platform-change fails open:
+    # an uncomputable or unrecognised diff runs the build). This job is not a
+    # required context, so a skipped run does not block merges.
     steps:
       - uses: actions/checkout@v7
 
-      - name: Detect platform-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.ios_relevant == 'true'
         with:
           key: ios-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build XCFramework and Swift bindings
-        if: steps.platform.outputs.ios_relevant == 'true'
         run: |
           chmod +x scripts/build_xcframework.sh
           scripts/build_xcframework.sh
       - name: Build Xcode project
-        if: steps.platform.outputs.ios_relevant == 'true'
         working-directory: iOS
         run: |
           xcodebuild build \

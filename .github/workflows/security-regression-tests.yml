@@ -69,13 +69,25 @@ on:
 permissions:
   contents: read
 
+# One active run per pull request; main pushes are keyed on the SHA and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
+    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
+    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
+    # Blacksmith scope (free tier = 3000 2vCPU-min/mo; 4vCPU burns 2x): vars.CI_RUNNER_BLACKSMITH_JOBS
+    # comma list of test,docs,ffi,forgery,pr (default 'test'; push-to-main only unless 'pr').
+    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md.
+    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',forgery,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-4vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

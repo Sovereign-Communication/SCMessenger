@@ -346,8 +346,11 @@ impl IdentityKeys {
         Ok(verifying_key.verify(data, &sig).is_ok())
     }
 
-    /// Serialize keys to bytes
-    pub fn to_bytes(&self) -> Vec<u8> {
+    /// Serialize keys to bytes.
+    ///
+    /// Returns an error instead of panicking if serialization fails; callers
+    /// must propagate it (never persist or back up an empty/partial key blob).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         if let Some(mldsa_kp) = self.mldsa_keypair.as_ref() {
             // V3 format with ML-DSA keys
             let mut raw = IdentityKeysV3Raw {
@@ -358,13 +361,14 @@ impl IdentityKeys {
                 // ML-DSA-65 private key is persisted directly (4032 bytes)
                 mldsa_secret_key: mldsa_kp.signing_key().to_vec(),
             };
-            let mut serialized = bincode::serialize(&raw)
-                .expect("bincode serialization of IdentityKeysV3Raw cannot fail");
+            let serialized = bincode::serialize(&raw);
             raw.zeroize();
+            let mut serialized = serialized
+                .map_err(|e| anyhow::anyhow!("Failed to serialize V3 identity keys: {}", e))?;
             let mut result = Vec::with_capacity(1 + serialized.len());
             result.push(0x03); // version tag for V3
             result.append(&mut serialized);
-            result
+            Ok(result)
         } else {
             // V2 format without ML-DSA keys
             let mut raw = IdentityKeysV2Raw {
@@ -372,13 +376,14 @@ impl IdentityKeys {
                 x25519_secret_bytes: self.x25519_encryption_secret.to_bytes(),
                 mlkem_seed: self.mlkem_keypair.seed.to_vec(),
             };
-            let mut serialized = bincode::serialize(&raw)
-                .expect("bincode serialization of IdentityKeysV2Raw cannot fail");
+            let serialized = bincode::serialize(&raw);
             raw.zeroize();
+            let mut serialized = serialized
+                .map_err(|e| anyhow::anyhow!("Failed to serialize V2 identity keys: {}", e))?;
             let mut result = Vec::with_capacity(1 + serialized.len());
             result.push(0x02); // version tag
             result.append(&mut serialized);
-            result
+            Ok(result)
         }
     }
 
@@ -782,7 +787,7 @@ mod tests {
     #[test]
     fn test_serialization() {
         let keys = IdentityKeys::generate();
-        let bytes = keys.to_bytes();
+        let bytes = keys.to_bytes().unwrap();
 
         let restored = IdentityKeys::from_bytes(&bytes).unwrap();
 
@@ -1134,7 +1139,7 @@ mod tests {
         assert!(keys.mldsa_keypair.is_some());
 
         // Serialize it as V3 (tagged format)
-        let serialized = keys.to_bytes();
+        let serialized = keys.to_bytes().unwrap();
         assert_eq!(serialized[0], 0x03);
 
         // Parse serialized V3
@@ -1211,7 +1216,7 @@ mod tests {
         assert!(keys.mldsa_keypair.is_some());
 
         // Serialize as V3
-        let v3_bytes = keys.to_bytes();
+        let v3_bytes = keys.to_bytes().unwrap();
         assert_eq!(v3_bytes[0], 0x03);
 
         // Parse V3 bytes
