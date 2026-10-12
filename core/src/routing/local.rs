@@ -106,6 +106,10 @@ pub struct LocalCell {
     /// Time of each peer's last accepted announcement (unix secs); drives the
     /// adaptive announce rate limit. Pruned with the peer.
     last_announce: HashMap<PeerId, u64>,
+    /// Latest rate-limited announcement per peer, applied once the peer's
+    /// window opens. Only known peers get an entry (bounded by `max_peers`)
+    /// and it is pruned with the peer.
+    pending_announce: HashMap<PeerId, Vec<[u8; 8]>>,
 }
 
 /// Hint budget floor: every peer, however new, may announce this many hints.
@@ -132,6 +136,7 @@ impl LocalCell {
             announced_total: 0,
             hint_ttl: 1800,
             last_announce: HashMap::new(),
+            pending_announce: HashMap::new(),
         }
     }
 
@@ -147,6 +152,7 @@ impl LocalCell {
             announced_total: 0,
             hint_ttl: stale_timeout,
             last_announce: HashMap::new(),
+            pending_announce: HashMap::new(),
         }
     }
 
@@ -197,8 +203,26 @@ impl LocalCell {
     /// reliability-derived budget before any state changes, then the global
     /// budget (scaled by routing table size) is enforced by evicting the
     /// lowest-reliability, oldest hints. The peer's direct hint is exempt.
-    pub fn update_peer_hints(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>) {
-        self.update_peer_hints_at(peer_id, hints, current_timestamp());
+    ///
+    /// Returns false when the announcement was not applied now: unknown peer,
+    /// or rate-limited (then it is coalesced as the peer's pending announce
+    /// and applied on a later `tick` or announce).
+    pub fn update_peer_hints(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>) -> bool {
+        self.update_peer_hints_at(peer_id, hints, current_timestamp())
+    }
+
+    /// Bind a peer's own direct hint. Not an announcement: it neither consumes
+    /// nor records the announce rate-limit window.
+    pub fn bind_direct_hint(&mut self, peer_id: &PeerId) {
+        let direct = crate::identity::keys::routing_hint_from_public_key(peer_id);
+        let Some(peer) = self.peers.get_mut(peer_id) else {
+            return;
+        };
+        if peer.reachable_hints.contains(&direct) {
+            return;
+        }
+        peer.reachable_hints.push(direct);
+        self.index_insert(peer_id, &direct, current_timestamp());
     }
 
     /// Per-peer hint budget: a small floor that scales with reliability.
@@ -257,8 +281,11 @@ impl LocalCell {
             return false;
         };
         if !self.announce_allowed(peer_id, reliability, now) {
+            // Coalesce: keep only the latest announce per (known) peer.
+            self.pending_announce.insert(*peer_id, hints);
             return false;
         }
+        self.pending_announce.remove(peer_id);
         let Some(peer) = self.peers.get_mut(peer_id) else {
             return false;
         };
@@ -472,6 +499,12 @@ impl LocalCell {
 
         self.expire_hints(now);
 
+        // Apply coalesced announces whose window has opened; still-limited
+        // ones are re-stored, removed peers are dropped.
+        for (peer_id, hints) in std::mem::take(&mut self.pending_announce) {
+            self.update_peer_hints_at(&peer_id, hints, now);
+        }
+
         let peers_to_update: Vec<PeerId> = self.peers.keys().copied().collect();
 
         for peer_id in peers_to_update {
@@ -565,6 +598,7 @@ impl LocalCell {
             .expect("checked non-empty above");
 
         self.last_announce.remove(&peer_to_evict);
+        self.pending_announce.remove(&peer_to_evict);
         if let Some(removed) = self.peers.remove(&peer_to_evict) {
             for hint in &removed.reachable_hints {
                 self.index_remove(&peer_to_evict, hint);
@@ -798,6 +832,67 @@ mod tests {
             .flat_map(|(h, holders)| holders.keys().map(move |p| (*p, *h)))
             .collect();
         assert_eq!(remaining, survivors);
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn identify_bind_does_not_consume_announce_window() {
+        let mut cell = hint_test_cell(1);
+        let peer = make_peer_id(1);
+        let direct = crate::identity::keys::routing_hint_from_public_key(&peer);
+        cell.bind_direct_hint(&peer);
+        assert!(cell
+            .get_peer(&peer)
+            .unwrap()
+            .reachable_hints
+            .contains(&direct));
+        assert!(cell.last_announce.is_empty());
+        assert!(cell.update_peer_hints(&peer, vec![make_hint(9)]));
+        let held = &cell.get_peer(&peer).unwrap().reachable_hints;
+        assert!(held.contains(&make_hint(9)) && held.contains(&direct));
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn rate_limited_announces_coalesce_to_latest_and_apply_on_tick() {
+        let mut cell = hint_test_cell(1);
+        let flooder = make_peer_id(1);
+        for _ in 0..4 {
+            cell.update_reliability(&flooder, false);
+        }
+        let base = current_timestamp();
+        assert!(cell.update_peer_hints_at(&flooder, vec![make_hint(1)], base));
+        assert!(!cell.update_peer_hints_at(&flooder, vec![make_hint(2)], base + 1));
+        assert!(!cell.update_peer_hints_at(&flooder, vec![make_hint(3)], base + 2));
+        assert_eq!(cell.pending_announce.len(), 1);
+        cell.tick(base + 3);
+        let held = &cell.get_peer(&flooder).unwrap().reachable_hints;
+        assert!(held.contains(&make_hint(1)) && !held.contains(&make_hint(3)));
+        let open = base + LocalCell::announce_min_interval(0.0);
+        cell.tick(open);
+        let held = &cell.get_peer(&flooder).unwrap().reachable_hints;
+        assert!(held.contains(&make_hint(3)));
+        assert!(!held.contains(&make_hint(1)) && !held.contains(&make_hint(2)));
+        assert!(cell.pending_announce.is_empty());
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn pending_announce_pruned_when_peer_removed() {
+        let mut cell = hint_test_cell(2);
+        cell.max_peers = 2;
+        let weak = make_peer_id(1);
+        for _ in 0..4 {
+            cell.update_reliability(&weak, false);
+        }
+        let base = current_timestamp();
+        cell.update_peer_hints_at(&weak, vec![make_hint(1)], base);
+        cell.update_peer_hints_at(&weak, vec![make_hint(2)], base + 1);
+        assert_eq!(cell.pending_announce.len(), 1);
+        cell.peer_seen(make_peer_id(3), TransportType::TCP);
+        assert!(cell.get_peer(&weak).is_none());
+        assert!(cell.pending_announce.is_empty());
+        assert!(cell.last_announce.is_empty());
         assert_index_consistent(&cell);
     }
 

@@ -3270,10 +3270,15 @@ impl IronCore {
             engine.record_message_activity(&hex::encode(peer_id));
             // LocalCell intentionally updates only peers already known to
             // the local topology; an announcement cannot create a peer.
-            engine
+            let applied = engine
                 .base_engine_mut()
                 .local_cell_mut()
                 .update_peer_hints(&peer_id, parsed_hints);
+            if !applied {
+                tracing::debug!(
+                    "routing_update_peer_hints: announce not applied now (rate-limited announces are coalesced and applied later; unknown peers ignored)"
+                );
+            }
         }
     }
 

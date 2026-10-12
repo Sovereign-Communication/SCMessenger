@@ -377,14 +377,8 @@ impl OptimizedRoutingEngine {
         cell.peer_seen(peer_id, transport);
 
         // Ensure peer's direct hint is reachable in local cell
-        let direct_hint: [u8; 8] = crate::identity::keys::routing_hint_from_public_key(&peer_id);
-        if let Some(peer) = cell.get_peer(&peer_id) {
-            if !peer.reachable_hints.contains(&direct_hint) {
-                let mut hints = peer.reachable_hints.clone();
-                hints.push(direct_hint);
-                cell.update_peer_hints(&peer_id, hints);
-            }
-        }
+        // Not an announcement: bypass the announce rate limit.
+        cell.bind_direct_hint(&peer_id);
     }
 
     /// Check whether a specific peer is reachable via any known route.
