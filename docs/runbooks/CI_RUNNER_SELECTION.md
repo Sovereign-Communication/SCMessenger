@@ -20,7 +20,7 @@ value stays `ubuntu-latest`). Caching stays on actions/cache and Swatinem/rust-c
 
 ## Blacksmith scope and free tier
 
-`vars.CI_RUNNER_BLACKSMITH_JOBS` is a comma list of `test,docs,ffi,forgery,pr`.
+`vars.CI_RUNNER_BLACKSMITH_JOBS` is a comma list of `test,docs,ffi,forgery,light,pr`.
 Default (unset) is `test`, push-to-main only; add `pr` to also use Blacksmith
 on same-repo PRs. Jobs not listed fall back to hosted (`ubuntu-latest`).
 
@@ -30,6 +30,28 @@ proportionally (4vCPU = 2x, 8vCPU = 4x). Pricing: https://www.blacksmith.sh/pric
 (overage billing mechanics are not documented there; assume it may bill).
 Observed 7-day volume (hosted job minutes): test 587, docs 2604, ffi 2710,
 forgery 2143, so only a narrow scope fits the allowance.
+
+## The `light` token (blacksmith-2vcpu-ubuntu-2404)
+
+When hosted `ubuntu-latest` is saturated, small gate jobs queue behind heavy
+ones and delay the Blacksmith-routed `Test` job (it `needs: changes`). With
+`CI_RUNNER=blacksmith` and `light` listed in `CI_RUNNER_BLACKSMITH_JOBS`, these
+jobs run on `blacksmith-2vcpu-ubuntu-2404` (the cheapest size, 1x free-tier burn):
+
+- ci.yml: `changes` (Detect changed areas), `handoff-scope`, `naming-policy`,
+  `lint` (Lint), `orchestration`
+- lint.yml: `changes`, `rust` (Rust Linting)
+- hygiene.yml: `hygiene-checks` (Repository Hygiene Checks)
+
+Same rules as the heavy jobs: push is trusted; a same-repo PR also needs `pr`;
+fork PRs and every other event stay on `ubuntu-latest`; anything else falls
+back to `ubuntu-latest` (these jobs never used OCI). Check names, `needs`, `if`
+and the fail-closed guard on the `changes` result are unchanged. Jobs needing
+Linux build deps use `.github/actions/linux-build-deps`, which handles
+Blacksmith. Example: `gh variable set CI_RUNNER_BLACKSMITH_JOBS --body test,light,pr`.
+
+`scripts/test_ci_runner_selector.py` (run by Repository Hygiene) evaluates all
+12 jobs over every runner/scope/event combination.
 
 ## Rollback
 
